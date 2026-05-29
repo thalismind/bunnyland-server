@@ -1,24 +1,42 @@
 """bunnyland command-line entrypoint.
 
 ``serve`` wires plugins onto a world actor, generates a world, and runs the game loop so
-LLM-controlled characters act each tick. Offline (no ``--ollama-model``) it uses the
+LLM-controlled characters act each tick. By default (no ``--llm``) it uses the
 deterministic stub world and a waiting agent, so the loop is runnable without the ``llm``
-extra; with a model it generates via Ollama and drives characters with a real agent.
+extra; with ``--llm`` it generates via Ollama and drives characters with a real agent,
+reading the API key from ``OLLAMA_CLOUD_API_KEY`` (loaded from ``.env`` if present).
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import os
+from pathlib import Path
 
 from .core.world_actor import WorldActor
 from .engine import GameLoop
-from .llm_agents import ControllerDispatch, ScriptedAgent
+from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
 from .plugins import apply_plugins, bunnyland_plugins, load_modules, resolve_order, select
 from .prompts.builder import PromptBuilder
 from .worldgen import StubWorldBuilder, instantiate
 
 BUILTIN_MODULE = "bunnyland.plugins.builtin"
+#: Ollama Cloud endpoint; the API key authenticates against it.
+OLLAMA_CLOUD_HOST = "https://ollama.com"
+
+
+def load_dotenv(path: str | Path = ".env") -> None:
+    """Load simple ``KEY=value`` lines from ``.env`` into ``os.environ`` (no overrides)."""
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
 def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[WorldActor, list]:
@@ -37,23 +55,32 @@ async def _serve(args) -> None:
     for plugin in resolve_order(applied):
         print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
 
-    if args.ollama_model:
+    if args.llm:
+        load_dotenv()
+        api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
+        host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
+        if not api_key:
+            raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
+
         from .worldgen.ollama_builder import OllamaWorldBuilder
 
-        proposal = OllamaWorldBuilder(model=args.ollama_model).propose(args.seed)
+        proposal = OllamaWorldBuilder(
+            model=args.ollama_model, host=host, api_key=api_key
+        ).propose(args.seed)
     else:
         proposal = StubWorldBuilder().propose(args.seed)
     result = await instantiate(actor, proposal)
     print(f"Generated world {args.seed!r}: {len(result.rooms)} rooms, "
           f"{len(result.characters)} characters.")
 
-    if args.ollama_model:
+    if args.llm:
         from .llm_agents import OllamaAgent
 
-        agent = OllamaAgent(model=args.ollama_model)
+        agent = OllamaAgent(model=args.ollama_model, host=host, api_key=api_key)
+        print(f"Driving characters with Ollama model {args.ollama_model!r} at {host}.")
     else:
         agent = ScriptedAgent([])  # offline: characters wait, the world still ticks
-        print("No --ollama-model: characters will wait (offline demo).")
+        print("Offline demo (no --llm): characters will wait.")
 
     dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), agent)
     loop = GameLoop(actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale)
@@ -72,7 +99,10 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--plugin", action="append", default=None, help="enable a plugin id")
     serve.add_argument("--seed", default="a quiet marsh", help="world-generation seed")
     serve.add_argument(
-        "--ollama-model", default=None, help="use this Ollama model (needs llm extra)"
+        "--llm", action="store_true", help="drive characters with Ollama (needs llm extra)"
+    )
+    serve.add_argument(
+        "--ollama-model", default=DEFAULT_MODEL, help=f"Ollama model (default: {DEFAULT_MODEL})"
     )
     serve.add_argument("--ticks", type=int, default=10, help="number of ticks (0 = run forever)")
     serve.add_argument("--tick-seconds", type=float, default=1.0, help="real seconds per tick")

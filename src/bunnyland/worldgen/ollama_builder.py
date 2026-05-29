@@ -30,7 +30,11 @@ class OllamaWorldBuilder:
     """Generates a proposal via Ollama Cloud. ``ollama`` is imported lazily."""
 
     def __init__(
-        self, *, model: str = "llama3", host: str | None = None, api_key: str | None = None
+        self,
+        *,
+        model: str = "deepseek-v4-flash",
+        host: str | None = None,
+        api_key: str | None = None,
     ):
         try:
             import ollama

@@ -16,6 +16,9 @@ from typing import Protocol
 from ..prompts.builder import PromptContext
 from .tools import ToolCall, tool_schemas
 
+#: Default Ollama model (https://ollama.com/library/deepseek-v4-flash).
+DEFAULT_MODEL = "deepseek-v4-flash"
+
 
 class Agent(Protocol):
     """Chooses the next action for a character, or ``None`` to wait this turn.
@@ -58,7 +61,7 @@ class OllamaAgent:
     def __init__(
         self,
         *,
-        model: str,
+        model: str = DEFAULT_MODEL,
         host: str | None = None,
         api_key: str | None = None,
         history_turns: int = 12,
@@ -106,4 +109,4 @@ class OllamaAgent:
             del history[: len(history) - limit]
 
 
-__all__ = ["Agent", "OllamaAgent", "ScriptedAgent"]
+__all__ = ["DEFAULT_MODEL", "Agent", "OllamaAgent", "ScriptedAgent"]
