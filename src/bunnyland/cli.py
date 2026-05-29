@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 from pathlib import Path
 
@@ -122,11 +123,18 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument(
         "--time-scale", type=float, default=3600.0, help="game seconds per real tick"
     )
+    serve.add_argument(
+        "--verbose", action="store_true", help="log decisions and world generation at INFO"
+    )
 
     args = parser.parse_args(argv)
     if args.command != "serve":
         parser.print_help()
         return 0
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
     asyncio.run(_serve(args))
     return 0

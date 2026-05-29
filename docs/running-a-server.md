@@ -1,0 +1,117 @@
+# Running a server
+
+`bunnyland serve` generates a world and runs the **game loop**: each round it advances the
+simulation one tick (clock, regeneration, queued commands, consequences) and then lets each
+active controller propose its next action. It runs headless — the world simulates whether or
+not anyone is watching.
+
+## Install
+
+```bash
+uv sync                 # core only: deterministic worlds, characters that wait
+uv sync --extra llm     # add Ollama-backed generation and LLM agents
+```
+
+## The simplest run (offline)
+
+```bash
+uv run bunnyland serve --ticks 5
+```
+
+```
+Loaded plugins:
+  - bunnyland.core_verbs (Core Verbs) v0.1.0
+  - bunnyland.lifesim (Life Sim) v0.1.0
+  - bunnyland.memory (Memory) v0.1.0
+  - bunnyland.worldgen (World Generators) v0.1.0
+Generated world 'a quiet marsh' via 'oneshot': 2 rooms, 2 characters.
+Offline demo (no --llm): characters will wait.
+Running game loop (5 ticks)...
+Stopped after 5 ticks at game epoch 18000s.
+```
+
+Offline, the world is the deterministic stub world and characters take no actions — useful
+for verifying setup, watching passive systems (hunger, thirst, regen) tick, and developing
+plugins without network or API costs.
+
+## Connecting an LLM
+
+Characters only *think* when an LLM is attached. bunnyland uses [Ollama
+Cloud](https://ollama.com) by default.
+
+1. Install the extra: `uv sync --extra llm`
+2. Put your key in a `.env` file (it is git-ignored):
+   ```
+   OLLAMA_CLOUD_API_KEY=sk-...
+   # optional: point at a different host (defaults to https://ollama.com)
+   # OLLAMA_HOST=http://localhost:11434
+   ```
+3. Run with `--llm`:
+   ```bash
+   uv run bunnyland serve --llm --ticks 20
+   ```
+
+With `--llm`, both world generation and the characters use the model (default
+`deepseek-v4-flash`; override with `--ollama-model`). Each character keeps its own
+conversation history, so it remembers what it has done.
+
+To use a local Ollama instead of the cloud, set `OLLAMA_HOST` to your local server; the API
+key may be any non-empty value for local servers that don't check it.
+
+## Options
+
+| Flag             | Default        | Meaning                                                        |
+|------------------|----------------|----------------------------------------------------------------|
+| `--seed`         | `a quiet marsh`| World-generation seed (free text; flavours LLM generation).    |
+| `--generator`    | `oneshot`      | Which world generator to use. See [world creation](world-creation.md). |
+| `--max-rooms`    | `6`            | Room budget for graph-based generators (`recursive`).          |
+| `--llm`          | off            | Drive generation + characters with Ollama (needs `llm` extra). |
+| `--ollama-model` | `deepseek-v4-flash` | Model name passed to Ollama.                              |
+| `--ticks`        | `10`           | Number of rounds to run; `0` runs forever (until Ctrl-C).      |
+| `--tick-seconds` | `1.0`          | Real seconds the loop sleeps between rounds (when `--ticks 0`).  |
+| `--time-scale`   | `3600.0`       | Game seconds that pass per round.                              |
+| `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](admin.md). |
+| `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](admin.md).   |
+| `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
+
+## The time model
+
+A round advances game time by `tick_seconds × time_scale` seconds. With the defaults
+(`1.0 × 3600`) each round is **one game hour**, so regeneration and needs (defined per hour)
+move at a comfortable rate while you watch a handful of rounds.
+
+- For a fast offline demo, keep a finite `--ticks` and ignore wall-clock time (the loop
+  doesn't sleep when `--ticks` is finite).
+- For a long-running server, use `--ticks 0` and tune `--tick-seconds` (how often the loop
+  wakes) and `--time-scale` (how much game-time each wake represents). For example
+  `--tick-seconds 60 --time-scale 3600` is "one game hour every real minute".
+
+## Running long-term
+
+`--ticks 0` runs until interrupted:
+
+```bash
+uv run bunnyland serve --llm --generator recursive --max-rooms 8 --ticks 0 \
+  --tick-seconds 30 --time-scale 1800
+```
+
+Persistence (saving/restoring the world) is on the roadmap (see `PLAN.md`); today a server
+starts from a freshly generated world each launch.
+
+## Watching it play
+
+Pass `--verbose` to log each decision (under `bunnyland.dispatch`) and world-generation step
+(under `bunnyland.worldgen`) at INFO:
+
+```bash
+uv run bunnyland serve --llm --ticks 10 --verbose
+```
+
+```
+bunnyland.worldgen recursive worldgen: {'rooms': 3, 'sealed': 9, 'dropped': 0, 'linked': 0}
+bunnyland.dispatch character entity_..09 chose take {'item_id': 'entity_..06'}
+bunnyland.dispatch character entity_..09 chose say {'text': 'Hello Juniper!', 'intent': 'conversation'}
+```
+
+Note that the logged tool calls show *resolved* entity ids — names the controller used
+(`"the marsh journal"`) have already been mapped to the entities they refer to.

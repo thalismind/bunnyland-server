@@ -145,12 +145,10 @@ def did_you_mean(arguments: Mapping[str, object], unresolved: Mapping[str, list[
         label = key.replace("_id", "").replace("_", " ")
         if names:
             parts.append(
-                f"I couldn't find a {label} matching {typed!r}. Did you mean: "
-                + ", ".join(names)
-                + "?"
+                f"I don't see {typed!r} ({label}) here. Did you mean: " + ", ".join(names) + "?"
             )
         else:
-            parts.append(f"I couldn't find a {label} matching {typed!r}, and nothing's nearby.")
+            parts.append(f"I don't see {typed!r} ({label}) here, and nothing similar.")
     return " ".join(parts)
 
 

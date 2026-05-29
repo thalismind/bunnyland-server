@@ -40,6 +40,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         self.actor = actor
         self.token = token
         intents = discord.Intents.default()
+        intents.message_content = True  # required to read "!" command text
         self.client = commands.Bot(command_prefix="!", intents=intents)
         self._register_commands()
 
