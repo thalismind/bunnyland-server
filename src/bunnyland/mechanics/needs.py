@@ -120,6 +120,33 @@ def thirst_band(entity) -> str:
     return band(entity.get_component(ThirstComponent).meter)
 
 
+_HUNGER_PHRASES = {
+    "warning": "You are getting hungry.",
+    "urgent": "You are hungry; food is becoming a priority.",
+    "crisis": "You are starving and feel weak.",
+}
+_THIRST_PHRASES = {
+    "warning": "Your mouth is dry.",
+    "urgent": "You are thirsty; you should find clean water soon.",
+    "crisis": "You are dehydrated, dizzy, and unfocused.",
+}
+
+
+def need_fragments(world, character) -> list[str]:
+    """Prompt phrases for this character's pressing needs (spec 16.3, 27.1)."""
+    del world  # signature matches the builder's fragment-provider protocol
+    fragments: list[str] = []
+    if character.has_component(HungerComponent):
+        phrase = _HUNGER_PHRASES.get(hunger_band(character))
+        if phrase:
+            fragments.append(phrase)
+    if character.has_component(ThirstComponent):
+        phrase = _THIRST_PHRASES.get(thirst_band(character))
+        if phrase:
+            fragments.append(phrase)
+    return fragments
+
+
 __all__ = [
     "DrinkConsumedEvent",
     "FoodEatenEvent",
@@ -130,5 +157,6 @@ __all__ = [
     "ThirstComponent",
     "ThirstSystem",
     "hunger_band",
+    "need_fragments",
     "thirst_band",
 ]
