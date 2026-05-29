@@ -5,7 +5,11 @@ becomes a ``SubmittedCommand`` routed to that user's character; the world lane (
 say) is public, while focus actions (notes, remember) are offered over DM. The bot only
 translates input and relays events — it never touches the ECS directly (spec 24.2).
 
-This module is structural: it is import-guarded and not exercised by the unit tests.
+Humans, like the LLM, refer to things by name; the bot resolves those names to entity ids
+the same way dispatch does, and replies with a "did you mean..." hint when it can't.
+
+The ``DiscordBot`` class is import-guarded and not exercised by the unit tests; the pure
+name-resolution helpers below are.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 from ..core.controllers import DiscordControllerComponent
 from ..core.edges import ControlledBy
 from ..core.world_actor import WorldActor
+from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call
 
 
@@ -54,8 +59,14 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         if found is None:
             return "You are not controlling a character yet."
         character_id, controller_id, generation = found
+
+        character = self.actor.world.get_entity(character_id)
+        resolved, unresolved = resolve_reference_args(self.actor.world, character, arguments)
+        if unresolved:
+            return did_you_mean(arguments, unresolved)
+
         command = command_from_tool_call(
-            ToolCall(name=tool, arguments=arguments),
+            ToolCall(name=tool, arguments=resolved),
             character_id=str(character_id),
             controller_id=str(controller_id),
             controller_generation=generation,
@@ -83,4 +94,4 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         self.client.run(self.token)
 
 
-__all__ = ["DiscordBot"]
+__all__ = ["DiscordBot", "did_you_mean"]

@@ -9,8 +9,10 @@ tick — dispatch only proposes.
 
 from __future__ import annotations
 
+import difflib
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 
 from relics import Entity, EntityId, World
 
@@ -83,6 +85,75 @@ def resolve_reference(
     return value
 
 
+def suggest_names(
+    query: str, candidates: list[tuple[str, EntityId]], *, limit: int = 3
+) -> list[str]:
+    """Candidate names nearest an unresolvable query, for a 'did you mean...' hint.
+
+    Prefers prefix then substring matches, then fuzzy (difflib) matches, de-duplicated and
+    capped at ``limit``."""
+    names = [name for name, _ in candidates]
+    q = query.strip().lower()
+    prefix = [n for n in names if n.lower().startswith(q)]
+    substring = [n for n in names if q and q in n.lower()]
+    fuzzy = difflib.get_close_matches(query, names, n=limit, cutoff=0.5)
+
+    ordered: list[str] = []
+    for name in [*prefix, *substring, *fuzzy]:
+        if name not in ordered:
+            ordered.append(name)
+    return ordered[:limit]
+
+
+def resolve_reference_args(
+    world: World,
+    character: Entity,
+    arguments: Mapping[str, object],
+    *,
+    keys: frozenset[str] = REFERENCE_ARG_KEYS,
+    suggestions: int = 3,
+) -> tuple[dict, dict[str, list[str]]]:
+    """Resolve entity-reference args to ids.
+
+    Returns ``(resolved, unresolved)`` where ``resolved`` is a copy of ``arguments`` with
+    reference keys mapped to entity ids where possible, and ``unresolved`` maps each
+    reference key that did not resolve to a list of suggested names.
+    """
+    candidates = name_candidates(world, character)
+    resolved = dict(arguments)
+    unresolved: dict[str, list[str]] = {}
+    for key in keys:
+        value = resolved.get(key)
+        if not isinstance(value, str):
+            continue
+        mapped = resolve_reference(value, candidates, world=world)
+        resolved[key] = mapped
+        parsed = parse_entity_id(mapped)
+        if parsed is None or not world.has_entity(parsed):
+            unresolved[key] = suggest_names(value, candidates, limit=suggestions)
+    return resolved, unresolved
+
+
+def did_you_mean(arguments: Mapping[str, object], unresolved: Mapping[str, list[str]]) -> str:
+    """Build a 'did you mean...' message for reference args that did not resolve.
+
+    Used for both humans (Discord reply) and LLM agents (fed back as a prompt warning), so
+    the two get identical guidance."""
+    parts: list[str] = []
+    for key, names in unresolved.items():
+        typed = arguments.get(key)
+        label = key.replace("_id", "").replace("_", " ")
+        if names:
+            parts.append(
+                f"I couldn't find a {label} matching {typed!r}. Did you mean: "
+                + ", ".join(names)
+                + "?"
+            )
+        else:
+            parts.append(f"I couldn't find a {label} matching {typed!r}, and nothing's nearby.")
+    return " ".join(parts)
+
+
 @dataclass(frozen=True)
 class Decision:
     """An observable record of what an agent chose (no hidden reasoning)."""
@@ -99,6 +170,9 @@ class ControllerDispatch:
         self.actor = actor
         self.builder = builder
         self.agent = agent
+        # character_id -> a "did you mean..." note to surface on its next prompt, so an
+        # agent that named something unreachable gets the same guidance a human does.
+        self._feedback: dict[str, str] = {}
 
     async def run_once(self) -> list[Decision]:
         decisions: list[Decision] = []
@@ -138,39 +212,51 @@ class ControllerDispatch:
         controller = self._llm_controller(character_id)
         assert controller is not None  # filtered in _actable_characters
         controller_id, generation = controller
+        cid = str(character_id)
 
         context = self.builder.build(character_id, epoch=self.actor.epoch)
+        pending = self._feedback.pop(cid, None)
+        if pending is not None:
+            context = replace(context, warnings=(*context.warnings, pending))
         prompt = render_prompt(context)
-        call = self.agent.decide(prompt, context, character_id=str(character_id))
+        call = self.agent.decide(prompt, context, character_id=cid)
 
         if call is None:
             logger.info("character %s decided to wait", character_id)
-            return Decision(str(character_id), None, "wait")
+            return Decision(cid, None, "wait")
 
-        call = self._resolve_references(character_id, call)
+        # Resolve names exactly as the Discord bot does. If a reference can't be resolved,
+        # don't submit a doomed command — feed the agent the same "did you mean..." hint
+        # on its next turn (spec 25: tools enforce the same rules for humans and LLMs).
+        character = self.actor.world.get_entity(character_id)
+        resolved, unresolved = resolve_reference_args(
+            self.actor.world, character, call.arguments
+        )
+        if unresolved:
+            message = did_you_mean(call.arguments, unresolved)
+            self._feedback[cid] = message
+            logger.info("character %s named something unreachable: %s", character_id, message)
+            return Decision(cid, call.name, f"unresolved: {message}")
+
         command = command_from_tool_call(
-            call,
-            character_id=str(character_id),
+            ToolCall(name=call.name, arguments=resolved),
+            character_id=cid,
             controller_id=str(controller_id),
             controller_generation=generation,
             submitted_at_epoch=self.actor.epoch,
         )
         await self.actor.submit(command)
-        summary = f"{call.name} {call.arguments}".strip()
+        summary = f"{call.name} {resolved}".strip()
         logger.info("character %s chose %s", character_id, summary)
-        return Decision(str(character_id), call.name, summary)
-
-    def _resolve_references(self, character_id: EntityId, call: ToolCall) -> ToolCall:
-        """Map any human-readable entity names in the call's reference args to entity ids."""
-        world = self.actor.world
-        character = world.get_entity(character_id)
-        candidates = name_candidates(world, character)
-        resolved = dict(call.arguments)
-        for key in REFERENCE_ARG_KEYS:
-            value = resolved.get(key)
-            if isinstance(value, str):
-                resolved[key] = resolve_reference(value, candidates, world=world)
-        return ToolCall(name=call.name, arguments=resolved)
+        return Decision(cid, call.name, summary)
 
 
-__all__ = ["ControllerDispatch", "Decision", "name_candidates", "resolve_reference"]
+__all__ = [
+    "ControllerDispatch",
+    "Decision",
+    "did_you_mean",
+    "name_candidates",
+    "resolve_reference",
+    "resolve_reference_args",
+    "suggest_names",
+]

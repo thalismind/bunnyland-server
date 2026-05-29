@@ -24,8 +24,11 @@ from bunnyland.llm_agents import (
     ScriptedAgent,
     ToolCall,
     command_from_tool_call,
+    did_you_mean,
     name_candidates,
     resolve_reference,
+    resolve_reference_args,
+    suggest_names,
     tool_names,
     tool_schemas,
 )
@@ -165,6 +168,70 @@ def test_resolve_reference_matches_names_case_insensitively():
     assert resolve_reference(str(journal), candidates, world=world) == str(journal)
     # no match -> returned unchanged so the handler rejects it observably
     assert resolve_reference("dragon", candidates, world=world) == "dragon"
+
+
+def test_resolve_reference_args_reports_unresolved_with_suggestions():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    journal = _add_item(scenario, "marsh journal")
+    _add_item(scenario, "woven basket", container=True)
+    character = world.get_entity(scenario.character)
+
+    resolved, unresolved = resolve_reference_args(
+        world, character, {"item_id": "Mar", "target_container_id": "basket"}
+    )
+    # "Mar" resolves to the journal id; "basket" does not prefix-match anything.
+    assert resolved["item_id"] == str(journal)
+    assert "item_id" not in unresolved
+    assert "woven basket" in unresolved["target_container_id"]
+
+
+def test_suggest_names_prefers_substring_then_fuzzy():
+    candidates = [("woven basket", None), ("marsh journal", None)]
+    assert suggest_names("basket", candidates) == ["woven basket"]  # substring
+    assert "woven basket" in suggest_names("woven baskt", candidates)  # fuzzy typo
+    assert suggest_names("dragon", candidates) == []  # nothing nearby
+
+
+def test_did_you_mean_message():
+    msg = did_you_mean({"item_id": "baskt"}, {"item_id": ["woven basket"]})
+    assert "did you mean" in msg.lower() and "woven basket" in msg
+    empty = did_you_mean({"target_id": "ghost"}, {"target_id": []})
+    assert "nothing" in empty.lower()
+
+
+class _RecordingAgent:
+    """Records the prompts it is shown and replays a fixed list of calls."""
+
+    def __init__(self, calls):
+        self.calls = list(calls)
+        self.prompts: list[str] = []
+        self._index = 0
+
+    def decide(self, prompt, context, *, character_id):
+        self.prompts.append(prompt)
+        if self._index >= len(self.calls):
+            return None
+        call = self.calls[self._index]
+        self._index += 1
+        return call
+
+
+async def test_dispatch_feeds_did_you_mean_back_to_the_agent():
+    # An LLM agent that names something unreachable gets the same guidance a human would,
+    # surfaced as a warning on its next prompt — and the doomed command is never submitted.
+    scenario = build_scenario()
+    _add_item(scenario, "woven basket", container=True)
+    agent = _RecordingAgent([ToolCall("take", {"item_id": "basket"}), None])
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    first = await dispatch.run_once()
+    assert first[0].tool == "take"
+    assert "did you mean" in first[0].summary.lower()
+    assert scenario.actor._inbox.empty()  # nothing submitted
+
+    await dispatch.run_once()  # second turn carries the feedback as a prompt warning
+    assert "woven basket" in agent.prompts[1]
 
 
 async def test_dispatch_resolves_item_names_to_ids_before_submitting():

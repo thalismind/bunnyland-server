@@ -1,6 +1,8 @@
 """Discord front-end (spec 24). Import the bot lazily so the extra stays optional."""
 
-__all__ = ["DiscordBot"]
+from .bot import did_you_mean
+
+__all__ = ["DiscordBot", "did_you_mean"]
 
 
 def __getattr__(name: str):
