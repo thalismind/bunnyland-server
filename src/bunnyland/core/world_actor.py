@@ -30,6 +30,7 @@ from .components import (
     SuspendedComponent,
     WorldClockComponent,
 )
+from .consequences import Consequence, HealthConsequence
 from .controllers import SuspendedControllerComponent
 from .ecs import ensure_blank_prefab, parse_entity_id, replace_component, spawn_entity
 from .edges import ControlledBy
@@ -67,6 +68,7 @@ class WorldActor:
         self.bus = EventBus()
         self.queues = CommandQueues()
         self._handlers: dict[str, CommandHandler] = {}
+        self._consequences: list[Consequence] = [HealthConsequence()]
         self._inbox: asyncio.Queue[SubmittedCommand] = asyncio.Queue()
         self._rng = rng or random.Random()
         self._lock = asyncio.Lock()
@@ -81,6 +83,10 @@ class WorldActor:
 
     def register_handler(self, handler: CommandHandler) -> None:
         self._handlers[handler.command_type] = handler
+
+    def register_consequence(self, consequence: Consequence) -> None:
+        """Add a post-command consequence pass (spec 5.6 phase 6)."""
+        self._consequences.append(consequence)
 
     # -- clock --------------------------------------------------------------------------
 
@@ -107,6 +113,13 @@ class WorldActor:
             self.world.tick(game_delta_seconds)
             # Phase 5: process queued commands in initiative order.
             await self._process_commands()
+            # Phase 6: consequence systems (downed/death transitions, etc.).
+            await self._run_consequences()
+
+    async def _run_consequences(self) -> None:
+        for consequence in self._consequences:
+            for event in consequence.process(self.world, self.epoch):
+                await self._publish(event)
 
     async def _ingest(self) -> None:
         while not self._inbox.empty():

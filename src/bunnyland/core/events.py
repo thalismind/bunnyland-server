@@ -101,6 +101,23 @@ class ControllerChangedEvent(DomainEvent):
 
 
 # --------------------------------------------------------------------------------------
+# Health / downed / death events (spec 18.3)
+# --------------------------------------------------------------------------------------
+
+
+class CharacterDownedEvent(DomainEvent):
+    cause: str
+
+
+class CharacterRevivedEvent(DomainEvent):
+    pass
+
+
+class CharacterDiedEvent(DomainEvent):
+    cause: str
+
+
+# --------------------------------------------------------------------------------------
 # Movement / world events
 # --------------------------------------------------------------------------------------
 
@@ -183,6 +200,9 @@ class EventBus:
 __all__ = [
     "ActionPointsChangedEvent",
     "ActorMovedEvent",
+    "CharacterDiedEvent",
+    "CharacterDownedEvent",
+    "CharacterRevivedEvent",
     "CommandAcceptedEvent",
     "CommandExecutedEvent",
     "CommandExpiredEvent",

@@ -73,6 +73,12 @@ class CharacterComponent(Component):
     public: bool = True
 
 
+@dataclass(frozen=True)
+class HealthComponent(Component):
+    current: float = 100.0
+    maximum: float = 100.0
+
+
 # --------------------------------------------------------------------------------------
 # Physical objects and inventory (spec 11.5)
 # --------------------------------------------------------------------------------------
@@ -178,6 +184,7 @@ __all__ = [
     "ContainerComponent",
     "DownedComponent",
     "FocusPointsComponent",
+    "HealthComponent",
     "IdentityComponent",
     "InitiativeComponent",
     "InventoryComponent",
