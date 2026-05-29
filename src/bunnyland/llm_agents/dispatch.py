@@ -12,24 +12,75 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from relics import EntityId
+from relics import Entity, EntityId, World
 
 from ..core.components import (
     ActionPointsComponent,
     CharacterComponent,
     DeadComponent,
     DownedComponent,
+    IdentityComponent,
+    RoomComponent,
     SleepingComponent,
     SuspendedComponent,
 )
 from ..core.controllers import LLMControllerComponent
-from ..core.edges import ControlledBy
+from ..core.ecs import container_of, parse_entity_id, reachable_ids
+from ..core.edges import ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
 from ..prompts.builder import PromptBuilder, render_prompt
 from .agent import Agent
-from .tools import command_from_tool_call
+from .tools import REFERENCE_ARG_KEYS, ToolCall, command_from_tool_call
 
 logger = logging.getLogger("bunnyland.dispatch")
+
+
+def name_candidates(world: World, character: Entity) -> list[tuple[str, EntityId]]:
+    """(name, id) pairs the character could be referring to: reachable entities plus the
+    rooms its exits lead to. Objects/characters use their identity name; rooms use title."""
+    ids = reachable_ids(world, character)
+    room_id = container_of(character)
+    if room_id is not None:
+        for _edge, target in world.get_entity(room_id).get_relationships(ExitTo):
+            ids.add(target)
+
+    candidates: list[tuple[str, EntityId]] = []
+    for entity_id in ids:
+        if entity_id == character.id:
+            continue
+        entity = world.get_entity(entity_id)
+        if entity.has_component(IdentityComponent):
+            candidates.append((entity.get_component(IdentityComponent).name, entity_id))
+        elif entity.has_component(RoomComponent):
+            candidates.append((entity.get_component(RoomComponent).title, entity_id))
+    return candidates
+
+
+def resolve_reference(
+    value: str, candidates: list[tuple[str, EntityId]], *, world: World
+) -> str:
+    """Resolve a human-readable name to an entity id (case-insensitive prefix match).
+
+    Already-valid entity ids pass through. An exact (case-insensitive) name wins; otherwise
+    the shortest candidate whose name starts with the query is chosen ("Mar" -> "marsh").
+    Unresolvable values are returned unchanged so the handler rejects them observably.
+    """
+    parsed = parse_entity_id(value)
+    if parsed is not None and world.has_entity(parsed):
+        return value
+    query = value.strip().lower()
+    if not query:
+        return value
+    for name, entity_id in candidates:
+        if name.lower() == query:
+            return str(entity_id)
+    matches = sorted(
+        (nc for nc in candidates if nc[0].lower().startswith(query)),
+        key=lambda nc: (len(nc[0]), nc[0].lower()),
+    )
+    if matches:
+        return str(matches[0][1])
+    return value
 
 
 @dataclass(frozen=True)
@@ -96,6 +147,7 @@ class ControllerDispatch:
             logger.info("character %s decided to wait", character_id)
             return Decision(str(character_id), None, "wait")
 
+        call = self._resolve_references(character_id, call)
         command = command_from_tool_call(
             call,
             character_id=str(character_id),
@@ -108,5 +160,17 @@ class ControllerDispatch:
         logger.info("character %s chose %s", character_id, summary)
         return Decision(str(character_id), call.name, summary)
 
+    def _resolve_references(self, character_id: EntityId, call: ToolCall) -> ToolCall:
+        """Map any human-readable entity names in the call's reference args to entity ids."""
+        world = self.actor.world
+        character = world.get_entity(character_id)
+        candidates = name_candidates(world, character)
+        resolved = dict(call.arguments)
+        for key in REFERENCE_ARG_KEYS:
+            value = resolved.get(key)
+            if isinstance(value, str):
+                resolved[key] = resolve_reference(value, candidates, world=world)
+        return ToolCall(name=call.name, arguments=resolved)
 
-__all__ = ["ControllerDispatch", "Decision"]
+
+__all__ = ["ControllerDispatch", "Decision", "name_candidates", "resolve_reference"]

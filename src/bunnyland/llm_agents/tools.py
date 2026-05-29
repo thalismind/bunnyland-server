@@ -33,6 +33,12 @@ _SPEECH = CommandCost(action=1, focus=1)
 _FOCUS = CommandCost(focus=1)
 _FREE = CommandCost()
 
+#: Payload keys whose value names an entity (resolved name -> id during dispatch). Other
+#: keys (direction, text, intent, tags, query, mode, limit) are free text and left alone.
+REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
+    {"exit_id", "item_id", "target_container_id", "target_id", "tool_id", "source_id"}
+)
+
 # tool name -> verb definition. ``drop`` and ``take_note`` rename to engine command types.
 _VERBS: dict[str, _Verb] = {
     "move": _Verb("move", Lane.WORLD, _ACTION, ("direction", "exit_id")),
@@ -98,4 +104,10 @@ def command_from_tool_call(
     )
 
 
-__all__ = ["ToolCall", "command_from_tool_call", "tool_names", "tool_schemas"]
+__all__ = [
+    "REFERENCE_ARG_KEYS",
+    "ToolCall",
+    "command_from_tool_call",
+    "tool_names",
+    "tool_schemas",
+]
