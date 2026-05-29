@@ -31,7 +31,11 @@ from .components import (
     WorldClockComponent,
 )
 from .consequences import Consequence, HealthConsequence
-from .controllers import SuspendedControllerComponent
+from .controllers import (
+    DiscordControllerComponent,
+    LLMControllerComponent,
+    SuspendedControllerComponent,
+)
 from .ecs import ensure_blank_prefab, parse_entity_id, replace_component, spawn_entity
 from .edges import ControlledBy
 from .events import (
@@ -41,6 +45,7 @@ from .events import (
     CommandQueuedEvent,
     CommandRejectedEvent,
     CommandSubmittedEvent,
+    ControllerChangedEvent,
     DomainEvent,
     EventBus,
     FocusPointsChangedEvent,
@@ -49,6 +54,10 @@ from .handlers import CommandHandler, HandlerContext
 from .handlers.lifecycle import WakeHandler
 from .queue import CommandQueues
 from .systems import ActionFocusRegenSystem, WorldClockSystem
+
+#: Control verbs change the controller itself (spec 7.4); they carry no point cost and
+#: bypass generation/participation gates so handoff and resume always work.
+CONTROL_COMMANDS = frozenset({"take-control", "release-to-llm", "suspend", "resume"})
 
 
 @dataclass(frozen=True)
@@ -201,6 +210,28 @@ class WorldActor:
                 )
             )
             return _LaneOutcome(executed=False, stop_lane=False)
+
+        # Control verbs change the controller itself, so they bypass generation,
+        # cost, and participation gates (but never apply to the dead).
+        if command.command_type in CONTROL_COMMANDS:
+            self.queues.pop(character_id, lane)
+            if character.has_component(DeadComponent):
+                await self._reject(command, "character is dead")
+                return _LaneOutcome(executed=False, stop_lane=False)
+            applied, reason = await self._apply_control(entity_id, command)
+            if not applied:
+                await self._reject(command, reason)
+                return _LaneOutcome(executed=False, stop_lane=False)
+            await self._publish(
+                CommandExecutedEvent(
+                    **self._event_base(
+                        actor_id=character_id,
+                        command_id=command.command_id,
+                        command_type=command.command_type,
+                    )
+                )
+            )
+            return _LaneOutcome(executed=True, stop_lane=False)
 
         # Stale controller generation (spec 7.3).
         if not self._generation_current(character, command):
@@ -359,6 +390,47 @@ class WorldActor:
         if not controller.has_component(SuspendedControllerComponent):
             controller.add_component(SuspendedControllerComponent(reason=reason))
         return generation
+
+    def _controller_kind(self, controller_id: EntityId) -> str:
+        controller = self.world.get_entity(controller_id)
+        if controller.has_component(DiscordControllerComponent):
+            return "discord"
+        if controller.has_component(LLMControllerComponent):
+            return "llm"
+        if controller.has_component(SuspendedControllerComponent):
+            return "suspended"
+        return "unknown"
+
+    async def _apply_control(
+        self, character_id: EntityId, command: SubmittedCommand
+    ) -> tuple[bool, str]:
+        """Apply a control verb. Returns (applied, reject_reason)."""
+        controller_id = parse_entity_id(command.payload.get("controller_id"))
+        if controller_id is None or not self.world.has_entity(controller_id):
+            return False, "controller does not exist"
+
+        if command.command_type == "suspend":
+            reason = str(command.payload.get("reason", "offline"))
+            generation = self.suspend(character_id, controller_id, reason=reason)
+            kind = "suspended"
+        else:
+            # take-control / release-to-llm / resume -> an active controller.
+            generation = self.assign_controller(character_id, controller_id)
+            character = self.world.get_entity(character_id)
+            if character.has_component(SuspendedComponent):
+                character.remove_component(SuspendedComponent)
+            kind = self._controller_kind(controller_id)
+
+        await self._publish(
+            ControllerChangedEvent(
+                **self._event_base(
+                    actor_id=str(character_id),
+                    generation=generation,
+                    controller_kind=kind,
+                )
+            )
+        )
+        return True, ""
 
     # -- events -------------------------------------------------------------------------
 
