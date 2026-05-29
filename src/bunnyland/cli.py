@@ -49,19 +49,23 @@ def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[Worl
     return actor, applied
 
 
-async def _serve(args) -> None:
-    actor, applied = build_actor(args.module, args.plugin)
-    print("Loaded plugins:")
-    for plugin in resolve_order(applied):
-        print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
+async def _generate_world(actor, args, *, host, api_key):
+    """Generate a world via the recursive BFS path or the one-shot proposal path."""
+    if args.recursive:
+        if args.llm:
+            from .worldgen import OllamaRecursiveBuilder
+
+            builder = OllamaRecursiveBuilder(model=args.ollama_model, host=host, api_key=api_key)
+        else:
+            from .worldgen import StubRecursiveBuilder
+
+            builder = StubRecursiveBuilder()
+        from .worldgen import RecursiveWorldGenerator
+
+        generator = RecursiveWorldGenerator(actor, builder, max_rooms=args.max_rooms)
+        return await generator.generate(args.seed)
 
     if args.llm:
-        load_dotenv()
-        api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
-        host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
-        if not api_key:
-            raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
-
         from .worldgen.ollama_builder import OllamaWorldBuilder
 
         proposal = OllamaWorldBuilder(
@@ -69,7 +73,24 @@ async def _serve(args) -> None:
         ).propose(args.seed)
     else:
         proposal = StubWorldBuilder().propose(args.seed)
-    result = await instantiate(actor, proposal)
+    return await instantiate(actor, proposal)
+
+
+async def _serve(args) -> None:
+    actor, applied = build_actor(args.module, args.plugin)
+    print("Loaded plugins:")
+    for plugin in resolve_order(applied):
+        print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
+
+    host = api_key = None
+    if args.llm:
+        load_dotenv()
+        api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
+        host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
+        if not api_key:
+            raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
+
+    result = await _generate_world(actor, args, host=host, api_key=api_key)
     print(f"Generated world {args.seed!r}: {len(result.rooms)} rooms, "
           f"{len(result.characters)} characters.")
 
@@ -103,6 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     serve.add_argument(
         "--ollama-model", default=DEFAULT_MODEL, help=f"Ollama model (default: {DEFAULT_MODEL})"
+    )
+    serve.add_argument(
+        "--recursive", action="store_true", help="generate the world breadth-first (graph-based)"
+    )
+    serve.add_argument(
+        "--max-rooms", type=int, default=6, help="room budget for recursive generation"
     )
     serve.add_argument("--ticks", type=int, default=10, help="number of ticks (0 = run forever)")
     serve.add_argument("--tick-seconds", type=float, default=1.0, help="real seconds per tick")
