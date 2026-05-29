@@ -67,6 +67,34 @@ class RoomComponent(Component):
 
 
 @dataclass(frozen=True)
+class RoomSummaryComponent(Component):
+    """Event-driven projection cache for a room (spec 11.4, 17).
+
+    The prose ``visible_summary`` is a readability aid rebuilt from structured facts; it
+    is never the source of truth. ``dirty`` marks it stale after a relevant world change.
+    """
+
+    visible_summary: str = ""
+    last_updated_epoch: int = 0
+    version: int = 0
+    dirty: bool = True
+
+
+@dataclass(frozen=True)
+class TemperatureComponent(Component):
+    """Ambient temperature (spec 11.13). The driving system arrives with environment."""
+
+    celsius: float = 20.0
+
+
+@dataclass(frozen=True)
+class LightComponent(Component):
+    level: float = 1.0
+    enabled: bool = True
+    natural: bool = True
+
+
+@dataclass(frozen=True)
 class CharacterComponent(Component):
     species: str = "bunny"
     biography: str = ""
@@ -237,12 +265,15 @@ __all__ = [
     "InventoryComponent",
     "KeyComponent",
     "LifecycleComponent",
+    "LightComponent",
     "LockableComponent",
     "PortableComponent",
     "ReadableComponent",
     "RoomComponent",
+    "RoomSummaryComponent",
     "SleepingComponent",
     "SuspendedComponent",
+    "TemperatureComponent",
     "WorldClockComponent",
     "WritableComponent",
 ]
