@@ -1,0 +1,41 @@
+[project]
+name = "bunnyland"
+version = "0.1.0"
+description = "An asynchronous social sandbox where humans and LLM agents share persistent characters in an emergent ECS simulation."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "relics",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+bunnyland = "bunnyland.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.uv.sources]
+relics = { git = "https://github.com/ssube/relics.git" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bunnyland"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
