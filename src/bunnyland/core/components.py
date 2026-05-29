@@ -108,6 +108,51 @@ class InventoryComponent(Component):
 
 
 # --------------------------------------------------------------------------------------
+# Mechanisms (spec 11.9) and readable/writable objects (spec 11.8)
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DoorComponent(Component):
+    open: bool = False
+    open_on_use: bool = True
+    auto_close_after_ticks: int | None = None
+
+
+@dataclass(frozen=True)
+class ButtonComponent(Component):
+    active: bool = True
+    toggle: bool = False
+    pressed: bool = False
+    cooldown_ticks: int = 0
+    reset_after_ticks: int | None = None
+
+
+@dataclass(frozen=True)
+class LockableComponent(Component):
+    locked: bool = True
+    key_name: str | None = None
+    difficulty: float = 0.0
+
+
+@dataclass(frozen=True)
+class KeyComponent(Component):
+    key_name: str
+
+
+@dataclass(frozen=True)
+class ReadableComponent(Component):
+    title: str | None = None
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class WritableComponent(Component):
+    remaining_space: int | None = None
+    erasable: bool = False
+
+
+# --------------------------------------------------------------------------------------
 # Action and Focus points (spec 6.1)
 # --------------------------------------------------------------------------------------
 
@@ -178,20 +223,26 @@ class DeadComponent(Component):
 
 __all__ = [
     "ActionPointsComponent",
+    "ButtonComponent",
     "CharacterComponent",
+    "ContainerComponent",
     "DeadComponent",
     "DescriptionComponent",
-    "ContainerComponent",
+    "DoorComponent",
     "DownedComponent",
     "FocusPointsComponent",
     "HealthComponent",
     "IdentityComponent",
     "InitiativeComponent",
     "InventoryComponent",
+    "KeyComponent",
     "LifecycleComponent",
+    "LockableComponent",
     "PortableComponent",
+    "ReadableComponent",
     "RoomComponent",
     "SleepingComponent",
     "SuspendedComponent",
     "WorldClockComponent",
+    "WritableComponent",
 ]

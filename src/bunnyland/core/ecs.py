@@ -85,6 +85,18 @@ def contents(entity: Entity) -> list[EntityId]:
     return [target_id for _edge, target_id in entity.get_relationships(Contains)]
 
 
+def reachable_ids(world: World, character: Entity) -> set[EntityId]:
+    """Entities a character can interact with: itself, its inventory, its room, and the
+    room's direct contents (MVP reachability — no nested containers yet)."""
+    reachable: set[EntityId] = {character.id}
+    reachable.update(contents(character))
+    room_id = container_of(character)
+    if room_id is not None:
+        reachable.add(room_id)
+        reachable.update(contents(world.get_entity(room_id)))
+    return reachable
+
+
 __all__ = [
     "BLANK_PREFAB",
     "Component",
@@ -94,6 +106,7 @@ __all__ = [
     "container_of",
     "contents",
     "ensure_blank_prefab",
+    "reachable_ids",
     "get_or_none",
     "parse_entity_id",
     "replace_component",

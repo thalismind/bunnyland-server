@@ -148,6 +148,17 @@ class ItemDroppedEvent(DomainEvent):
     room_id_dropped: str
 
 
+class ItemUsedEvent(DomainEvent):
+    item_id: str
+    affordance: str
+    tool_id: str | None = None
+
+
+class PhysicalWriteEvent(DomainEvent):
+    item_id: str
+    text: str
+
+
 # --------------------------------------------------------------------------------------
 # Speech events (spec 14, 18.3). Visibility distinguishes room speech from directed.
 # --------------------------------------------------------------------------------------
@@ -217,6 +228,8 @@ __all__ = [
     "ItemDroppedEvent",
     "ItemPutEvent",
     "ItemTakenEvent",
+    "ItemUsedEvent",
+    "PhysicalWriteEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",
 ]
