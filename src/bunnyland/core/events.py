@@ -117,6 +117,10 @@ class CharacterDiedEvent(DomainEvent):
     cause: str
 
 
+class AffectChangedEvent(DomainEvent):
+    labels: tuple[str, ...] = ()
+
+
 # --------------------------------------------------------------------------------------
 # Movement / world events
 # --------------------------------------------------------------------------------------
@@ -227,6 +231,7 @@ class EventBus:
 __all__ = [
     "ActionPointsChangedEvent",
     "ActorMovedEvent",
+    "AffectChangedEvent",
     "CharacterDiedEvent",
     "CharacterDownedEvent",
     "CharacterRevivedEvent",

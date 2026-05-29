@@ -41,6 +41,56 @@ class LifecycleComponent(Component):
 
 
 # --------------------------------------------------------------------------------------
+# Affect, thoughts (spec 11.12). Mood is multidimensional, not a single scalar.
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AffectVector:
+    valence: float = 0.0
+    arousal: float = 0.0
+    stress: float = 0.0
+    fear: float = 0.0
+    anger: float = 0.0
+    sadness: float = 0.0
+    confidence: float = 0.0
+    sociability: float = 0.0
+    curiosity: float = 0.0
+    focus: float = 0.0
+
+
+@dataclass(frozen=True)
+class AffectDelta:
+    valence: float = 0.0
+    arousal: float = 0.0
+    stress: float = 0.0
+    fear: float = 0.0
+    anger: float = 0.0
+    sadness: float = 0.0
+    confidence: float = 0.0
+    sociability: float = 0.0
+    curiosity: float = 0.0
+    focus: float = 0.0
+
+
+@dataclass(frozen=True)
+class AffectComponent(Component):
+    baseline: AffectVector = AffectVector()
+    current: AffectVector = AffectVector()
+    labels: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class ThoughtComponent(Component):
+    label: str
+    text: str
+    affect_delta: AffectDelta
+    created_at_epoch: int
+    expires_at_epoch: int | None = None
+    source_event_id: str | None = None
+
+
+# --------------------------------------------------------------------------------------
 # World clock (spec 11.2)
 # --------------------------------------------------------------------------------------
 
@@ -260,6 +310,9 @@ class DeadComponent(Component):
 
 __all__ = [
     "ActionPointsComponent",
+    "AffectComponent",
+    "AffectDelta",
+    "AffectVector",
     "ButtonComponent",
     "CharacterComponent",
     "ContainerComponent",
@@ -284,6 +337,7 @@ __all__ = [
     "SleepingComponent",
     "SuspendedComponent",
     "TemperatureComponent",
+    "ThoughtComponent",
     "WorldClockComponent",
     "WritableComponent",
 ]

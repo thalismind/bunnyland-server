@@ -61,11 +61,17 @@ class ControlledBy(Edge):
     since_epoch: int = 0
 
 
+@dataclass(frozen=True)
+class HasThought(Edge):
+    """character -> thought entity (spec 12)."""
+
+
 __all__ = [
     "ContainmentMode",
     "Contains",
     "ControlledBy",
     "ExitTo",
+    "HasThought",
     "Holding",
     "Wearing",
 ]

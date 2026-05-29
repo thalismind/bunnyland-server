@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .affect import install_affect
 from .eat_drink import DrinkHandler, EatHandler
 from .needs import HungerSystem, ThirstSystem
 
@@ -28,4 +29,4 @@ def install_needs(actor: WorldActor) -> None:
     actor.register_handler(DrinkHandler())
 
 
-__all__ = ["install_needs"]
+__all__ = ["install_affect", "install_needs"]

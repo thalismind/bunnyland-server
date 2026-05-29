@@ -19,6 +19,9 @@ from .commands import (
 )
 from .components import (
     ActionPointsComponent,
+    AffectComponent,
+    AffectDelta,
+    AffectVector,
     ButtonComponent,
     CharacterComponent,
     ContainerComponent,
@@ -43,6 +46,7 @@ from .components import (
     SleepingComponent,
     SuspendedComponent,
     TemperatureComponent,
+    ThoughtComponent,
     WorldClockComponent,
     WritableComponent,
 )
@@ -59,7 +63,15 @@ from .ecs import (
     replace_component,
     spawn_entity,
 )
-from .edges import ContainmentMode, Contains, ControlledBy, ExitTo, Holding, Wearing
+from .edges import (
+    ContainmentMode,
+    Contains,
+    ControlledBy,
+    ExitTo,
+    HasThought,
+    Holding,
+    Wearing,
+)
 from .events import DomainEvent, EventBus, EventVisibility
 from .handlers import (
     HandlerContext,
@@ -81,6 +93,9 @@ from .world_actor import WorldActor
 
 __all__ = [
     "ActionPointsComponent",
+    "AffectComponent",
+    "AffectDelta",
+    "AffectVector",
     "ButtonComponent",
     "CharacterComponent",
     "Command",
@@ -102,6 +117,7 @@ __all__ = [
     "FocusPointsComponent",
     "HandlerContext",
     "HandlerResult",
+    "HasThought",
     "HealthComponent",
     "Holding",
     "IdentityComponent",
@@ -134,6 +150,7 @@ __all__ = [
     "TellCommand",
     "TellHandler",
     "TemperatureComponent",
+    "ThoughtComponent",
     "UseHandler",
     "WaitCommand",
     "WaitHandler",
