@@ -60,6 +60,8 @@ class ContentContribution(BaseModel):
     prefabs: tuple[Any, ...] = ()
     prompt_parts: tuple[Any, ...] = ()
     worldgen_hooks: tuple[Any, ...] = ()
+    #: Named ``WorldGenerator`` strategies, selectable at runtime by name.
+    world_generators: tuple[Any, ...] = ()
 
 
 class PolicyContribution(BaseModel):

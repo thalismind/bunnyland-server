@@ -30,11 +30,19 @@ from ..mechanics.needs import (
     ThirstSystem,
 )
 from ..memory import install_memory
-from .model import CommandContribution, EcsContribution, Plugin, RuntimeContribution
+from ..worldgen.generators import WorldGenerator, oneshot_generator, recursive_generator
+from .model import (
+    CommandContribution,
+    ContentContribution,
+    EcsContribution,
+    Plugin,
+    RuntimeContribution,
+)
 
 CORE_VERBS = "bunnyland.core_verbs"
 LIFESIM = "bunnyland.lifesim"
 MEMORY = "bunnyland.memory"
+WORLDGEN = "bunnyland.worldgen"
 
 
 def _install_affect(actor) -> None:
@@ -97,16 +105,35 @@ def _memory_factory(actor) -> None:
     install_memory(actor)
 
 
+def worldgen_plugin() -> Plugin:
+    return Plugin(
+        id=WORLDGEN,
+        name="World Generators",
+        content=ContentContribution(
+            world_generators=(
+                WorldGenerator(
+                    "oneshot", oneshot_generator, "single LLM proposal, instantiated at once"
+                ),
+                WorldGenerator(
+                    "recursive", recursive_generator, "breadth-first graph, grown room-by-room"
+                ),
+            )
+        ),
+    )
+
+
 def bunnyland_plugins() -> list[Plugin]:
-    return [core_verbs_plugin(), lifesim_plugin(), memory_plugin()]
+    return [core_verbs_plugin(), lifesim_plugin(), memory_plugin(), worldgen_plugin()]
 
 
 __all__ = [
     "CORE_VERBS",
     "LIFESIM",
     "MEMORY",
+    "WORLDGEN",
     "bunnyland_plugins",
     "core_verbs_plugin",
     "lifesim_plugin",
     "memory_plugin",
+    "worldgen_plugin",
 ]

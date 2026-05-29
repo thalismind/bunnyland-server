@@ -19,7 +19,7 @@ from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
 from .plugins import apply_plugins, bunnyland_plugins, load_modules, resolve_order, select
 from .prompts.builder import PromptBuilder
-from .worldgen import StubWorldBuilder, instantiate
+from .worldgen import GenOptions, collect_generators
 
 BUILTIN_MODULE = "bunnyland.plugins.builtin"
 #: Ollama Cloud endpoint; the API key authenticates against it.
@@ -49,38 +49,17 @@ def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[Worl
     return actor, applied
 
 
-async def _generate_world(actor, args, *, host, api_key):
-    """Generate a world via the recursive BFS path or the one-shot proposal path."""
-    if args.recursive:
-        if args.llm:
-            from .worldgen import OllamaRecursiveBuilder
-
-            builder = OllamaRecursiveBuilder(model=args.ollama_model, host=host, api_key=api_key)
-        else:
-            from .worldgen import StubRecursiveBuilder
-
-            builder = StubRecursiveBuilder()
-        from .worldgen import RecursiveWorldGenerator
-
-        generator = RecursiveWorldGenerator(actor, builder, max_rooms=args.max_rooms)
-        return await generator.generate(args.seed)
-
-    if args.llm:
-        from .worldgen.ollama_builder import OllamaWorldBuilder
-
-        proposal = OllamaWorldBuilder(
-            model=args.ollama_model, host=host, api_key=api_key
-        ).propose(args.seed)
-    else:
-        proposal = StubWorldBuilder().propose(args.seed)
-    return await instantiate(actor, proposal)
-
-
 async def _serve(args) -> None:
     actor, applied = build_actor(args.module, args.plugin)
     print("Loaded plugins:")
     for plugin in resolve_order(applied):
         print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
+
+    registry = collect_generators(applied)
+    generator = registry.get(args.generator)
+    if generator is None:
+        names = ", ".join(sorted(registry)) or "(none)"
+        raise SystemExit(f"unknown generator {args.generator!r}; available: {names}")
 
     host = api_key = None
     if args.llm:
@@ -90,9 +69,16 @@ async def _serve(args) -> None:
         if not api_key:
             raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
 
-    result = await _generate_world(actor, args, host=host, api_key=api_key)
-    print(f"Generated world {args.seed!r}: {len(result.rooms)} rooms, "
-          f"{len(result.characters)} characters.")
+    options = GenOptions(
+        llm=args.llm,
+        model=args.ollama_model,
+        host=host,
+        api_key=api_key,
+        max_rooms=args.max_rooms,
+    )
+    result = await generator.generate(actor, args.seed, options)
+    print(f"Generated world {args.seed!r} via {generator.name!r}: "
+          f"{len(result.rooms)} rooms, {len(result.characters)} characters.")
 
     if args.llm:
         from .llm_agents import OllamaAgent
@@ -126,10 +112,10 @@ def main(argv: list[str] | None = None) -> int:
         "--ollama-model", default=DEFAULT_MODEL, help=f"Ollama model (default: {DEFAULT_MODEL})"
     )
     serve.add_argument(
-        "--recursive", action="store_true", help="generate the world breadth-first (graph-based)"
+        "--generator", default="oneshot", help="world generator to use (e.g. oneshot, recursive)"
     )
     serve.add_argument(
-        "--max-rooms", type=int, default=6, help="room budget for recursive generation"
+        "--max-rooms", type=int, default=6, help="room budget for graph-based generators"
     )
     serve.add_argument("--ticks", type=int, default=10, help="number of ticks (0 = run forever)")
     serve.add_argument("--tick-seconds", type=float, default=1.0, help="real seconds per tick")

@@ -5,6 +5,13 @@ breadth-first ``RecursiveWorldGenerator`` that grows the room graph node-by-node
 """
 
 from .builder import StubWorldBuilder, WorldBuilder
+from .generators import (
+    GenOptions,
+    WorldGenerator,
+    collect_generators,
+    oneshot_generator,
+    recursive_generator,
+)
 from .instantiate import InstantiatedWorld, instantiate, validate_proposal
 from .proposal import (
     CharacterProposal,
@@ -32,6 +39,7 @@ __all__ = [
     "DanglingResolution",
     "DoorProposal",
     "ExitSpec",
+    "GenOptions",
     "InstantiatedWorld",
     "ItemProposal",
     "ObjectSpec",
@@ -44,7 +52,11 @@ __all__ = [
     "StubRecursiveBuilder",
     "StubWorldBuilder",
     "WorldBuilder",
+    "WorldGenerator",
     "WorldProposal",
+    "collect_generators",
     "instantiate",
+    "oneshot_generator",
+    "recursive_generator",
     "validate_proposal",
 ]

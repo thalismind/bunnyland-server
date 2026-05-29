@@ -22,18 +22,28 @@ from bunnyland.plugins import (
     resolve_order,
     select,
 )
-from bunnyland.plugins.builtin import CORE_VERBS, LIFESIM, MEMORY
+from bunnyland.plugins.builtin import CORE_VERBS, LIFESIM, MEMORY, WORLDGEN
 
 
 def test_builtin_plugins_declared():
     ids = {p.id for p in bunnyland_plugins()}
-    assert ids == {CORE_VERBS, LIFESIM, MEMORY}
+    assert ids == {CORE_VERBS, LIFESIM, MEMORY, WORLDGEN}
 
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 3
+    assert len(select(plugins, None)) == 4
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
+
+
+def test_worldgen_plugin_contributes_named_generators():
+    from bunnyland.worldgen import collect_generators
+
+    registry = collect_generators(bunnyland_plugins())
+    assert {"oneshot", "recursive"} <= set(registry)
+    # generators are selected by name and disappear if the plugin is dropped
+    without = collect_generators([p for p in bunnyland_plugins() if p.id != WORLDGEN])
+    assert without == {}
 
 
 def test_select_unknown_id_raises():

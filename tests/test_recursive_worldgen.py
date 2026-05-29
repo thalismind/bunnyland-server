@@ -18,8 +18,11 @@ from bunnyland.core.events import WorldGeneratedEvent
 from bunnyland.mechanics.consumables import FoodComponent
 from bunnyland.worldgen import (
     DanglingResolution,
+    GenOptions,
     RecursiveWorldGenerator,
     StubRecursiveBuilder,
+    oneshot_generator,
+    recursive_generator,
 )
 
 
@@ -141,3 +144,13 @@ async def test_emits_world_generated_event():
 
 def test_dangling_resolution_defaults_to_seal():
     assert DanglingResolution().action == "seal"
+
+
+async def test_builtin_generator_functions_produce_worlds_offline():
+    options = GenOptions(llm=False, max_rooms=3)
+
+    one = await oneshot_generator(WorldActor(), "seed", options)
+    assert one.rooms and one.characters
+
+    many = await recursive_generator(WorldActor(), "seed", options)
+    assert len(many.rooms) == 3 and many.characters
