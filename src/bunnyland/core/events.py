@@ -112,6 +112,26 @@ class ActorMovedEvent(DomainEvent):
 
 
 # --------------------------------------------------------------------------------------
+# Inventory / object events (spec 18.3)
+# --------------------------------------------------------------------------------------
+
+
+class ItemTakenEvent(DomainEvent):
+    item_id: str
+    from_container_id: str
+
+
+class ItemPutEvent(DomainEvent):
+    item_id: str
+    to_container_id: str
+
+
+class ItemDroppedEvent(DomainEvent):
+    item_id: str
+    room_id_dropped: str
+
+
+# --------------------------------------------------------------------------------------
 # Event bus
 # --------------------------------------------------------------------------------------
 
@@ -155,4 +175,7 @@ __all__ = [
     "EventBus",
     "EventVisibility",
     "FocusPointsChangedEvent",
+    "ItemDroppedEvent",
+    "ItemPutEvent",
+    "ItemTakenEvent",
 ]

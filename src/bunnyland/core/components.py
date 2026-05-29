@@ -12,6 +12,8 @@ from __future__ import annotations
 from pydantic.dataclasses import dataclass
 from relics import Component
 
+from .edges import ContainmentMode
+
 # --------------------------------------------------------------------------------------
 # Identity and lifecycle (spec 11.1)
 # --------------------------------------------------------------------------------------
@@ -69,6 +71,34 @@ class CharacterComponent(Component):
     species: str = "bunny"
     biography: str = ""
     public: bool = True
+
+
+# --------------------------------------------------------------------------------------
+# Physical objects and inventory (spec 11.5)
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PortableComponent(Component):
+    can_pick_up: bool = True
+    min_strength: float = 0.0
+    requires_tool: bool = False
+
+
+@dataclass(frozen=True)
+class ContainerComponent(Component):
+    allow_add: bool = True
+    allow_remove: bool = True
+    max_slots: int | None = None
+    open: bool = True
+    transparent: bool = False
+    locked: bool = False
+
+
+@dataclass(frozen=True)
+class InventoryComponent(Component):
+    max_slots: int | None = 20
+    default_drop_mode: ContainmentMode = ContainmentMode.ROOM_CONTENT
 
 
 # --------------------------------------------------------------------------------------
@@ -132,11 +162,14 @@ __all__ = [
     "CharacterComponent",
     "DeadComponent",
     "DescriptionComponent",
+    "ContainerComponent",
     "DownedComponent",
     "FocusPointsComponent",
     "IdentityComponent",
     "InitiativeComponent",
+    "InventoryComponent",
     "LifecycleComponent",
+    "PortableComponent",
     "RoomComponent",
     "SuspendedComponent",
     "WorldClockComponent",

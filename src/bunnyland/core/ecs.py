@@ -78,6 +78,13 @@ def container_of(entity: Entity):
     return source_id
 
 
+def contents(entity: Entity) -> list[EntityId]:
+    """Return the ids of entities directly contained by ``entity`` (outgoing ``Contains``)."""
+    from .edges import Contains
+
+    return [target_id for _edge, target_id in entity.get_relationships(Contains)]
+
+
 __all__ = [
     "BLANK_PREFAB",
     "Component",
@@ -85,6 +92,7 @@ __all__ = [
     "EntityId",
     "World",
     "container_of",
+    "contents",
     "ensure_blank_prefab",
     "get_or_none",
     "parse_entity_id",

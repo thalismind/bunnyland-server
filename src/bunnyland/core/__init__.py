@@ -17,13 +17,16 @@ from .commands import (
 from .components import (
     ActionPointsComponent,
     CharacterComponent,
+    ContainerComponent,
     DeadComponent,
     DescriptionComponent,
     DownedComponent,
     FocusPointsComponent,
     IdentityComponent,
     InitiativeComponent,
+    InventoryComponent,
     LifecycleComponent,
+    PortableComponent,
     RoomComponent,
     SuspendedComponent,
     WorldClockComponent,
@@ -35,13 +38,14 @@ from .controllers import (
 )
 from .ecs import (
     container_of,
+    contents,
     parse_entity_id,
     replace_component,
     spawn_entity,
 )
 from .edges import ContainmentMode, Contains, ControlledBy, ExitTo, Holding, Wearing
 from .events import DomainEvent, EventBus, EventVisibility
-from .handlers import HandlerContext, HandlerResult, MoveHandler
+from .handlers import HandlerContext, HandlerResult, MoveHandler, PutHandler, TakeHandler
 from .queue import CommandQueues
 from .world_actor import WorldActor
 
@@ -51,6 +55,7 @@ __all__ = [
     "Command",
     "CommandCost",
     "CommandQueues",
+    "ContainerComponent",
     "Contains",
     "ContainmentMode",
     "ControlledBy",
@@ -68,22 +73,27 @@ __all__ = [
     "Holding",
     "IdentityComponent",
     "InitiativeComponent",
+    "InventoryComponent",
     "LLMControllerComponent",
     "Lane",
     "LifecycleComponent",
     "MoveCommand",
     "MoveHandler",
     "OnInsufficientPoints",
+    "PortableComponent",
+    "PutHandler",
     "RoomComponent",
     "SubmittedCommand",
     "SuspendedComponent",
     "SuspendedControllerComponent",
+    "TakeHandler",
     "WaitCommand",
     "Wearing",
     "WorldActor",
     "WorldClockComponent",
     "build_submitted_command",
     "container_of",
+    "contents",
     "parse_entity_id",
     "replace_component",
     "spawn_entity",
