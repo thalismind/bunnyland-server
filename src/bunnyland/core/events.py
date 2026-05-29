@@ -179,6 +179,22 @@ class SpeechToldEvent(DomainEvent):
 
 
 # --------------------------------------------------------------------------------------
+# Private notes / memory events (spec 15, 18.4). Always private to the character.
+# --------------------------------------------------------------------------------------
+
+
+class NoteTakenEvent(DomainEvent):
+    note_id: str
+    text: str
+
+
+class NotesSearchedEvent(DomainEvent):
+    query: str | None
+    mode: str
+    results: tuple[str, ...] = ()
+
+
+# --------------------------------------------------------------------------------------
 # Event bus
 # --------------------------------------------------------------------------------------
 
@@ -229,6 +245,8 @@ __all__ = [
     "ItemPutEvent",
     "ItemTakenEvent",
     "ItemUsedEvent",
+    "NoteTakenEvent",
+    "NotesSearchedEvent",
     "PhysicalWriteEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",

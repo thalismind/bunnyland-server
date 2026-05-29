@@ -107,6 +107,15 @@ class HealthComponent(Component):
     maximum: float = 100.0
 
 
+@dataclass(frozen=True)
+class MemoryProfileComponent(Component):
+    """Names a character's private memory/notes collection (spec 11.16)."""
+
+    vector_collection: str
+    last_event_seen_id: str | None = None
+    last_reflection_epoch: int = 0
+
+
 # --------------------------------------------------------------------------------------
 # Physical objects and inventory (spec 11.5)
 # --------------------------------------------------------------------------------------
@@ -267,6 +276,7 @@ __all__ = [
     "LifecycleComponent",
     "LightComponent",
     "LockableComponent",
+    "MemoryProfileComponent",
     "PortableComponent",
     "ReadableComponent",
     "RoomComponent",
