@@ -199,6 +199,17 @@ class NotesSearchedEvent(DomainEvent):
 
 
 # --------------------------------------------------------------------------------------
+# World generation events (spec 18.3, 22)
+# --------------------------------------------------------------------------------------
+
+
+class WorldGeneratedEvent(DomainEvent):
+    seed: str
+    room_count: int
+    character_count: int
+
+
+# --------------------------------------------------------------------------------------
 # Event bus
 # --------------------------------------------------------------------------------------
 
@@ -255,4 +266,5 @@ __all__ = [
     "PhysicalWriteEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",
+    "WorldGeneratedEvent",
 ]
