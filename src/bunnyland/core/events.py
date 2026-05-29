@@ -132,6 +132,25 @@ class ItemDroppedEvent(DomainEvent):
 
 
 # --------------------------------------------------------------------------------------
+# Speech events (spec 14, 18.3). Visibility distinguishes room speech from directed.
+# --------------------------------------------------------------------------------------
+
+
+class SpeechSaidEvent(DomainEvent):
+    text: str
+    author_intent: str | None = None
+    inferred_intent: str | None = None
+    final_interpretation: str | None = None
+
+
+class SpeechToldEvent(DomainEvent):
+    text: str
+    author_intent: str | None = None
+    inferred_intent: str | None = None
+    final_interpretation: str | None = None
+
+
+# --------------------------------------------------------------------------------------
 # Event bus
 # --------------------------------------------------------------------------------------
 
@@ -178,4 +197,6 @@ __all__ = [
     "ItemDroppedEvent",
     "ItemPutEvent",
     "ItemTakenEvent",
+    "SpeechSaidEvent",
+    "SpeechToldEvent",
 ]

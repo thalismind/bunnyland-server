@@ -3,6 +3,7 @@
 from .base import CommandHandler, HandlerContext, HandlerResult, ok, rejected
 from .inventory import PutHandler, TakeHandler
 from .movement import MoveHandler
+from .speech import SayHandler, TellHandler, infer_intent
 
 __all__ = [
     "CommandHandler",
@@ -10,7 +11,10 @@ __all__ = [
     "HandlerResult",
     "MoveHandler",
     "PutHandler",
+    "SayHandler",
     "TakeHandler",
+    "TellHandler",
+    "infer_intent",
     "ok",
     "rejected",
 ]

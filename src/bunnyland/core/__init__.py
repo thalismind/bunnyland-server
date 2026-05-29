@@ -10,7 +10,10 @@ from .commands import (
     Lane,
     MoveCommand,
     OnInsufficientPoints,
+    SayCommand,
+    SpeechIntent,
     SubmittedCommand,
+    TellCommand,
     WaitCommand,
     build_submitted_command,
 )
@@ -45,7 +48,16 @@ from .ecs import (
 )
 from .edges import ContainmentMode, Contains, ControlledBy, ExitTo, Holding, Wearing
 from .events import DomainEvent, EventBus, EventVisibility
-from .handlers import HandlerContext, HandlerResult, MoveHandler, PutHandler, TakeHandler
+from .handlers import (
+    HandlerContext,
+    HandlerResult,
+    MoveHandler,
+    PutHandler,
+    SayHandler,
+    TakeHandler,
+    TellHandler,
+    infer_intent,
+)
 from .queue import CommandQueues
 from .world_actor import WorldActor
 
@@ -83,10 +95,15 @@ __all__ = [
     "PortableComponent",
     "PutHandler",
     "RoomComponent",
+    "SayCommand",
+    "SayHandler",
+    "SpeechIntent",
     "SubmittedCommand",
     "SuspendedComponent",
     "SuspendedControllerComponent",
     "TakeHandler",
+    "TellCommand",
+    "TellHandler",
     "WaitCommand",
     "Wearing",
     "WorldActor",
@@ -94,6 +111,7 @@ __all__ = [
     "build_submitted_command",
     "container_of",
     "contents",
+    "infer_intent",
     "parse_entity_id",
     "replace_component",
     "spawn_entity",

@@ -21,6 +21,26 @@ class Lane(StrEnum):
     WORLD = "world"
 
 
+class SpeechIntent(StrEnum):
+    """Social meaning of an utterance (spec 14.2). Evolves during implementation."""
+
+    NEUTRAL = "neutral"
+    INFORM = "inform"
+    QUESTION = "question"
+    REQUEST = "request"
+    OFFER = "offer"
+    JOKE = "joke"
+    INSULT = "insult"
+    THREAT = "threat"
+    COMFORT = "comfort"
+    APOLOGY = "apology"
+    PRAISE = "praise"
+    FLIRT = "flirt"
+    CONFESSION = "confession"
+    PROMISE = "promise"
+    GOSSIP = "gossip"
+
+
 class OnInsufficientPoints(StrEnum):
     """What to do when a character cannot yet afford a command (spec 5.1)."""
 
@@ -70,6 +90,23 @@ class MoveCommand(Command):
 
 
 @dataclass(frozen=True)
+class SayCommand(Command):
+    """Room-scoped speech (spec 13.8)."""
+
+    text: str = ""
+    intent: SpeechIntent | None = None
+
+
+@dataclass(frozen=True)
+class TellCommand(Command):
+    """Speech directed to one character (spec 13.8)."""
+
+    target_id: str = ""
+    text: str = ""
+    intent: SpeechIntent | None = None
+
+
+@dataclass(frozen=True)
 class WaitCommand(Command):
     """No-op; yields the character's turn (spec 13.1)."""
 
@@ -111,6 +148,9 @@ __all__ = [
     "Lane",
     "MoveCommand",
     "OnInsufficientPoints",
+    "SayCommand",
+    "SpeechIntent",
     "SubmittedCommand",
+    "TellCommand",
     "WaitCommand",
 ]
