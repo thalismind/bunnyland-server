@@ -23,8 +23,10 @@ from .commands import Lane, OnInsufficientPoints, SubmittedCommand
 from .components import (
     ActionPointsComponent,
     DeadComponent,
+    DownedComponent,
     FocusPointsComponent,
     InitiativeComponent,
+    SleepingComponent,
     SuspendedComponent,
     WorldClockComponent,
 )
@@ -43,6 +45,7 @@ from .events import (
     FocusPointsChangedEvent,
 )
 from .handlers import CommandHandler, HandlerContext
+from .handlers.lifecycle import WakeHandler
 from .queue import CommandQueues
 from .systems import ActionFocusRegenSystem, WorldClockSystem
 
@@ -200,6 +203,18 @@ class WorldActor:
         if character.has_component(SuspendedComponent):
             self.queues.pop(character_id, lane)
             await self._reject(command, "character is suspended")
+            return _LaneOutcome(executed=False, stop_lane=False)
+        if character.has_component(DownedComponent):
+            self.queues.pop(character_id, lane)
+            await self._reject(command, "character is downed")
+            return _LaneOutcome(executed=False, stop_lane=False)
+        # Asleep characters may only wake (spec 11.11, 19).
+        if (
+            character.has_component(SleepingComponent)
+            and command.command_type != WakeHandler.command_type
+        ):
+            self.queues.pop(character_id, lane)
+            await self._reject(command, "character is asleep")
             return _LaneOutcome(executed=False, stop_lane=False)
 
         # Affordability (points are checked, but spent only on handler success).

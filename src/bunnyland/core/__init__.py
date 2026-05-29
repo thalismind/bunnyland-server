@@ -31,6 +31,7 @@ from .components import (
     LifecycleComponent,
     PortableComponent,
     RoomComponent,
+    SleepingComponent,
     SuspendedComponent,
     WorldClockComponent,
 )
@@ -54,8 +55,11 @@ from .handlers import (
     MoveHandler,
     PutHandler,
     SayHandler,
+    SleepHandler,
     TakeHandler,
     TellHandler,
+    WaitHandler,
+    WakeHandler,
     infer_intent,
 )
 from .queue import CommandQueues
@@ -97,6 +101,8 @@ __all__ = [
     "RoomComponent",
     "SayCommand",
     "SayHandler",
+    "SleepHandler",
+    "SleepingComponent",
     "SpeechIntent",
     "SubmittedCommand",
     "SuspendedComponent",
@@ -105,6 +111,8 @@ __all__ = [
     "TellCommand",
     "TellHandler",
     "WaitCommand",
+    "WaitHandler",
+    "WakeHandler",
     "Wearing",
     "WorldActor",
     "WorldClockComponent",

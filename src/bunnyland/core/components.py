@@ -143,6 +143,19 @@ class SuspendedComponent(Component):
 
 
 @dataclass(frozen=True)
+class SleepingComponent(Component):
+    """Marker for a sleeping character (spec 11.11).
+
+    Sleeping characters do not act (only ``wake``) and do not perceive speech by default
+    (spec 19). Distinct from the fatigue meter, which is a separate need mechanic.
+    """
+
+    started_at_epoch: int = 0
+    safe_sleep: bool = True
+    wake_when_recharged: bool = False
+
+
+@dataclass(frozen=True)
 class DownedComponent(Component):
     downed_at_epoch: int
     cause: str
@@ -171,6 +184,7 @@ __all__ = [
     "LifecycleComponent",
     "PortableComponent",
     "RoomComponent",
+    "SleepingComponent",
     "SuspendedComponent",
     "WorldClockComponent",
 ]

@@ -2,6 +2,7 @@
 
 from .base import CommandHandler, HandlerContext, HandlerResult, ok, rejected
 from .inventory import PutHandler, TakeHandler
+from .lifecycle import SleepHandler, WaitHandler, WakeHandler
 from .movement import MoveHandler
 from .speech import SayHandler, TellHandler, infer_intent
 
@@ -12,8 +13,11 @@ __all__ = [
     "MoveHandler",
     "PutHandler",
     "SayHandler",
+    "SleepHandler",
     "TakeHandler",
     "TellHandler",
+    "WaitHandler",
+    "WakeHandler",
     "infer_intent",
     "ok",
     "rejected",

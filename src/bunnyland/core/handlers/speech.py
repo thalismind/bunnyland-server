@@ -16,7 +16,12 @@ from typing import Any
 from relics import EntityId
 
 from ..commands import SpeechIntent, SubmittedCommand
-from ..components import CharacterComponent, DeadComponent, SuspendedComponent
+from ..components import (
+    CharacterComponent,
+    DeadComponent,
+    SleepingComponent,
+    SuspendedComponent,
+)
 from ..ecs import container_of, contents, parse_entity_id
 from ..events import EventVisibility, SpeechSaidEvent, SpeechToldEvent
 from .base import HandlerContext, HandlerResult, ok, rejected
@@ -56,6 +61,7 @@ def _is_active_awake(entity) -> bool:
         entity.has_component(CharacterComponent)
         and not entity.has_component(SuspendedComponent)
         and not entity.has_component(DeadComponent)
+        and not entity.has_component(SleepingComponent)
     )
 
 
