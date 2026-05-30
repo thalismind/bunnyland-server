@@ -296,6 +296,46 @@ def _status_edge(entity: Entity, target_id: EntityId) -> RelationshipStatus | No
     return None
 
 
+def parents_of(world: World, child_id: EntityId) -> tuple[str, ...]:
+    parents = []
+    for parent in world.query().with_all([CharacterComponent]).execute_entities():
+        if parent.has_relationship(ParentOf, child_id):
+            parents.append(str(parent.id))
+    return tuple(sorted(parents))
+
+
+def children_of(world: World, parent_id: EntityId) -> tuple[str, ...]:
+    parent = world.get_entity(parent_id)
+    return tuple(sorted(str(child_id) for _edge, child_id in parent.get_relationships(ParentOf)))
+
+
+def partners_of(world: World, character_id: EntityId) -> tuple[str, ...]:
+    character = world.get_entity(character_id)
+    return tuple(
+        sorted(
+            str(target_id)
+            for edge, target_id in character.get_relationships(PartnerOf)
+            if edge.status == "together"
+        )
+    )
+
+
+def kinship_label(world: World, source_id: EntityId, target_id: EntityId) -> str | None:
+    if source_id == target_id:
+        return "self"
+    source_parents = set(parents_of(world, source_id))
+    target_parents = set(parents_of(world, target_id))
+    if str(target_id) in source_parents:
+        return "parent"
+    if str(source_id) in target_parents:
+        return "child"
+    if str(target_id) in partners_of(world, source_id):
+        return "partner"
+    if source_parents and source_parents == target_parents:
+        return "sibling"
+    return None
+
+
 class ChooseAspirationHandler:
     command_type = "choose-aspiration"
 
@@ -1217,8 +1257,12 @@ __all__ = [
     "SellItemHandler",
     "WorkShiftCompletedEvent",
     "adult_classifier",
+    "children_of",
     "install_lifesim",
+    "kinship_label",
     "lifesim_fragments",
+    "parents_of",
+    "partners_of",
     "pregnancy_classifier",
     "romance_classifier",
 ]

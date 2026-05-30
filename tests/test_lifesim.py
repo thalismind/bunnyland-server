@@ -65,6 +65,7 @@ from bunnyland.mechanics.lifesim import (
     StartPregnancyHandler,
     WorkShiftCompletedEvent,
     install_lifesim,
+    kinship_label,
     lifesim_fragments,
 )
 from bunnyland.mechanics.policy import (
@@ -496,3 +497,19 @@ def test_lifesim_fragments_describe_parents():
     fragments = lifesim_fragments(scenario.actor.world, scenario.actor.world.get_entity(child))
 
     assert any("Your parents: Juniper" in line for line in fragments)
+
+
+def test_kinship_queries_return_parent_child_partner_and_sibling_labels():
+    scenario = build_scenario()
+    parent = scenario.actor.world.get_entity(scenario.character)
+    child = _child(scenario, name="Clover")
+    sibling = _child(scenario, name="Fern")
+    partner = _co_parent(scenario)
+    parent.add_relationship(ParentOf(), child)
+    parent.add_relationship(ParentOf(), sibling)
+    parent.add_relationship(PartnerOf(since_epoch=0), partner)
+
+    assert kinship_label(scenario.actor.world, child, scenario.character) == "parent"
+    assert kinship_label(scenario.actor.world, scenario.character, child) == "child"
+    assert kinship_label(scenario.actor.world, scenario.character, partner) == "partner"
+    assert kinship_label(scenario.actor.world, child, sibling) == "sibling"
