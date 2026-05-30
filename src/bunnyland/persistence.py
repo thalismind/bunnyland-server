@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from relics import Component, Edge
 
 from .core.world_actor import WorldActor
-from .plugins import apply_plugins
+from .plugins import PluginError, apply_plugins
 
 if TYPE_CHECKING:
     from .plugins.model import Plugin
@@ -161,6 +161,11 @@ def load_world(
 
     actor = WorldActor()
     if plugins is not None:
+        available = {plugin.id for plugin in plugins}
+        missing = tuple(plugin_id for plugin_id in meta.plugins if plugin_id not in available)
+        if missing:
+            names = ", ".join(repr(plugin_id) for plugin_id in missing)
+            raise PluginError(f"saved world depends on missing plugin(s): {names}")
         apply_plugins(plugins, actor)
 
     component_registry, edge_registry = type_registries(plugins)

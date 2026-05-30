@@ -82,7 +82,11 @@ async def _serve(args) -> None:
             raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
 
     if args.load:
-        actor, meta = load_world(args.load, plugins=plugins)
+        try:
+            actor, meta = load_world(args.load, plugins=plugins)
+        except PluginError as exc:
+            logging.getLogger(__name__).error("plugin loading failed: %s", exc)
+            raise SystemExit(2) from exc
         print(f"Reloaded world from {args.load!r}: seed {meta.seed!r}, "
               f"generator {meta.generator!r}, game epoch {actor.epoch}s.")
     else:

@@ -8,8 +8,9 @@ from types import ModuleType
 import pytest
 
 from bunnyland.cli import main, select_plugins
-from bunnyland.persistence import WorldMeta, load_world
-from bunnyland.plugins import DependencyContribution, Plugin
+from bunnyland.core import WorldActor
+from bunnyland.persistence import WorldMeta, load_world, save_world
+from bunnyland.plugins import DependencyContribution, Plugin, PluginError, bunnyland_plugins
 from bunnyland.plugins.builtin import CORE_VERBS, WORLDGEN
 
 
@@ -77,3 +78,32 @@ def test_cli_save_records_namespaced_imported_plugin(monkeypatch, tmp_path):
     assert result == 0
     _actor, meta = load_world(path)
     assert meta.plugins == (WORLDGEN, "module_foo.bar")
+
+
+def test_load_rejects_saved_plugin_that_is_no_longer_available(tmp_path):
+    path = tmp_path / "world.json"
+    save_world(
+        WorldActor(),
+        path,
+        meta=WorldMeta(plugins=(WORLDGEN, "module_foo.bar")),
+    )
+    plugins = [plugin for plugin in bunnyland_plugins() if plugin.id == WORLDGEN]
+
+    with pytest.raises(PluginError, match="module_foo.bar"):
+        load_world(path, plugins=plugins)
+
+
+def test_cli_load_missing_saved_plugin_logs_error_and_exits(tmp_path, caplog):
+    path = tmp_path / "world.json"
+    save_world(
+        WorldActor(),
+        path,
+        meta=WorldMeta(plugins=(WORLDGEN, "module_foo.bar")),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main(["serve", "--load", str(path), "--plugin", WORLDGEN, "--ticks", "1"])
+
+    assert exc.value.code == 2
+    assert "plugin loading failed" in caplog.text
+    assert "module_foo.bar" in caplog.text
