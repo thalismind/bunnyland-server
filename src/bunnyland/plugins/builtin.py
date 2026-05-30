@@ -51,6 +51,7 @@ from ..mechanics.colonysim import (
     ReservedBy,
     ReserveHandler,
     ResourceNodeComponent,
+    ResourceRegenSystem,
     ResourceStackComponent,
     WorkstationComponent,
     colonysim_fragments,
@@ -299,6 +300,7 @@ def colonysim_plugin() -> Plugin:
                 JobComponent,
             ),
             edges=(ReservedBy, AssignedTo, Owns),
+            systems=(ResourceRegenSystem,),
         ),
         commands=CommandContribution(
             action_handlers=(

@@ -13,6 +13,7 @@ from bunnyland.core import (
     PortableComponent,
     build_submitted_command,
     parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import (
@@ -39,6 +40,7 @@ from bunnyland.mechanics.colonysim import (
     ReservedBy,
     ReserveHandler,
     ResourceNodeComponent,
+    ResourceRegenSystem,
     ResourceStackComponent,
     WorkstationComponent,
     colonysim_fragments,
@@ -56,6 +58,7 @@ def _install(actor):
     actor.register_handler(CompleteJobHandler())
     actor.register_handler(ClaimOwnershipHandler())
     actor.register_handler(ReleaseOwnershipHandler())
+    actor.world.register_system(ResourceRegenSystem())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -148,6 +151,22 @@ async def test_gather_resource_decrements_node_and_adds_inventory_stack():
     stack = scenario.actor.world.get_entity(parse_entity_id(gathered[0].stack_id))
     assert stack.get_component(ResourceStackComponent).resource_type == "wood"
     assert stack.get_component(ResourceStackComponent).quantity == 2
+
+
+async def test_resource_nodes_regenerate_to_maximum():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    node = _resource_node(scenario, current=1)
+    node_entity = scenario.actor.world.get_entity(node)
+    replace_component(
+        node_entity,
+        ResourceNodeComponent(resource_type="wood", current=1, maximum=4, regen_per_day=2.0)
+    )
+
+    await scenario.actor.tick(24 * 60 * 60)
+    await scenario.actor.tick(24 * 60 * 60)
+
+    assert node_entity.get_component(ResourceNodeComponent).current == 4
 
 
 async def test_gather_rejects_when_resource_reserved_by_someone_else():

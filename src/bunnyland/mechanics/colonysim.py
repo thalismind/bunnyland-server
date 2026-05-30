@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from pydantic.dataclasses import dataclass
-from relics import Component, Edge, Entity, EntityId, World
+from relics import Component, Edge, Entity, EntityId, Frequency, System, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import (
@@ -37,6 +37,8 @@ from ..core.events import (
     ResourceGatheredEvent,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+
+SECONDS_PER_DAY = 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,32 @@ class AssignedTo(Edge):
 @dataclass(frozen=True)
 class Owns(Edge):
     since_epoch: int
+
+
+class ResourceRegenSystem(System):
+    """Regenerate resource nodes up to their maximum from ``regen_per_day``."""
+
+    def query(self):
+        return self.q.with_all([ResourceNodeComponent])
+
+    def frequency(self) -> Frequency:
+        return Frequency.EVERY_TICK
+
+    def process(self, entities, components, delta) -> None:
+        days = delta / SECONDS_PER_DAY
+        if days <= 0:
+            return
+        for entity in entities:
+            node = entity.get_component(ResourceNodeComponent)
+            if node.regen_per_day <= 0 or node.current >= node.maximum:
+                continue
+            recovered = int(node.regen_per_day * days)
+            if recovered <= 0:
+                continue
+            replace_component(
+                entity,
+                replace(node, current=min(node.maximum, node.current + recovered)),
+            )
 
 
 def _reservation_holder(entity: Entity) -> EntityId | None:
@@ -545,6 +573,7 @@ __all__ = [
     "ReserveHandler",
     "ReservedBy",
     "ResourceNodeComponent",
+    "ResourceRegenSystem",
     "ResourceStackComponent",
     "WorkstationComponent",
     "colonysim_fragments",
