@@ -22,6 +22,8 @@ from bunnyland.core.events import (
     CharacterDefendedEvent,
     CombatChallengeEvent,
     CommandRejectedEvent,
+    FortificationBuiltEvent,
+    RaidStartedEvent,
 )
 from bunnyland.mechanics.barbariansim import (
     ArmorComponent,
@@ -29,6 +31,9 @@ from bunnyland.mechanics.barbariansim import (
     ChallengeHandler,
     DefendHandler,
     DefendingComponent,
+    FortificationComponent,
+    FortifyHandler,
+    RaidHandler,
     SparHandler,
     WeaponComponent,
     barbariansim_fragments,
@@ -46,6 +51,8 @@ def _install(actor, *, enabled=frozenset({BoundaryTag.PVP})):
     actor.register_handler(SparHandler())
     actor.register_handler(DefendHandler())
     actor.register_handler(ChallengeHandler())
+    actor.register_handler(FortifyHandler())
+    actor.register_handler(RaidHandler())
 
 
 def _target(scenario, *, health=20.0, armor=0.0):
@@ -184,11 +191,57 @@ async def test_challenge_emits_roleplay_event_without_pvp_gate():
     assert challenges[0].terms == "first touch"
 
 
+async def test_fortify_current_room_and_raid_damage_fortification():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset())
+    built: list[FortificationBuiltEvent] = []
+    raids: list[RaidStartedEvent] = []
+    scenario.actor.bus.subscribe(FortificationBuiltEvent, built.append)
+    scenario.actor.bus.subscribe(RaidStartedEvent, raids.append)
+
+    await scenario.actor.submit(_cmd(scenario, "fortify", strength=2.0))
+    await scenario.actor.tick(HOUR)
+
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    fortification = room.get_component(FortificationComponent)
+    assert fortification.rating == 2.0
+    assert fortification.durability == 10.0
+    assert built[0].target_id == str(scenario.room_a)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "raid", target_id=str(scenario.room_a), intensity=5.0)
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert raids[0].damage == 3.0
+    assert room.get_component(FortificationComponent).durability == 7.0
+
+
+async def test_fortify_rejects_unreachable_target():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset())
+    target = _target(scenario)
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, target)
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), target
+    )
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "fortify", target_id=str(target)))
+    await scenario.actor.tick(HOUR)
+
+    assert any("not reachable" in event.reason for event in rejects)
+
+
 def test_barbariansim_fragments_show_defense_armor_and_weapons():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(DefendingComponent(started_at_epoch=0))
     character.add_component(ArmorComponent(rating=1.5))
+    scenario.actor.world.get_entity(scenario.room_a).add_component(
+        FortificationComponent(rating=2.0, durability=8.0)
+    )
     _weapon(scenario)
 
     fragments = barbariansim_fragments(scenario.actor.world, character)
@@ -196,3 +249,4 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     assert any("defending" in line for line in fragments)
     assert any("armor rating" in line for line in fragments)
     assert any("Reachable weapon" in line for line in fragments)
+    assert any("Reachable fortification" in line for line in fragments)

@@ -52,7 +52,7 @@ def _add_item(scenario, name, *, container=False):
 def test_tool_schemas_cover_every_verb():
     names = {s["function"]["name"] for s in tool_schemas()}
     assert names == set(tool_names())
-    assert {"move", "say", "take", "drop", "take_note", "remember", "wait"} <= names
+    assert {"move", "say", "take", "drop", "take_note", "remember", "reflect", "wait"} <= names
 
 
 def test_command_from_tool_call_renames_drop_to_put():
@@ -102,6 +102,9 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     )
     assert parse_natural_command("take note the basin is cold") == ToolCall(
         "take_note", {"text": "the basin is cold"}
+    )
+    assert parse_natural_command("reflect on the basin") == ToolCall(
+        "reflect", {"text": "on the basin"}
     )
     assert parse_natural_command("wait") == ToolCall("wait", {})
 

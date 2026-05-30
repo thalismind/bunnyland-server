@@ -14,7 +14,12 @@ from bunnyland.core import (
     build_submitted_command,
     replace_component,
 )
-from bunnyland.core.events import CommandRejectedEvent, NotesSearchedEvent, NoteTakenEvent
+from bunnyland.core.events import (
+    CommandRejectedEvent,
+    NotesSearchedEvent,
+    NoteTakenEvent,
+    ReflectionCreatedEvent,
+)
 from bunnyland.memory import InMemoryStore, install_memory
 
 HOUR = 3600.0
@@ -49,6 +54,19 @@ def remember_cmd(scenario, query=None, mode="recent", limit=5):
         cost=CommandCost(focus=1),
         lane=Lane.FOCUS,
         payload={"query": query, "mode": mode, "limit": limit},
+    )
+
+
+def reflect_cmd(scenario, text="", query=None, mode="recent", limit=5):
+    payload = {"text": text, "query": query, "mode": mode, "limit": limit}
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="reflect",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload=payload,
     )
 
 
@@ -169,6 +187,41 @@ async def test_shared_notes_reject_unavailable_collection():
     await scenario.actor.tick(0.0)
 
     assert any(r.reason == "shared collection is not available" for r in rejects)
+
+
+async def test_reflect_summarizes_recent_notes_into_private_memory():
+    scenario, store = memory_scenario()
+    reflected = collect(scenario.actor, ReflectionCreatedEvent)
+    profile_before = scenario.actor.world.get_entity(scenario.character).get_component(
+        MemoryProfileComponent
+    )
+
+    await scenario.actor.submit(note_cmd(scenario, "Hazel distrusts the basin."))
+    await scenario.actor.submit(note_cmd(scenario, "The north tunnel is cold."))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(reflect_cmd(scenario, limit=2))
+    await scenario.actor.tick(0.0)
+
+    assert reflected[-1].visibility == "private"
+    assert "Reflection:" in reflected[-1].text
+    assert "north tunnel" in reflected[-1].text
+    assert len(reflected[-1].source_note_ids) == 2
+    entries = store.search("juniper", query="reflection", mode="keyword")
+    assert entries[0].source == "reflection"
+    profile_after = scenario.actor.world.get_entity(scenario.character).get_component(
+        MemoryProfileComponent
+    )
+    assert profile_after.last_reflection_epoch >= profile_before.last_reflection_epoch
+
+
+async def test_reflect_rejects_without_notes_or_text():
+    scenario, _store = memory_scenario()
+    rejects = collect(scenario.actor, CommandRejectedEvent)
+
+    await scenario.actor.submit(reflect_cmd(scenario))
+    await scenario.actor.tick(0.0)
+
+    assert any(r.reason == "nothing to reflect on" for r in rejects)
 
 
 async def test_focus_lane_note_does_not_consume_world_action():

@@ -13,8 +13,8 @@ from typing import Any
 
 from ..core.commands import SubmittedCommand
 from ..core.components import MemoryProfileComponent
-from ..core.ecs import parse_entity_id
-from ..core.events import NotesSearchedEvent, NoteTakenEvent
+from ..core.ecs import parse_entity_id, replace_component
+from ..core.events import NotesSearchedEvent, NoteTakenEvent, ReflectionCreatedEvent
 from ..core.handlers.base import HandlerContext, HandlerResult, ok, rejected
 from .store import MemoryStore
 
@@ -112,4 +112,66 @@ class RememberHandler:
         )
 
 
-__all__ = ["RememberHandler", "TakeNoteHandler"]
+class ReflectHandler:
+    command_type = "reflect"
+
+    def __init__(self, store: MemoryStore) -> None:
+        self.store = store
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        payload: Mapping[str, Any] = command.payload
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(MemoryProfileComponent):
+            return rejected("character has no memory profile")
+        profile = character.get_component(MemoryProfileComponent)
+
+        limit = int(payload.get("limit", 5))
+        if limit <= 0:
+            return rejected("reflection limit must be positive")
+        entries = self.store.search(
+            profile.vector_collection,
+            query=payload.get("query"),
+            mode=str(payload.get("mode", "recent")),
+            limit=limit,
+        )
+        explicit = str(payload.get("text", "")).strip()
+        if explicit:
+            text = explicit
+        elif entries:
+            text = "Reflection: " + " ".join(entry.text for entry in entries)
+        else:
+            return rejected("nothing to reflect on")
+
+        entry = self.store.add(
+            profile.vector_collection,
+            text=text,
+            tags=("reflection",),
+            created_at_epoch=ctx.epoch,
+            source="reflection",
+        )
+        replace_component(
+            character,
+            MemoryProfileComponent(
+                vector_collection=profile.vector_collection,
+                shared_collections=profile.shared_collections,
+                last_event_seen_id=profile.last_event_seen_id,
+                last_reflection_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            ReflectionCreatedEvent(
+                **ctx.event_base(
+                    visibility="private",
+                    actor_id=command.character_id,
+                    note_id=entry.id,
+                    text=text,
+                    source_note_ids=tuple(entry.id for entry in entries),
+                )
+            )
+        )
+
+
+__all__ = ["ReflectHandler", "RememberHandler", "TakeNoteHandler"]

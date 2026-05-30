@@ -12,6 +12,7 @@ from .room_summary import (
     RoomFacts,
     RoomObject,
     RoomSummaryProjection,
+    SummaryRenderer,
     build_room_facts,
     render_summary,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "RoomFacts",
     "RoomObject",
     "RoomSummaryProjection",
+    "SummaryRenderer",
     "build_room_facts",
     "perceive",
     "render_summary",

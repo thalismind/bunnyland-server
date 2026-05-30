@@ -9,7 +9,7 @@ instead of raw numbers so tiny changes don't churn the summary (spec 17.3).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
 from relics import (
@@ -177,6 +177,9 @@ def render_summary(facts: RoomFacts) -> str:
     return "\n".join(lines)
 
 
+SummaryRenderer = Callable[[RoomFacts], str]
+
+
 # --------------------------------------------------------------------------------------
 # Observers (spec 17.3): keep the cache honest by reacting to ECS changes directly
 # --------------------------------------------------------------------------------------
@@ -225,8 +228,9 @@ class RoomSummaryProjection:
     """Rebuilds room summaries lazily; Relics observers mark a room dirty when its own
     conditions, contents, or exits change (spec 11.4, 17.3)."""
 
-    def __init__(self, world: World) -> None:
+    def __init__(self, world: World, *, renderer: SummaryRenderer = render_summary) -> None:
         self.world = world
+        self.renderer = renderer
         self._attached = False
 
     def attach(self, world: World | None = None) -> RoomSummaryProjection:
@@ -296,7 +300,7 @@ class RoomSummaryProjection:
         replace_component(
             room,
             RoomSummaryComponent(
-                visible_summary=render_summary(facts),
+                visible_summary=self.renderer(facts),
                 last_updated_epoch=epoch,
                 version=previous_version + 1,
                 dirty=False,
@@ -309,6 +313,7 @@ __all__ = [
     "RoomFacts",
     "RoomObject",
     "RoomSummaryProjection",
+    "SummaryRenderer",
     "build_room_facts",
     "light_band",
     "render_summary",

@@ -190,6 +190,18 @@ class CombatChallengeEvent(DomainEvent):
     terms: str = ""
 
 
+class FortificationBuiltEvent(DomainEvent):
+    target_id: str
+    durability: float
+    rating: float
+
+
+class RaidStartedEvent(DomainEvent):
+    target_id: str
+    intensity: float
+    damage: float
+
+
 # --------------------------------------------------------------------------------------
 # Movement / world events
 # --------------------------------------------------------------------------------------
@@ -272,6 +284,12 @@ class NotesSearchedEvent(DomainEvent):
     collection: str | None = None
 
 
+class ReflectionCreatedEvent(DomainEvent):
+    note_id: str
+    text: str
+    source_note_ids: tuple[str, ...] = ()
+
+
 # --------------------------------------------------------------------------------------
 # World generation events (spec 18.3, 22)
 # --------------------------------------------------------------------------------------
@@ -335,6 +353,7 @@ __all__ = [
     "DomainEvent",
     "EventBus",
     "EventVisibility",
+    "FortificationBuiltEvent",
     "FocusPointsChangedEvent",
     "ItemDroppedEvent",
     "ItemCraftedEvent",
@@ -350,8 +369,10 @@ __all__ = [
     "PregnancyStartedEvent",
     "ReservationCreatedEvent",
     "ReservationReleasedEvent",
+    "RaidStartedEvent",
     "ResourceGatheredEvent",
     "PhysicalWriteEvent",
+    "ReflectionCreatedEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",
     "WorldGeneratedEvent",

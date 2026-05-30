@@ -26,6 +26,8 @@ from ..core.events import (
     CharacterDefendedEvent,
     CombatChallengeEvent,
     EventVisibility,
+    FortificationBuiltEvent,
+    RaidStartedEvent,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .policy import BoundaryTag, PolicyGate
@@ -50,6 +52,12 @@ class ArmorComponent(Component):
 class DefendingComponent(Component):
     started_at_epoch: int
     reduction: float = DEFEND_REDUCTION
+
+
+@dataclass(frozen=True)
+class FortificationComponent(Component):
+    rating: float = 1.0
+    durability: float = 10.0
 
 
 def pvp_classifier(command: SubmittedCommand):
@@ -232,6 +240,95 @@ class ChallengeHandler:
         )
 
 
+class FortifyHandler:
+    command_type = "fortify"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(actor_id)
+        if target_id is None:
+            target_id = container_of(character)
+        if target_id is None or not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        target = ctx.entity(target_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+
+        strength = float(command.payload.get("strength", 1.0))
+        if strength <= 0:
+            return rejected("fortification strength must be positive")
+        current = (
+            target.get_component(FortificationComponent)
+            if target.has_component(FortificationComponent)
+            else FortificationComponent(rating=0.0, durability=0.0)
+        )
+        updated = FortificationComponent(
+            rating=current.rating + strength,
+            durability=current.durability + strength * 5.0,
+        )
+        replace_component(target, updated)
+        return ok(
+            FortificationBuiltEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    durability=updated.durability,
+                    rating=updated.rating,
+                )
+            )
+        )
+
+
+class RaidHandler:
+    command_type = "raid"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None or target_id is None:
+            return rejected("invalid raider or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        character = ctx.entity(actor_id)
+        target = ctx.entity(target_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+
+        intensity = float(command.payload.get("intensity", 1.0))
+        if intensity <= 0:
+            return rejected("raid intensity must be positive")
+        fortification = (
+            target.get_component(FortificationComponent)
+            if target.has_component(FortificationComponent)
+            else FortificationComponent(rating=0.0, durability=0.0)
+        )
+        damage = max(0.0, intensity - fortification.rating)
+        if fortification.durability > 0:
+            replace_component(
+                target,
+                replace(fortification, durability=max(0.0, fortification.durability - damage)),
+            )
+        return ok(
+            RaidStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    intensity=intensity,
+                    damage=damage,
+                )
+            )
+        )
+
+
 def barbariansim_fragments(world: World, character) -> list[str]:
     lines: list[str] = []
     if character.has_component(DefendingComponent):
@@ -243,6 +340,11 @@ def barbariansim_fragments(world: World, character) -> list[str]:
         if entity.has_component(WeaponComponent):
             weapon = entity.get_component(WeaponComponent)
             lines.append(f"Reachable weapon: {weapon.damage_type} ({weapon.damage} damage).")
+        if entity.has_component(FortificationComponent):
+            fort = entity.get_component(FortificationComponent)
+            lines.append(
+                f"Reachable fortification: rating {fort.rating}, durability {fort.durability}."
+            )
     return sorted(lines)
 
 
@@ -256,6 +358,9 @@ __all__ = [
     "ChallengeHandler",
     "DefendHandler",
     "DefendingComponent",
+    "FortificationComponent",
+    "FortifyHandler",
+    "RaidHandler",
     "SparHandler",
     "WeaponComponent",
     "barbariansim_fragments",

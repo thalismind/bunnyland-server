@@ -89,6 +89,18 @@ def test_render_summary_is_deterministic_template():
     assert "Exits: north." in text
 
 
+def test_room_summary_projection_accepts_custom_renderer():
+    scenario = build_scenario()
+
+    projection = RoomSummaryProjection(
+        scenario.actor.world,
+        renderer=lambda facts: f"{facts.title}: prose from renderer",
+    ).attach()
+    summary = projection.summary(scenario.room_a, scenario.actor.epoch)
+
+    assert summary.visible_summary == "Mosslit Burrow: prose from renderer"
+
+
 # -- projection dirty/rebuild -----------------------------------------------------------
 
 

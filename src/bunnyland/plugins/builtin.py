@@ -27,6 +27,9 @@ from ..mechanics.barbariansim import (
     ChallengeHandler,
     DefendHandler,
     DefendingComponent,
+    FortificationComponent,
+    FortifyHandler,
+    RaidHandler,
     SparHandler,
     WeaponComponent,
     barbariansim_fragments,
@@ -311,10 +314,22 @@ def barbariansim_plugin() -> Plugin:
         name="Barbarian Sim",
         dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(
-            components=(WeaponComponent, ArmorComponent, DefendingComponent)
+            components=(
+                WeaponComponent,
+                ArmorComponent,
+                DefendingComponent,
+                FortificationComponent,
+            )
         ),
         commands=CommandContribution(
-            action_handlers=(AttackHandler, SparHandler, DefendHandler, ChallengeHandler)
+            action_handlers=(
+                AttackHandler,
+                SparHandler,
+                DefendHandler,
+                ChallengeHandler,
+                FortifyHandler,
+                RaidHandler,
+            )
         ),
         runtime=RuntimeContribution(service_factories=(install_barbariansim,)),
         content=ContentContribution(prompt_fragments=(barbariansim_fragments,)),
