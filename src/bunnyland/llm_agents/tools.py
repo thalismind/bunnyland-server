@@ -36,7 +36,15 @@ _FREE = CommandCost()
 #: Payload keys whose value names an entity (resolved name -> id during dispatch). Other
 #: keys (direction, text, intent, tags, query, mode, limit, collection) are free text.
 REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
-    {"exit_id", "item_id", "target_container_id", "target_id", "tool_id", "source_id"}
+    {
+        "child_id",
+        "exit_id",
+        "item_id",
+        "target_container_id",
+        "target_id",
+        "tool_id",
+        "source_id",
+    }
 )
 
 # tool name -> verb definition. ``drop`` and ``take_note`` rename to engine command types.
@@ -48,6 +56,7 @@ _VERBS: dict[str, _Verb] = {
     "use": _Verb("use", Lane.WORLD, _ACTION, ("target_id", "tool_id")),
     "eat": _Verb("eat", Lane.WORLD, _ACTION, ("item_id",)),
     "drink": _Verb("drink", Lane.WORLD, _ACTION, ("source_id",)),
+    "adopt_child": _Verb("adopt-child", Lane.WORLD, _ACTION, ("child_id",)),
     "say": _Verb("say", Lane.WORLD, _SPEECH, ("text", "intent")),
     "tell": _Verb("tell", Lane.WORLD, _SPEECH, ("target_id", "text", "intent")),
     "pickpocket": _Verb("pickpocket", Lane.WORLD, _ACTION, ("target_id", "item_id")),

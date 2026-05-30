@@ -56,6 +56,7 @@ def test_tool_schemas_cover_every_verb():
         "move",
         "say",
         "take",
+        "adopt_child",
         "drop",
         "pickpocket",
         "take_note",
@@ -112,6 +113,9 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     )
     assert parse_natural_command("pickpocket Hazel brass key") == ToolCall(
         "pickpocket", {"target_id": "Hazel", "item_id": "brass key"}
+    )
+    assert parse_natural_command("adopt Clover") == ToolCall(
+        "adopt_child", {"child_id": "Clover"}
     )
     assert parse_natural_command("take note the basin is cold") == ToolCall(
         "take_note", {"text": "the basin is cold"}

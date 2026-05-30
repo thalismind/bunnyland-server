@@ -16,12 +16,14 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import (
+    AdoptionCompletedEvent,
     BirthDueEvent,
     BirthResolvedEvent,
     CommandRejectedEvent,
     PartnershipStartedEvent,
 )
 from bunnyland.mechanics.lifesim import (
+    AdoptChildHandler,
     BirthDueComponent,
     LifeStageComponent,
     ParentOf,
@@ -50,6 +52,7 @@ def _install(actor):
     actor.register_handler(StartPartnershipHandler())
     actor.register_handler(StartPregnancyHandler())
     actor.register_handler(ResolveBirthHandler())
+    actor.register_handler(AdoptChildHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -61,6 +64,21 @@ def _co_parent(scenario, *, boundary=None):
     if boundary is not None:
         components.append(boundary)
     entity = spawn_entity(scenario.actor.world, components)
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
+    )
+    return entity.id
+
+
+def _child(scenario, *, name="Clover"):
+    entity = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=name, kind="character"),
+            CharacterComponent(species="bunny"),
+            LifeStageComponent(stage="child"),
+        ],
+    )
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
     )
@@ -180,11 +198,42 @@ async def test_resolve_birth_creates_child_and_parent_edges_after_resume():
     assert scenario.actor.world.get_entity(target).has_relationship(ParentOf, child.id)
 
 
+async def test_adopt_child_creates_parent_edge():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    child = _child(scenario)
+    adopted: list[AdoptionCompletedEvent] = []
+    scenario.actor.bus.subscribe(AdoptionCompletedEvent, adopted.append)
+
+    await scenario.actor.submit(_cmd(scenario, "adopt-child", child_id=str(child)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_relationship(ParentOf, child)
+    assert adopted[0].child_id == str(child)
+    assert adopted[0].parent_id == str(scenario.character)
+
+
+async def test_adopt_child_rejects_non_child_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _co_parent(scenario)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "adopt-child", child_id=str(target)))
+    await scenario.actor.tick(HOUR)
+
+    assert any(r.reason == "target is not a child" for r in rejects)
+
+
 def test_lifesim_fragments_describe_partner_and_pregnancy():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
     partner = _co_parent(scenario)
+    child = _child(scenario)
     character.add_relationship(PartnerOf(since_epoch=0), partner)
+    character.add_relationship(ParentOf(), child)
     character.add_component(
         PregnancyComponent(started_at_epoch=0, due_at_epoch=10, co_parent_ids=(str(partner),))
     )
@@ -193,3 +242,15 @@ def test_lifesim_fragments_describe_partner_and_pregnancy():
 
     assert any("partners with Hazel" in line for line in fragments)
     assert any("pregnant" in line for line in fragments)
+    assert any("Your children: Clover" in line for line in fragments)
+
+
+def test_lifesim_fragments_describe_parents():
+    scenario = build_scenario()
+    child = _child(scenario)
+    parent = scenario.actor.world.get_entity(scenario.character)
+    parent.add_relationship(ParentOf(), child)
+
+    fragments = lifesim_fragments(scenario.actor.world, scenario.actor.world.get_entity(child))
+
+    assert any("Your parents: Juniper" in line for line in fragments)

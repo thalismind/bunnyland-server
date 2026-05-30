@@ -62,6 +62,7 @@ from ..mechanics.environment import (
     install_environment,
 )
 from ..mechanics.lifesim import (
+    AdoptChildHandler,
     BirthDueComponent,
     EndPartnershipHandler,
     LifeStageComponent,
@@ -174,6 +175,7 @@ def lifesim_plugin() -> Plugin:
                 EndPartnershipHandler,
                 StartPregnancyHandler,
                 ResolveBirthHandler,
+                AdoptChildHandler,
             )
         ),
         runtime=RuntimeContribution(service_factories=(_install_affect, install_lifesim)),

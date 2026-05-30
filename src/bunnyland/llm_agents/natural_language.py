@@ -116,6 +116,10 @@ def parse_natural_command(text: str) -> ToolCall | None:
     if verb == "pickpocket" and len(words) >= 3:
         return ToolCall("pickpocket", {"target_id": words[1], "item_id": _rest(words, 2)})
 
+    if verb == "adopt":
+        child = _rest(words, 1)
+        return ToolCall("adopt_child", {"child_id": child}) if child else None
+
     if verb in {"note", "remember", "reflect"}:
         body = _rest(words, 1)
         name = "take_note" if verb == "note" else verb

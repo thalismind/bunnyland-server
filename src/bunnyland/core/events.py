@@ -145,6 +145,11 @@ class BirthResolvedEvent(DomainEvent):
     parent_ids: tuple[str, ...] = ()
 
 
+class AdoptionCompletedEvent(DomainEvent):
+    child_id: str
+    parent_id: str
+
+
 class ReservationCreatedEvent(DomainEvent):
     target_id: str
 
@@ -338,6 +343,7 @@ class EventBus:
 
 __all__ = [
     "ActionPointsChangedEvent",
+    "AdoptionCompletedEvent",
     "ActorMovedEvent",
     "AffectChangedEvent",
     "CharacterDiedEvent",

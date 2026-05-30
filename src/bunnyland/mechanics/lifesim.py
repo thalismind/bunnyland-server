@@ -26,6 +26,7 @@ from ..core.components import (
 from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import (
+    AdoptionCompletedEvent,
     BirthDueEvent,
     BirthResolvedEvent,
     EventVisibility,
@@ -321,6 +322,45 @@ class ResolveBirthHandler:
         )
 
 
+class AdoptChildHandler:
+    command_type = "adopt-child"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        child_id = parse_entity_id(command.payload.get("child_id"))
+        if actor_id is None or child_id is None:
+            return rejected("invalid parent or child id")
+        if not ctx.world.has_entity(child_id):
+            return rejected("child does not exist")
+
+        actor = ctx.entity(actor_id)
+        child = ctx.entity(child_id)
+        if not _active_character(actor) or not _active_character(child):
+            return rejected("participant cannot participate")
+        if not _same_room(ctx.world, actor_id, child_id):
+            return rejected("child is not present")
+        if not child.has_component(LifeStageComponent) or child.get_component(
+            LifeStageComponent
+        ).stage != "child":
+            return rejected("target is not a child")
+        if actor.has_relationship(ParentOf, child_id):
+            return rejected("already parent of child")
+
+        actor.add_relationship(ParentOf(), child_id)
+        return ok(
+            AdoptionCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=_event_room(ctx.world, actor_id),
+                    target_ids=(str(child_id),),
+                    child_id=str(child_id),
+                    parent_id=str(actor_id),
+                )
+            )
+        )
+
+
 class PregnancyDueConsequence:
     """Mark due pregnancies without resolving birth, including while suspended."""
 
@@ -373,6 +413,27 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
             else "someone"
         )
         lines.append(f"You are partners with {name}.")
+    children = [
+        world.get_entity(child_id).get_component(IdentityComponent).name
+        if world.has_entity(child_id)
+        and world.get_entity(child_id).has_component(IdentityComponent)
+        else "someone"
+        for _edge, child_id in character.get_relationships(ParentOf)
+        if world.has_entity(child_id)
+    ]
+    if children:
+        lines.append("Your children: " + ", ".join(sorted(children)) + ".")
+    parents = []
+    for parent in world.query().with_all([CharacterComponent]).execute_entities():
+        if parent.has_relationship(ParentOf, character.id):
+            name = (
+                parent.get_component(IdentityComponent).name
+                if parent.has_component(IdentityComponent)
+                else "someone"
+            )
+            parents.append(name)
+    if parents:
+        lines.append("Your parents: " + ", ".join(sorted(parents)) + ".")
     return sorted(lines)
 
 
@@ -383,6 +444,7 @@ def install_lifesim(actor) -> None:
 
 __all__ = [
     "BirthDueComponent",
+    "AdoptChildHandler",
     "EndPartnershipHandler",
     "LifeStageComponent",
     "ParentOf",
