@@ -57,12 +57,17 @@ def test_tool_schemas_cover_every_verb():
         "say",
         "take",
         "adopt_child",
+        "accept_quest",
         "claim_ownership",
+        "complete_objective",
+        "discover_location",
         "drop",
         "fertilize",
         "harvest_crop",
         "plant",
         "pickpocket",
+        "join_faction",
+        "leave_faction",
         "release_ownership",
         "take_note",
         "till",
@@ -138,6 +143,21 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     )
     assert parse_natural_command("harvest garden bed") == ToolCall(
         "harvest_crop", {"soil_id": "garden bed"}
+    )
+    assert parse_natural_command("discover old watchtower") == ToolCall(
+        "discover_location", {"location_id": "old watchtower"}
+    )
+    assert parse_natural_command("accept quest lost ring") == ToolCall(
+        "accept_quest", {"quest_id": "lost ring"}
+    )
+    assert parse_natural_command("complete objective find the ring") == ToolCall(
+        "complete_objective", {"objective_id": "find the ring"}
+    )
+    assert parse_natural_command("join faction Moss Wardens") == ToolCall(
+        "join_faction", {"faction_id": "Moss Wardens"}
+    )
+    assert parse_natural_command("leave faction Moss Wardens") == ToolCall(
+        "leave_faction", {"faction_id": "Moss Wardens"}
     )
     assert parse_natural_command("release ownership oak chest") == ToolCall(
         "release_ownership", {"target_id": "oak chest"}

@@ -136,6 +136,26 @@ def parse_natural_command(text: str) -> ToolCall | None:
         soil = _rest(words, 1)
         return ToolCall("harvest_crop", {"soil_id": soil}) if soil else None
 
+    if verb == "discover":
+        location = _rest(words, 1)
+        return ToolCall("discover_location", {"location_id": location}) if location else None
+
+    if verb == "accept" and len(words) > 1 and words[1].lower() == "quest":
+        quest = _rest(words, 2)
+        return ToolCall("accept_quest", {"quest_id": quest}) if quest else None
+
+    if verb == "complete" and len(words) > 1 and words[1].lower() == "objective":
+        objective = _rest(words, 2)
+        return ToolCall("complete_objective", {"objective_id": objective}) if objective else None
+
+    if verb == "join" and len(words) > 1 and words[1].lower() == "faction":
+        faction = _rest(words, 2)
+        return ToolCall("join_faction", {"faction_id": faction}) if faction else None
+
+    if verb == "leave" and len(words) > 1 and words[1].lower() == "faction":
+        faction = _rest(words, 2)
+        return ToolCall("leave_faction", {"faction_id": faction}) if faction else None
+
     if verb == "claim":
         target = _rest(words, 1)
         return ToolCall("claim_ownership", {"target_id": target}) if target else None

@@ -57,6 +57,29 @@ from ..mechanics.colonysim import (
     colonysim_fragments,
 )
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
+from ..mechanics.dragonsim import (
+    AcceptQuestHandler,
+    CompleteObjectiveHandler,
+    DiscoverLocationHandler,
+    DiscoveryComponent,
+    FactionComponent,
+    FactionJoinedEvent,
+    FactionLeftEvent,
+    FactionReputationComponent,
+    JoinFactionHandler,
+    LeaveFactionHandler,
+    LocationDiscoveredEvent,
+    MemberOf,
+    PointOfInterestComponent,
+    QuestAcceptedEvent,
+    QuestCompletedEvent,
+    QuestComponent,
+    QuestObjectiveCompletedEvent,
+    QuestObjectiveComponent,
+    QuestRewardComponent,
+    QuestStageComponent,
+    dragonsim_fragments,
+)
 from ..mechanics.eat_drink import DrinkHandler, EatHandler
 from ..mechanics.environment import (
     CalendarComponent,
@@ -148,6 +171,7 @@ PERSONA = "bunnyland.persona"
 COLONYSIM = "bunnyland.colonysim"
 BARBARIANSIM = "bunnyland.barbariansim"
 GARDENSIM = "bunnyland.gardensim"
+DRAGONSIM = "bunnyland.dragonsim"
 
 
 def _install_affect(actor) -> None:
@@ -417,6 +441,45 @@ def gardensim_plugin() -> Plugin:
     )
 
 
+def dragonsim_plugin() -> Plugin:
+    return Plugin(
+        id=DRAGONSIM,
+        name="Dragon Sim",
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
+        ecs=EcsContribution(
+            components=(
+                PointOfInterestComponent,
+                DiscoveryComponent,
+                QuestComponent,
+                QuestStageComponent,
+                QuestObjectiveComponent,
+                QuestRewardComponent,
+                FactionComponent,
+                FactionReputationComponent,
+            ),
+            edges=(MemberOf,),
+        ),
+        commands=CommandContribution(
+            action_handlers=(
+                DiscoverLocationHandler,
+                AcceptQuestHandler,
+                CompleteObjectiveHandler,
+                JoinFactionHandler,
+                LeaveFactionHandler,
+            ),
+            typed_events=(
+                LocationDiscoveredEvent,
+                QuestAcceptedEvent,
+                QuestObjectiveCompletedEvent,
+                QuestCompletedEvent,
+                FactionJoinedEvent,
+                FactionLeftEvent,
+            ),
+        ),
+        content=ContentContribution(prompt_fragments=(dragonsim_fragments,)),
+    )
+
+
 def bunnyland_plugins() -> list[Plugin]:
     return [
         core_verbs_plugin(),
@@ -431,6 +494,7 @@ def bunnyland_plugins() -> list[Plugin]:
         colonysim_plugin(),
         barbariansim_plugin(),
         gardensim_plugin(),
+        dragonsim_plugin(),
     ]
 
 
@@ -438,6 +502,7 @@ __all__ = [
     "BARBARIANSIM",
     "CORE_VERBS",
     "COLONYSIM",
+    "DRAGONSIM",
     "ENVIRONMENT",
     "GARDENSIM",
     "LIFESIM",
@@ -451,6 +516,7 @@ __all__ = [
     "bunnyland_plugins",
     "colonysim_plugin",
     "core_verbs_plugin",
+    "dragonsim_plugin",
     "environment_plugin",
     "gardensim_plugin",
     "lifesim_plugin",
