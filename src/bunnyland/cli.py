@@ -19,7 +19,14 @@ from .core.world_actor import WorldActor
 from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
 from .persistence import WorldMeta, load_world, save_world
-from .plugins import apply_plugins, bunnyland_plugins, load_modules, resolve_order, select
+from .plugins import (
+    apply_plugins,
+    bunnyland_plugins,
+    collect_prompt_fragments,
+    load_modules,
+    resolve_order,
+    select,
+)
 from .prompts.builder import PromptBuilder
 from .worldgen import GenOptions, collect_generators
 
@@ -112,7 +119,8 @@ async def _serve(args) -> None:
             save_world(actor, args.save, meta=meta)
             print(f"  [autosave] tick {ticks} -> {args.save}")
 
-    dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), agent)
+    builder = PromptBuilder(actor.world, fragment_providers=collect_prompt_fragments(plugins))
+    dispatch = ControllerDispatch(actor, builder, agent)
     loop = GameLoop(
         actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
         autosave=autosave, autosave_every=args.autosave_every,

@@ -27,6 +27,7 @@ from ..mechanics.environment import (
     CalendarComponent,
     TimeOfDayComponent,
     WeatherComponent,
+    environment_fragments,
     install_environment,
 )
 from ..mechanics.mechanisms import install_mechanisms
@@ -35,13 +36,14 @@ from ..mechanics.needs import (
     HungerSystem,
     ThirstComponent,
     ThirstSystem,
+    need_fragments,
 )
 from ..mechanics.policy import (
     CharacterBoundaryComponent,
     WorldPolicyComponent,
     install_policy,
 )
-from ..mechanics.social import SocialBond, install_social
+from ..mechanics.social import SocialBond, install_social, relationship_fragments
 from ..memory import install_memory
 from ..worldgen.generators import WorldGenerator, oneshot_generator, recursive_generator
 from .model import (
@@ -106,6 +108,7 @@ def lifesim_plugin() -> Plugin:
         ),
         commands=CommandContribution(action_handlers=(EatHandler, DrinkHandler)),
         runtime=RuntimeContribution(service_factories=(_install_affect,)),
+        content=ContentContribution(prompt_fragments=(need_fragments,)),
     )
 
 
@@ -134,6 +137,7 @@ def environment_plugin() -> Plugin:
             components=(CalendarComponent, TimeOfDayComponent, WeatherComponent)
         ),
         runtime=RuntimeContribution(service_factories=(_environment_factory,)),
+        content=ContentContribution(prompt_fragments=(environment_fragments,)),
     )
 
 
@@ -161,6 +165,7 @@ def social_plugin() -> Plugin:
         dependencies=(CORE_VERBS,),
         ecs=EcsContribution(edges=(SocialBond,)),
         runtime=RuntimeContribution(service_factories=(_social_factory,)),
+        content=ContentContribution(prompt_fragments=(relationship_fragments,)),
     )
 
 

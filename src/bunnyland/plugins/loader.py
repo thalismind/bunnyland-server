@@ -75,6 +75,11 @@ def resolve_order(plugins: Sequence[Plugin]) -> list[Plugin]:
     return ordered
 
 
+def collect_prompt_fragments(plugins: Sequence[Plugin]) -> list:
+    """Gather all prompt fragment providers contributed by the given plugins (spec 16.3)."""
+    return [provider for plugin in plugins for provider in plugin.content.prompt_fragments]
+
+
 def _instantiate(item):
     """Allow contributions to be classes (instantiated) or ready instances."""
     return item() if isinstance(item, type) else item
@@ -116,6 +121,7 @@ __all__ = [
     "PluginError",
     "apply_plugin",
     "apply_plugins",
+    "collect_prompt_fragments",
     "load_and_apply",
     "load_modules",
     "resolve_order",

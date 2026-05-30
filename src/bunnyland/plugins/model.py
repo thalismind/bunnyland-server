@@ -62,6 +62,8 @@ class ContentContribution(BaseModel):
     worldgen_hooks: tuple[Any, ...] = ()
     #: Named ``WorldGenerator`` strategies, selectable at runtime by name.
     world_generators: tuple[Any, ...] = ()
+    #: Prompt fragment providers ``(world, character) -> list[str]`` (spec 16.3).
+    prompt_fragments: tuple[Any, ...] = ()
 
 
 class PolicyContribution(BaseModel):

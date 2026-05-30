@@ -47,6 +47,15 @@ def test_select_defaults_to_default_enabled():
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
 
 
+def test_collect_prompt_fragments_gathers_providers():
+    from bunnyland.plugins import collect_prompt_fragments
+
+    providers = collect_prompt_fragments(bunnyland_plugins())
+    # needs, environment, and social each contribute one.
+    assert len(providers) >= 3
+    assert all(callable(p) for p in providers)
+
+
 def test_worldgen_plugin_contributes_named_generators():
     from bunnyland.worldgen import collect_generators
 

@@ -99,6 +99,22 @@ async def test_generated_world_matches_its_proposal():
             assert any(c.has_component(LLMControllerComponent) for c in controllers)
 
 
+async def test_prompt_includes_status_fragments_from_plugins():
+    from bunnyland.plugins import collect_prompt_fragments
+
+    actor, _proposal, result = await _new_world()
+    await actor.tick(12 * 3600.0)  # noon, day 1 -> environment sets the time of day
+
+    builder = PromptBuilder(
+        actor.world, fragment_providers=collect_prompt_fragments(bunnyland_plugins())
+    )
+    prompt = render_prompt(builder.build(result.characters["hazel"]))
+
+    # The plugin fragments surface under a Currently block (time of day at least).
+    assert "Currently:" in prompt
+    assert "It is" in prompt
+
+
 async def test_agent_prompt_reflects_the_generated_world():
     actor, _proposal, result = await _new_world()
     prompt = render_prompt(PromptBuilder(actor.world).build(result.characters["hazel"]))

@@ -69,8 +69,8 @@ def test_build_context_includes_needs_feelings_and_notes():
     )
     ctx = builder.build(scenario.character, epoch=scenario.actor.epoch)
 
-    assert any("hungry" in n for n in ctx.needs)
-    assert all("dry" not in n for n in ctx.needs)  # thirst calm
+    assert any("hungry" in n for n in ctx.conditions)
+    assert all("dry" not in n for n in ctx.conditions)  # thirst calm
     assert "tense" in ctx.feelings
     assert "The basin water is unsafe." in ctx.notes
 

@@ -48,7 +48,7 @@ class PromptContext:
     inventory: tuple[str, ...] = ()
     held: tuple[str, ...] = ()
     worn: tuple[str, ...] = ()
-    needs: tuple[str, ...] = ()
+    conditions: tuple[str, ...] = ()  # domain fragments: needs, weather, relationships, ...
     feelings: tuple[str, ...] = ()
     recent: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
@@ -123,9 +123,9 @@ class PromptBuilder:
             if character.has_component(AffectComponent)
             else ()
         )
-        needs: list[str] = []
+        conditions: list[str] = []
         for provider in self.fragment_providers:
-            needs.extend(provider(self.world, character))
+            conditions.extend(provider(self.world, character))
 
         recent = ()
         if self.recent_context is not None and room_id is not None:
@@ -153,7 +153,7 @@ class PromptBuilder:
             inventory=inventory,
             held=held,
             worn=worn,
-            needs=tuple(needs),
+            conditions=tuple(conditions),
             feelings=feelings,
             recent=tuple(recent),
             notes=notes,
@@ -258,7 +258,7 @@ def render_prompt(context: PromptContext) -> str:
     section("You are holding", context.held)
     section("You are wearing", context.worn)
     section("You feel", context.feelings)
-    section("Needs", context.needs)
+    section("Currently", context.conditions)
     section("Recent context", context.recent)
     section("Notes", context.notes)
 
