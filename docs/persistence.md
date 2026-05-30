@@ -2,9 +2,10 @@
 
 A world can be saved to disk and reloaded later. A save is a **single JSON file** that holds
 both the Relics ECS snapshot (every entity, component, and edge) and the bunnyland
-provenance that produced it — the **seed**, the generation **prompt**, and which
-**generator** built it. Reloading restores the world exactly: room graph, inventories, needs
-meters, moods, controllers, and the game clock.
+provenance that produced it — the **seed**, the literal **DM system prompt** the model was
+given (empty for the deterministic offline builder), and which **generator** built it.
+Reloading restores the world exactly: room graph, inventories, needs meters, moods,
+controllers, and the game clock.
 
 > The volatile command queues are intentionally **not** saved — a reloaded world resumes
 > with empty queues and keeps playing from the saved game time.

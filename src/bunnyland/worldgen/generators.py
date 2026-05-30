@@ -52,12 +52,14 @@ async def oneshot_generator(actor: WorldActor, seed: str, options: GenOptions) -
     if options.llm:
         from .ollama_builder import OllamaWorldBuilder
 
-        proposal = OllamaWorldBuilder(
+        builder = OllamaWorldBuilder(
             model=options.model, host=options.host, api_key=options.api_key
-        ).propose(seed)
+        )
     else:
-        proposal = StubWorldBuilder().propose(seed)
-    return await instantiate(actor, proposal)
+        builder = StubWorldBuilder()
+    result = await instantiate(actor, builder.propose(seed))
+    result.prompt = builder.system_prompt  # literal DM system prompt, for provenance
+    return result
 
 
 async def recursive_generator(
@@ -72,7 +74,9 @@ async def recursive_generator(
     else:
         builder = StubRecursiveBuilder()
     generator = RecursiveWorldGenerator(actor, builder, max_rooms=options.max_rooms)
-    return await generator.generate(seed)
+    result = await generator.generate(seed)
+    result.prompt = builder.system_prompt  # literal DM system prompt, for provenance
+    return result
 
 
 def collect_generators(plugins: Iterable) -> dict[str, WorldGenerator]:

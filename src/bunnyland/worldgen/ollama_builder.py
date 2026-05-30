@@ -29,6 +29,9 @@ a writable object, one llm character, and one suspended (claimable) character.""
 class OllamaWorldBuilder:
     """Generates a proposal via Ollama Cloud. ``ollama`` is imported lazily."""
 
+    #: The literal DM system prompt this builder sends, recorded in saved worlds.
+    system_prompt = _SYSTEM_PROMPT
+
     def __init__(
         self,
         *,

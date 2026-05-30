@@ -49,6 +49,8 @@ class InstantiatedWorld:
     rooms: dict[str, EntityId] = field(default_factory=dict)
     objects: dict[str, EntityId] = field(default_factory=dict)
     characters: dict[str, EntityId] = field(default_factory=dict)
+    #: The literal DM system prompt that built the world ("" for deterministic builders).
+    prompt: str = ""
 
 
 def validate_proposal(proposal: WorldProposal) -> list[str]:

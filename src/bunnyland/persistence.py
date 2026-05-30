@@ -53,7 +53,7 @@ class WorldMeta(BaseModel):
 
     schema_version: int = SCHEMA_VERSION
     seed: str = ""
-    prompt: str = ""  # the generation prompt/instruction used to build the world
+    prompt: str = ""  # the literal DM system prompt used to build the world ("" for stub)
     generator: str = ""  # which world generator produced it
     saved_at_epoch: int = 0  # bunnyland game epoch at save time
     saved_at: datetime | None = None  # wall-clock save time

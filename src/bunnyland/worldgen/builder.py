@@ -19,6 +19,8 @@ class WorldBuilder(Protocol):
 class StubWorldBuilder:
     """A fixed, deterministic proposal used for tests and offline development."""
 
+    system_prompt = ""  # deterministic; no LLM prompt
+
     def propose(self, seed: str) -> WorldProposal:
         return WorldProposal(
             seed=seed,

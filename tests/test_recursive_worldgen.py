@@ -154,3 +154,19 @@ async def test_builtin_generator_functions_produce_worlds_offline():
 
     many = await recursive_generator(WorldActor(), "seed", options)
     assert len(many.rooms) == 3 and many.characters
+
+
+async def test_generators_record_the_dm_system_prompt():
+    from bunnyland.worldgen.ollama_builder import _SYSTEM_PROMPT, OllamaWorldBuilder
+    from bunnyland.worldgen.recursive_builder import OllamaRecursiveBuilder
+
+    # Offline stub builders carry no LLM prompt.
+    one = await oneshot_generator(WorldActor(), "seed", GenOptions(llm=False))
+    assert one.prompt == ""
+    many = await recursive_generator(WorldActor(), "seed", GenOptions(llm=False, max_rooms=2))
+    assert many.prompt == ""
+
+    # The LLM builders expose their literal DM system prompt (captured into metadata).
+    assert OllamaWorldBuilder.system_prompt == _SYSTEM_PROMPT
+    assert "world-builder" in OllamaWorldBuilder.system_prompt
+    assert "DM" in OllamaRecursiveBuilder.system_prompt

@@ -89,11 +89,10 @@ async def _serve(args) -> None:
             max_rooms=args.max_rooms,
         )
         result = await generator.generate(actor, args.seed, options)
-        mode = f"llm:{args.ollama_model}" if args.llm else "stub"
         meta = WorldMeta(
             seed=args.seed,
             generator=generator.name,
-            prompt=f"{generator.name} ({mode}) from seed {args.seed!r}",
+            prompt=result.prompt,  # the literal DM system prompt (empty for stub builders)
         )
         print(f"Generated world {args.seed!r} via {generator.name!r}: "
               f"{len(result.rooms)} rooms, {len(result.characters)} characters.")

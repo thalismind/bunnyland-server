@@ -51,6 +51,7 @@ class StubRecursiveBuilder:
     """
 
     ROOT_TITLE = "Mosslit Burrow"
+    system_prompt = ""  # deterministic; no LLM prompt
 
     def propose_room(
         self, seed: str, *, behind: DoorProposal | None, known_rooms: Mapping[str, str]
@@ -149,6 +150,9 @@ class OllamaRecursiveBuilder:
 
     ``ollama`` is imported lazily; requires the ``llm`` extra.
     """
+
+    #: The literal DM system prompt this builder seeds the conversation with.
+    system_prompt = _SYSTEM_PROMPT
 
     def __init__(
         self,
