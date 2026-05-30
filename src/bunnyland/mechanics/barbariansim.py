@@ -7,6 +7,8 @@ outcomes. PvP and lethal PvP are policy-gated before damage is applied.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
 from relics import Component, EntityId, Frequency, System, World
@@ -20,7 +22,9 @@ from ..core.components import (
     HealthComponent,
     InjuryComponent,
     PortableComponent,
+    RoomComponent,
     SuspendedComponent,
+    TemperatureComponent,
 )
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains, HasInjury, Wearing
@@ -43,6 +47,31 @@ DEFEND_REDUCTION = 2.0
 ATTACK_STAMINA_COST = 3.0
 SPAR_STAMINA_COST = 2.0
 DEFEND_STAMINA_COST = 2.0
+HOT_SAFE_CELSIUS = 30.0
+COLD_SAFE_CELSIUS = 5.0
+EXPOSURE_DANGER = 10.0
+EXPOSURE_DAMAGE_PER_HOUR = 5.0
+EXPOSURE_RECOVERY_PER_HOUR = 4.0
+
+
+@dataclass(frozen=True)
+class TemperatureResistanceComponent(Component):
+    heat: float = 0.0
+    cold: float = 0.0
+
+
+@dataclass(frozen=True)
+class ShelterComponent(Component):
+    temperature_buffer: float = 0.0
+
+
+@dataclass(frozen=True)
+class TemperatureExposureComponent(Component):
+    heat: float = 0.0
+    cold: float = 0.0
+    heat_danger: bool = False
+    cold_danger: bool = False
+    last_updated_epoch: int = 0
 
 
 @dataclass(frozen=True)
@@ -80,6 +109,36 @@ class StaminaChangedEvent(DomainEvent):
     current: float
     maximum: float
     reason: str = ""
+
+
+class ExposureChangedEvent(DomainEvent):
+    character_id: str
+    ambient_celsius: float | None = None
+    heat: float
+    cold: float
+
+
+class HeatstrokeStartedEvent(DomainEvent):
+    character_id: str
+    heat: float
+
+
+class FrostbiteStartedEvent(DomainEvent):
+    character_id: str
+    cold: float
+
+
+class ExposureDamageEvent(DomainEvent):
+    character_id: str
+    damage: float
+    cause: str
+    health: float
+
+
+def _barbarian_event_base(epoch: int, **kwargs) -> dict:
+    base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
+    base.update(kwargs)
+    return base
 
 
 class StaminaRegenSystem(System):
@@ -171,6 +230,29 @@ def _body_part(target, requested: object) -> str:
     return "body"
 
 
+def _temperature_buffer(world: World, character_id: EntityId, room_id: EntityId | None) -> float:
+    character = world.get_entity(character_id)
+    buffer = 0.0
+    if character.has_component(ShelterComponent):
+        buffer += character.get_component(ShelterComponent).temperature_buffer
+    if room_id is not None and world.has_entity(room_id):
+        room = world.get_entity(room_id)
+        if room.has_component(RoomComponent) and room.get_component(RoomComponent).indoor:
+            buffer += 5.0
+        if room.has_component(ShelterComponent):
+            buffer += room.get_component(ShelterComponent).temperature_buffer
+    return buffer
+
+
+def _ambient_celsius(world: World, room_id: EntityId | None) -> float | None:
+    if room_id is None or not world.has_entity(room_id):
+        return None
+    room = world.get_entity(room_id)
+    if not room.has_component(TemperatureComponent):
+        return None
+    return room.get_component(TemperatureComponent).celsius
+
+
 def _spend_stamina(
     ctx: HandlerContext,
     entity_id: EntityId,
@@ -199,6 +281,125 @@ def _spend_stamina(
             )
         ),
     )
+
+
+class TemperatureExposureConsequence:
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = (
+            world.query()
+            .with_all([CharacterComponent, TemperatureExposureComponent])
+            .with_none([DeadComponent, SuspendedComponent])
+        )
+        for character in query.execute_entities():
+            exposure = character.get_component(TemperatureExposureComponent)
+            elapsed = max(0, epoch - exposure.last_updated_epoch)
+            if elapsed <= 0:
+                continue
+
+            room_id = container_of(character)
+            ambient = _ambient_celsius(world, room_id)
+            resistance = (
+                character.get_component(TemperatureResistanceComponent)
+                if character.has_component(TemperatureResistanceComponent)
+                else TemperatureResistanceComponent()
+            )
+            buffer = _temperature_buffer(world, character.id, room_id)
+            hours = elapsed / 3600.0
+            heat = exposure.heat
+            cold = exposure.cold
+
+            if ambient is None:
+                heat = max(0.0, heat - EXPOSURE_RECOVERY_PER_HOUR * hours)
+                cold = max(0.0, cold - EXPOSURE_RECOVERY_PER_HOUR * hours)
+            else:
+                hot_limit = HOT_SAFE_CELSIUS + resistance.heat + buffer
+                cold_limit = COLD_SAFE_CELSIUS - resistance.cold - buffer
+                if ambient > hot_limit:
+                    heat += (ambient - hot_limit) * hours
+                    cold = max(0.0, cold - EXPOSURE_RECOVERY_PER_HOUR * hours)
+                elif ambient < cold_limit:
+                    cold += (cold_limit - ambient) * hours
+                    heat = max(0.0, heat - EXPOSURE_RECOVERY_PER_HOUR * hours)
+                else:
+                    heat = max(0.0, heat - EXPOSURE_RECOVERY_PER_HOUR * hours)
+                    cold = max(0.0, cold - EXPOSURE_RECOVERY_PER_HOUR * hours)
+
+            heat_danger = heat >= EXPOSURE_DANGER
+            cold_danger = cold >= EXPOSURE_DANGER
+            if heat == exposure.heat and cold == exposure.cold:
+                replace_component(character, replace(exposure, last_updated_epoch=epoch))
+                continue
+
+            updated = TemperatureExposureComponent(
+                heat=heat,
+                cold=cold,
+                heat_danger=heat_danger,
+                cold_danger=cold_danger,
+                last_updated_epoch=epoch,
+            )
+            replace_component(character, updated)
+            events.append(
+                ExposureChangedEvent(
+                    **_barbarian_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character.id),
+                        room_id=str(room_id) if room_id is not None else None,
+                        character_id=str(character.id),
+                        ambient_celsius=ambient,
+                        heat=heat,
+                        cold=cold,
+                    )
+                )
+            )
+            if heat_danger and not exposure.heat_danger:
+                events.append(
+                    HeatstrokeStartedEvent(
+                        **_barbarian_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            room_id=str(room_id) if room_id is not None else None,
+                            character_id=str(character.id),
+                            heat=heat,
+                        )
+                    )
+                )
+            if cold_danger and not exposure.cold_danger:
+                events.append(
+                    FrostbiteStartedEvent(
+                        **_barbarian_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            room_id=str(room_id) if room_id is not None else None,
+                            character_id=str(character.id),
+                            cold=cold,
+                        )
+                    )
+                )
+            if character.has_component(HealthComponent) and (heat_danger or cold_danger):
+                cause = "heat exposure" if heat >= cold else "cold exposure"
+                damage = EXPOSURE_DAMAGE_PER_HOUR * hours
+                health = character.get_component(HealthComponent)
+                updated_health = replace(health, current=health.current - damage)
+                replace_component(character, updated_health)
+                events.append(
+                    ExposureDamageEvent(
+                        **_barbarian_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            room_id=str(room_id) if room_id is not None else None,
+                            character_id=str(character.id),
+                            damage=damage,
+                            cause=cause,
+                            health=updated_health.current,
+                        )
+                    )
+                )
+        return events
 
 
 class AttackHandler:
@@ -520,6 +721,14 @@ def barbariansim_fragments(world: World, character) -> list[str]:
     if character.has_component(StaminaComponent):
         stamina = character.get_component(StaminaComponent)
         lines.append(f"Stamina: {stamina.current:g}/{stamina.maximum:g}.")
+    if character.has_component(TemperatureExposureComponent):
+        exposure = character.get_component(TemperatureExposureComponent)
+        if exposure.heat or exposure.cold:
+            lines.append(f"Exposure: heat {exposure.heat:g}, cold {exposure.cold:g}.")
+        if exposure.heat_danger:
+            lines.append("You are suffering dangerous heat exposure.")
+        if exposure.cold_danger:
+            lines.append("You are suffering dangerous cold exposure.")
     if character.has_component(DefendingComponent):
         lines.append("You are defending yourself.")
     if character.has_component(ArmorComponent):
@@ -539,6 +748,7 @@ def barbariansim_fragments(world: World, character) -> list[str]:
 
 def install_barbariansim(actor) -> None:
     actor.world.register_system(StaminaRegenSystem())
+    actor.register_consequence(TemperatureExposureConsequence())
     actor.register_gate(
         PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier))
     )
@@ -550,14 +760,22 @@ __all__ = [
     "ChallengeHandler",
     "DefendHandler",
     "DefendingComponent",
+    "ExposureChangedEvent",
+    "ExposureDamageEvent",
     "FortificationComponent",
     "FortifyHandler",
+    "FrostbiteStartedEvent",
+    "HeatstrokeStartedEvent",
     "PickpocketHandler",
     "RaidHandler",
+    "ShelterComponent",
     "SparHandler",
     "StaminaChangedEvent",
     "StaminaComponent",
     "StaminaRegenSystem",
+    "TemperatureExposureComponent",
+    "TemperatureExposureConsequence",
+    "TemperatureResistanceComponent",
     "WeaponComponent",
     "barbariansim_fragments",
     "install_barbariansim",

@@ -14,6 +14,7 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     PortableComponent,
+    TemperatureComponent,
     build_submitted_command,
     container_of,
     spawn_entity,
@@ -33,13 +34,18 @@ from bunnyland.mechanics.barbariansim import (
     ChallengeHandler,
     DefendHandler,
     DefendingComponent,
+    ExposureDamageEvent,
     FortificationComponent,
     FortifyHandler,
+    HeatstrokeStartedEvent,
     PickpocketHandler,
     RaidHandler,
+    ShelterComponent,
     SparHandler,
     StaminaChangedEvent,
     StaminaComponent,
+    TemperatureExposureComponent,
+    TemperatureResistanceComponent,
     WeaponComponent,
     barbariansim_fragments,
     install_barbariansim,
@@ -180,6 +186,50 @@ async def test_low_stamina_blocks_combat_without_damage():
     assert character.get_component(StaminaComponent).current == 1.0
     assert scenario.actor.world.get_entity(target).get_component(HealthComponent).current == 20.0
     assert any("insufficient stamina" in event.reason for event in rejects)
+
+
+async def test_hot_room_exposure_damages_health():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(TemperatureComponent(celsius=45.0))
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=20.0, maximum=20.0))
+    character.add_component(TemperatureExposureComponent())
+    heatstroke: list[HeatstrokeStartedEvent] = []
+    damage: list[ExposureDamageEvent] = []
+    scenario.actor.bus.subscribe(HeatstrokeStartedEvent, heatstroke.append)
+    scenario.actor.bus.subscribe(ExposureDamageEvent, damage.append)
+
+    await scenario.actor.tick(HOUR)
+
+    exposure = character.get_component(TemperatureExposureComponent)
+    assert exposure.heat == 15.0
+    assert exposure.heat_danger is True
+    assert character.get_component(HealthComponent).current == 15.0
+    assert heatstroke[0].character_id == str(scenario.character)
+    assert damage[0].cause == "heat exposure"
+
+
+async def test_temperature_resistance_and_shelter_prevent_exposure_damage():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(TemperatureComponent(celsius=45.0))
+    room.add_component(ShelterComponent(temperature_buffer=5.0))
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=20.0, maximum=20.0))
+    character.add_component(TemperatureExposureComponent())
+    character.add_component(TemperatureResistanceComponent(heat=10.0))
+    damage: list[ExposureDamageEvent] = []
+    scenario.actor.bus.subscribe(ExposureDamageEvent, damage.append)
+
+    await scenario.actor.tick(HOUR)
+
+    exposure = character.get_component(TemperatureExposureComponent)
+    assert exposure.heat == 0.0
+    assert character.get_component(HealthComponent).current == 20.0
+    assert damage == []
 
 
 async def test_lethal_attack_requires_lethal_pvp_policy():
@@ -326,6 +376,7 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     character.add_component(DefendingComponent(started_at_epoch=0))
     character.add_component(ArmorComponent(rating=1.5))
     character.add_component(StaminaComponent(current=4.0, maximum=10.0))
+    character.add_component(TemperatureExposureComponent(heat=12.0, heat_danger=True))
     scenario.actor.world.get_entity(scenario.room_a).add_component(
         FortificationComponent(rating=2.0, durability=8.0)
     )
@@ -335,6 +386,7 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
 
     assert any("defending" in line for line in fragments)
     assert any("Stamina: 4/10" in line for line in fragments)
+    assert any("dangerous heat exposure" in line for line in fragments)
     assert any("armor rating" in line for line in fragments)
     assert any("Reachable weapon" in line for line in fragments)
     assert any("Reachable fortification" in line for line in fragments)
