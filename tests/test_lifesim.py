@@ -39,6 +39,7 @@ from bunnyland.mechanics.lifesim import (
     FindJobHandler,
     GossipSpreadEvent,
     GoToWorkHandler,
+    HasRoutine,
     HomeComponent,
     HouseholdComponent,
     HouseholdFundsComponent,
@@ -50,6 +51,7 @@ from bunnyland.mechanics.lifesim import (
     LifeStageComponent,
     MilestoneCompletedEvent,
     OpenBusinessHandler,
+    OwnsBusiness,
     ParentOf,
     PartnerOf,
     PregnancyComponent,
@@ -253,7 +255,8 @@ async def test_business_sale_moves_item_out_of_inventory_and_pays_funds():
     )
     await scenario.actor.tick(HOUR)
 
-    business = character.get_component(BusinessOwnerComponent)
+    business_id = character.get_relationships(OwnsBusiness)[0][1]
+    business = scenario.actor.world.get_entity(business_id).get_component(BusinessOwnerComponent)
     assert business.sales_count == 1
     assert character.get_component(HouseholdFundsComponent).balance == 15
     assert not character.has_relationship(Contains, item.id)
@@ -306,9 +309,10 @@ async def test_routine_due_consequence_advances_next_due_without_auto_commanding
     await scenario.actor.tick(0.0)
     await scenario.actor.tick(HOUR)
 
-    routine = scenario.actor.world.get_entity(scenario.character).get_component(
-        RoutineComponent
-    )
+    routine_id = scenario.actor.world.get_entity(scenario.character).get_relationships(
+        HasRoutine
+    )[0][1]
+    routine = scenario.actor.world.get_entity(routine_id).get_component(RoutineComponent)
     assert routine.activity == "water the window herbs"
     assert routine.last_completed_epoch == scenario.actor.epoch
     assert routine.next_due_epoch == scenario.actor.epoch + HOUR

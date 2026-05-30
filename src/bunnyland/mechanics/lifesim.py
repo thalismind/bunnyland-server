@@ -156,6 +156,16 @@ class ParentOf(Edge):
 
 
 @dataclass(frozen=True)
+class HasRoutine(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class OwnsBusiness(Edge):
+    pass
+
+
+@dataclass(frozen=True)
 class PartnerOf(Edge):
     since_epoch: int
     status: str = "together"
@@ -343,6 +353,32 @@ def partners_of(world: World, character_id: EntityId) -> tuple[str, ...]:
             if edge.status == "together"
         )
     )
+
+
+def _routine_for_activity(world: World, character: Entity, activity: str) -> Entity | None:
+    for _edge, routine_id in character.get_relationships(HasRoutine):
+        if not world.has_entity(routine_id):
+            continue
+        routine = world.get_entity(routine_id)
+        if routine.has_component(RoutineComponent):
+            component = routine.get_component(RoutineComponent)
+            if component.activity == activity:
+                return routine
+    return None
+
+
+def _first_business(
+    world: World, character: Entity, business_id: EntityId | None = None
+) -> Entity | None:
+    for _edge, candidate_id in character.get_relationships(OwnsBusiness):
+        if business_id is not None and candidate_id != business_id:
+            continue
+        if not world.has_entity(candidate_id):
+            continue
+        business = world.get_entity(candidate_id)
+        if business.has_component(BusinessOwnerComponent):
+            return business
+    return None
 
 
 def kinship_label(world: World, source_id: EntityId, target_id: EntityId) -> str | None:
@@ -598,7 +634,11 @@ class OpenBusinessHandler:
         if price <= 0:
             return rejected("default price must be positive")
         actor = ctx.entity(actor_id)
-        replace_component(actor, BusinessOwnerComponent(name=name, default_price=price))
+        business = spawn_entity(
+            ctx.world,
+            [BusinessOwnerComponent(name=name, default_price=price)],
+        )
+        actor.add_relationship(OwnsBusiness(), business.id)
         if not actor.has_component(HouseholdFundsComponent):
             actor.add_component(HouseholdFundsComponent())
         return ok(
@@ -606,6 +646,7 @@ class OpenBusinessHandler:
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
+                    target_ids=(str(business.id),),
                     business_name=name,
                 )
             )
@@ -624,14 +665,16 @@ class SellItemHandler:
         if not ctx.world.has_entity(item_id) or not ctx.world.has_entity(customer_id):
             return rejected("item or customer does not exist")
         actor = ctx.entity(actor_id)
-        if not actor.has_component(BusinessOwnerComponent):
+        business_id = parse_entity_id(command.payload.get("business_id"))
+        business_entity = _first_business(ctx.world, actor, business_id)
+        if business_entity is None:
             return rejected("character has no business")
         if not actor.has_relationship(Contains, item_id):
             return rejected("item is not in inventory")
         customer = ctx.entity(customer_id)
         if not customer.has_component(CustomerComponent):
             return rejected("target is not a customer")
-        business = actor.get_component(BusinessOwnerComponent)
+        business = business_entity.get_component(BusinessOwnerComponent)
         price = int(command.payload.get("price", business.default_price))
         if price <= 0:
             return rejected("price must be positive")
@@ -646,7 +689,7 @@ class SellItemHandler:
         updated_funds = HouseholdFundsComponent(balance=funds.balance + price)
         replace_component(actor, updated_funds)
         replace_component(
-            actor,
+            business_entity,
             replace(business, sales_count=business.sales_count + 1),
         )
         customer_budget = customer.get_component(CustomerComponent)
@@ -675,10 +718,12 @@ class PromoteBusinessHandler:
         if actor_id is None:
             return rejected("invalid character id")
         actor = ctx.entity(actor_id)
-        if not actor.has_component(BusinessOwnerComponent):
+        business_id = parse_entity_id(command.payload.get("business_id"))
+        business_entity = _first_business(ctx.world, actor, business_id)
+        if business_entity is None:
             return rejected("character has no business")
-        business = actor.get_component(BusinessOwnerComponent)
-        replace_component(actor, replace(business, promoted=True))
+        business = business_entity.get_component(BusinessOwnerComponent)
+        replace_component(business_entity, replace(business, promoted=True))
         return ok(
             BusinessPromotedEvent(
                 **ctx.event_base(
@@ -793,19 +838,24 @@ class SetRoutineHandler:
             return rejected("routine interval must be positive")
         next_due = int(command.payload.get("next_due_epoch", ctx.epoch + interval))
         actor = ctx.entity(actor_id)
+        existing = _routine_for_activity(ctx.world, actor, activity)
+        routine = existing or spawn_entity(ctx.world)
         replace_component(
-            actor,
+            routine,
             RoutineComponent(
                 activity=activity,
                 interval_seconds=interval,
                 next_due_epoch=next_due,
             ),
         )
+        if existing is None:
+            actor.add_relationship(HasRoutine(), routine.id)
         return ok(
             RoutineSetEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
+                    target_ids=(str(routine.id),),
                     activity=activity,
                     next_due_epoch=next_due,
                 )
@@ -1198,32 +1248,37 @@ class RoutineDueConsequence:
 
     def process(self, world: World, epoch: int):
         events = []
-        for entity in (
-            world.query()
-            .with_all([RoutineComponent, CharacterComponent])
-            .with_none([DeadComponent])
-            .execute_entities()
-        ):
-            routine = entity.get_component(RoutineComponent)
+        for routine_entity in world.query().with_all([RoutineComponent]).execute_entities():
+            routine = routine_entity.get_component(RoutineComponent)
             if routine.next_due_epoch > epoch:
+                continue
+            owners = [
+                source_id
+                for source_id, _edge in routine_entity.get_incoming_relationships(HasRoutine)
+                if world.has_entity(source_id)
+                and not world.get_entity(source_id).has_component(DeadComponent)
+            ]
+            if not owners:
                 continue
             updated = replace(
                 routine,
                 last_completed_epoch=epoch,
                 next_due_epoch=epoch + routine.interval_seconds,
             )
-            replace_component(entity, updated)
-            events.append(
-                RoutineDueEvent(
-                    **_event_base(
-                        epoch,
-                        visibility=EventVisibility.PRIVATE,
-                        actor_id=str(entity.id),
-                        activity=routine.activity,
-                        next_due_epoch=updated.next_due_epoch,
+            replace_component(routine_entity, updated)
+            for owner_id in owners:
+                events.append(
+                    RoutineDueEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(owner_id),
+                            target_ids=(str(routine_entity.id),),
+                            activity=routine.activity,
+                            next_due_epoch=updated.next_due_epoch,
+                        )
                     )
                 )
-            )
         return events
 
 
@@ -1245,16 +1300,24 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(HouseholdFundsComponent):
         funds = character.get_component(HouseholdFundsComponent)
         lines.append(f"Household funds: {funds.balance}.")
-    if character.has_component(BusinessOwnerComponent):
-        business = character.get_component(BusinessOwnerComponent)
-        lines.append(f"You own {business.name}; {business.sales_count} sales.")
+    for _edge, business_id in character.get_relationships(OwnsBusiness):
+        if not world.has_entity(business_id):
+            continue
+        business_entity = world.get_entity(business_id)
+        if business_entity.has_component(BusinessOwnerComponent):
+            business = business_entity.get_component(BusinessOwnerComponent)
+            lines.append(f"You own {business.name}; {business.sales_count} sales.")
     if character.has_component(HouseholdComponent):
         household = character.get_component(HouseholdComponent)
         label = household.name or household.household_id
         lines.append(f"Your household is {label}.")
-    if character.has_component(RoutineComponent):
-        routine = character.get_component(RoutineComponent)
-        lines.append(f"Routine: {routine.activity} due at epoch {routine.next_due_epoch}.")
+    for _edge, routine_id in character.get_relationships(HasRoutine):
+        if not world.has_entity(routine_id):
+            continue
+        routine_entity = world.get_entity(routine_id)
+        if routine_entity.has_component(RoutineComponent):
+            routine = routine_entity.get_component(RoutineComponent)
+            lines.append(f"Routine: {routine.activity} due at epoch {routine.next_due_epoch}.")
     if character.has_component(ReputationComponent):
         reputation = character.get_component(ReputationComponent)
         if reputation.known_for:
@@ -1350,6 +1413,7 @@ __all__ = [
     "FindJobHandler",
     "GoToWorkHandler",
     "GossipSpreadEvent",
+    "HasRoutine",
     "HomeClaimedEvent",
     "HomeComponent",
     "HouseholdComponent",
@@ -1363,6 +1427,7 @@ __all__ = [
     "MilestoneCompletedEvent",
     "MilestoneComponent",
     "OpenBusinessHandler",
+    "OwnsBusiness",
     "ParentOf",
     "PartnerOf",
     "PregnancyComponent",
