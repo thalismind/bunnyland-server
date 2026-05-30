@@ -28,17 +28,25 @@ from bunnyland.mechanics.lifesim import (
     AdoptChildHandler,
     AspirationComponent,
     BirthDueComponent,
+    CareerComponent,
     ChooseAspirationHandler,
     CompleteMilestoneHandler,
+    FindJobHandler,
+    GoToWorkHandler,
+    HouseholdFundsComponent,
+    JobScheduleComponent,
     LifeStageComponent,
     MilestoneCompletedEvent,
     ParentOf,
     PartnerOf,
     PregnancyComponent,
+    PromotionEarnedEvent,
+    QuitJobHandler,
     ReproductiveComponent,
     ResolveBirthHandler,
     StartPartnershipHandler,
     StartPregnancyHandler,
+    WorkShiftCompletedEvent,
     install_lifesim,
     lifesim_fragments,
 )
@@ -61,6 +69,9 @@ def _install(actor):
     actor.register_handler(AdoptChildHandler())
     actor.register_handler(ChooseAspirationHandler())
     actor.register_handler(CompleteMilestoneHandler())
+    actor.register_handler(FindJobHandler())
+    actor.register_handler(GoToWorkHandler())
+    actor.register_handler(QuitJobHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -138,6 +149,43 @@ async def test_aspiration_milestone_completion_can_reward_inventory_item():
     assert reward_id is not None
     inventory_ids = {str(target_id) for _edge, target_id in character.get_relationships(Contains)}
     assert reward_id in inventory_ids
+
+
+async def test_career_shift_pays_funds_and_can_promote():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    shifts: list[WorkShiftCompletedEvent] = []
+    promotions: list[PromotionEarnedEvent] = []
+    scenario.actor.bus.subscribe(WorkShiftCompletedEvent, shifts.append)
+    scenario.actor.bus.subscribe(PromotionEarnedEvent, promotions.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "find-job",
+            title="Burrow Barista",
+            hourly_pay=12,
+            shift_duration_seconds=2 * 3600,
+            shift_interval_seconds=HOUR,
+            next_shift_epoch=0,
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "go-to-work", performance_gain=1.0)
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    career = character.get_component(CareerComponent)
+    assert career.title == "Burrow Barista"
+    assert career.level == 2
+    assert career.hourly_pay == 17
+    assert character.get_component(HouseholdFundsComponent).balance == 24
+    schedule = character.get_component(JobScheduleComponent)
+    assert schedule.next_shift_epoch == scenario.actor.epoch + HOUR
+    assert shifts[0].earned == 24
+    assert promotions[0].level == 2
 
 
 async def test_start_partnership_creates_bidirectional_edges():

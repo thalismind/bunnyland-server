@@ -8,6 +8,7 @@ family ECS state.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -62,6 +63,27 @@ class MilestoneComponent(Component):
 
 
 @dataclass(frozen=True)
+class HouseholdFundsComponent(Component):
+    balance: int = 0
+
+
+@dataclass(frozen=True)
+class CareerComponent(Component):
+    title: str
+    level: int = 1
+    hourly_pay: int = 10
+    performance: float = 0.0
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class JobScheduleComponent(Component):
+    next_shift_epoch: int = 0
+    shift_duration_seconds: int = 8 * 60 * 60
+    shift_interval_seconds: int = 24 * 60 * 60
+
+
+@dataclass(frozen=True)
 class ReproductiveComponent(Component):
     can_be_pregnant: bool = False
     can_cause_pregnancy: bool = False
@@ -102,6 +124,21 @@ class MilestoneCompletedEvent(DomainEvent):
     aspiration: str
     milestone: str
     reward_item_id: str | None = None
+
+
+class CareerStartedEvent(DomainEvent):
+    title: str
+
+
+class WorkShiftCompletedEvent(DomainEvent):
+    title: str
+    earned: int
+    balance: int
+
+
+class PromotionEarnedEvent(DomainEvent):
+    title: str
+    level: int
 
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
@@ -250,6 +287,140 @@ class CompleteMilestoneHandler:
                 )
             )
         )
+
+
+class FindJobHandler:
+    command_type = "find-job"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        title = str(command.payload.get("title", "")).strip()
+        if not title:
+            return rejected("job title is required")
+        hourly_pay = int(command.payload.get("hourly_pay", 10))
+        if hourly_pay <= 0:
+            return rejected("hourly pay must be positive")
+        actor = ctx.entity(actor_id)
+        replace_component(actor, CareerComponent(title=title, hourly_pay=hourly_pay))
+        replace_component(
+            actor,
+            JobScheduleComponent(
+                next_shift_epoch=int(command.payload.get("next_shift_epoch", ctx.epoch)),
+                shift_duration_seconds=int(
+                    command.payload.get("shift_duration_seconds", 8 * 60 * 60)
+                ),
+                shift_interval_seconds=int(
+                    command.payload.get("shift_interval_seconds", 24 * 60 * 60)
+                ),
+            ),
+        )
+        if not actor.has_component(HouseholdFundsComponent):
+            actor.add_component(HouseholdFundsComponent())
+        return ok(
+            CareerStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    title=title,
+                )
+            )
+        )
+
+
+class GoToWorkHandler:
+    command_type = "go-to-work"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        actor = ctx.entity(actor_id)
+        if not actor.has_component(CareerComponent) or not actor.has_component(
+            JobScheduleComponent
+        ):
+            return rejected("character has no job")
+        career = actor.get_component(CareerComponent)
+        schedule = actor.get_component(JobScheduleComponent)
+        if not career.active:
+            return rejected("career is inactive")
+        if ctx.epoch < schedule.next_shift_epoch:
+            return rejected("shift is not scheduled yet")
+        hours = max(1, schedule.shift_duration_seconds // 3600)
+        earned = career.hourly_pay * hours
+        funds = (
+            actor.get_component(HouseholdFundsComponent)
+            if actor.has_component(HouseholdFundsComponent)
+            else HouseholdFundsComponent()
+        )
+        updated_funds = HouseholdFundsComponent(balance=funds.balance + earned)
+        replace_component(actor, updated_funds)
+        performance = career.performance + float(command.payload.get("performance_gain", 0.5))
+        promoted = performance >= 1.0
+        if promoted:
+            updated_career = CareerComponent(
+                title=career.title,
+                level=career.level + 1,
+                hourly_pay=career.hourly_pay + 5,
+                performance=performance - 1.0,
+                active=career.active,
+            )
+        else:
+            updated_career = CareerComponent(
+                title=career.title,
+                level=career.level,
+                hourly_pay=career.hourly_pay,
+                performance=performance,
+                active=career.active,
+            )
+        replace_component(actor, updated_career)
+        replace_component(
+            actor,
+            JobScheduleComponent(
+                next_shift_epoch=ctx.epoch + schedule.shift_interval_seconds,
+                shift_duration_seconds=schedule.shift_duration_seconds,
+                shift_interval_seconds=schedule.shift_interval_seconds,
+            ),
+        )
+        events = [
+            WorkShiftCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    title=career.title,
+                    earned=earned,
+                    balance=updated_funds.balance,
+                )
+            )
+        ]
+        if promoted:
+            events.append(
+                PromotionEarnedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(actor_id),
+                        title=career.title,
+                        level=updated_career.level,
+                    )
+                )
+            )
+        return ok(*events)
+
+
+class QuitJobHandler:
+    command_type = "quit-job"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        actor = ctx.entity(actor_id)
+        if not actor.has_component(CareerComponent):
+            return rejected("character has no job")
+        career = actor.get_component(CareerComponent)
+        replace_component(actor, replace(career, active=False))
+        return ok()
 
 
 class StartPartnershipHandler:
@@ -521,6 +692,13 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(f"Your aspiration is {aspiration.name}; completed: {done}.")
         else:
             lines.append(f"Your aspiration is {aspiration.name}.")
+    if character.has_component(CareerComponent):
+        career = character.get_component(CareerComponent)
+        if career.active:
+            lines.append(f"Your career is {career.title}, level {career.level}.")
+    if character.has_component(HouseholdFundsComponent):
+        funds = character.get_component(HouseholdFundsComponent)
+        lines.append(f"Household funds: {funds.balance}.")
     if character.has_component(PregnancyComponent):
         pregnancy = character.get_component(PregnancyComponent)
         due = (
@@ -573,9 +751,15 @@ __all__ = [
     "AspirationComponent",
     "BirthDueComponent",
     "AdoptChildHandler",
+    "CareerComponent",
+    "CareerStartedEvent",
     "ChooseAspirationHandler",
     "CompleteMilestoneHandler",
     "EndPartnershipHandler",
+    "FindJobHandler",
+    "GoToWorkHandler",
+    "HouseholdFundsComponent",
+    "JobScheduleComponent",
     "LifeStageComponent",
     "MilestoneCompletedEvent",
     "MilestoneComponent",
@@ -583,10 +767,13 @@ __all__ = [
     "PartnerOf",
     "PregnancyComponent",
     "PregnancyDueConsequence",
+    "PromotionEarnedEvent",
+    "QuitJobHandler",
     "ReproductiveComponent",
     "ResolveBirthHandler",
     "StartPartnershipHandler",
     "StartPregnancyHandler",
+    "WorkShiftCompletedEvent",
     "adult_classifier",
     "install_lifesim",
     "lifesim_fragments",
