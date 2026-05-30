@@ -28,18 +28,19 @@ from bunnyland.plugins.builtin import (
     LIFESIM,
     MECHANISMS,
     MEMORY,
+    SOCIAL,
     WORLDGEN,
 )
 
 
 def test_builtin_plugins_declared():
     ids = {p.id for p in bunnyland_plugins()}
-    assert ids == {CORE_VERBS, LIFESIM, MEMORY, WORLDGEN, ENVIRONMENT, MECHANISMS}
+    assert ids == {CORE_VERBS, LIFESIM, MEMORY, WORLDGEN, ENVIRONMENT, MECHANISMS, SOCIAL}
 
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 6
+    assert len(select(plugins, None)) == 7
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
 
 

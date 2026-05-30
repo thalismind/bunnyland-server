@@ -14,6 +14,7 @@ from .eat_drink import DrinkHandler, EatHandler
 from .environment import install_environment
 from .mechanisms import install_mechanisms
 from .needs import HungerSystem, ThirstSystem
+from .social import install_social
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -31,4 +32,10 @@ def install_needs(actor: WorldActor) -> None:
     actor.register_handler(DrinkHandler())
 
 
-__all__ = ["install_affect", "install_environment", "install_mechanisms", "install_needs"]
+__all__ = [
+    "install_affect",
+    "install_environment",
+    "install_mechanisms",
+    "install_needs",
+    "install_social",
+]
