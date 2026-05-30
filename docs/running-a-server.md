@@ -34,6 +34,23 @@ Offline, the world is the deterministic stub world and characters take no action
 for verifying setup, watching passive systems (hunger, thirst, regen) tick, and developing
 plugins without network or API costs.
 
+## Optional client API
+
+Web, admin, and TUI clients live outside this repo, but they can connect to a running
+bunnyland server through the optional HTTP/websocket API:
+
+```bash
+uv run --extra server bunnyland serve --ticks 0 --api-host 127.0.0.1 --api-port 8080
+```
+
+The API exposes:
+
+- `GET /health` for liveness and current world epoch.
+- `GET /world/snapshot` for the initial ECS snapshot and world metadata.
+- `GET /world/events/recent` for recently published domain events.
+- `POST /world/commands` to submit a command envelope into the world actor.
+- `WS /world/updates` for an initial snapshot followed by typed domain events.
+
 ## Connecting an LLM
 
 Characters only *think* when an LLM is attached. bunnyland uses [Ollama
@@ -70,6 +87,8 @@ key may be any non-empty value for local servers that don't check it.
 | `--ticks`        | `10`           | Number of rounds to run; `0` runs forever (until Ctrl-C).      |
 | `--tick-seconds` | `1.0`          | Real seconds the loop sleeps between rounds (when `--ticks 0`).  |
 | `--time-scale`   | `3600.0`       | Game seconds that pass per round.                              |
+| `--api-host`     | `127.0.0.1`    | Host for the optional HTTP/websocket client API.                |
+| `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](admin.md). |
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](admin.md).   |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |

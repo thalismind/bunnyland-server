@@ -135,7 +135,23 @@ async def _serve(args) -> None:
     )
     max_ticks = args.ticks if args.ticks > 0 else None
     print(f"Running game loop ({'forever' if max_ticks is None else f'{max_ticks} ticks'})...")
-    ticks = await loop.run(max_ticks=max_ticks)
+    if args.api_port is None:
+        ticks = await loop.run(max_ticks=max_ticks)
+    else:
+        from .server.runtime import run_loop_with_api
+
+        print(f"Serving client API at http://{args.api_host}:{args.api_port}.")
+        try:
+            ticks = await run_loop_with_api(
+                loop,
+                actor,
+                meta,
+                host=args.api_host,
+                port=args.api_port,
+                max_ticks=max_ticks,
+            )
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
     print(f"Stopped after {ticks} ticks at game epoch {actor.epoch}s.")
 
     if args.save:
@@ -179,6 +195,17 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--tick-seconds", type=float, default=1.0, help="real seconds per tick")
     serve.add_argument(
         "--time-scale", type=float, default=3600.0, help="game seconds per real tick"
+    )
+    serve.add_argument(
+        "--api-host",
+        default="127.0.0.1",
+        help="host for the optional HTTP/websocket client API",
+    )
+    serve.add_argument(
+        "--api-port",
+        type=int,
+        default=None,
+        help="port for the optional HTTP/websocket client API",
     )
     serve.add_argument(
         "--verbose", action="store_true", help="log decisions and world generation at INFO"

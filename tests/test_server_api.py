@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+
+import pytest
+
+from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
+from bunnyland.core.events import ActorMovedEvent
+from bunnyland.persistence import WorldMeta
+from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
+from bunnyland.server.app import create_app
+
+
+def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
+    meta = WorldMeta(seed="moss", generator="oneshot", plugins=("bunnyland.core_verbs",))
+
+    snapshot = serialize_world(scenario.actor, meta)
+
+    assert snapshot["world_epoch"] == scenario.actor.epoch
+    assert snapshot["metadata"]["seed"] == "moss"
+    entities = {entity["id"]: entity for entity in snapshot["entities"]}
+    room = entities[str(scenario.room_a)]
+    character = entities[str(scenario.character)]
+    assert room["components"]["RoomComponent"]["title"] == "Mosslit Burrow"
+    assert character["components"]["IdentityComponent"]["name"] == "Juniper"
+    assert any(
+        edge["target_id"] == str(scenario.character)
+        for edge in room["relationships"]["Contains"]
+    )
+
+
+def test_command_request_builds_submitted_command():
+    request = CommandRequest(
+        character_id="entity_1",
+        controller_id="entity_2",
+        controller_generation=3,
+        command_type="move",
+        payload={"direction": "north"},
+        cost={"action": 1},
+        lane=Lane.WORLD,
+        on_insufficient_points=OnInsufficientPoints.DENY,
+    )
+
+    command = request.to_submitted(submitted_at_epoch=42)
+
+    assert command.character_id == "entity_1"
+    assert command.command_type == "move"
+    assert command.payload == {"direction": "north"}
+    assert command.cost == CommandCost(action=1, focus=0)
+    assert command.submitted_at_epoch == 42
+
+
+async def test_event_stream_records_recent_events_and_fans_out_to_subscribers(scenario):
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe()
+    await scenario.actor.submit(
+        CommandRequest(
+            character_id=str(scenario.character),
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="move",
+            payload={"direction": "north"},
+            cost={"action": 1},
+        ).to_submitted(submitted_at_epoch=scenario.actor.epoch)
+    )
+
+    await scenario.actor.tick(0.0)
+
+    moved = None
+    for _ in range(6):
+        message = await asyncio.wait_for(subscription.queue.get(), timeout=1.0)
+        if message["data"]["event_type"] == "ActorMovedEvent":
+            moved = message
+            break
+    subscription.close()
+
+    assert moved is not None
+    assert moved["type"] == "event"
+    assert moved["data"]["event"]["to_room_id"] == str(scenario.room_b)
+    assert any(
+        message["data"]["event_type"] == "ActorMovedEvent"
+        for message in stream.recent_messages()
+    )
+
+
+def test_event_serialization_includes_type_and_json_fields(scenario):
+    event = ActorMovedEvent(
+        event_id="evt",
+        world_epoch=7,
+        created_at=datetime.now(UTC),
+        actor_id=str(scenario.character),
+        from_room_id=str(scenario.room_a),
+        to_room_id=str(scenario.room_b),
+    )
+
+    serialized = serialize_event(event)
+
+    assert serialized["event_type"] == "ActorMovedEvent"
+    assert serialized["event"]["world_epoch"] == 7
+    assert serialized["event"]["created_at"] is not None
+
+
+def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(scenario):
+    pytest.importorskip("fastapi")
+
+    app = create_app(scenario.actor)
+
+    paths = {route.path for route in app.routes}
+    assert "/health" in paths
+    assert "/world/snapshot" in paths
+    assert "/world/events/recent" in paths
+    assert "/world/commands" in paths
+    assert "/world/updates" in paths
