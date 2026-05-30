@@ -168,6 +168,7 @@ class StimulusComponent(Component):
     room_id: str | None
     intensity: float = 1.0
     created_at_epoch: int = 0
+    expires_at_epoch: int | None = None
     text: str = ""
 
 
@@ -178,6 +179,7 @@ class AttentionComponent(Component):
     focus_room_id: str | None = None
     decay_rate: float = 0.1
     time_since_stimulus: float = 0.0
+    last_updated_epoch: int = 0
 
 
 @dataclass(frozen=True)

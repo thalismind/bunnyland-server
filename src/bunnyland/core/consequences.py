@@ -20,6 +20,7 @@ from relics import World
 
 from ..projections.perception import perceive
 from .components import (
+    AttentionComponent,
     BleedingComponent,
     CharacterComponent,
     DeadComponent,
@@ -31,12 +32,14 @@ from .components import (
     NoiseComponent,
     PainComponent,
     PerceptionComponent,
+    StimulusComponent,
     SuspendedComponent,
     WeightComponent,
 )
 from .ecs import container_of, replace_component
 from .edges import ContainmentMode, Contains, HasInjury
 from .events import (
+    AttentionShiftedEvent,
     BleedingChangedEvent,
     CharacterDiedEvent,
     CharacterDownedEvent,
@@ -380,6 +383,89 @@ class HearingConsequence:
         return events
 
 
+class AttentionConsequence:
+    """Focus characters on the strongest current stimulus or heard noise."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        stimuli = [
+            stimulus
+            for stimulus in world.query().with_all([StimulusComponent]).execute_entities()
+            if _stimulus_active(stimulus.get_component(StimulusComponent), epoch)
+        ]
+        for character in world.query().with_all([CharacterComponent]).execute_entities():
+            existing = (
+                character.get_component(AttentionComponent)
+                if character.has_component(AttentionComponent)
+                else AttentionComponent(last_updated_epoch=epoch)
+            )
+            updated = self._updated_attention(world, character, existing, stimuli, epoch)
+            if updated == existing and character.has_component(AttentionComponent):
+                continue
+            replace_component(character, updated)
+            if (
+                updated.focus_entity_id != existing.focus_entity_id
+                or updated.focus_room_id != existing.focus_room_id
+            ):
+                events.append(
+                    AttentionShiftedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=_Vis.PRIVATE,
+                            actor_id=str(character.id),
+                            focus_entity_id=updated.focus_entity_id,
+                            focus_room_id=updated.focus_room_id,
+                            score=updated.score,
+                        )
+                    )
+                )
+        return events
+
+    def _updated_attention(self, world, character, existing, stimuli, epoch):
+        candidates: list[tuple[float, str | None, str | None]] = []
+        room_id = str(container_of(character)) if container_of(character) is not None else None
+        for entity in stimuli:
+            stimulus = entity.get_component(StimulusComponent)
+            if stimulus.room_id != room_id or stimulus.source_entity_id == str(character.id):
+                continue
+            candidates.append(
+                (
+                    stimulus.intensity,
+                    stimulus.source_entity_id or str(entity.id),
+                    stimulus.room_id,
+                )
+            )
+        if character.has_component(PerceptionComponent):
+            perception = character.get_component(PerceptionComponent)
+            for noise_id in perception.audible_entities:
+                parsed = _entity_id_from_string(world, noise_id)
+                noise = world.get_entity(parsed).get_component(NoiseComponent)
+                candidates.append(
+                    (noise.loudness, noise.source_entity_id or noise_id, noise.room_id)
+                )
+        if candidates:
+            score, focus_entity_id, focus_room_id = max(candidates, key=lambda item: item[0])
+            return replace(
+                existing,
+                score=score,
+                focus_entity_id=focus_entity_id,
+                focus_room_id=focus_room_id,
+                time_since_stimulus=0.0,
+                last_updated_epoch=epoch,
+            )
+
+        elapsed_hours = max(0, epoch - existing.last_updated_epoch) / 3600.0
+        score = max(0.0, existing.score - existing.decay_rate * elapsed_hours)
+        return replace(
+            existing,
+            score=score,
+            focus_entity_id=existing.focus_entity_id if score > 0 else None,
+            focus_room_id=existing.focus_room_id if score > 0 else None,
+            time_since_stimulus=existing.time_since_stimulus + elapsed_hours,
+            last_updated_epoch=epoch,
+        )
+
+
 def _perceived_ids(entities) -> list[str]:
     ids: list[str] = []
     for entity in entities:
@@ -390,6 +476,10 @@ def _perceived_ids(entities) -> list[str]:
 
 def _noise_active(noise: NoiseComponent, epoch: int) -> bool:
     return noise.expires_at_epoch is None or noise.expires_at_epoch >= epoch
+
+
+def _stimulus_active(stimulus: StimulusComponent, epoch: int) -> bool:
+    return stimulus.expires_at_epoch is None or stimulus.expires_at_epoch >= epoch
 
 
 def _can_hear(character, noise: NoiseComponent, hearing: HearingComponent) -> bool:
@@ -408,6 +498,7 @@ def _entity_id_from_string(world: World, entity_id: str):
 
 
 __all__ = [
+    "AttentionConsequence",
     "Consequence",
     "EncumbranceConsequence",
     "HearingConsequence",

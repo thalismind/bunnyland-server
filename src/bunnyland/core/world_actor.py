@@ -32,6 +32,7 @@ from .components import (
     WorldClockComponent,
 )
 from .consequences import (
+    AttentionConsequence,
     Consequence,
     EncumbranceConsequence,
     HealthConsequence,
@@ -94,6 +95,7 @@ class WorldActor:
             HealthConsequence(),
             PerceptionConsequence(),
             HearingConsequence(),
+            AttentionConsequence(),
         ]
         #: Policy gates: (world, command) -> (allowed, reason). Any deny rejects the
         #: command before it costs anything (spec 20). Plugins register these.

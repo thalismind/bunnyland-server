@@ -7,6 +7,7 @@ from conftest import build_scenario
 
 from bunnyland.core import (
     ActionPointsComponent,
+    AttentionComponent,
     BleedingComponent,
     BodyPlanComponent,
     CharacterComponent,
@@ -23,12 +24,14 @@ from bunnyland.core import (
     PainComponent,
     PerceptionComponent,
     StealthComponent,
+    StimulusComponent,
     WeightComponent,
     build_submitted_command,
     parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.events import (
+    AttentionShiftedEvent,
     EncumbranceChangedEvent,
     EntitySeenEvent,
     InjuryAddedEvent,
@@ -213,3 +216,43 @@ async def test_listener_hears_character_move_when_noise_meets_sensitivity():
     noise = scenario.actor.world.get_entity(parsed_noise_id)
     assert noise.get_component(NoiseComponent).source_entity_id == str(scenario.character)
     assert any(event.noise_id == noise_id and event.actor_id == str(listener.id) for event in heard)
+
+
+async def test_stimulus_shifts_attention_then_decays_after_expiration():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(AttentionComponent(decay_rate=0.5))
+    source = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="silver chime", kind="item")]
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), source.id
+    )
+    spawn_entity(
+        scenario.actor.world,
+        [
+            StimulusComponent(
+                stimulus_type="sound",
+                source_entity_id=str(source.id),
+                room_id=str(scenario.room_a),
+                intensity=1.0,
+                created_at_epoch=0,
+                expires_at_epoch=int(HOUR),
+                text="a clear chime",
+            )
+        ],
+    )
+    shifts = collect(scenario.actor, AttentionShiftedEvent)
+
+    await scenario.actor.tick(HOUR)
+
+    attention = character.get_component(AttentionComponent)
+    assert attention.focus_entity_id == str(source.id)
+    assert attention.score == pytest.approx(1.0)
+    assert any(event.focus_entity_id == str(source.id) for event in shifts)
+
+    await scenario.actor.tick(HOUR)
+
+    attention = character.get_component(AttentionComponent)
+    assert attention.focus_entity_id == str(source.id)
+    assert attention.score == pytest.approx(0.5)

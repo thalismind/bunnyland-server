@@ -150,6 +150,12 @@ class NoiseHeardEvent(DomainEvent):
     text: str = ""
 
 
+class AttentionShiftedEvent(DomainEvent):
+    focus_entity_id: str | None = None
+    focus_room_id: str | None = None
+    score: float
+
+
 class AffectChangedEvent(DomainEvent):
     labels: tuple[str, ...] = ()
 
@@ -387,6 +393,7 @@ __all__ = [
     "AdoptionCompletedEvent",
     "ActorMovedEvent",
     "AffectChangedEvent",
+    "AttentionShiftedEvent",
     "BleedingChangedEvent",
     "BirthDueEvent",
     "BirthResolvedEvent",
