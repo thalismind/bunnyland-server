@@ -45,6 +45,8 @@ uv run bunnyland serve --llm --generator recursive --ticks 20
   wiring a user to a character, and the player commands.
 - **[Admin & controllers](docs/admin.md)** — claiming, suspending, and handing off
   characters; enabling/disabling plugins.
+- **[Saving & reloading](docs/persistence.md)** — save/autosave/reload a world, and what
+  is (and isn't) persisted.
 
 The full design is in [`bunnyland_specification.md`](bunnyland_specification.md); the build
 plan is in [`PLAN.md`](PLAN.md).

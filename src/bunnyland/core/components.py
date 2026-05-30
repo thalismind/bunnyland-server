@@ -23,7 +23,7 @@ from .edges import ContainmentMode
 class IdentityComponent(Component):
     name: str
     kind: str
-    tags: frozenset[str] = frozenset()
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ class AffectDelta:
 class AffectComponent(Component):
     baseline: AffectVector = AffectVector()
     current: AffectVector = AffectVector()
-    labels: frozenset[str] = frozenset()
+    labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

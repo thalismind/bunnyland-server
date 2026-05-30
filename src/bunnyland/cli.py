@@ -18,6 +18,7 @@ from pathlib import Path
 from .core.world_actor import WorldActor
 from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
+from .persistence import WorldMeta, load_world, save_world
 from .plugins import apply_plugins, bunnyland_plugins, load_modules, resolve_order, select
 from .prompts.builder import PromptBuilder
 from .worldgen import GenOptions, collect_generators
@@ -40,27 +41,23 @@ def load_dotenv(path: str | Path = ".env") -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
-def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[WorldActor, list]:
-    """Create an actor and apply builtin + requested plugins; return (actor, applied)."""
+def select_plugins(modules: list[str], enabled_ids: list[str] | None) -> list:
+    """Collect builtin + requested plugins and select which are enabled."""
     plugins = list(bunnyland_plugins())
     plugins.extend(load_modules(modules))
-    chosen = select(plugins, enabled_ids)
+    return select(plugins, enabled_ids)
+
+
+def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[WorldActor, list]:
+    """Create an actor and apply builtin + requested plugins; return (actor, applied)."""
+    chosen = select_plugins(modules, enabled_ids)
     actor = WorldActor()
     applied = apply_plugins(chosen, actor)
     return actor, applied
 
 
 async def _serve(args) -> None:
-    actor, applied = build_actor(args.module, args.plugin)
-    print("Loaded plugins:")
-    for plugin in resolve_order(applied):
-        print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
-
-    registry = collect_generators(applied)
-    generator = registry.get(args.generator)
-    if generator is None:
-        names = ", ".join(sorted(registry)) or "(none)"
-        raise SystemExit(f"unknown generator {args.generator!r}; available: {names}")
+    plugins = select_plugins(args.module, args.plugin)
 
     host = api_key = None
     if args.llm:
@@ -70,16 +67,36 @@ async def _serve(args) -> None:
         if not api_key:
             raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
 
-    options = GenOptions(
-        llm=args.llm,
-        model=args.ollama_model,
-        host=host,
-        api_key=api_key,
-        max_rooms=args.max_rooms,
-    )
-    result = await generator.generate(actor, args.seed, options)
-    print(f"Generated world {args.seed!r} via {generator.name!r}: "
-          f"{len(result.rooms)} rooms, {len(result.characters)} characters.")
+    if args.load:
+        actor, meta = load_world(args.load, plugins=plugins)
+        print(f"Reloaded world from {args.load!r}: seed {meta.seed!r}, "
+              f"generator {meta.generator!r}, game epoch {actor.epoch}s.")
+    else:
+        actor = WorldActor()
+        apply_plugins(plugins, actor)
+        print("Loaded plugins:")
+        for plugin in resolve_order(plugins):
+            print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
+
+        registry = collect_generators(plugins)
+        generator = registry.get(args.generator)
+        if generator is None:
+            names = ", ".join(sorted(registry)) or "(none)"
+            raise SystemExit(f"unknown generator {args.generator!r}; available: {names}")
+
+        options = GenOptions(
+            llm=args.llm, model=args.ollama_model, host=host, api_key=api_key,
+            max_rooms=args.max_rooms,
+        )
+        result = await generator.generate(actor, args.seed, options)
+        mode = f"llm:{args.ollama_model}" if args.llm else "stub"
+        meta = WorldMeta(
+            seed=args.seed,
+            generator=generator.name,
+            prompt=f"{generator.name} ({mode}) from seed {args.seed!r}",
+        )
+        print(f"Generated world {args.seed!r} via {generator.name!r}: "
+              f"{len(result.rooms)} rooms, {len(result.characters)} characters.")
 
     if args.llm:
         from .llm_agents import OllamaAgent
@@ -90,12 +107,25 @@ async def _serve(args) -> None:
         agent = ScriptedAgent([])  # offline: characters wait, the world still ticks
         print("Offline demo (no --llm): characters will wait.")
 
+    autosave = None
+    if args.save and args.autosave_every > 0:
+        def autosave(ticks: int) -> None:
+            save_world(actor, args.save, meta=meta)
+            print(f"  [autosave] tick {ticks} -> {args.save}")
+
     dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), agent)
-    loop = GameLoop(actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale)
+    loop = GameLoop(
+        actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
+        autosave=autosave, autosave_every=args.autosave_every,
+    )
     max_ticks = args.ticks if args.ticks > 0 else None
     print(f"Running game loop ({'forever' if max_ticks is None else f'{max_ticks} ticks'})...")
     ticks = await loop.run(max_ticks=max_ticks)
     print(f"Stopped after {ticks} ticks at game epoch {actor.epoch}s.")
+
+    if args.save:
+        saved = save_world(actor, args.save, meta=meta)
+        print(f"Saved world to {args.save!r} (seed {saved.seed!r}, epoch {saved.saved_at_epoch}s).")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,6 +147,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     serve.add_argument(
         "--max-rooms", type=int, default=6, help="room budget for graph-based generators"
+    )
+    serve.add_argument("--load", default=None, help="reload a saved world (skips generation)")
+    serve.add_argument("--save", default=None, help="save the world to this path on exit")
+    serve.add_argument(
+        "--autosave-every", type=int, default=0, help="autosave every N ticks (needs --save)"
     )
     serve.add_argument("--ticks", type=int, default=10, help="number of ticks (0 = run forever)")
     serve.add_argument("--tick-seconds", type=float, default=1.0, help="real seconds per tick")

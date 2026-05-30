@@ -103,6 +103,19 @@ class WorldActor:
     def epoch(self) -> int:
         return self._clock_entity.get_component(WorldClockComponent).game_time_seconds
 
+    def bind_clock(self) -> None:
+        """Re-point ``_clock_entity`` at the world's clock entity.
+
+        Loading a saved world replaces every entity (including the clock spawned in
+        ``__init__``), so persistence calls this afterwards to rebind the singleton clock.
+        """
+        clocks = list(
+            self.world.query().with_all([WorldClockComponent]).execute_entities()
+        )
+        if len(clocks) != 1:
+            raise RuntimeError(f"expected exactly one world clock, found {len(clocks)}")
+        self._clock_entity = clocks[0]
+
     # -- submission ---------------------------------------------------------------------
 
     async def submit(self, command: SubmittedCommand) -> None:

@@ -73,6 +73,9 @@ key may be any non-empty value for local servers that don't check it.
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](admin.md). |
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](admin.md).   |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
+| `--load`         | (none)         | Resume a saved world instead of generating. See [persistence](persistence.md). |
+| `--save`         | (none)         | Save the world to this path on exit.                           |
+| `--autosave-every`| `0`           | Autosave every N ticks (needs `--save`).                       |
 
 ## The time model
 
@@ -92,11 +95,12 @@ move at a comfortable rate while you watch a handful of rounds.
 
 ```bash
 uv run bunnyland serve --llm --generator recursive --max-rooms 8 --ticks 0 \
-  --tick-seconds 30 --time-scale 1800
+  --tick-seconds 30 --time-scale 1800 --save worlds/marsh.json --autosave-every 20
 ```
 
-Persistence (saving/restoring the world) is on the roadmap (see `PLAN.md`); today a server
-starts from a freshly generated world each launch.
+`--save` writes the world (and its seed/prompt/generator) on exit; `--autosave-every N`
+checkpoints it every N ticks; `--load` resumes a saved world instead of generating a new
+one. See [saving & reloading](persistence.md).
 
 ## Watching it play
 

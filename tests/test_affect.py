@@ -142,7 +142,7 @@ async def test_thoughts_decay_and_mood_returns_to_baseline():
     assert "angry" in char.get_component(AffectComponent).labels
 
     await scenario.actor.tick(HOUR)  # now past expiry -> thought decays
-    assert char.get_component(AffectComponent).labels == frozenset()
+    assert char.get_component(AffectComponent).labels == ()
     assert len(char.get_relationships(HasThought)) == 0
 
 

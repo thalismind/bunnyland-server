@@ -59,15 +59,15 @@ def apply_delta(vector: AffectVector, delta: AffectDelta) -> AffectVector:
     return AffectVector(**{d: getattr(vector, d) + getattr(delta, d) for d in _DIMENSIONS})
 
 
-def labels_for(vector: AffectVector) -> frozenset[str]:
-    labels: set[str] = set()
+def labels_for(vector: AffectVector) -> tuple[str, ...]:
+    labels: list[str] = []
     for dimension, label, threshold in _LABEL_RULES:
         value = getattr(vector, dimension)
         if threshold >= 0 and value >= threshold:
-            labels.add(label)
+            labels.append(label)
         elif threshold < 0 and value <= threshold:
-            labels.add(label)
-    return frozenset(labels)
+            labels.append(label)
+    return tuple(sorted(labels))
 
 
 # Interpretation -> (label, text, delta) for speech a character hears.
