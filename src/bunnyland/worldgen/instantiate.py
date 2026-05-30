@@ -38,6 +38,7 @@ from ..core.events import WorldGeneratedEvent
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.meter import Meter
 from ..mechanics.needs import HungerComponent, ThirstComponent
+from ..mechanics.persona import GoalComponent, TraitSetComponent
 from .proposal import CharacterSpec, ObjectSpec, WorldProposal
 
 if TYPE_CHECKING:
@@ -117,6 +118,10 @@ def _character_components(spec: CharacterSpec) -> list:
         components.append(ThirstComponent(meter=Meter()))
     if spec.with_memory:
         components.append(MemoryProfileComponent(vector_collection=f"mem:{spec.key}"))
+    if spec.traits:
+        components.append(TraitSetComponent(traits=tuple(spec.traits)))
+    if spec.goals:
+        components.append(GoalComponent(active_goals=tuple(spec.goals)))
     return components
 
 

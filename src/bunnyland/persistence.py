@@ -48,6 +48,7 @@ _TYPE_MODULES = (
     "bunnyland.mechanics.environment",
     "bunnyland.mechanics.social",
     "bunnyland.mechanics.policy",
+    "bunnyland.mechanics.persona",
 )
 
 

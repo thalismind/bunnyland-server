@@ -53,6 +53,8 @@ class CharacterSpec(BaseModel):
     llm_model: str = "llama3"
     with_needs: bool = True
     with_memory: bool = True
+    traits: tuple[str, ...] = ()
+    goals: tuple[str, ...] = ()
 
 
 class WorldProposal(BaseModel):
@@ -124,6 +126,8 @@ class CharacterProposal(BaseModel):
     llm_model: str = "deepseek-v4-flash"
     with_needs: bool = True
     with_memory: bool = True
+    traits: tuple[str, ...] = ()
+    goals: tuple[str, ...] = ()
     key: str = ""  # assigned by the generator before instantiation
 
 

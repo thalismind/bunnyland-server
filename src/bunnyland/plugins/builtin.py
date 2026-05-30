@@ -38,6 +38,12 @@ from ..mechanics.needs import (
     ThirstSystem,
     need_fragments,
 )
+from ..mechanics.persona import (
+    GoalComponent,
+    PreferenceComponent,
+    TraitSetComponent,
+    persona_fragments,
+)
 from ..mechanics.policy import (
     CharacterBoundaryComponent,
     WorldPolicyComponent,
@@ -62,6 +68,7 @@ ENVIRONMENT = "bunnyland.environment"
 MECHANISMS = "bunnyland.mechanisms"
 SOCIAL = "bunnyland.social"
 POLICY = "bunnyland.policy"
+PERSONA = "bunnyland.persona"
 
 
 def _install_affect(actor) -> None:
@@ -183,6 +190,17 @@ def policy_plugin() -> Plugin:
     )
 
 
+def persona_plugin() -> Plugin:
+    return Plugin(
+        id=PERSONA,
+        name="Persona",
+        ecs=EcsContribution(
+            components=(TraitSetComponent, PreferenceComponent, GoalComponent)
+        ),
+        content=ContentContribution(prompt_fragments=(persona_fragments,)),
+    )
+
+
 def worldgen_plugin() -> Plugin:
     return Plugin(
         id=WORLDGEN,
@@ -210,6 +228,7 @@ def bunnyland_plugins() -> list[Plugin]:
         mechanisms_plugin(),
         social_plugin(),
         policy_plugin(),
+        persona_plugin(),
     ]
 
 
@@ -219,6 +238,7 @@ __all__ = [
     "LIFESIM",
     "MECHANISMS",
     "MEMORY",
+    "PERSONA",
     "POLICY",
     "SOCIAL",
     "WORLDGEN",
@@ -228,6 +248,7 @@ __all__ = [
     "lifesim_plugin",
     "mechanisms_plugin",
     "memory_plugin",
+    "persona_plugin",
     "policy_plugin",
     "social_plugin",
     "worldgen_plugin",

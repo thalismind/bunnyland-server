@@ -86,6 +86,7 @@ class StubWorldBuilder:
                     name="Juniper",
                     room_key="burrow",
                     controller="suspended",  # claimable by a human
+                    traits=("cautious", "kind"),
                 ),
                 CharacterSpec(
                     key="hazel",
@@ -94,6 +95,8 @@ class StubWorldBuilder:
                     controller="llm",
                     llm_profile="elder",
                     llm_model="llama3",
+                    traits=("curious", "talkative"),
+                    goals=("learn the marsh's secrets",),
                 ),
             ],
         )
