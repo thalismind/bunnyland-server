@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from pydantic.dataclasses import dataclass
-from relics import Component, EntityId, World
+from relics import Component, EntityId, Frequency, System, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import (
@@ -29,6 +29,7 @@ from ..core.events import (
     CharacterDefendedEvent,
     CharacterPickpocketedEvent,
     CombatChallengeEvent,
+    DomainEvent,
     EventVisibility,
     FortificationBuiltEvent,
     InjuryAddedEvent,
@@ -39,6 +40,16 @@ from .policy import BoundaryTag, PolicyGate
 
 UNARMED_DAMAGE = 5.0
 DEFEND_REDUCTION = 2.0
+ATTACK_STAMINA_COST = 3.0
+SPAR_STAMINA_COST = 2.0
+DEFEND_STAMINA_COST = 2.0
+
+
+@dataclass(frozen=True)
+class StaminaComponent(Component):
+    current: float = 10.0
+    maximum: float = 10.0
+    regen_per_hour: float = 4.0
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,29 @@ class DefendingComponent(Component):
 class FortificationComponent(Component):
     rating: float = 1.0
     durability: float = 10.0
+
+
+class StaminaChangedEvent(DomainEvent):
+    current: float
+    maximum: float
+    reason: str = ""
+
+
+class StaminaRegenSystem(System):
+    def query(self):
+        return self.q.with_all([StaminaComponent])
+
+    def frequency(self) -> Frequency:
+        return Frequency.EVERY_TICK
+
+    def process(self, entities, components, delta) -> None:
+        del components
+        for entity in entities:
+            stamina = entity.get_component(StaminaComponent)
+            gained = stamina.regen_per_hour * (delta / 3600.0)
+            current = min(stamina.maximum, stamina.current + gained)
+            if current != stamina.current:
+                replace_component(entity, replace(stamina, current=current))
 
 
 def pvp_classifier(command: SubmittedCommand):
@@ -137,6 +171,36 @@ def _body_part(target, requested: object) -> str:
     return "body"
 
 
+def _spend_stamina(
+    ctx: HandlerContext,
+    entity_id: EntityId,
+    amount: float,
+    *,
+    reason: str,
+) -> tuple[bool, str | None, StaminaChangedEvent | None]:
+    entity = ctx.entity(entity_id)
+    if amount <= 0 or not entity.has_component(StaminaComponent):
+        return True, None, None
+    stamina = entity.get_component(StaminaComponent)
+    if stamina.current < amount:
+        return False, "insufficient stamina", None
+    updated = replace(stamina, current=stamina.current - amount)
+    replace_component(entity, updated)
+    return (
+        True,
+        None,
+        StaminaChangedEvent(
+            **ctx.event_base(
+                visibility=EventVisibility.PRIVATE,
+                actor_id=str(entity_id),
+                current=updated.current,
+                maximum=updated.maximum,
+                reason=reason,
+            )
+        ),
+    )
+
+
 class AttackHandler:
     command_type = "attack"
 
@@ -171,6 +235,21 @@ def _resolve_attack(
     if not target.has_component(HealthComponent):
         return rejected("target has no health")
 
+    stamina_cost = float(
+        command.payload.get(
+            "stamina_cost",
+            SPAR_STAMINA_COST if sparring else ATTACK_STAMINA_COST,
+        )
+    )
+    allowed, reason, stamina_event = _spend_stamina(
+        ctx,
+        actor_id,
+        stamina_cost,
+        reason="spar" if sparring else "attack",
+    )
+    if not allowed:
+        return rejected(reason or "insufficient stamina")
+
     raw_damage = _weapon_damage(ctx, actor_id, weapon_id)
     if raw_damage < 0:
         return rejected("weapon is not usable")
@@ -190,7 +269,10 @@ def _resolve_attack(
     if target.has_component(DefendingComponent):
         target.remove_component(DefendingComponent)
 
-    events = [
+    events: list[DomainEvent] = []
+    if stamina_event is not None:
+        events.append(stamina_event)
+    events.append(
         CharacterAttackedEvent(
             **ctx.event_base(
                 visibility=EventVisibility.ROOM,
@@ -204,7 +286,7 @@ def _resolve_attack(
                 sparring=sparring,
             )
         )
-    ]
+    )
     if damage > 0:
         body_part = _body_part(target, command.payload.get("body_part"))
         injury = spawn_entity(
@@ -245,6 +327,12 @@ class DefendHandler:
         actor_id = parse_entity_id(command.character_id)
         if actor_id is None:
             return rejected("invalid character id")
+        stamina_cost = float(command.payload.get("stamina_cost", DEFEND_STAMINA_COST))
+        allowed, reason, stamina_event = _spend_stamina(
+            ctx, actor_id, stamina_cost, reason="defend"
+        )
+        if not allowed:
+            return rejected(reason or "insufficient stamina")
         character = ctx.entity(actor_id)
         replace_component(
             character,
@@ -253,7 +341,10 @@ class DefendHandler:
                 reduction=float(command.payload.get("reduction", DEFEND_REDUCTION)),
             ),
         )
-        return ok(
+        events: list[DomainEvent] = []
+        if stamina_event is not None:
+            events.append(stamina_event)
+        events.append(
             CharacterDefendedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -263,6 +354,7 @@ class DefendHandler:
                 )
             )
         )
+        return ok(*events)
 
 
 class ChallengeHandler:
@@ -425,6 +517,9 @@ class PickpocketHandler:
 
 def barbariansim_fragments(world: World, character) -> list[str]:
     lines: list[str] = []
+    if character.has_component(StaminaComponent):
+        stamina = character.get_component(StaminaComponent)
+        lines.append(f"Stamina: {stamina.current:g}/{stamina.maximum:g}.")
     if character.has_component(DefendingComponent):
         lines.append("You are defending yourself.")
     if character.has_component(ArmorComponent):
@@ -443,6 +538,7 @@ def barbariansim_fragments(world: World, character) -> list[str]:
 
 
 def install_barbariansim(actor) -> None:
+    actor.world.register_system(StaminaRegenSystem())
     actor.register_gate(
         PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier))
     )
@@ -459,6 +555,9 @@ __all__ = [
     "PickpocketHandler",
     "RaidHandler",
     "SparHandler",
+    "StaminaChangedEvent",
+    "StaminaComponent",
+    "StaminaRegenSystem",
     "WeaponComponent",
     "barbariansim_fragments",
     "install_barbariansim",

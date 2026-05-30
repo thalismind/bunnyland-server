@@ -32,6 +32,8 @@ from ..mechanics.barbariansim import (
     PickpocketHandler,
     RaidHandler,
     SparHandler,
+    StaminaChangedEvent,
+    StaminaComponent,
     WeaponComponent,
     barbariansim_fragments,
     install_barbariansim,
@@ -485,6 +487,7 @@ def barbariansim_plugin() -> Plugin:
                 ArmorComponent,
                 DefendingComponent,
                 FortificationComponent,
+                StaminaComponent,
             )
         ),
         commands=CommandContribution(
@@ -496,6 +499,9 @@ def barbariansim_plugin() -> Plugin:
                 FortifyHandler,
                 RaidHandler,
                 PickpocketHandler,
+            ),
+            typed_events=(
+                StaminaChangedEvent,
             )
         ),
         runtime=RuntimeContribution(service_factories=(install_barbariansim,)),

@@ -38,6 +38,8 @@ from bunnyland.mechanics.barbariansim import (
     PickpocketHandler,
     RaidHandler,
     SparHandler,
+    StaminaChangedEvent,
+    StaminaComponent,
     WeaponComponent,
     barbariansim_fragments,
     install_barbariansim,
@@ -144,6 +146,40 @@ async def test_attack_damage_respects_weapon_armor_and_defense():
     assert attacked[0].damage == 5.0
     assert target_entity.get_component(HealthComponent).current == 15.0
     assert not target_entity.has_component(DefendingComponent)
+
+
+async def test_stamina_regenerates_before_attack_and_spends_on_combat():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(StaminaComponent(current=0.0, maximum=10.0, regen_per_hour=5.0))
+    target = _target(scenario, health=20.0)
+    changed: list[StaminaChangedEvent] = []
+    scenario.actor.bus.subscribe(StaminaChangedEvent, changed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "attack", target_id=str(target)))
+    await scenario.actor.tick(HOUR)
+
+    assert character.get_component(StaminaComponent).current == 2.0
+    assert scenario.actor.world.get_entity(target).get_component(HealthComponent).current == 15.0
+    assert changed[0].reason == "attack"
+
+
+async def test_low_stamina_blocks_combat_without_damage():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(StaminaComponent(current=1.0, maximum=10.0, regen_per_hour=0.0))
+    target = _target(scenario, health=20.0)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "attack", target_id=str(target)))
+    await scenario.actor.tick(0.0)
+
+    assert character.get_component(StaminaComponent).current == 1.0
+    assert scenario.actor.world.get_entity(target).get_component(HealthComponent).current == 20.0
+    assert any("insufficient stamina" in event.reason for event in rejects)
 
 
 async def test_lethal_attack_requires_lethal_pvp_policy():
@@ -289,6 +325,7 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(DefendingComponent(started_at_epoch=0))
     character.add_component(ArmorComponent(rating=1.5))
+    character.add_component(StaminaComponent(current=4.0, maximum=10.0))
     scenario.actor.world.get_entity(scenario.room_a).add_component(
         FortificationComponent(rating=2.0, durability=8.0)
     )
@@ -297,6 +334,7 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     fragments = barbariansim_fragments(scenario.actor.world, character)
 
     assert any("defending" in line for line in fragments)
+    assert any("Stamina: 4/10" in line for line in fragments)
     assert any("armor rating" in line for line in fragments)
     assert any("Reachable weapon" in line for line in fragments)
     assert any("Reachable fortification" in line for line in fragments)
