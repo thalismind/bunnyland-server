@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -20,6 +22,7 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
+from bunnyland.core.ecs import replace_component
 from bunnyland.projections import (
     RecentContextProjection,
     RoomSummaryProjection,
@@ -89,8 +92,7 @@ def test_render_summary_is_deterministic_template():
 
 async def test_move_marks_rooms_dirty_and_rebuild_reflects_new_occupant():
     scenario = build_scenario()
-    projection = RoomSummaryProjection(scenario.actor.world)
-    projection.subscribe(scenario.actor.bus)
+    projection = RoomSummaryProjection(scenario.actor.world).attach()
 
     # Build once so room_a has a clean cached summary mentioning Juniper.
     summary_a = projection.summary(scenario.room_a, scenario.actor.epoch)
@@ -98,9 +100,10 @@ async def test_move_marks_rooms_dirty_and_rebuild_reflects_new_occupant():
     assert "Juniper" in summary_a.visible_summary
 
     await scenario.actor.submit(move_cmd(scenario))
-    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(HOUR)  # executes the move; its edge changes are queued
+    await scenario.actor.tick(HOUR)  # next tick drains the observer queue -> dirties rooms
 
-    # Move dirtied both rooms.
+    # Move dirtied both rooms (via Contains observers).
     room_a = scenario.actor.world.get_entity(scenario.room_a)
     assert room_a.get_component(RoomSummaryComponent).dirty is True
 
@@ -114,12 +117,59 @@ async def test_move_marks_rooms_dirty_and_rebuild_reflects_new_occupant():
 
 async def test_summary_rebuilds_lazily_only_when_dirty():
     scenario = build_scenario()
-    projection = RoomSummaryProjection(scenario.actor.world)
-    projection.subscribe(scenario.actor.bus)
+    projection = RoomSummaryProjection(scenario.actor.world).attach()
 
     first = projection.summary(scenario.room_a, scenario.actor.epoch)
     second = projection.summary(scenario.room_a, scenario.actor.epoch)
     assert first.version == second.version  # not rebuilt while clean
+
+
+async def test_observer_dirties_room_when_its_light_changes():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    world.get_entity(scenario.room_a).add_component(LightComponent(level=1.0))
+    projection = RoomSummaryProjection(world).attach()
+
+    bright = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "bright" in bright.visible_summary
+
+    # Darken the room; the change is queued and applies on the next tick (spec 5.x).
+    room = world.get_entity(scenario.room_a)
+    replace_component(room, replace(room.get_component(LightComponent), level=0.05))
+    assert room.get_component(RoomSummaryComponent).dirty is False  # not yet observed
+
+    await scenario.actor.tick(0.0)  # drains the observer queue
+    assert room.get_component(RoomSummaryComponent).dirty is True
+    assert "dark" in projection.summary(scenario.room_a, scenario.actor.epoch).visible_summary
+
+
+async def test_observer_dirties_room_when_contents_change():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    projection = RoomSummaryProjection(world).attach()
+    projection.summary(scenario.room_a, scenario.actor.epoch)  # clean cache
+
+    add_object(scenario, scenario.room_a, [IdentityComponent(name="a brass key", kind="item")])
+    await scenario.actor.tick(0.0)  # Contains-added observer dirties the room
+
+    assert world.get_entity(scenario.room_a).get_component(RoomSummaryComponent).dirty is True
+    summary = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "a brass key" in summary.visible_summary
+
+
+async def test_observer_dirties_room_when_an_exit_is_added():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    projection = RoomSummaryProjection(world).attach()
+    projection.summary(scenario.room_b, scenario.actor.epoch)  # room_b clean
+
+    from bunnyland.core import ExitTo
+
+    world.get_entity(scenario.room_b).add_relationship(ExitTo(direction="up"), scenario.room_a)
+    await scenario.actor.tick(0.0)
+
+    summary = projection.summary(scenario.room_b, scenario.actor.epoch)
+    assert "up" in summary.visible_summary
 
 
 # -- perception -------------------------------------------------------------------------

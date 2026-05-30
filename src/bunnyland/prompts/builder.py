@@ -85,7 +85,9 @@ class PromptBuilder:
         fragment_providers: Sequence[FragmentProvider] = (),
     ) -> None:
         self.world = world
-        self.room_summary = room_summary or RoomSummaryProjection(world)
+        # Attach the projection's ECS observers so its cache invalidates as the room
+        # changes (idempotent; mutations dirty the room on the next tick).
+        self.room_summary = (room_summary or RoomSummaryProjection(world)).attach()
         self.recent_context = recent_context
         self.memory_store = memory_store
         self.fragment_providers = tuple(fragment_providers)

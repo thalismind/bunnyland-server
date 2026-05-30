@@ -12,7 +12,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
-from relics import EntityId, World
+from relics import (
+    EntityId,
+    OnComponentAdded,
+    OnComponentRemoved,
+    OnRelationshipAdded,
+    OnRelationshipRemoved,
+    World,
+)
 
 from ..core.components import (
     CharacterComponent,
@@ -25,31 +32,13 @@ from ..core.components import (
     RoomSummaryComponent,
     TemperatureComponent,
 )
-from ..core.ecs import container_of, contents, parse_entity_id, replace_component
-from ..core.edges import ExitTo
-from ..core.events import (
-    ActorMovedEvent,
-    CharacterDiedEvent,
-    CharacterDownedEvent,
-    CharacterRevivedEvent,
-    DomainEvent,
-    ItemDroppedEvent,
-    ItemPutEvent,
-    ItemTakenEvent,
-    ItemUsedEvent,
-)
+from ..core.ecs import container_of, contents, replace_component
+from ..core.edges import Contains, ExitTo
 
-# Event types whose occurrence can change a room's visible state (spec 17.3).
-_DIRTYING_EVENTS: tuple[type[DomainEvent], ...] = (
-    ActorMovedEvent,
-    ItemTakenEvent,
-    ItemDroppedEvent,
-    ItemPutEvent,
-    ItemUsedEvent,
-    CharacterDownedEvent,
-    CharacterRevivedEvent,
-    CharacterDiedEvent,
-)
+# Components/edges whose add or remove can change a room's visible state (spec 17.3).
+# Our frozen components are replaced (remove+add), so add/remove observers catch edits too.
+_ROOM_COMPONENTS = (RoomComponent, LightComponent, TemperatureComponent)
+_ROOM_EDGES = (Contains, ExitTo)
 
 
 # --------------------------------------------------------------------------------------
@@ -180,45 +169,83 @@ def render_summary(facts: RoomFacts) -> str:
 
 
 # --------------------------------------------------------------------------------------
+# Observers (spec 17.3): keep the cache honest by reacting to ECS changes directly
+# --------------------------------------------------------------------------------------
+
+
+def _component_observer(component_type, dirty, *, removed: bool):
+    """A Relics observer that dirties the room of an entity when ``component_type`` changes."""
+    if removed:
+
+        class _Observer(OnComponentRemoved):
+            def on_component_removed(self, entity, component) -> None:
+                dirty(entity)
+    else:
+
+        class _Observer(OnComponentAdded):
+            def on_component_added(self, entity, component) -> None:
+                dirty(entity)
+
+    _Observer.component_type = component_type
+    return _Observer()
+
+
+def _relationship_observer(edge_type, dirty, *, removed: bool):
+    """A Relics observer that dirties a room when an ``edge_type`` edge from it changes."""
+    if removed:
+
+        class _Observer(OnRelationshipRemoved):
+            def on_relationship_removed(self, source, edge, target) -> None:
+                dirty(source)
+    else:
+
+        class _Observer(OnRelationshipAdded):
+            def on_relationship_added(self, source, edge, target) -> None:
+                dirty(source)
+
+    _Observer.edge_type = edge_type
+    return _Observer()
+
+
+# --------------------------------------------------------------------------------------
 # Projection
 # --------------------------------------------------------------------------------------
 
 
 class RoomSummaryProjection:
-    """Marks room summaries dirty on relevant events and rebuilds them lazily."""
+    """Rebuilds room summaries lazily; Relics observers mark a room dirty when its own
+    conditions, contents, or exits change (spec 11.4, 17.3)."""
 
     def __init__(self, world: World) -> None:
         self.world = world
+        self._attached = False
 
-    def subscribe(self, bus) -> None:
-        for event_type in _DIRTYING_EVENTS:
-            bus.subscribe(event_type, self._on_event)
+    def attach(self, world: World | None = None) -> RoomSummaryProjection:
+        """Register the ECS observers that dirty a room on relevant changes (idempotent)."""
+        if world is not None:
+            self.world = world
+        if self._attached:
+            return self
+        for component_type in _ROOM_COMPONENTS:
+            self.world.observe(_component_observer(component_type, self._dirty, removed=False))
+            self.world.observe(_component_observer(component_type, self._dirty, removed=True))
+        for edge_type in _ROOM_EDGES:
+            self.world.observe(_relationship_observer(edge_type, self._dirty, removed=False))
+            self.world.observe(_relationship_observer(edge_type, self._dirty, removed=True))
+        self._attached = True
+        return self
 
     # -- dirtying ----------------------------------------------------------------------
 
-    def _on_event(self, event: DomainEvent) -> None:
-        for room_id in self._rooms_for_event(event):
-            self.mark_dirty(room_id)
-
-    def _rooms_for_event(self, event: DomainEvent) -> set[EntityId]:
-        rooms: set[EntityId] = set()
-        if isinstance(event, ActorMovedEvent):
-            for raw in (event.from_room_id, event.to_room_id):
-                room_id = parse_entity_id(raw)
-                if room_id is not None:
-                    rooms.add(room_id)
-            return rooms
-        if event.room_id:
-            room_id = parse_entity_id(event.room_id)
-            if room_id is not None:
-                rooms.add(room_id)
-        # Fall back to the actor's current room (covers use/door, downed, etc.).
-        actor_id = parse_entity_id(event.actor_id) if event.actor_id else None
-        if actor_id is not None and self.world.has_entity(actor_id):
-            current = container_of(self.world.get_entity(actor_id))
-            if current is not None:
-                rooms.add(current)
-        return rooms
+    def _dirty(self, entity) -> None:
+        """Dirty the room an observed entity belongs to: itself if a room, else its room."""
+        if entity.has_component(RoomComponent):
+            self.mark_dirty(entity.id)
+            return
+        parent = container_of(entity)
+        if parent is not None and self.world.has_entity(parent):
+            if self.world.get_entity(parent).has_component(RoomComponent):
+                self.mark_dirty(parent)
 
     def mark_dirty(self, room_id: EntityId) -> None:
         if not self.world.has_entity(room_id):
