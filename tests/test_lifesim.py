@@ -59,6 +59,7 @@ from bunnyland.mechanics.lifesim import (
     RoutineComponent,
     RoutineDueEvent,
     SellItemHandler,
+    SetRelationshipStatusHandler,
     SetRoutineHandler,
     StartPartnershipHandler,
     StartPregnancyHandler,
@@ -95,6 +96,7 @@ def _install(actor):
     actor.register_handler(ClaimHomeHandler())
     actor.register_handler(ClaimRoomHandler())
     actor.register_handler(SetRoutineHandler())
+    actor.register_handler(SetRelationshipStatusHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -319,6 +321,26 @@ async def test_start_partnership_creates_bidirectional_edges():
     assert character.has_relationship(PartnerOf, target)
     assert partner.has_relationship(PartnerOf, scenario.character)
     assert started[0].partner_id == str(target)
+
+
+async def test_relationship_status_transition_is_prompt_visible():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _co_parent(scenario)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "set-relationship-status",
+            target_id=str(target),
+            status="friend",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    fragments = lifesim_fragments(scenario.actor.world, character)
+    assert any("Hazel is your friend" in line for line in fragments)
 
 
 async def test_start_pregnancy_requires_policy_consent():

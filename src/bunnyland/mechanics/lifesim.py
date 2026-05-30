@@ -155,6 +155,12 @@ class PartnerOf(Edge):
     status: str = "together"
 
 
+@dataclass(frozen=True)
+class RelationshipStatus(Edge):
+    status: str
+    since_epoch: int
+
+
 class AspirationChosenEvent(DomainEvent):
     aspiration: str
 
@@ -218,6 +224,11 @@ class RoutineDueEvent(DomainEvent):
     activity: str
     next_due_epoch: int
 
+
+class RelationshipStatusChangedEvent(DomainEvent):
+    target_id: str
+    status: str
+
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
     for key in payload_keys:
@@ -273,6 +284,13 @@ def _active_character(entity: Entity) -> bool:
 
 def _partner_edge(entity: Entity, target_id: EntityId) -> PartnerOf | None:
     for edge, related_id in entity.get_relationships(PartnerOf):
+        if related_id == target_id:
+            return edge
+    return None
+
+
+def _status_edge(entity: Entity, target_id: EntityId) -> RelationshipStatus | None:
+    for edge, related_id in entity.get_relationships(RelationshipStatus):
         if related_id == target_id:
             return edge
     return None
@@ -730,6 +748,43 @@ class SetRoutineHandler:
         )
 
 
+class SetRelationshipStatusHandler:
+    command_type = "set-relationship-status"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None or target_id is None:
+            return rejected("invalid character or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        status = str(command.payload.get("status", "")).strip()
+        if status not in {"friend", "rival", "romance", "acquaintance"}:
+            return rejected("unsupported relationship status")
+        actor = ctx.entity(actor_id)
+        target = ctx.entity(target_id)
+        if not _active_character(target):
+            return rejected("target cannot participate")
+        if not _same_room(ctx.world, actor_id, target_id):
+            return rejected("target is not present")
+        current = _status_edge(actor, target_id)
+        if current is not None:
+            actor.remove_relationship(RelationshipStatus, target_id)
+        actor.add_relationship(RelationshipStatus(status=status, since_epoch=ctx.epoch), target_id)
+        return ok(
+            RelationshipStatusChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=_event_room(ctx.world, actor_id),
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    status=status,
+                )
+            )
+        )
+
+
 class StartPartnershipHandler:
     command_type = "start-partnership"
 
@@ -1068,6 +1123,16 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
             else "someone"
         )
         lines.append(f"You are partners with {name}.")
+    for edge, target_id in character.get_relationships(RelationshipStatus):
+        if not world.has_entity(target_id):
+            continue
+        target = world.get_entity(target_id)
+        name = (
+            target.get_component(IdentityComponent).name
+            if target.has_component(IdentityComponent)
+            else "someone"
+        )
+        lines.append(f"{name} is your {edge.status}.")
     children = [
         world.get_entity(child_id).get_component(IdentityComponent).name
         if world.has_entity(child_id)
@@ -1143,7 +1208,10 @@ __all__ = [
     "RoutineDueConsequence",
     "RoutineDueEvent",
     "RoutineSetEvent",
+    "RelationshipStatus",
+    "RelationshipStatusChangedEvent",
     "SetRoutineHandler",
+    "SetRelationshipStatusHandler",
     "StartPartnershipHandler",
     "StartPregnancyHandler",
     "SellItemHandler",
