@@ -43,6 +43,8 @@ from bunnyland.mechanics.lifesim import (
     HouseholdComponent,
     HouseholdFundsComponent,
     HouseholdJoinedEvent,
+    JealousyComponent,
+    JealousyTriggeredEvent,
     JobScheduleComponent,
     JoinHouseholdHandler,
     LifeStageComponent,
@@ -66,6 +68,7 @@ from bunnyland.mechanics.lifesim import (
     SpreadGossipHandler,
     StartPartnershipHandler,
     StartPregnancyHandler,
+    WitnessRomanceHandler,
     WorkShiftCompletedEvent,
     install_lifesim,
     kinship_label,
@@ -102,6 +105,7 @@ def _install(actor):
     actor.register_handler(SetRoutineHandler())
     actor.register_handler(SetRelationshipStatusHandler())
     actor.register_handler(SpreadGossipHandler())
+    actor.register_handler(WitnessRomanceHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -373,6 +377,40 @@ async def test_gossip_changes_target_reputation_and_prompt_context():
     assert gossip[0].target_id == str(target)
     fragments = lifesim_fragments(scenario.actor.world, target_entity)
     assert any("rescued a neighbor" in line for line in fragments)
+
+
+async def test_witnessed_romance_between_partner_and_rival_triggers_jealousy():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    partner = _co_parent(scenario)
+    rival = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Poppy", kind="character"), CharacterComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), rival.id
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(PartnerOf(since_epoch=0), partner)
+    events: list[JealousyTriggeredEvent] = []
+    scenario.actor.bus.subscribe(JealousyTriggeredEvent, events.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "witness-romance",
+            partner_id=str(partner),
+            rival_id=str(rival.id),
+            intensity=0.75,
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    jealousy = character.get_component(JealousyComponent)
+    assert jealousy.partner_id == str(partner)
+    assert jealousy.rival_id == str(rival.id)
+    assert jealousy.intensity == 0.75
+    assert events[0].rival_id == str(rival.id)
 
 
 async def test_start_pregnancy_requires_policy_consent():

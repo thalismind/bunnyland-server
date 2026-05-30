@@ -129,6 +129,14 @@ class ReputationComponent(Component):
 
 
 @dataclass(frozen=True)
+class JealousyComponent(Component):
+    partner_id: str
+    rival_id: str
+    intensity: float = 0.0
+    triggered_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class ReproductiveComponent(Component):
     can_be_pregnant: bool = False
     can_cause_pregnancy: bool = False
@@ -240,6 +248,12 @@ class GossipSpreadEvent(DomainEvent):
     target_id: str
     text: str
     reputation_delta: float
+
+
+class JealousyTriggeredEvent(DomainEvent):
+    partner_id: str
+    rival_id: str
+    intensity: float
 
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
@@ -881,6 +895,48 @@ class SpreadGossipHandler:
         )
 
 
+class WitnessRomanceHandler:
+    command_type = "witness-romance"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        partner_id = parse_entity_id(command.payload.get("partner_id"))
+        rival_id = parse_entity_id(command.payload.get("rival_id"))
+        if actor_id is None or partner_id is None or rival_id is None:
+            return rejected("invalid witness, partner, or rival id")
+        if not ctx.world.has_entity(partner_id) or not ctx.world.has_entity(rival_id):
+            return rejected("partner or rival does not exist")
+        actor = ctx.entity(actor_id)
+        if _partner_edge(actor, partner_id) is None:
+            return rejected("witness is not partners with partner")
+        if not _same_room(ctx.world, actor_id, partner_id) or not _same_room(
+            ctx.world, actor_id, rival_id
+        ):
+            return rejected("participants are not present")
+        intensity = float(command.payload.get("intensity", 0.5))
+        replace_component(
+            actor,
+            JealousyComponent(
+                partner_id=str(partner_id),
+                rival_id=str(rival_id),
+                intensity=intensity,
+                triggered_at_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            JealousyTriggeredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(partner_id), str(rival_id)),
+                    partner_id=str(partner_id),
+                    rival_id=str(rival_id),
+                    intensity=intensity,
+                )
+            )
+        )
+
+
 class StartPartnershipHandler:
     command_type = "start-partnership"
 
@@ -1205,6 +1261,9 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         reputation = character.get_component(ReputationComponent)
         if reputation.known_for:
             lines.append("You are known for: " + ", ".join(reputation.known_for) + ".")
+    if character.has_component(JealousyComponent):
+        jealousy = character.get_component(JealousyComponent)
+        lines.append(f"You feel jealous about {jealousy.partner_id}.")
     if character.has_component(PregnancyComponent):
         pregnancy = character.get_component(PregnancyComponent)
         due = (
@@ -1290,6 +1349,8 @@ __all__ = [
     "HouseholdJoinedEvent",
     "JoinHouseholdHandler",
     "JobScheduleComponent",
+    "JealousyComponent",
+    "JealousyTriggeredEvent",
     "LifeStageComponent",
     "MilestoneCompletedEvent",
     "MilestoneComponent",
@@ -1319,6 +1380,7 @@ __all__ = [
     "StartPregnancyHandler",
     "SellItemHandler",
     "WorkShiftCompletedEvent",
+    "WitnessRomanceHandler",
     "adult_classifier",
     "children_of",
     "install_lifesim",
