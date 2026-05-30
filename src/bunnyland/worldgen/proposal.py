@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RoomSpec(BaseModel):
@@ -55,6 +55,13 @@ class CharacterSpec(BaseModel):
     with_memory: bool = True
     traits: tuple[str, ...] = ()
     goals: tuple[str, ...] = ()
+
+    @field_validator("llm_profile", "llm_model", mode="before")
+    @classmethod
+    def _default_llm_fields(cls, value: object, info) -> object:
+        if value is None:
+            return cls.model_fields[info.field_name].default
+        return value
 
 
 class WorldProposal(BaseModel):
@@ -129,6 +136,13 @@ class CharacterProposal(BaseModel):
     traits: tuple[str, ...] = ()
     goals: tuple[str, ...] = ()
     key: str = ""  # assigned by the generator before instantiation
+
+    @field_validator("llm_profile", "llm_model", mode="before")
+    @classmethod
+    def _default_llm_fields(cls, value: object, info) -> object:
+        if value is None:
+            return cls.model_fields[info.field_name].default
+        return value
 
 
 class RoomContentsProposal(BaseModel):

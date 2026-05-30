@@ -21,6 +21,7 @@ from bunnyland.core.events import WorldGeneratedEvent
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
 from bunnyland.worldgen import (
+    CharacterProposal,
     ExitSpec,
     RoomSpec,
     StubWorldBuilder,
@@ -45,6 +46,15 @@ def test_validate_rejects_dangling_references():
 def test_validate_accepts_stub_proposal():
     proposal = StubWorldBuilder().propose("a quiet marsh")
     assert validate_proposal(proposal) == []
+
+
+def test_character_proposal_defaults_null_llm_fields():
+    proposal = CharacterProposal.model_validate(
+        {"name": "Moss", "controller": "llm", "llm_profile": None, "llm_model": None}
+    )
+
+    assert proposal.llm_profile == "default"
+    assert proposal.llm_model == "deepseek-v4-flash"
 
 
 async def test_instantiate_builds_the_mvp_checklist():
