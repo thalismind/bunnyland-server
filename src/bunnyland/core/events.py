@@ -124,6 +124,22 @@ class EncumbranceChangedEvent(DomainEvent):
     speed_multiplier: float
 
 
+class InjuryAddedEvent(DomainEvent):
+    injury_id: str
+    body_part: str
+    severity: float
+    bleeding_rate: float = 0.0
+
+
+class PainChangedEvent(DomainEvent):
+    current: float
+
+
+class BleedingChangedEvent(DomainEvent):
+    rate: float
+    accumulated_loss: float
+
+
 class AffectChangedEvent(DomainEvent):
     labels: tuple[str, ...] = ()
 
@@ -361,6 +377,9 @@ __all__ = [
     "AdoptionCompletedEvent",
     "ActorMovedEvent",
     "AffectChangedEvent",
+    "BleedingChangedEvent",
+    "BirthDueEvent",
+    "BirthResolvedEvent",
     "CharacterDiedEvent",
     "CharacterDownedEvent",
     "CharacterAttackedEvent",
@@ -368,8 +387,6 @@ __all__ = [
     "CharacterPickpocketedEvent",
     "CharacterRevivedEvent",
     "CombatChallengeEvent",
-    "BirthDueEvent",
-    "BirthResolvedEvent",
     "CommandAcceptedEvent",
     "CommandExecutedEvent",
     "CommandExpiredEvent",
@@ -383,6 +400,7 @@ __all__ = [
     "EventVisibility",
     "FortificationBuiltEvent",
     "FocusPointsChangedEvent",
+    "InjuryAddedEvent",
     "ItemDroppedEvent",
     "ItemCraftedEvent",
     "ItemPutEvent",
@@ -394,6 +412,7 @@ __all__ = [
     "NotesSearchedEvent",
     "OwnershipClaimedEvent",
     "OwnershipReleasedEvent",
+    "PainChangedEvent",
     "PartnershipEndedEvent",
     "PartnershipStartedEvent",
     "PregnancyStartedEvent",

@@ -13,15 +13,17 @@ from relics import Component, EntityId, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import (
+    BodyPlanComponent,
     CharacterComponent,
     DeadComponent,
     DownedComponent,
     HealthComponent,
+    InjuryComponent,
     PortableComponent,
     SuspendedComponent,
 )
-from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
-from ..core.edges import ContainmentMode, Contains, Wearing
+from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component, spawn_entity
+from ..core.edges import ContainmentMode, Contains, HasInjury, Wearing
 from ..core.events import (
     CharacterAttackedEvent,
     CharacterDefendedEvent,
@@ -29,6 +31,7 @@ from ..core.events import (
     CombatChallengeEvent,
     EventVisibility,
     FortificationBuiltEvent,
+    InjuryAddedEvent,
     RaidStartedEvent,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
@@ -124,6 +127,16 @@ def _armor_rating(ctx: HandlerContext, target_id: EntityId) -> float:
     return rating
 
 
+def _body_part(target, requested: object) -> str:
+    if isinstance(requested, str) and requested:
+        return requested
+    if target.has_component(BodyPlanComponent):
+        parts = target.get_component(BodyPlanComponent).parts
+        if parts:
+            return parts[0]
+    return "body"
+
+
 class AttackHandler:
     command_type = "attack"
 
@@ -177,7 +190,7 @@ def _resolve_attack(
     if target.has_component(DefendingComponent):
         target.remove_component(DefendingComponent)
 
-    return ok(
+    events = [
         CharacterAttackedEvent(
             **ctx.event_base(
                 visibility=EventVisibility.ROOM,
@@ -191,7 +204,38 @@ def _resolve_attack(
                 sparring=sparring,
             )
         )
-    )
+    ]
+    if damage > 0:
+        body_part = _body_part(target, command.payload.get("body_part"))
+        injury = spawn_entity(
+            ctx.world,
+            [
+                InjuryComponent(
+                    body_part=body_part,
+                    severity=damage,
+                    pain=damage,
+                    bleeding_rate=damage * 0.1,
+                    applied_at_epoch=ctx.epoch,
+                )
+            ],
+        )
+        target.add_relationship(HasInjury(), injury.id)
+        events.append(
+            InjuryAddedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(actor)) if container_of(actor) else None,
+                    target_ids=(str(target_id), str(injury.id)),
+                    injury_id=str(injury.id),
+                    body_part=body_part,
+                    severity=damage,
+                    bleeding_rate=damage * 0.1,
+                )
+            )
+        )
+
+    return ok(*events)
 
 
 class DefendHandler:

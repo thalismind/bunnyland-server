@@ -210,6 +210,36 @@ class HealthComponent(Component):
 
 
 @dataclass(frozen=True)
+class BodyPlanComponent(Component):
+    parts: tuple[str, ...] = ("body",)
+    vital_parts: tuple[str, ...] = ("body",)
+
+
+@dataclass(frozen=True)
+class InjuryComponent(Component):
+    body_part: str = "body"
+    severity: float = 0.0
+    pain: float = 0.0
+    bleeding_rate: float = 0.0
+    treated: bool = False
+    applied_at_epoch: int = 0
+    source_event_id: str | None = None
+
+
+@dataclass(frozen=True)
+class PainComponent(Component):
+    current: float = 0.0
+    updated_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class BleedingComponent(Component):
+    rate: float = 0.0
+    accumulated_loss: float = 0.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class WeightComponent(Component):
     weight: float = 1.0
 
@@ -381,6 +411,8 @@ __all__ = [
     "AffectDelta",
     "AffectVector",
     "AttentionComponent",
+    "BleedingComponent",
+    "BodyPlanComponent",
     "ButtonComponent",
     "CharacterComponent",
     "ContainerComponent",
@@ -395,6 +427,7 @@ __all__ = [
     "IdentityComponent",
     "InitiativeComponent",
     "InventoryComponent",
+    "InjuryComponent",
     "KeyComponent",
     "LifecycleComponent",
     "LightComponent",
@@ -402,6 +435,7 @@ __all__ = [
     "MemoryProfileComponent",
     "NoiseComponent",
     "PerceptionComponent",
+    "PainComponent",
     "PortableComponent",
     "ReadableComponent",
     "RoomComponent",

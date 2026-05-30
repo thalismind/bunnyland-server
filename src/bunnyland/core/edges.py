@@ -66,11 +66,17 @@ class HasThought(Edge):
     """character -> thought entity (spec 12)."""
 
 
+@dataclass(frozen=True)
+class HasInjury(Edge):
+    """character -> injury entity."""
+
+
 __all__ = [
     "ContainmentMode",
     "Contains",
     "ControlledBy",
     "ExitTo",
+    "HasInjury",
     "HasThought",
     "Holding",
     "Wearing",

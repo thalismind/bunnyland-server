@@ -31,7 +31,12 @@ from .components import (
     SuspendedComponent,
     WorldClockComponent,
 )
-from .consequences import Consequence, EncumbranceConsequence, HealthConsequence
+from .consequences import (
+    Consequence,
+    EncumbranceConsequence,
+    HealthConsequence,
+    InjuryConsequence,
+)
 from .controllers import (
     DiscordControllerComponent,
     LLMControllerComponent,
@@ -83,6 +88,7 @@ class WorldActor:
         self._handlers: dict[str, CommandHandler] = {}
         self._consequences: list[Consequence] = [
             EncumbranceConsequence(),
+            InjuryConsequence(),
             HealthConsequence(),
         ]
         #: Policy gates: (world, command) -> (allowed, reason). Any deny rejects the
