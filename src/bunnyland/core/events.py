@@ -121,6 +121,67 @@ class AffectChangedEvent(DomainEvent):
     labels: tuple[str, ...] = ()
 
 
+class PartnershipStartedEvent(DomainEvent):
+    partner_id: str
+
+
+class PartnershipEndedEvent(DomainEvent):
+    partner_id: str
+
+
+class PregnancyStartedEvent(DomainEvent):
+    pregnant_id: str
+    co_parent_ids: tuple[str, ...] = ()
+    due_at_epoch: int
+
+
+class BirthDueEvent(DomainEvent):
+    pregnant_id: str
+    due_since_epoch: int
+
+
+class BirthResolvedEvent(DomainEvent):
+    child_id: str
+    parent_ids: tuple[str, ...] = ()
+
+
+class ReservationCreatedEvent(DomainEvent):
+    target_id: str
+
+
+class ReservationReleasedEvent(DomainEvent):
+    target_id: str
+
+
+class ResourceGatheredEvent(DomainEvent):
+    node_id: str
+    resource_type: str
+    quantity: int
+    stack_id: str
+
+
+class ItemCraftedEvent(DomainEvent):
+    recipe_id: str
+    output_ids: tuple[str, ...] = ()
+
+
+class CharacterAttackedEvent(DomainEvent):
+    target_id: str
+    weapon_id: str | None = None
+    damage: float
+    lethal: bool = False
+    sparring: bool = False
+
+
+class CharacterDefendedEvent(DomainEvent):
+    reduction: float
+
+
+class CombatChallengeEvent(DomainEvent):
+    target_id: str
+    terms: str = ""
+
+
 # --------------------------------------------------------------------------------------
 # Movement / world events
 # --------------------------------------------------------------------------------------
@@ -245,7 +306,12 @@ __all__ = [
     "AffectChangedEvent",
     "CharacterDiedEvent",
     "CharacterDownedEvent",
+    "CharacterAttackedEvent",
+    "CharacterDefendedEvent",
     "CharacterRevivedEvent",
+    "CombatChallengeEvent",
+    "BirthDueEvent",
+    "BirthResolvedEvent",
     "CommandAcceptedEvent",
     "CommandExecutedEvent",
     "CommandExpiredEvent",
@@ -258,11 +324,18 @@ __all__ = [
     "EventVisibility",
     "FocusPointsChangedEvent",
     "ItemDroppedEvent",
+    "ItemCraftedEvent",
     "ItemPutEvent",
     "ItemTakenEvent",
     "ItemUsedEvent",
     "NoteTakenEvent",
     "NotesSearchedEvent",
+    "PartnershipEndedEvent",
+    "PartnershipStartedEvent",
+    "PregnancyStartedEvent",
+    "ReservationCreatedEvent",
+    "ReservationReleasedEvent",
+    "ResourceGatheredEvent",
     "PhysicalWriteEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",

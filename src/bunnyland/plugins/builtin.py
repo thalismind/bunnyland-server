@@ -21,6 +21,31 @@ from ..core.handlers import (
     WriteHandler,
 )
 from ..mechanics.affect import AffectAggregation, AffectReactor
+from ..mechanics.barbariansim import (
+    ArmorComponent,
+    AttackHandler,
+    ChallengeHandler,
+    DefendHandler,
+    DefendingComponent,
+    SparHandler,
+    WeaponComponent,
+    barbariansim_fragments,
+    install_barbariansim,
+)
+from ..mechanics.colonysim import (
+    AssignedTo,
+    CraftHandler,
+    GatherResourceHandler,
+    JobComponent,
+    RecipeComponent,
+    ReleaseReservationHandler,
+    ReservedBy,
+    ReserveHandler,
+    ResourceNodeComponent,
+    ResourceStackComponent,
+    WorkstationComponent,
+    colonysim_fragments,
+)
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.eat_drink import DrinkHandler, EatHandler
 from ..mechanics.environment import (
@@ -29,6 +54,20 @@ from ..mechanics.environment import (
     WeatherComponent,
     environment_fragments,
     install_environment,
+)
+from ..mechanics.lifesim import (
+    BirthDueComponent,
+    EndPartnershipHandler,
+    LifeStageComponent,
+    ParentOf,
+    PartnerOf,
+    PregnancyComponent,
+    ReproductiveComponent,
+    ResolveBirthHandler,
+    StartPartnershipHandler,
+    StartPregnancyHandler,
+    install_lifesim,
+    lifesim_fragments,
 )
 from ..mechanics.mechanisms import install_mechanisms
 from ..mechanics.needs import (
@@ -69,6 +108,8 @@ MECHANISMS = "bunnyland.mechanisms"
 SOCIAL = "bunnyland.social"
 POLICY = "bunnyland.policy"
 PERSONA = "bunnyland.persona"
+COLONYSIM = "bunnyland.colonysim"
+BARBARIANSIM = "bunnyland.barbariansim"
 
 
 def _install_affect(actor) -> None:
@@ -110,12 +151,26 @@ def lifesim_plugin() -> Plugin:
                 FoodComponent,
                 DrinkableComponent,
                 ConsumableComponent,
+                LifeStageComponent,
+                ReproductiveComponent,
+                PregnancyComponent,
+                BirthDueComponent,
             ),
+            edges=(ParentOf, PartnerOf),
             systems=(HungerSystem, ThirstSystem),
         ),
-        commands=CommandContribution(action_handlers=(EatHandler, DrinkHandler)),
-        runtime=RuntimeContribution(service_factories=(_install_affect,)),
-        content=ContentContribution(prompt_fragments=(need_fragments,)),
+        commands=CommandContribution(
+            action_handlers=(
+                EatHandler,
+                DrinkHandler,
+                StartPartnershipHandler,
+                EndPartnershipHandler,
+                StartPregnancyHandler,
+                ResolveBirthHandler,
+            )
+        ),
+        runtime=RuntimeContribution(service_factories=(_install_affect, install_lifesim)),
+        content=ContentContribution(prompt_fragments=(need_fragments, lifesim_fragments)),
     )
 
 
@@ -218,6 +273,49 @@ def worldgen_plugin() -> Plugin:
     )
 
 
+def colonysim_plugin() -> Plugin:
+    return Plugin(
+        id=COLONYSIM,
+        name="Colony Sim",
+        dependencies=(CORE_VERBS,),
+        ecs=EcsContribution(
+            components=(
+                ResourceNodeComponent,
+                ResourceStackComponent,
+                WorkstationComponent,
+                RecipeComponent,
+                JobComponent,
+            ),
+            edges=(ReservedBy, AssignedTo),
+        ),
+        commands=CommandContribution(
+            action_handlers=(
+                ReserveHandler,
+                ReleaseReservationHandler,
+                GatherResourceHandler,
+                CraftHandler,
+            )
+        ),
+        content=ContentContribution(prompt_fragments=(colonysim_fragments,)),
+    )
+
+
+def barbariansim_plugin() -> Plugin:
+    return Plugin(
+        id=BARBARIANSIM,
+        name="Barbarian Sim",
+        dependencies=(CORE_VERBS,),
+        ecs=EcsContribution(
+            components=(WeaponComponent, ArmorComponent, DefendingComponent)
+        ),
+        commands=CommandContribution(
+            action_handlers=(AttackHandler, SparHandler, DefendHandler, ChallengeHandler)
+        ),
+        runtime=RuntimeContribution(service_factories=(install_barbariansim,)),
+        content=ContentContribution(prompt_fragments=(barbariansim_fragments,)),
+    )
+
+
 def bunnyland_plugins() -> list[Plugin]:
     return [
         core_verbs_plugin(),
@@ -229,11 +327,15 @@ def bunnyland_plugins() -> list[Plugin]:
         social_plugin(),
         policy_plugin(),
         persona_plugin(),
+        colonysim_plugin(),
+        barbariansim_plugin(),
     ]
 
 
 __all__ = [
+    "BARBARIANSIM",
     "CORE_VERBS",
+    "COLONYSIM",
     "ENVIRONMENT",
     "LIFESIM",
     "MECHANISMS",
@@ -242,7 +344,9 @@ __all__ = [
     "POLICY",
     "SOCIAL",
     "WORLDGEN",
+    "barbariansim_plugin",
     "bunnyland_plugins",
+    "colonysim_plugin",
     "core_verbs_plugin",
     "environment_plugin",
     "lifesim_plugin",
