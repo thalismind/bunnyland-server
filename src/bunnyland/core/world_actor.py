@@ -35,6 +35,7 @@ from .consequences import (
     Consequence,
     EncumbranceConsequence,
     HealthConsequence,
+    HearingConsequence,
     InjuryConsequence,
     PerceptionConsequence,
 )
@@ -92,6 +93,7 @@ class WorldActor:
             InjuryConsequence(),
             HealthConsequence(),
             PerceptionConsequence(),
+            HearingConsequence(),
         ]
         #: Policy gates: (world, command) -> (allowed, reason). Any deny rejects the
         #: command before it costs anything (spec 20). Plugins register these.

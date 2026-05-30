@@ -8,7 +8,8 @@ from typing import Any
 from relics import EntityId
 
 from ..commands import SubmittedCommand
-from ..ecs import container_of, parse_entity_id
+from ..components import NoiseComponent
+from ..ecs import container_of, parse_entity_id, spawn_entity
 from ..edges import ContainmentMode, Contains, ExitTo
 from ..events import ActorMovedEvent
 from .base import HandlerContext, HandlerResult, ok, rejected
@@ -57,6 +58,19 @@ class MoveHandler:
         current_room.remove_relationship(Contains, character_id)
         destination = ctx.entity(destination_id)
         destination.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character_id)
+        spawn_entity(
+            ctx.world,
+            [
+                NoiseComponent(
+                    loudness=float(payload.get("noise", 1.0)),
+                    text="movement",
+                    source_entity_id=str(character_id),
+                    room_id=str(destination_id),
+                    created_at_epoch=ctx.epoch,
+                    expires_at_epoch=ctx.epoch + 60,
+                )
+            ],
+        )
 
         return ok(
             ActorMovedEvent(

@@ -26,13 +26,15 @@ from .components import (
     DownedComponent,
     EncumbranceComponent,
     HealthComponent,
+    HearingComponent,
     InjuryComponent,
+    NoiseComponent,
     PainComponent,
     PerceptionComponent,
     SuspendedComponent,
     WeightComponent,
 )
-from .ecs import replace_component
+from .ecs import container_of, replace_component
 from .edges import ContainmentMode, Contains, HasInjury
 from .events import (
     BleedingChangedEvent,
@@ -42,6 +44,7 @@ from .events import (
     DomainEvent,
     EncumbranceChangedEvent,
     EntitySeenEvent,
+    NoiseHeardEvent,
     PainChangedEvent,
 )
 from .events import EventVisibility as _Vis
@@ -324,6 +327,59 @@ class PerceptionConsequence:
         return events
 
 
+class HearingConsequence:
+    """Track audible noises for characters in the same room."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        noises = [
+            noise
+            for noise in world.query().with_all([NoiseComponent]).execute_entities()
+            if _noise_active(noise.get_component(NoiseComponent), epoch)
+        ]
+        for character in world.query().with_all([CharacterComponent]).execute_entities():
+            existing = (
+                character.get_component(PerceptionComponent)
+                if character.has_component(PerceptionComponent)
+                else PerceptionComponent()
+            )
+            hearing = (
+                character.get_component(HearingComponent)
+                if character.has_component(HearingComponent)
+                else HearingComponent()
+            )
+            if not existing.active:
+                audible = frozenset()
+            else:
+                audible = frozenset(
+                    str(noise.id)
+                    for noise in noises
+                    if _can_hear(character, noise.get_component(NoiseComponent), hearing)
+                )
+            if existing.audible_entities == audible and character.has_component(
+                PerceptionComponent
+            ):
+                continue
+            replace_component(character, replace(existing, audible_entities=audible))
+            for noise_id in sorted(audible - existing.audible_entities):
+                noise = world.get_entity(_entity_id_from_string(world, noise_id))
+                component = noise.get_component(NoiseComponent)
+                events.append(
+                    NoiseHeardEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=_Vis.PRIVATE,
+                            actor_id=str(character.id),
+                            target_ids=(noise_id,),
+                            noise_id=noise_id,
+                            source_entity_id=component.source_entity_id,
+                            text=component.text,
+                        )
+                    )
+                )
+        return events
+
+
 def _perceived_ids(entities) -> list[str]:
     ids: list[str] = []
     for entity in entities:
@@ -332,9 +388,29 @@ def _perceived_ids(entities) -> list[str]:
     return ids
 
 
+def _noise_active(noise: NoiseComponent, epoch: int) -> bool:
+    return noise.expires_at_epoch is None or noise.expires_at_epoch >= epoch
+
+
+def _can_hear(character, noise: NoiseComponent, hearing: HearingComponent) -> bool:
+    if noise.source_entity_id == str(character.id):
+        return False
+    return noise.room_id == str(container_of(character)) and noise.loudness >= hearing.sensitivity
+
+
+def _entity_id_from_string(world: World, entity_id: str):
+    from .ecs import parse_entity_id
+
+    parsed = parse_entity_id(entity_id)
+    if parsed is None or not world.has_entity(parsed):
+        raise KeyError(entity_id)
+    return parsed
+
+
 __all__ = [
     "Consequence",
     "EncumbranceConsequence",
+    "HearingConsequence",
     "HealthConsequence",
     "InjuryConsequence",
     "PerceptionConsequence",

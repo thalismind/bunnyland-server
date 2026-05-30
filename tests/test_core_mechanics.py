@@ -16,16 +16,24 @@ from bunnyland.core import (
     EncumbranceComponent,
     HasInjury,
     HealthComponent,
+    HearingComponent,
     IdentityComponent,
     Lane,
+    NoiseComponent,
     PainComponent,
     PerceptionComponent,
     StealthComponent,
     WeightComponent,
     build_submitted_command,
+    parse_entity_id,
     spawn_entity,
 )
-from bunnyland.core.events import EncumbranceChangedEvent, EntitySeenEvent, InjuryAddedEvent
+from bunnyland.core.events import (
+    EncumbranceChangedEvent,
+    EntitySeenEvent,
+    InjuryAddedEvent,
+    NoiseHeardEvent,
+)
 from bunnyland.mechanics.barbariansim import AttackHandler
 
 HOUR = 3600.0
@@ -157,3 +165,51 @@ async def test_room_perception_tracks_visible_entities_and_skips_hidden():
     assert str(visible_item.id) in perception.visible_entities
     assert str(hidden_item.id) not in perception.visible_entities
     assert any(event.entity_id == str(visible_item.id) for event in seen)
+
+
+async def test_listener_hears_character_move_when_noise_meets_sensitivity():
+    scenario = build_scenario()
+    listener = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            HearingComponent(sensitivity=0.5),
+        ],
+    )
+    hard_of_hearing = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(),
+            HearingComponent(sensitivity=2.0),
+        ],
+    )
+    room_b = scenario.actor.world.get_entity(scenario.room_b)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), listener.id)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), hard_of_hearing.id)
+    heard = collect(scenario.actor, NoiseHeardEvent)
+
+    await scenario.actor.submit(
+        build_submitted_command(
+            character_id=str(scenario.character),
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="move",
+            cost=CommandCost(action=1),
+            lane=Lane.WORLD,
+            payload={"direction": "north", "noise": 1.0},
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    listener_perception = listener.get_component(PerceptionComponent)
+    quiet_perception = hard_of_hearing.get_component(PerceptionComponent)
+    assert len(listener_perception.audible_entities) == 1
+    assert quiet_perception.audible_entities == frozenset()
+    noise_id = next(iter(listener_perception.audible_entities))
+    parsed_noise_id = parse_entity_id(noise_id)
+    assert parsed_noise_id is not None
+    noise = scenario.actor.world.get_entity(parsed_noise_id)
+    assert noise.get_component(NoiseComponent).source_entity_id == str(scenario.character)
+    assert any(event.noise_id == noise_id and event.actor_id == str(listener.id) for event in heard)

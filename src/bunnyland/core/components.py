@@ -187,6 +187,7 @@ class NoiseComponent(Component):
     source_entity_id: str | None = None
     room_id: str | None = None
     created_at_epoch: int = 0
+    expires_at_epoch: int | None = None
 
 
 @dataclass(frozen=True)

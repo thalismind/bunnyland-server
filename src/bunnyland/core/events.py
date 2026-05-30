@@ -144,6 +144,12 @@ class EntitySeenEvent(DomainEvent):
     entity_id: str
 
 
+class NoiseHeardEvent(DomainEvent):
+    noise_id: str
+    source_entity_id: str | None = None
+    text: str = ""
+
+
 class AffectChangedEvent(DomainEvent):
     labels: tuple[str, ...] = ()
 
@@ -413,6 +419,7 @@ __all__ = [
     "ItemUsedEvent",
     "JobAssignedEvent",
     "JobCompletedEvent",
+    "NoiseHeardEvent",
     "NoteTakenEvent",
     "NotesSearchedEvent",
     "OwnershipClaimedEvent",
