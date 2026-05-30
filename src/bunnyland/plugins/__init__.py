@@ -14,6 +14,7 @@ from .loader import (
 from .model import (
     CommandContribution,
     ContentContribution,
+    DependencyContribution,
     EcsContribution,
     Plugin,
     PolicyContribution,
@@ -23,6 +24,7 @@ from .model import (
 __all__ = [
     "CommandContribution",
     "ContentContribution",
+    "DependencyContribution",
     "EcsContribution",
     "Plugin",
     "PluginError",

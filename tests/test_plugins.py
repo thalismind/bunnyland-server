@@ -14,6 +14,7 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import NoteTakenEvent
 from bunnyland.plugins import (
+    DependencyContribution,
     EcsContribution,
     Plugin,
     PluginError,
@@ -83,16 +84,71 @@ def test_resolve_order_places_dependencies_first():
 
 
 def test_missing_dependency_raises():
-    orphan = Plugin(id="x", name="X", dependencies=("does.not.exist",))
+    orphan = Plugin(
+        id="x",
+        name="X",
+        dependencies=DependencyContribution(requires=("does.not.exist",)),
+    )
     with pytest.raises(PluginError):
         resolve_order([orphan])
 
 
 def test_dependency_cycle_raises():
-    a = Plugin(id="a", name="A", dependencies=("b",))
-    b = Plugin(id="b", name="B", dependencies=("a",))
+    a = Plugin(id="a", name="A", dependencies=DependencyContribution(requires=("b",)))
+    b = Plugin(id="b", name="B", dependencies=DependencyContribution(requires=("a",)))
     with pytest.raises(PluginError):
         resolve_order([a, b])
+
+
+def test_missing_recommendation_warns_but_continues(caplog):
+    plugin = Plugin(
+        id="a",
+        name="A",
+        dependencies=DependencyContribution(recommends=("missing",)),
+    )
+
+    assert resolve_order([plugin]) == [plugin]
+    assert "recommends missing" in caplog.text
+
+
+def test_imported_plugin_ids_are_namespaced_and_selectable_by_short_id(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    from bunnyland.plugins import load_modules
+
+    module = ModuleType("module_foo")
+    module.bunnyland_plugins = lambda: [Plugin(id="bar", name="Bar")]
+    monkeypatch.setitem(sys.modules, "module_foo", module)
+
+    plugins = load_modules(["module_foo"])
+
+    assert [p.id for p in plugins] == ["module_foo.bar"]
+    assert [p.id for p in select(plugins, ["bar"])] == ["module_foo.bar"]
+
+
+def test_imported_plugin_dependencies_are_namespaced(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    from bunnyland.plugins import load_modules
+
+    module = ModuleType("module_foo")
+    module.bunnyland_plugins = lambda: [
+        Plugin(id="base", name="Base"),
+        Plugin(
+            id="bar",
+            name="Bar",
+            dependencies=DependencyContribution(requires=("base",), recommends=("extra",)),
+        ),
+    ]
+    monkeypatch.setitem(sys.modules, "module_foo", module)
+
+    plugins = load_modules(["module_foo"])
+    bar = next(plugin for plugin in plugins if plugin.id == "module_foo.bar")
+
+    assert bar.dependencies.requires == ("module_foo.base",)
+    assert bar.dependencies.recommends == ("module_foo.extra",)
 
 
 async def test_applying_core_verbs_enables_move():

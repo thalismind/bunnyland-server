@@ -62,6 +62,7 @@ class WorldMeta(BaseModel):
     seed: str = ""
     prompt: str = ""  # the literal DM system prompt used to build the world ("" for stub)
     generator: str = ""  # which world generator produced it
+    plugins: tuple[str, ...] = ()  # plugin ids loaded for this world, e.g. module_foo.bar
     saved_at_epoch: int = 0  # bunnyland game epoch at save time
     saved_at: datetime | None = None  # wall-clock save time
 

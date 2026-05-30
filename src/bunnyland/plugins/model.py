@@ -74,6 +74,13 @@ class PolicyContribution(BaseModel):
     config_schema: type | None = None
 
 
+class DependencyContribution(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    requires: tuple[str, ...] = ()
+    recommends: tuple[str, ...] = ()
+
+
 class Plugin(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
@@ -81,7 +88,7 @@ class Plugin(BaseModel):
     name: str
     version: str = "0.1.0"
 
-    dependencies: tuple[str, ...] = ()
+    dependencies: DependencyContribution = Field(default_factory=DependencyContribution)
     default_enabled: bool = True
 
     ecs: EcsContribution = Field(default_factory=EcsContribution)
@@ -94,6 +101,7 @@ class Plugin(BaseModel):
 __all__ = [
     "CommandContribution",
     "ContentContribution",
+    "DependencyContribution",
     "EcsContribution",
     "Plugin",
     "PolicyContribution",

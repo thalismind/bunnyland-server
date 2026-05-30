@@ -94,6 +94,7 @@ from ..worldgen.generators import WorldGenerator, oneshot_generator, recursive_g
 from .model import (
     CommandContribution,
     ContentContribution,
+    DependencyContribution,
     EcsContribution,
     Plugin,
     RuntimeContribution,
@@ -143,7 +144,7 @@ def lifesim_plugin() -> Plugin:
     return Plugin(
         id=LIFESIM,
         name="Life Sim",
-        dependencies=(CORE_VERBS,),
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(
             components=(
                 HungerComponent,
@@ -178,7 +179,7 @@ def memory_plugin() -> Plugin:
     return Plugin(
         id=MEMORY,
         name="Memory",
-        dependencies=(CORE_VERBS,),
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         runtime=RuntimeContribution(service_factories=(_memory_factory,)),
     )
 
@@ -211,7 +212,7 @@ def mechanisms_plugin() -> Plugin:
     return Plugin(
         id=MECHANISMS,
         name="Mechanisms",
-        dependencies=(CORE_VERBS,),
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         runtime=RuntimeContribution(service_factories=(_mechanisms_factory,)),
     )
 
@@ -224,7 +225,7 @@ def social_plugin() -> Plugin:
     return Plugin(
         id=SOCIAL,
         name="Social Bonds",
-        dependencies=(CORE_VERBS,),
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(edges=(SocialBond,)),
         runtime=RuntimeContribution(service_factories=(_social_factory,)),
         content=ContentContribution(prompt_fragments=(relationship_fragments,)),
@@ -239,7 +240,7 @@ def policy_plugin() -> Plugin:
     return Plugin(
         id=POLICY,
         name="Policy & Boundaries",
-        dependencies=(CORE_VERBS,),
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(components=(WorldPolicyComponent, CharacterBoundaryComponent)),
         runtime=RuntimeContribution(service_factories=(_policy_factory,)),
     )
@@ -277,7 +278,7 @@ def colonysim_plugin() -> Plugin:
     return Plugin(
         id=COLONYSIM,
         name="Colony Sim",
-        dependencies=(CORE_VERBS,),
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(
             components=(
                 ResourceNodeComponent,
@@ -304,7 +305,7 @@ def barbariansim_plugin() -> Plugin:
     return Plugin(
         id=BARBARIANSIM,
         name="Barbarian Sim",
-        dependencies=(CORE_VERBS,),
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(
             components=(WeaponComponent, ArmorComponent, DefendingComponent)
         ),

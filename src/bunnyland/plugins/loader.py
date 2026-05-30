@@ -8,6 +8,7 @@ orders them by dependency, and applies each to a world actor.
 from __future__ import annotations
 
 import importlib
+import logging
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING
 
@@ -17,10 +18,26 @@ if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
 
 ENTRYPOINT = "bunnyland_plugins"
+LOG = logging.getLogger(__name__)
 
 
 class PluginError(RuntimeError):
     pass
+
+
+def _qualify_plugin(module_name: str, plugin: Plugin) -> Plugin:
+    """Namespace imported plugin ids by their source module for tracking and selection."""
+
+    def qualify(value: str) -> str:
+        return value if "." in value else f"{module_name}.{value}"
+
+    dependencies = plugin.dependencies.model_copy(
+        update={
+            "requires": tuple(qualify(dep) for dep in plugin.dependencies.requires),
+            "recommends": tuple(qualify(dep) for dep in plugin.dependencies.recommends),
+        }
+    )
+    return plugin.model_copy(update={"id": qualify(plugin.id), "dependencies": dependencies})
 
 
 def load_modules(module_names: Iterable[str]) -> list[Plugin]:
@@ -32,8 +49,21 @@ def load_modules(module_names: Iterable[str]) -> list[Plugin]:
         if entry is None:
             raise PluginError(f"module {name!r} has no {ENTRYPOINT}() entrypoint")
         result = entry()
-        plugins.extend(result)
+        plugins.extend(_qualify_plugin(name, plugin) for plugin in result)
     return plugins
+
+
+def _match_plugin_id(by_id: dict[str, Plugin], requested: str) -> Plugin:
+    if requested in by_id:
+        return by_id[requested]
+    suffix = f".{requested}"
+    matches = [plugin for plugin_id, plugin in by_id.items() if plugin_id.endswith(suffix)]
+    if not matches:
+        raise PluginError(f"unknown plugin id {requested!r}")
+    if len(matches) > 1:
+        ids = ", ".join(sorted(plugin.id for plugin in matches))
+        raise PluginError(f"ambiguous plugin id {requested!r}; matches: {ids}")
+    return matches[0]
 
 
 def select(plugins: Sequence[Plugin], enabled_ids: Sequence[str] | None) -> list[Plugin]:
@@ -43,9 +73,7 @@ def select(plugins: Sequence[Plugin], enabled_ids: Sequence[str] | None) -> list
         return [p for p in plugins if p.default_enabled]
     chosen: list[Plugin] = []
     for plugin_id in enabled_ids:
-        if plugin_id not in by_id:
-            raise PluginError(f"unknown plugin id {plugin_id!r}")
-        chosen.append(by_id[plugin_id])
+        chosen.append(_match_plugin_id(by_id, plugin_id))
     return chosen
 
 
@@ -62,10 +90,13 @@ def resolve_order(plugins: Sequence[Plugin]) -> list[Plugin]:
         if plugin.id in visiting:
             raise PluginError(f"dependency cycle involving {plugin.id!r}")
         visiting.add(plugin.id)
-        for dep in plugin.dependencies:
+        for dep in plugin.dependencies.requires:
             if dep not in by_id:
                 raise PluginError(f"plugin {plugin.id!r} depends on missing {dep!r}")
             visit(by_id[dep])
+        for dep in plugin.dependencies.recommends:
+            if dep not in by_id:
+                LOG.warning("plugin %r recommends missing %r", plugin.id, dep)
         visiting.discard(plugin.id)
         done.add(plugin.id)
         ordered.append(plugin)

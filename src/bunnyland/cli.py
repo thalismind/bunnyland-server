@@ -20,6 +20,7 @@ from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
 from .persistence import WorldMeta, load_world, save_world
 from .plugins import (
+    PluginError,
     apply_plugins,
     bunnyland_plugins,
     collect_prompt_fragments,
@@ -64,7 +65,13 @@ def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[Worl
 
 
 async def _serve(args) -> None:
-    plugins = select_plugins(args.module, args.plugin)
+    try:
+        plugins = select_plugins(args.module, args.plugin)
+        ordered_plugins = resolve_order(plugins)
+    except PluginError as exc:
+        logging.getLogger(__name__).error("plugin loading failed: %s", exc)
+        raise SystemExit(2) from exc
+    # TODO: add --auto-load-requires to include missing required plugins automatically.
 
     host = api_key = None
     if args.llm:
@@ -82,7 +89,7 @@ async def _serve(args) -> None:
         actor = WorldActor()
         apply_plugins(plugins, actor)
         print("Loaded plugins:")
-        for plugin in resolve_order(plugins):
+        for plugin in ordered_plugins:
             print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
 
         registry = collect_generators(plugins)
@@ -100,6 +107,7 @@ async def _serve(args) -> None:
             seed=args.seed,
             generator=generator.name,
             prompt=result.prompt,  # the literal DM system prompt (empty for stub builders)
+            plugins=tuple(plugin.id for plugin in ordered_plugins),
         )
         print(f"Generated world {args.seed!r} via {generator.name!r}: "
               f"{len(result.rooms)} rooms, {len(result.characters)} characters.")
@@ -140,7 +148,14 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     serve = sub.add_parser("serve", help="generate a world and run the game loop")
-    serve.add_argument("--module", action="append", default=[], help="import a plugin module")
+    serve.add_argument(
+        "--module",
+        "--import",
+        dest="module",
+        action="append",
+        default=[],
+        help="import a plugin module",
+    )
     serve.add_argument("--plugin", action="append", default=None, help="enable a plugin id")
     serve.add_argument("--seed", default="a quiet marsh", help="world-generation seed")
     serve.add_argument(
