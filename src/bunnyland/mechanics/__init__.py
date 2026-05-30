@@ -14,6 +14,7 @@ from .eat_drink import DrinkHandler, EatHandler
 from .environment import install_environment
 from .mechanisms import install_mechanisms
 from .needs import HungerSystem, ThirstSystem
+from .policy import install_policy
 from .social import install_social
 
 if TYPE_CHECKING:
@@ -37,5 +38,6 @@ __all__ = [
     "install_environment",
     "install_mechanisms",
     "install_needs",
+    "install_policy",
     "install_social",
 ]

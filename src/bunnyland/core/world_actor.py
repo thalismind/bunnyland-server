@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from relics import EntityId, World
@@ -59,6 +60,9 @@ from .systems import ActionFocusRegenSystem, WorldClockSystem
 #: bypass generation/participation gates so handoff and resume always work.
 CONTROL_COMMANDS = frozenset({"take-control", "release-to-llm", "suspend", "resume"})
 
+#: A policy gate inspects a command against the world and returns ``(allowed, reason)``.
+CommandGate = Callable[[World, SubmittedCommand], tuple[bool, "str | None"]]
+
 
 @dataclass(frozen=True)
 class _LaneOutcome:
@@ -78,6 +82,9 @@ class WorldActor:
         self.queues = CommandQueues()
         self._handlers: dict[str, CommandHandler] = {}
         self._consequences: list[Consequence] = [HealthConsequence()]
+        #: Policy gates: (world, command) -> (allowed, reason). Any deny rejects the
+        #: command before it costs anything (spec 20). Plugins register these.
+        self._gates: list[CommandGate] = []
         self._inbox: asyncio.Queue[SubmittedCommand] = asyncio.Queue()
         self._rng = rng or random.Random()
         self._lock = asyncio.Lock()
@@ -96,6 +103,10 @@ class WorldActor:
     def register_consequence(self, consequence: Consequence) -> None:
         """Add a post-command consequence pass (spec 5.6 phase 6)."""
         self._consequences.append(consequence)
+
+    def register_gate(self, gate: CommandGate) -> None:
+        """Add a policy gate that can veto a command before it executes (spec 20)."""
+        self._gates.append(gate)
 
     # -- clock --------------------------------------------------------------------------
 
@@ -273,6 +284,14 @@ class WorldActor:
             self.queues.pop(character_id, lane)
             await self._reject(command, "character is asleep")
             return _LaneOutcome(executed=False, stop_lane=False)
+
+        # Policy gates (spec 20): a forbidden action is rejected outright, before any cost.
+        for gate in self._gates:
+            allowed, reason = gate(self.world, command)
+            if not allowed:
+                self.queues.pop(character_id, lane)
+                await self._reject(command, reason or "not allowed by policy")
+                return _LaneOutcome(executed=False, stop_lane=False)
 
         # Affordability (points are checked, but spent only on handler success).
         if not self._affordable(character, command):

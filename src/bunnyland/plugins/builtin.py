@@ -36,6 +36,11 @@ from ..mechanics.needs import (
     ThirstComponent,
     ThirstSystem,
 )
+from ..mechanics.policy import (
+    CharacterBoundaryComponent,
+    WorldPolicyComponent,
+    install_policy,
+)
 from ..mechanics.social import SocialBond, install_social
 from ..memory import install_memory
 from ..worldgen.generators import WorldGenerator, oneshot_generator, recursive_generator
@@ -54,6 +59,7 @@ WORLDGEN = "bunnyland.worldgen"
 ENVIRONMENT = "bunnyland.environment"
 MECHANISMS = "bunnyland.mechanisms"
 SOCIAL = "bunnyland.social"
+POLICY = "bunnyland.policy"
 
 
 def _install_affect(actor) -> None:
@@ -158,6 +164,20 @@ def social_plugin() -> Plugin:
     )
 
 
+def _policy_factory(actor) -> None:
+    install_policy(actor)
+
+
+def policy_plugin() -> Plugin:
+    return Plugin(
+        id=POLICY,
+        name="Policy & Boundaries",
+        dependencies=(CORE_VERBS,),
+        ecs=EcsContribution(components=(WorldPolicyComponent, CharacterBoundaryComponent)),
+        runtime=RuntimeContribution(service_factories=(_policy_factory,)),
+    )
+
+
 def worldgen_plugin() -> Plugin:
     return Plugin(
         id=WORLDGEN,
@@ -184,6 +204,7 @@ def bunnyland_plugins() -> list[Plugin]:
         environment_plugin(),
         mechanisms_plugin(),
         social_plugin(),
+        policy_plugin(),
     ]
 
 
@@ -193,6 +214,7 @@ __all__ = [
     "LIFESIM",
     "MECHANISMS",
     "MEMORY",
+    "POLICY",
     "SOCIAL",
     "WORLDGEN",
     "bunnyland_plugins",
@@ -201,6 +223,7 @@ __all__ = [
     "lifesim_plugin",
     "mechanisms_plugin",
     "memory_plugin",
+    "policy_plugin",
     "social_plugin",
     "worldgen_plugin",
 ]
