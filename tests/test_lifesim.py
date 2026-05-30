@@ -32,12 +32,18 @@ from bunnyland.mechanics.lifesim import (
     BusinessSaleEvent,
     CareerComponent,
     ChooseAspirationHandler,
+    ClaimHomeHandler,
+    ClaimRoomHandler,
     CompleteMilestoneHandler,
     CustomerComponent,
     FindJobHandler,
     GoToWorkHandler,
+    HomeComponent,
+    HouseholdComponent,
     HouseholdFundsComponent,
+    HouseholdJoinedEvent,
     JobScheduleComponent,
+    JoinHouseholdHandler,
     LifeStageComponent,
     MilestoneCompletedEvent,
     OpenBusinessHandler,
@@ -49,6 +55,7 @@ from bunnyland.mechanics.lifesim import (
     QuitJobHandler,
     ReproductiveComponent,
     ResolveBirthHandler,
+    RoomClaimComponent,
     SellItemHandler,
     StartPartnershipHandler,
     StartPregnancyHandler,
@@ -81,6 +88,9 @@ def _install(actor):
     actor.register_handler(OpenBusinessHandler())
     actor.register_handler(SellItemHandler())
     actor.register_handler(PromoteBusinessHandler())
+    actor.register_handler(JoinHouseholdHandler())
+    actor.register_handler(ClaimHomeHandler())
+    actor.register_handler(ClaimRoomHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -234,6 +244,33 @@ async def test_business_sale_moves_item_out_of_inventory_and_pays_funds():
     assert not character.has_relationship(Contains, item.id)
     assert customer.get_component(CustomerComponent).budget == 15
     assert sales[0].item_id == str(item.id)
+
+
+async def test_household_home_and_room_claims_update_world_state():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    joined: list[HouseholdJoinedEvent] = []
+    scenario.actor.bus.subscribe(HouseholdJoinedEvent, joined.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "join-household", household_id="burrow-1", name="Moss Burrow")
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "claim-home", room_id=str(scenario.room_a)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "claim-room", room_id=str(scenario.room_b)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    home = scenario.actor.world.get_entity(scenario.room_a).get_component(HomeComponent)
+    claim = scenario.actor.world.get_entity(scenario.room_b).get_component(RoomClaimComponent)
+    household = character.get_component(HouseholdComponent)
+    assert household.household_id == "burrow-1"
+    assert household.name == "Moss Burrow"
+    assert home.owner_id == str(scenario.character)
+    assert home.household_id == "burrow-1"
+    assert claim.claimed_by_id == str(scenario.character)
+    assert joined[0].household_name == "Moss Burrow"
 
 
 async def test_start_partnership_creates_bidirectional_edges():

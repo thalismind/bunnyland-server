@@ -97,6 +97,24 @@ class CustomerComponent(Component):
 
 
 @dataclass(frozen=True)
+class HouseholdComponent(Component):
+    household_id: str
+    name: str = ""
+
+
+@dataclass(frozen=True)
+class HomeComponent(Component):
+    owner_id: str
+    household_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RoomClaimComponent(Component):
+    claimed_by_id: str
+    claimed_at_epoch: int
+
+
+@dataclass(frozen=True)
 class ReproductiveComponent(Component):
     can_be_pregnant: bool = False
     can_cause_pregnancy: bool = False
@@ -168,6 +186,19 @@ class BusinessSaleEvent(DomainEvent):
 
 class BusinessPromotedEvent(DomainEvent):
     business_name: str
+
+
+class HouseholdJoinedEvent(DomainEvent):
+    household_id: str
+    household_name: str = ""
+
+
+class HomeClaimedEvent(DomainEvent):
+    room_id_claimed: str
+
+
+class RoomClaimedEvent(DomainEvent):
+    room_id_claimed: str
 
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
@@ -558,6 +589,94 @@ class PromoteBusinessHandler:
         )
 
 
+class JoinHouseholdHandler:
+    command_type = "join-household"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        household_id = str(command.payload.get("household_id", "")).strip()
+        if not household_id:
+            return rejected("household id is required")
+        household_name = str(command.payload.get("name", "")).strip()
+        actor = ctx.entity(actor_id)
+        replace_component(
+            actor, HouseholdComponent(household_id=household_id, name=household_name)
+        )
+        return ok(
+            HouseholdJoinedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    household_id=household_id,
+                    household_name=household_name,
+                )
+            )
+        )
+
+
+class ClaimHomeHandler:
+    command_type = "claim-home"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        room_id = parse_entity_id(command.payload.get("room_id"))
+        if actor_id is None:
+            return rejected("invalid character id")
+        if room_id is None:
+            room_id = container_of(ctx.entity(actor_id))
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("room does not exist")
+        actor = ctx.entity(actor_id)
+        household_id = (
+            actor.get_component(HouseholdComponent).household_id
+            if actor.has_component(HouseholdComponent)
+            else None
+        )
+        room = ctx.entity(room_id)
+        replace_component(room, HomeComponent(owner_id=str(actor_id), household_id=household_id))
+        return ok(
+            HomeClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    room_id=str(room_id),
+                    room_id_claimed=str(room_id),
+                )
+            )
+        )
+
+
+class ClaimRoomHandler:
+    command_type = "claim-room"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        room_id = parse_entity_id(command.payload.get("room_id"))
+        if actor_id is None:
+            return rejected("invalid character id")
+        if room_id is None:
+            room_id = container_of(ctx.entity(actor_id))
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("room does not exist")
+        room = ctx.entity(room_id)
+        replace_component(
+            room,
+            RoomClaimComponent(claimed_by_id=str(actor_id), claimed_at_epoch=ctx.epoch),
+        )
+        return ok(
+            RoomClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    room_id=str(room_id),
+                    room_id_claimed=str(room_id),
+                )
+            )
+        )
+
+
 class StartPartnershipHandler:
     command_type = "start-partnership"
 
@@ -837,6 +956,10 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(BusinessOwnerComponent):
         business = character.get_component(BusinessOwnerComponent)
         lines.append(f"You own {business.name}; {business.sales_count} sales.")
+    if character.has_component(HouseholdComponent):
+        household = character.get_component(HouseholdComponent)
+        label = household.name or household.household_id
+        lines.append(f"Your household is {label}.")
     if character.has_component(PregnancyComponent):
         pregnancy = character.get_component(PregnancyComponent)
         due = (
@@ -896,12 +1019,19 @@ __all__ = [
     "CareerComponent",
     "CareerStartedEvent",
     "ChooseAspirationHandler",
+    "ClaimHomeHandler",
+    "ClaimRoomHandler",
     "CompleteMilestoneHandler",
     "CustomerComponent",
     "EndPartnershipHandler",
     "FindJobHandler",
     "GoToWorkHandler",
+    "HomeClaimedEvent",
+    "HomeComponent",
+    "HouseholdComponent",
     "HouseholdFundsComponent",
+    "HouseholdJoinedEvent",
+    "JoinHouseholdHandler",
     "JobScheduleComponent",
     "LifeStageComponent",
     "MilestoneCompletedEvent",
@@ -916,6 +1046,8 @@ __all__ = [
     "QuitJobHandler",
     "ReproductiveComponent",
     "ResolveBirthHandler",
+    "RoomClaimComponent",
+    "RoomClaimedEvent",
     "StartPartnershipHandler",
     "StartPregnancyHandler",
     "SellItemHandler",
