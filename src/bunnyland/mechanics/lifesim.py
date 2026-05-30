@@ -84,6 +84,19 @@ class JobScheduleComponent(Component):
 
 
 @dataclass(frozen=True)
+class BusinessOwnerComponent(Component):
+    name: str
+    default_price: int = 10
+    sales_count: int = 0
+    promoted: bool = False
+
+
+@dataclass(frozen=True)
+class CustomerComponent(Component):
+    budget: int = 20
+
+
+@dataclass(frozen=True)
 class ReproductiveComponent(Component):
     can_be_pregnant: bool = False
     can_cause_pregnancy: bool = False
@@ -139,6 +152,22 @@ class WorkShiftCompletedEvent(DomainEvent):
 class PromotionEarnedEvent(DomainEvent):
     title: str
     level: int
+
+
+class BusinessOpenedEvent(DomainEvent):
+    business_name: str
+
+
+class BusinessSaleEvent(DomainEvent):
+    business_name: str
+    item_id: str
+    customer_id: str
+    price: int
+    balance: int
+
+
+class BusinessPromotedEvent(DomainEvent):
+    business_name: str
 
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
@@ -423,6 +452,112 @@ class QuitJobHandler:
         return ok()
 
 
+class OpenBusinessHandler:
+    command_type = "open-business"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        name = str(command.payload.get("name", "")).strip()
+        if not name:
+            return rejected("business name is required")
+        price = int(command.payload.get("default_price", 10))
+        if price <= 0:
+            return rejected("default price must be positive")
+        actor = ctx.entity(actor_id)
+        replace_component(actor, BusinessOwnerComponent(name=name, default_price=price))
+        if not actor.has_component(HouseholdFundsComponent):
+            actor.add_component(HouseholdFundsComponent())
+        return ok(
+            BusinessOpenedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    business_name=name,
+                )
+            )
+        )
+
+
+class SellItemHandler:
+    command_type = "sell-item"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        customer_id = parse_entity_id(command.payload.get("customer_id"))
+        if actor_id is None or item_id is None or customer_id is None:
+            return rejected("invalid seller, item, or customer id")
+        if not ctx.world.has_entity(item_id) or not ctx.world.has_entity(customer_id):
+            return rejected("item or customer does not exist")
+        actor = ctx.entity(actor_id)
+        if not actor.has_component(BusinessOwnerComponent):
+            return rejected("character has no business")
+        if not actor.has_relationship(Contains, item_id):
+            return rejected("item is not in inventory")
+        customer = ctx.entity(customer_id)
+        if not customer.has_component(CustomerComponent):
+            return rejected("target is not a customer")
+        business = actor.get_component(BusinessOwnerComponent)
+        price = int(command.payload.get("price", business.default_price))
+        if price <= 0:
+            return rejected("price must be positive")
+        if customer.get_component(CustomerComponent).budget < price:
+            return rejected("customer cannot afford item")
+        actor.remove_relationship(Contains, item_id)
+        funds = (
+            actor.get_component(HouseholdFundsComponent)
+            if actor.has_component(HouseholdFundsComponent)
+            else HouseholdFundsComponent()
+        )
+        updated_funds = HouseholdFundsComponent(balance=funds.balance + price)
+        replace_component(actor, updated_funds)
+        replace_component(
+            actor,
+            replace(business, sales_count=business.sales_count + 1),
+        )
+        customer_budget = customer.get_component(CustomerComponent)
+        replace_component(customer, replace(customer_budget, budget=customer_budget.budget - price))
+        return ok(
+            BusinessSaleEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(customer_id), str(item_id)),
+                    business_name=business.name,
+                    item_id=str(item_id),
+                    customer_id=str(customer_id),
+                    price=price,
+                    balance=updated_funds.balance,
+                )
+            )
+        )
+
+
+class PromoteBusinessHandler:
+    command_type = "promote-business"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        actor = ctx.entity(actor_id)
+        if not actor.has_component(BusinessOwnerComponent):
+            return rejected("character has no business")
+        business = actor.get_component(BusinessOwnerComponent)
+        replace_component(actor, replace(business, promoted=True))
+        return ok(
+            BusinessPromotedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    business_name=business.name,
+                )
+            )
+        )
+
+
 class StartPartnershipHandler:
     command_type = "start-partnership"
 
@@ -699,6 +834,9 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(HouseholdFundsComponent):
         funds = character.get_component(HouseholdFundsComponent)
         lines.append(f"Household funds: {funds.balance}.")
+    if character.has_component(BusinessOwnerComponent):
+        business = character.get_component(BusinessOwnerComponent)
+        lines.append(f"You own {business.name}; {business.sales_count} sales.")
     if character.has_component(PregnancyComponent):
         pregnancy = character.get_component(PregnancyComponent)
         due = (
@@ -751,10 +889,15 @@ __all__ = [
     "AspirationComponent",
     "BirthDueComponent",
     "AdoptChildHandler",
+    "BusinessOpenedEvent",
+    "BusinessOwnerComponent",
+    "BusinessPromotedEvent",
+    "BusinessSaleEvent",
     "CareerComponent",
     "CareerStartedEvent",
     "ChooseAspirationHandler",
     "CompleteMilestoneHandler",
+    "CustomerComponent",
     "EndPartnershipHandler",
     "FindJobHandler",
     "GoToWorkHandler",
@@ -763,16 +906,19 @@ __all__ = [
     "LifeStageComponent",
     "MilestoneCompletedEvent",
     "MilestoneComponent",
+    "OpenBusinessHandler",
     "ParentOf",
     "PartnerOf",
     "PregnancyComponent",
     "PregnancyDueConsequence",
     "PromotionEarnedEvent",
+    "PromoteBusinessHandler",
     "QuitJobHandler",
     "ReproductiveComponent",
     "ResolveBirthHandler",
     "StartPartnershipHandler",
     "StartPregnancyHandler",
+    "SellItemHandler",
     "WorkShiftCompletedEvent",
     "adult_classifier",
     "install_lifesim",

@@ -28,22 +28,28 @@ from bunnyland.mechanics.lifesim import (
     AdoptChildHandler,
     AspirationComponent,
     BirthDueComponent,
+    BusinessOwnerComponent,
+    BusinessSaleEvent,
     CareerComponent,
     ChooseAspirationHandler,
     CompleteMilestoneHandler,
+    CustomerComponent,
     FindJobHandler,
     GoToWorkHandler,
     HouseholdFundsComponent,
     JobScheduleComponent,
     LifeStageComponent,
     MilestoneCompletedEvent,
+    OpenBusinessHandler,
     ParentOf,
     PartnerOf,
     PregnancyComponent,
+    PromoteBusinessHandler,
     PromotionEarnedEvent,
     QuitJobHandler,
     ReproductiveComponent,
     ResolveBirthHandler,
+    SellItemHandler,
     StartPartnershipHandler,
     StartPregnancyHandler,
     WorkShiftCompletedEvent,
@@ -72,6 +78,9 @@ def _install(actor):
     actor.register_handler(FindJobHandler())
     actor.register_handler(GoToWorkHandler())
     actor.register_handler(QuitJobHandler())
+    actor.register_handler(OpenBusinessHandler())
+    actor.register_handler(SellItemHandler())
+    actor.register_handler(PromoteBusinessHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -186,6 +195,45 @@ async def test_career_shift_pays_funds_and_can_promote():
     assert schedule.next_shift_epoch == scenario.actor.epoch + HOUR
     assert shifts[0].earned == 24
     assert promotions[0].level == 2
+
+
+async def test_business_sale_moves_item_out_of_inventory_and_pays_funds():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    item = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="berry tart", kind="item")]
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    customer = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Marigold", kind="character"),
+            CharacterComponent(),
+            CustomerComponent(budget=30),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), customer.id
+    )
+    sales: list[BusinessSaleEvent] = []
+    scenario.actor.bus.subscribe(BusinessSaleEvent, sales.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "open-business", name="Juniper's Table", default_price=10)
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "sell-item", item_id=str(item.id), customer_id=str(customer.id), price=15)
+    )
+    await scenario.actor.tick(HOUR)
+
+    business = character.get_component(BusinessOwnerComponent)
+    assert business.sales_count == 1
+    assert character.get_component(HouseholdFundsComponent).balance == 15
+    assert not character.has_relationship(Contains, item.id)
+    assert customer.get_component(CustomerComponent).budget == 15
+    assert sales[0].item_id == str(item.id)
 
 
 async def test_start_partnership_creates_bidirectional_edges():
