@@ -56,7 +56,10 @@ from bunnyland.mechanics.lifesim import (
     ReproductiveComponent,
     ResolveBirthHandler,
     RoomClaimComponent,
+    RoutineComponent,
+    RoutineDueEvent,
     SellItemHandler,
+    SetRoutineHandler,
     StartPartnershipHandler,
     StartPregnancyHandler,
     WorkShiftCompletedEvent,
@@ -91,6 +94,7 @@ def _install(actor):
     actor.register_handler(JoinHouseholdHandler())
     actor.register_handler(ClaimHomeHandler())
     actor.register_handler(ClaimRoomHandler())
+    actor.register_handler(SetRoutineHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -271,6 +275,33 @@ async def test_household_home_and_room_claims_update_world_state():
     assert home.household_id == "burrow-1"
     assert claim.claimed_by_id == str(scenario.character)
     assert joined[0].household_name == "Moss Burrow"
+
+
+async def test_routine_due_consequence_advances_next_due_without_auto_commanding():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    due: list[RoutineDueEvent] = []
+    scenario.actor.bus.subscribe(RoutineDueEvent, due.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "set-routine",
+            activity="water the window herbs",
+            interval_seconds=HOUR,
+            next_due_epoch=HOUR,
+        )
+    )
+    await scenario.actor.tick(0.0)
+    await scenario.actor.tick(HOUR)
+
+    routine = scenario.actor.world.get_entity(scenario.character).get_component(
+        RoutineComponent
+    )
+    assert routine.activity == "water the window herbs"
+    assert routine.last_completed_epoch == scenario.actor.epoch
+    assert routine.next_due_epoch == scenario.actor.epoch + HOUR
+    assert due[0].activity == "water the window herbs"
 
 
 async def test_start_partnership_creates_bidirectional_edges():

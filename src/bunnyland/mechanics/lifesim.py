@@ -115,6 +115,14 @@ class RoomClaimComponent(Component):
 
 
 @dataclass(frozen=True)
+class RoutineComponent(Component):
+    activity: str
+    interval_seconds: int = 24 * 60 * 60
+    next_due_epoch: int = 0
+    last_completed_epoch: int | None = None
+
+
+@dataclass(frozen=True)
 class ReproductiveComponent(Component):
     can_be_pregnant: bool = False
     can_cause_pregnancy: bool = False
@@ -199,6 +207,16 @@ class HomeClaimedEvent(DomainEvent):
 
 class RoomClaimedEvent(DomainEvent):
     room_id_claimed: str
+
+
+class RoutineSetEvent(DomainEvent):
+    activity: str
+    next_due_epoch: int
+
+
+class RoutineDueEvent(DomainEvent):
+    activity: str
+    next_due_epoch: int
 
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
@@ -677,6 +695,41 @@ class ClaimRoomHandler:
         )
 
 
+class SetRoutineHandler:
+    command_type = "set-routine"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        activity = str(command.payload.get("activity", "")).strip()
+        if not activity:
+            return rejected("activity is required")
+        interval = int(command.payload.get("interval_seconds", 24 * 60 * 60))
+        if interval <= 0:
+            return rejected("routine interval must be positive")
+        next_due = int(command.payload.get("next_due_epoch", ctx.epoch + interval))
+        actor = ctx.entity(actor_id)
+        replace_component(
+            actor,
+            RoutineComponent(
+                activity=activity,
+                interval_seconds=interval,
+                next_due_epoch=next_due,
+            ),
+        )
+        return ok(
+            RoutineSetEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    activity=activity,
+                    next_due_epoch=next_due,
+                )
+            )
+        )
+
+
 class StartPartnershipHandler:
     command_type = "start-partnership"
 
@@ -935,6 +988,40 @@ class PregnancyDueConsequence:
         return events
 
 
+class RoutineDueConsequence:
+    """Emit routine reminders without submitting autonomous commands."""
+
+    def process(self, world: World, epoch: int):
+        events = []
+        for entity in (
+            world.query()
+            .with_all([RoutineComponent, CharacterComponent])
+            .with_none([DeadComponent])
+            .execute_entities()
+        ):
+            routine = entity.get_component(RoutineComponent)
+            if routine.next_due_epoch > epoch:
+                continue
+            updated = replace(
+                routine,
+                last_completed_epoch=epoch,
+                next_due_epoch=epoch + routine.interval_seconds,
+            )
+            replace_component(entity, updated)
+            events.append(
+                RoutineDueEvent(
+                    **_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(entity.id),
+                        activity=routine.activity,
+                        next_due_epoch=updated.next_due_epoch,
+                    )
+                )
+            )
+        return events
+
+
 def lifesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     if character.has_component(LifeStageComponent):
@@ -960,6 +1047,9 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         household = character.get_component(HouseholdComponent)
         label = household.name or household.household_id
         lines.append(f"Your household is {label}.")
+    if character.has_component(RoutineComponent):
+        routine = character.get_component(RoutineComponent)
+        lines.append(f"Routine: {routine.activity} due at epoch {routine.next_due_epoch}.")
     if character.has_component(PregnancyComponent):
         pregnancy = character.get_component(PregnancyComponent)
         due = (
@@ -1004,6 +1094,7 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
 
 def install_lifesim(actor) -> None:
     actor.register_consequence(PregnancyDueConsequence())
+    actor.register_consequence(RoutineDueConsequence())
     actor.register_gate(PolicyGate((romance_classifier, adult_classifier, pregnancy_classifier)))
 
 
@@ -1048,6 +1139,11 @@ __all__ = [
     "ResolveBirthHandler",
     "RoomClaimComponent",
     "RoomClaimedEvent",
+    "RoutineComponent",
+    "RoutineDueConsequence",
+    "RoutineDueEvent",
+    "RoutineSetEvent",
+    "SetRoutineHandler",
     "StartPartnershipHandler",
     "StartPregnancyHandler",
     "SellItemHandler",
