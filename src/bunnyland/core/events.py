@@ -140,6 +140,10 @@ class BleedingChangedEvent(DomainEvent):
     accumulated_loss: float
 
 
+class EntitySeenEvent(DomainEvent):
+    entity_id: str
+
+
 class AffectChangedEvent(DomainEvent):
     labels: tuple[str, ...] = ()
 
@@ -396,6 +400,7 @@ __all__ = [
     "ControllerChangedEvent",
     "DomainEvent",
     "EncumbranceChangedEvent",
+    "EntitySeenEvent",
     "EventBus",
     "EventVisibility",
     "FortificationBuiltEvent",

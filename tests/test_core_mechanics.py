@@ -19,11 +19,13 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     PainComponent,
+    PerceptionComponent,
+    StealthComponent,
     WeightComponent,
     build_submitted_command,
     spawn_entity,
 )
-from bunnyland.core.events import EncumbranceChangedEvent, InjuryAddedEvent
+from bunnyland.core.events import EncumbranceChangedEvent, EntitySeenEvent, InjuryAddedEvent
 from bunnyland.mechanics.barbariansim import AttackHandler
 
 HOUR = 3600.0
@@ -128,3 +130,30 @@ async def test_fight_creates_injury_and_bleeding_reduces_health():
 
     assert target.get_component(HealthComponent).current == pytest.approx(14.5)
     assert target.get_component(BleedingComponent).accumulated_loss == pytest.approx(0.5)
+
+
+async def test_room_perception_tracks_visible_entities_and_skips_hidden():
+    scenario = build_scenario()
+    visible_item = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="brass bell", kind="item")]
+    )
+    hidden_item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="hidden cache", kind="item"),
+            StealthComponent(visibility_level=0.05, hidden_threshold=0.1, hiding=True),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), visible_item.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), hidden_item.id)
+    seen = collect(scenario.actor, EntitySeenEvent)
+
+    await scenario.actor.tick(HOUR)
+
+    perception = scenario.actor.world.get_entity(scenario.character).get_component(
+        PerceptionComponent
+    )
+    assert str(visible_item.id) in perception.visible_entities
+    assert str(hidden_item.id) not in perception.visible_entities
+    assert any(event.entity_id == str(visible_item.id) for event in seen)

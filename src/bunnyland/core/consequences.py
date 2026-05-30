@@ -18,6 +18,7 @@ from typing import Protocol
 
 from relics import World
 
+from ..projections.perception import perceive
 from .components import (
     BleedingComponent,
     CharacterComponent,
@@ -27,6 +28,7 @@ from .components import (
     HealthComponent,
     InjuryComponent,
     PainComponent,
+    PerceptionComponent,
     SuspendedComponent,
     WeightComponent,
 )
@@ -39,6 +41,7 @@ from .events import (
     CharacterRevivedEvent,
     DomainEvent,
     EncumbranceChangedEvent,
+    EntitySeenEvent,
     PainChangedEvent,
 )
 from .events import EventVisibility as _Vis
@@ -284,9 +287,55 @@ class InjuryConsequence:
         return events
 
 
+class PerceptionConsequence:
+    """Track visible entities for characters from the room perception projection."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for character in world.query().with_all([CharacterComponent]).execute_entities():
+            existing = (
+                character.get_component(PerceptionComponent)
+                if character.has_component(PerceptionComponent)
+                else PerceptionComponent()
+            )
+            perceived = perceive(world, character)
+            visible = (
+                frozenset(_perceived_ids(perceived.entities))
+                if perceived.can_perceive
+                else frozenset()
+            )
+            if existing.visible_entities == visible and character.has_component(
+                PerceptionComponent
+            ):
+                continue
+            replace_component(character, replace(existing, visible_entities=visible))
+            for entity_id in sorted(visible - existing.visible_entities):
+                events.append(
+                    EntitySeenEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=_Vis.PRIVATE,
+                            actor_id=str(character.id),
+                            target_ids=(entity_id,),
+                            entity_id=entity_id,
+                        )
+                    )
+                )
+        return events
+
+
+def _perceived_ids(entities) -> list[str]:
+    ids: list[str] = []
+    for entity in entities:
+        ids.append(entity.id)
+        ids.extend(_perceived_ids(entity.contents))
+    return ids
+
+
 __all__ = [
     "Consequence",
     "EncumbranceConsequence",
     "HealthConsequence",
     "InjuryConsequence",
+    "PerceptionConsequence",
 ]

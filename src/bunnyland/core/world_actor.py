@@ -36,6 +36,7 @@ from .consequences import (
     EncumbranceConsequence,
     HealthConsequence,
     InjuryConsequence,
+    PerceptionConsequence,
 )
 from .controllers import (
     DiscordControllerComponent,
@@ -90,6 +91,7 @@ class WorldActor:
             EncumbranceConsequence(),
             InjuryConsequence(),
             HealthConsequence(),
+            PerceptionConsequence(),
         ]
         #: Policy gates: (world, command) -> (allowed, reason). Any deny rejects the
         #: command before it costs anything (spec 20). Plugins register these.
