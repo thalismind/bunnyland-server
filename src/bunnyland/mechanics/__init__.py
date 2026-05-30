@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from .affect import install_affect
 from .eat_drink import DrinkHandler, EatHandler
 from .environment import install_environment
+from .mechanisms import install_mechanisms
 from .needs import HungerSystem, ThirstSystem
 
 if TYPE_CHECKING:
@@ -30,4 +31,4 @@ def install_needs(actor: WorldActor) -> None:
     actor.register_handler(DrinkHandler())
 
 
-__all__ = ["install_affect", "install_environment", "install_needs"]
+__all__ = ["install_affect", "install_environment", "install_mechanisms", "install_needs"]

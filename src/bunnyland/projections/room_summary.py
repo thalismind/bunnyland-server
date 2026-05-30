@@ -37,7 +37,16 @@ from ..core.edges import Contains, ExitTo
 
 # Components/edges whose add or remove can change a room's visible state (spec 17.3).
 # Our frozen components are replaced (remove+add), so add/remove observers catch edits too.
-_ROOM_COMPONENTS = (RoomComponent, LightComponent, TemperatureComponent)
+# Room conditions (Room/Light/Temperature) plus the object-states the summary renders
+# (Door/Container/Lockable open/closed/locked) all dirty the room they sit in.
+_ROOM_COMPONENTS = (
+    RoomComponent,
+    LightComponent,
+    TemperatureComponent,
+    DoorComponent,
+    ContainerComponent,
+    LockableComponent,
+)
 _ROOM_EDGES = (Contains, ExitTo)
 
 

@@ -28,6 +28,7 @@ from ..mechanics.environment import (
     TimeOfDayComponent,
     install_environment,
 )
+from ..mechanics.mechanisms import install_mechanisms
 from ..mechanics.needs import (
     HungerComponent,
     HungerSystem,
@@ -49,6 +50,7 @@ LIFESIM = "bunnyland.lifesim"
 MEMORY = "bunnyland.memory"
 WORLDGEN = "bunnyland.worldgen"
 ENVIRONMENT = "bunnyland.environment"
+MECHANISMS = "bunnyland.mechanisms"
 
 
 def _install_affect(actor) -> None:
@@ -124,6 +126,19 @@ def environment_plugin() -> Plugin:
     )
 
 
+def _mechanisms_factory(actor) -> None:
+    install_mechanisms(actor)
+
+
+def mechanisms_plugin() -> Plugin:
+    return Plugin(
+        id=MECHANISMS,
+        name="Mechanisms",
+        dependencies=(CORE_VERBS,),
+        runtime=RuntimeContribution(service_factories=(_mechanisms_factory,)),
+    )
+
+
 def worldgen_plugin() -> Plugin:
     return Plugin(
         id=WORLDGEN,
@@ -148,6 +163,7 @@ def bunnyland_plugins() -> list[Plugin]:
         memory_plugin(),
         worldgen_plugin(),
         environment_plugin(),
+        mechanisms_plugin(),
     ]
 
 
@@ -155,12 +171,14 @@ __all__ = [
     "CORE_VERBS",
     "ENVIRONMENT",
     "LIFESIM",
+    "MECHANISMS",
     "MEMORY",
     "WORLDGEN",
     "bunnyland_plugins",
     "core_verbs_plugin",
     "environment_plugin",
     "lifesim_plugin",
+    "mechanisms_plugin",
     "memory_plugin",
     "worldgen_plugin",
 ]
