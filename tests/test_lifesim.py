@@ -49,11 +49,14 @@ from bunnyland.mechanics.lifesim import (
     JobScheduleComponent,
     JoinHouseholdHandler,
     LifeStageComponent,
+    MentorshipCompletedEvent,
+    MentorSkillHandler,
     MilestoneCompletedEvent,
     OpenBusinessHandler,
     OwnsBusiness,
     ParentOf,
     PartnerOf,
+    PracticeSkillHandler,
     PregnancyComponent,
     PromoteBusinessHandler,
     PromotionEarnedEvent,
@@ -67,9 +70,13 @@ from bunnyland.mechanics.lifesim import (
     SellItemHandler,
     SetRelationshipStatusHandler,
     SetRoutineHandler,
+    SkillLeveledEvent,
+    SkillSetComponent,
+    SkillXPChangedEvent,
     SpreadGossipHandler,
     StartPartnershipHandler,
     StartPregnancyHandler,
+    StudySkillHandler,
     WitnessRomanceHandler,
     WorkShiftCompletedEvent,
     install_lifesim,
@@ -95,6 +102,9 @@ def _install(actor):
     actor.register_handler(AdoptChildHandler())
     actor.register_handler(ChooseAspirationHandler())
     actor.register_handler(CompleteMilestoneHandler())
+    actor.register_handler(PracticeSkillHandler())
+    actor.register_handler(StudySkillHandler())
+    actor.register_handler(MentorSkillHandler())
     actor.register_handler(FindJobHandler())
     actor.register_handler(GoToWorkHandler())
     actor.register_handler(QuitJobHandler())
@@ -185,6 +195,50 @@ async def test_aspiration_milestone_completion_can_reward_inventory_item():
     assert reward_id is not None
     inventory_ids = {str(target_id) for _edge, target_id in character.get_relationships(Contains)}
     assert reward_id in inventory_ids
+
+
+async def test_practice_and_study_progress_skill_and_emit_level_up():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    changed: list[SkillXPChangedEvent] = []
+    leveled: list[SkillLeveledEvent] = []
+    scenario.actor.bus.subscribe(SkillXPChangedEvent, changed.append)
+    scenario.actor.bus.subscribe(SkillLeveledEvent, leveled.append)
+
+    await scenario.actor.submit(_cmd(scenario, "practice-skill", skill="cooking", xp=60))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "study-skill", skill="cooking", xp=50))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    skills = character.get_component(SkillSetComponent)
+    assert skills.levels["cooking"] == 1
+    assert skills.xp["cooking"] == 10
+    assert changed[-1].level == 1
+    assert leveled[0].skill == "cooking"
+    fragments = lifesim_fragments(scenario.actor.world, character)
+    assert any("Skill cooking: level 1, 10 xp" in line for line in fragments)
+
+
+async def test_mentor_skill_progresses_present_student():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    student = _co_parent(scenario)
+    mentored: list[MentorshipCompletedEvent] = []
+    scenario.actor.bus.subscribe(MentorshipCompletedEvent, mentored.append)
+
+    await scenario.actor.submit(_cmd(scenario, "practice-skill", skill="gardening", xp=100))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "mentor-skill", student_id=str(student), skill="gardening", xp=95)
+    )
+    await scenario.actor.tick(HOUR)
+
+    student_entity = scenario.actor.world.get_entity(student)
+    skills = student_entity.get_component(SkillSetComponent)
+    assert skills.levels["gardening"] == 1
+    assert skills.xp["gardening"] == 0
+    assert mentored[0].student_id == str(student)
 
 
 async def test_career_shift_pays_funds_and_can_promote():

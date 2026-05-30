@@ -187,6 +187,30 @@ async def test_applying_memory_plugin_enables_notes():
     assert len(notes) == 1
 
 
+async def test_applying_lifesim_plugin_enables_skill_progression():
+    scenario = _bare_scenario()
+    apply_plugins(
+        [p for p in bunnyland_plugins() if p.id in (CORE_VERBS, LIFESIM)],
+        scenario.actor,
+    )
+    from bunnyland.mechanics.lifesim import SkillSetComponent
+
+    command = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="practice-skill",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"skill": "cooking", "xp": 100},
+    )
+    await scenario.actor.submit(command)
+    await scenario.actor.tick(3600.0)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(SkillSetComponent).levels["cooking"] == 1
+
+
 async def test_disabled_plugin_leaves_its_verbs_unhandled():
     # Without the memory plugin, take-note has no handler and is rejected.
     scenario = _bare_scenario()

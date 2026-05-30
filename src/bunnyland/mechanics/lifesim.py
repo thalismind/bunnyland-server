@@ -8,7 +8,7 @@ family ECS state.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import field, replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -126,6 +126,12 @@ class RoutineComponent(Component):
 class ReputationComponent(Component):
     score: float = 0.0
     known_for: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkillSetComponent(Component):
+    levels: dict[str, int] = field(default_factory=dict)
+    xp: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -263,6 +269,89 @@ class JealousyTriggeredEvent(DomainEvent):
     partner_id: str
     rival_id: str
     intensity: float
+
+
+class SkillXPChangedEvent(DomainEvent):
+    character_id: str
+    skill: str
+    xp: float
+    level: int
+
+
+class SkillLeveledEvent(DomainEvent):
+    character_id: str
+    skill: str
+    level: int
+
+
+class MentorshipCompletedEvent(DomainEvent):
+    student_id: str
+    skill: str
+    xp: float
+
+
+def _skill_threshold(level: int) -> float:
+    return 100.0 * (level + 1)
+
+
+def _skill_state(entity: Entity) -> SkillSetComponent:
+    if entity.has_component(SkillSetComponent):
+        return entity.get_component(SkillSetComponent)
+    return SkillSetComponent()
+
+
+def _add_skill_xp(
+    ctx: HandlerContext,
+    entity: Entity,
+    *,
+    skill: str,
+    amount: float,
+    actor_id: str,
+    visibility: EventVisibility = EventVisibility.PRIVATE,
+    target_ids: tuple[str, ...] = (),
+) -> list[DomainEvent]:
+    state = _skill_state(entity)
+    levels = dict(state.levels)
+    xp_by_skill = dict(state.xp)
+    current_level = levels.get(skill, 0)
+    current_xp = xp_by_skill.get(skill, 0.0) + amount
+    events: list[DomainEvent] = []
+
+    while current_level < 10 and current_xp >= _skill_threshold(current_level):
+        current_xp -= _skill_threshold(current_level)
+        current_level += 1
+        events.append(
+            SkillLeveledEvent(
+                **ctx.event_base(
+                    visibility=visibility,
+                    actor_id=actor_id,
+                    target_ids=target_ids,
+                    character_id=str(entity.id),
+                    skill=skill,
+                    level=current_level,
+                )
+            )
+        )
+
+    levels[skill] = current_level
+    xp_by_skill[skill] = current_xp
+    replace_component(entity, SkillSetComponent(levels=levels, xp=xp_by_skill))
+    events.insert(
+        0,
+        SkillXPChangedEvent(
+            **ctx.event_base(
+                visibility=visibility,
+                actor_id=actor_id,
+                target_ids=target_ids,
+                character_id=str(entity.id),
+                skill=skill,
+                xp=current_xp,
+                level=current_level,
+            )
+        ),
+    )
+    return events
+
 
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
@@ -484,6 +573,97 @@ class CompleteMilestoneHandler:
                 )
             )
         )
+
+
+class PracticeSkillHandler:
+    command_type = "practice-skill"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        skill = str(command.payload.get("skill", "")).strip().lower()
+        if not skill:
+            return rejected("skill is required")
+        xp = float(command.payload.get("xp", 25.0))
+        if xp <= 0:
+            return rejected("xp must be positive")
+        return ok(
+            *_add_skill_xp(
+                ctx,
+                ctx.entity(actor_id),
+                skill=skill,
+                amount=xp,
+                actor_id=str(actor_id),
+            )
+        )
+
+
+class StudySkillHandler:
+    command_type = "study-skill"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        skill = str(command.payload.get("skill", "")).strip().lower()
+        if not skill:
+            return rejected("skill is required")
+        xp = float(command.payload.get("xp", 15.0))
+        if xp <= 0:
+            return rejected("xp must be positive")
+        return ok(
+            *_add_skill_xp(
+                ctx,
+                ctx.entity(actor_id),
+                skill=skill,
+                amount=xp,
+                actor_id=str(actor_id),
+            )
+        )
+
+
+class MentorSkillHandler:
+    command_type = "mentor-skill"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        student_id = parse_entity_id(command.payload.get("student_id"))
+        if actor_id is None or student_id is None:
+            return rejected("invalid mentor or student id")
+        if not ctx.world.has_entity(student_id):
+            return rejected("student does not exist")
+        if not _same_room(ctx.world, actor_id, student_id):
+            return rejected("student is not present")
+        skill = str(command.payload.get("skill", "")).strip().lower()
+        if not skill:
+            return rejected("skill is required")
+
+        mentor_level = _skill_state(ctx.entity(actor_id)).levels.get(skill, 0)
+        xp = float(command.payload.get("xp", 20.0)) + mentor_level * 5.0
+        if xp <= 0:
+            return rejected("xp must be positive")
+        events = _add_skill_xp(
+            ctx,
+            ctx.entity(student_id),
+            skill=skill,
+            amount=xp,
+            actor_id=str(actor_id),
+            target_ids=(str(student_id),),
+        )
+        events.append(
+            MentorshipCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(actor_id),
+                    target_ids=(str(student_id),),
+                    student_id=str(student_id),
+                    skill=skill,
+                    xp=xp,
+                )
+            )
+        )
+        return ok(*events)
 
 
 class FindJobHandler:
@@ -1322,6 +1502,11 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         reputation = character.get_component(ReputationComponent)
         if reputation.known_for:
             lines.append("You are known for: " + ", ".join(reputation.known_for) + ".")
+    if character.has_component(SkillSetComponent):
+        skills = character.get_component(SkillSetComponent)
+        for skill, level in sorted(skills.levels.items()):
+            xp = skills.xp.get(skill, 0.0)
+            lines.append(f"Skill {skill}: level {level}, {xp:g} xp.")
     for edge, rival_id in character.get_relationships(JealousOf):
         rival_name = "someone"
         partner_name = "someone"
@@ -1424,12 +1609,15 @@ __all__ = [
     "JealousOf",
     "JealousyTriggeredEvent",
     "LifeStageComponent",
+    "MentorSkillHandler",
+    "MentorshipCompletedEvent",
     "MilestoneCompletedEvent",
     "MilestoneComponent",
     "OpenBusinessHandler",
     "OwnsBusiness",
     "ParentOf",
     "PartnerOf",
+    "PracticeSkillHandler",
     "PregnancyComponent",
     "PregnancyDueConsequence",
     "PromotionEarnedEvent",
@@ -1448,9 +1636,13 @@ __all__ = [
     "RelationshipStatusChangedEvent",
     "SetRoutineHandler",
     "SetRelationshipStatusHandler",
+    "SkillLeveledEvent",
+    "SkillSetComponent",
+    "SkillXPChangedEvent",
     "SpreadGossipHandler",
     "StartPartnershipHandler",
     "StartPregnancyHandler",
+    "StudySkillHandler",
     "SellItemHandler",
     "WorkShiftCompletedEvent",
     "WitnessRomanceHandler",
