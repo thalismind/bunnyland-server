@@ -39,6 +39,12 @@ _PHASES = (
     (20, "night", 0.05),
 )
 
+# Weather cycles deterministically by day so worlds stay reproducible and persist cleanly.
+# Each condition dims outdoor daylight by a factor. Day 1 is clear (keeps the bright day).
+_WEATHER_BY_DAY = ("clear", "clear", "cloudy", "overcast", "rain", "cloudy", "overcast")
+_WEATHER_INTENSITY = {"clear": 0.0, "cloudy": 0.3, "overcast": 0.5, "rain": 0.7, "storm": 1.0}
+_WEATHER_LIGHT = {"clear": 1.0, "cloudy": 0.85, "overcast": 0.65, "rain": 0.5, "storm": 0.3}
+
 
 # -- components (spec 11.2, 11.13) ------------------------------------------------------
 
@@ -55,10 +61,21 @@ class TimeOfDayComponent(Component):
     phase: str = "day"
 
 
+@pydantic_dataclass(frozen=True)
+class WeatherComponent(Component):
+    condition: str = "clear"
+    intensity: float = 0.0
+
+
 class TimeOfDayChangedEvent(DomainEvent):
     phase: str
     hour: int
     day: int
+
+
+class WeatherChangedEvent(DomainEvent):
+    condition: str
+    intensity: float
 
 
 # -- derivation -------------------------------------------------------------------------
@@ -81,6 +98,23 @@ def time_of_day(game_time_seconds: int) -> tuple[int, int, str, str]:
     return day, hour, phase, season
 
 
+def weather_for(day: int) -> tuple[str, float]:
+    """Deterministic ``(condition, intensity)`` for a day number."""
+    condition = _WEATHER_BY_DAY[(day - 1) % len(_WEATHER_BY_DAY)]
+    return condition, _WEATHER_INTENSITY[condition]
+
+
+def _event_base(epoch: int, **kwargs) -> dict:
+    base = {
+        "event_id": uuid4().hex,
+        "world_epoch": epoch,
+        "created_at": datetime.now(UTC),
+        "visibility": EventVisibility.ROOM,
+    }
+    base.update(kwargs)
+    return base
+
+
 # -- consequence ------------------------------------------------------------------------
 
 
@@ -95,31 +129,40 @@ class EnvironmentConsequence:
         clock_entity = clocks[0]
         seconds = clock_entity.get_component(WorldClockComponent).game_time_seconds
         day, hour, phase, season = time_of_day(seconds)
-        _light = _phase_and_light(hour)[1]
+        condition, intensity = weather_for(day)
 
         previous_phase = (
             clock_entity.get_component(TimeOfDayComponent).phase
             if clock_entity.has_component(TimeOfDayComponent)
             else None
         )
+        previous_weather = (
+            clock_entity.get_component(WeatherComponent).condition
+            if clock_entity.has_component(WeatherComponent)
+            else None
+        )
         replace_component(clock_entity, TimeOfDayComponent(phase=phase))
         replace_component(clock_entity, CalendarComponent(day=day, season=season, hour=hour))
+        replace_component(clock_entity, WeatherComponent(condition=condition, intensity=intensity))
 
-        self._light_outdoor_rooms(world, _light)
+        # Outdoor daylight is the time-of-day level dimmed by the weather.
+        level = round(_phase_and_light(hour)[1] * _WEATHER_LIGHT[condition], 3)
+        self._light_outdoor_rooms(world, level)
 
-        if phase == previous_phase:
-            return []
-        return [
-            TimeOfDayChangedEvent(
-                event_id=uuid4().hex,
-                world_epoch=epoch,
-                created_at=datetime.now(UTC),
-                visibility=EventVisibility.ROOM,
-                phase=phase,
-                hour=hour,
-                day=day,
+        events: list[DomainEvent] = []
+        if phase != previous_phase:
+            events.append(
+                TimeOfDayChangedEvent(
+                    **_event_base(epoch, phase=phase, hour=hour, day=day)
+                )
             )
-        ]
+        if condition != previous_weather:
+            events.append(
+                WeatherChangedEvent(
+                    **_event_base(epoch, condition=condition, intensity=intensity)
+                )
+            )
+        return events
 
     @staticmethod
     def _light_outdoor_rooms(world: World, level: float) -> None:
@@ -151,9 +194,15 @@ def environment_fragments(world: World, character) -> list[str]:
         else None
     )
     phase = clock.get_component(TimeOfDayComponent).phase
+    weather = (
+        clock.get_component(WeatherComponent).condition
+        if clock.has_component(WeatherComponent)
+        else None
+    )
+    sky = f"{weather} {phase}" if weather and weather != "clear" else phase
     if calendar is None:
-        return [f"It is {phase}."]
-    return [f"It is {phase} (day {calendar.day}, {calendar.season})."]
+        return [f"It is {sky}."]
+    return [f"It is {sky} (day {calendar.day}, {calendar.season})."]
 
 
 def install_environment(actor: WorldActor) -> None:
@@ -166,7 +215,10 @@ __all__ = [
     "EnvironmentConsequence",
     "TimeOfDayChangedEvent",
     "TimeOfDayComponent",
+    "WeatherChangedEvent",
+    "WeatherComponent",
     "environment_fragments",
     "install_environment",
     "time_of_day",
+    "weather_for",
 ]

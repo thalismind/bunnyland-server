@@ -12,9 +12,12 @@ from bunnyland.mechanics.environment import (
     CalendarComponent,
     TimeOfDayChangedEvent,
     TimeOfDayComponent,
+    WeatherChangedEvent,
+    WeatherComponent,
     environment_fragments,
     install_environment,
     time_of_day,
+    weather_for,
 )
 
 HOUR = 3600.0
@@ -103,3 +106,43 @@ async def test_environment_fragment_describes_the_time():
 def test_fragment_is_empty_before_first_tick():
     actor = _world()  # consequence has not run yet
     assert environment_fragments(actor.world, character=None) == []
+
+
+# -- weather ----------------------------------------------------------------------------
+
+
+def test_weather_for_is_deterministic_and_day_one_is_clear():
+    assert weather_for(1) == ("clear", 0.0)
+    assert weather_for(5)[0] == "rain"
+    assert weather_for(8) == weather_for(1)  # 7-day cycle
+
+
+async def test_weather_dims_outdoor_daylight_on_a_rainy_day():
+    actor = _world()
+    meadow = spawn_entity(
+        actor.world, [RoomComponent(title="Meadow", indoor=False), LightComponent(level=1.0)]
+    )
+    await actor.tick(4 * DAY + 12 * HOUR)  # noon on day 5 (rain)
+
+    clock = list(actor.world.query().with_all([WeatherComponent]).execute_entities())[0]
+    assert clock.get_component(WeatherComponent).condition == "rain"
+    # noon daylight (1.0) dimmed by rain (0.5).
+    assert meadow.get_component(LightComponent).level == 0.5
+
+
+async def test_weather_change_emits_event_and_sets_singleton():
+    actor = _world()
+    events: list[WeatherChangedEvent] = []
+    actor.bus.subscribe(WeatherChangedEvent, events.append)
+
+    await actor.tick(12 * HOUR)  # day 1 -> clear
+    assert events[-1].condition == "clear"
+    await actor.tick(2 * DAY)  # day 3 -> cloudy
+    assert events[-1].condition == "cloudy"
+
+
+async def test_fragment_mentions_weather_when_not_clear():
+    actor = _world()
+    await actor.tick(4 * DAY + 19 * HOUR)  # dusk on day 5 (rain)
+    fragment = environment_fragments(actor.world, character=None)[0]
+    assert "rain" in fragment and "dusk" in fragment

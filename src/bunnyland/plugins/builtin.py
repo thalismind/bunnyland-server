@@ -26,6 +26,7 @@ from ..mechanics.eat_drink import DrinkHandler, EatHandler
 from ..mechanics.environment import (
     CalendarComponent,
     TimeOfDayComponent,
+    WeatherComponent,
     install_environment,
 )
 from ..mechanics.mechanisms import install_mechanisms
@@ -121,7 +122,9 @@ def environment_plugin() -> Plugin:
     return Plugin(
         id=ENVIRONMENT,
         name="Environment",
-        ecs=EcsContribution(components=(CalendarComponent, TimeOfDayComponent)),
+        ecs=EcsContribution(
+            components=(CalendarComponent, TimeOfDayComponent, WeatherComponent)
+        ),
         runtime=RuntimeContribution(service_factories=(_environment_factory,)),
     )
 
