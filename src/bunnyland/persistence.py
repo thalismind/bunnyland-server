@@ -45,6 +45,7 @@ _TYPE_MODULES = (
     "bunnyland.mechanics.needs",
     "bunnyland.mechanics.consumables",
     "bunnyland.mechanics.affect",
+    "bunnyland.mechanics.environment",
 )
 
 

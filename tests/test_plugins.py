@@ -22,17 +22,17 @@ from bunnyland.plugins import (
     resolve_order,
     select,
 )
-from bunnyland.plugins.builtin import CORE_VERBS, LIFESIM, MEMORY, WORLDGEN
+from bunnyland.plugins.builtin import CORE_VERBS, ENVIRONMENT, LIFESIM, MEMORY, WORLDGEN
 
 
 def test_builtin_plugins_declared():
     ids = {p.id for p in bunnyland_plugins()}
-    assert ids == {CORE_VERBS, LIFESIM, MEMORY, WORLDGEN}
+    assert ids == {CORE_VERBS, LIFESIM, MEMORY, WORLDGEN, ENVIRONMENT}
 
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 4
+    assert len(select(plugins, None)) == 5
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
 
 

@@ -23,6 +23,11 @@ from ..core.handlers import (
 from ..mechanics.affect import AffectAggregation, AffectReactor
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.eat_drink import DrinkHandler, EatHandler
+from ..mechanics.environment import (
+    CalendarComponent,
+    TimeOfDayComponent,
+    install_environment,
+)
 from ..mechanics.needs import (
     HungerComponent,
     HungerSystem,
@@ -43,6 +48,7 @@ CORE_VERBS = "bunnyland.core_verbs"
 LIFESIM = "bunnyland.lifesim"
 MEMORY = "bunnyland.memory"
 WORLDGEN = "bunnyland.worldgen"
+ENVIRONMENT = "bunnyland.environment"
 
 
 def _install_affect(actor) -> None:
@@ -105,6 +111,19 @@ def _memory_factory(actor) -> None:
     install_memory(actor)
 
 
+def _environment_factory(actor) -> None:
+    install_environment(actor)
+
+
+def environment_plugin() -> Plugin:
+    return Plugin(
+        id=ENVIRONMENT,
+        name="Environment",
+        ecs=EcsContribution(components=(CalendarComponent, TimeOfDayComponent)),
+        runtime=RuntimeContribution(service_factories=(_environment_factory,)),
+    )
+
+
 def worldgen_plugin() -> Plugin:
     return Plugin(
         id=WORLDGEN,
@@ -123,16 +142,24 @@ def worldgen_plugin() -> Plugin:
 
 
 def bunnyland_plugins() -> list[Plugin]:
-    return [core_verbs_plugin(), lifesim_plugin(), memory_plugin(), worldgen_plugin()]
+    return [
+        core_verbs_plugin(),
+        lifesim_plugin(),
+        memory_plugin(),
+        worldgen_plugin(),
+        environment_plugin(),
+    ]
 
 
 __all__ = [
     "CORE_VERBS",
+    "ENVIRONMENT",
     "LIFESIM",
     "MEMORY",
     "WORLDGEN",
     "bunnyland_plugins",
     "core_verbs_plugin",
+    "environment_plugin",
     "lifesim_plugin",
     "memory_plugin",
     "worldgen_plugin",
