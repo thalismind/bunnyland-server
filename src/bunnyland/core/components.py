@@ -210,6 +210,20 @@ class HealthComponent(Component):
 
 
 @dataclass(frozen=True)
+class WeightComponent(Component):
+    weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class EncumbranceComponent(Component):
+    current_load: float = 0.0
+    capacity: float = 10.0
+    overburdened: bool = False
+    speed_multiplier: float = 1.0
+    updated_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class MemoryProfileComponent(Component):
     """Names a character's private memory/notes collection (spec 11.16)."""
 
@@ -374,6 +388,7 @@ __all__ = [
     "DescriptionComponent",
     "DoorComponent",
     "DownedComponent",
+    "EncumbranceComponent",
     "FocusPointsComponent",
     "HearingComponent",
     "HealthComponent",
@@ -399,4 +414,5 @@ __all__ = [
     "ThoughtComponent",
     "WorldClockComponent",
     "WritableComponent",
+    "WeightComponent",
 ]

@@ -22,15 +22,19 @@ from .components import (
     CharacterComponent,
     DeadComponent,
     DownedComponent,
+    EncumbranceComponent,
     HealthComponent,
     SuspendedComponent,
+    WeightComponent,
 )
 from .ecs import replace_component
+from .edges import ContainmentMode, Contains
 from .events import (
     CharacterDiedEvent,
     CharacterDownedEvent,
     CharacterRevivedEvent,
     DomainEvent,
+    EncumbranceChangedEvent,
 )
 from .events import EventVisibility as _Vis
 
@@ -134,4 +138,56 @@ class HealthConsequence:
         return events
 
 
-__all__ = ["Consequence", "HealthConsequence"]
+class EncumbranceConsequence:
+    """Aggregate inventory weight into character load state."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for character in world.query().with_all([CharacterComponent]).execute_entities():
+            existing = (
+                character.get_component(EncumbranceComponent)
+                if character.has_component(EncumbranceComponent)
+                else EncumbranceComponent()
+            )
+            current_load = 0.0
+            for edge, item_id in character.get_relationships(Contains):
+                if edge.mode is not ContainmentMode.INVENTORY:
+                    continue
+                item = world.get_entity(item_id)
+                if item.has_component(WeightComponent):
+                    current_load += max(0.0, item.get_component(WeightComponent).weight)
+            overburdened = current_load > existing.capacity
+            speed_multiplier = (
+                1.0 if current_load <= existing.capacity else existing.capacity / current_load
+            )
+            updated = replace(
+                existing,
+                current_load=current_load,
+                overburdened=overburdened,
+                speed_multiplier=speed_multiplier,
+                updated_at_epoch=epoch,
+            )
+            if (
+                not character.has_component(EncumbranceComponent)
+                or existing.current_load != updated.current_load
+                or existing.overburdened != updated.overburdened
+                or existing.speed_multiplier != updated.speed_multiplier
+            ):
+                replace_component(character, updated)
+                events.append(
+                    EncumbranceChangedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=_Vis.PRIVATE,
+                            actor_id=str(character.id),
+                            current_load=updated.current_load,
+                            capacity=updated.capacity,
+                            overburdened=updated.overburdened,
+                            speed_multiplier=updated.speed_multiplier,
+                        )
+                    )
+                )
+        return events
+
+
+__all__ = ["Consequence", "EncumbranceConsequence", "HealthConsequence"]

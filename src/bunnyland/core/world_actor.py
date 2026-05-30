@@ -31,7 +31,7 @@ from .components import (
     SuspendedComponent,
     WorldClockComponent,
 )
-from .consequences import Consequence, HealthConsequence
+from .consequences import Consequence, EncumbranceConsequence, HealthConsequence
 from .controllers import (
     DiscordControllerComponent,
     LLMControllerComponent,
@@ -81,7 +81,10 @@ class WorldActor:
         self.bus = EventBus()
         self.queues = CommandQueues()
         self._handlers: dict[str, CommandHandler] = {}
-        self._consequences: list[Consequence] = [HealthConsequence()]
+        self._consequences: list[Consequence] = [
+            EncumbranceConsequence(),
+            HealthConsequence(),
+        ]
         #: Policy gates: (world, command) -> (allowed, reason). Any deny rejects the
         #: command before it costs anything (spec 20). Plugins register these.
         self._gates: list[CommandGate] = []

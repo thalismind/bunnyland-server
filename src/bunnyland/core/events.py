@@ -117,6 +117,13 @@ class CharacterDiedEvent(DomainEvent):
     cause: str
 
 
+class EncumbranceChangedEvent(DomainEvent):
+    current_load: float
+    capacity: float
+    overburdened: bool
+    speed_multiplier: float
+
+
 class AffectChangedEvent(DomainEvent):
     labels: tuple[str, ...] = ()
 
@@ -371,6 +378,7 @@ __all__ = [
     "CommandSubmittedEvent",
     "ControllerChangedEvent",
     "DomainEvent",
+    "EncumbranceChangedEvent",
     "EventBus",
     "EventVisibility",
     "FortificationBuiltEvent",
