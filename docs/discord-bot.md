@@ -6,9 +6,8 @@ character. The bot only translates input and relays results — it never touches
 directly.
 
 > **Status:** the bot is an MVP front-end that exposes the world-lane verbs (`!move`,
-> `!say`, `!take`) and shares the LLM's name resolver. It runs as a separate process against
-> a `WorldActor`; a single command that hosts the simulation loop *and* the bot together is
-> on the roadmap (see `PLAN.md`).
+> `!say`, `!take`) and shares the LLM's name resolver. In production, run it with
+> `bunnyland serve --discord` so it shares the same `WorldActor` as the simulation and API.
 
 ## 1. Install the extra
 
@@ -68,6 +67,29 @@ right-click a user → *Copy User ID*).
 
 ## 5. Run the bot
 
+For the server process, prefer `bunnyland serve --discord`:
+
+```bash
+DISCORD_TOKEN=... \
+BUNNYLAND_DISCORD_USER_ID=123 \
+BUNNYLAND_DISCORD_CHANNEL_ID=456 \
+BUNNYLAND_DISCORD_CHARACTER=Juniper \
+uv run --extra server --extra llm --extra discord bunnyland serve \
+  --llm \
+  --discord \
+  --load worlds/main.json \
+  --save worlds/main.json \
+  --ticks 0 \
+  --api-host 127.0.0.1 \
+  --api-port 8765
+```
+
+If `BUNNYLAND_DISCORD_USER_ID` is set, startup creates a Discord controller for that user
+and assigns it to `BUNNYLAND_DISCORD_CHARACTER`; if no character name is set, the first
+suspended claimable character is used.
+
+For embedded tools or tests, you can still construct the bot directly:
+
 ```python
 import os
 from bunnyland.discord import DiscordBot
@@ -76,10 +98,8 @@ bot = DiscordBot(actor, token=os.environ["DISCORD_TOKEN"])
 bot.run()   # blocking; runs the Discord client
 ```
 
-`DiscordBot` does not advance the simulation by itself — run the game loop on the same
-`actor` (in another task/thread/process) so ticks process the commands users submit. See
-[running a server](running-a-server.md) for the loop, and `tests/test_e2e.py` for driving an
-actor programmatically.
+`DiscordBot` does not advance the simulation by itself — the host process must run the game
+loop on the same `actor` so ticks process the commands users submit.
 
 ## Player commands
 

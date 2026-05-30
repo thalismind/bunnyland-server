@@ -7,8 +7,16 @@ from types import ModuleType
 
 import pytest
 
-from bunnyland.cli import main, select_plugins
-from bunnyland.core import WorldActor
+from bunnyland.cli import assign_discord_controller, main, select_plugins
+from bunnyland.core import (
+    CharacterComponent,
+    ControlledBy,
+    DiscordControllerComponent,
+    IdentityComponent,
+    SuspendedComponent,
+    WorldActor,
+    spawn_entity,
+)
 from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import DependencyContribution, Plugin, PluginError, bunnyland_plugins
 from bunnyland.plugins.builtin import CORE_VERBS, WORLDGEN
@@ -47,6 +55,37 @@ def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):
     assert exc.value.code == 2
     assert "plugin loading failed" in caplog.text
     assert "module_foo.missing" in caplog.text
+
+
+def test_cli_discord_requires_token(monkeypatch):
+    monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+
+    with pytest.raises(SystemExit, match="--discord needs DISCORD_TOKEN"):
+        main(["serve", "--discord", "--ticks", "1"])
+
+
+def test_assign_discord_controller_claims_suspended_character():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+
+    claimed = assign_discord_controller(
+        actor, discord_user_id=123, default_channel_id=456, character_name="Juniper"
+    )
+
+    assert claimed == "Juniper"
+    assert not character.has_component(SuspendedComponent)
+    controller_id = character.get_relationships(ControlledBy)[0][1]
+    controller = actor.world.get_entity(controller_id)
+    discord = controller.get_component(DiscordControllerComponent)
+    assert discord.discord_user_id == 123
+    assert discord.default_channel_id == 456
 
 
 def test_world_meta_can_record_loaded_plugin_ids():

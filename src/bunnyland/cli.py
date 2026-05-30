@@ -13,8 +13,16 @@ import argparse
 import asyncio
 import logging
 import os
+from collections.abc import Awaitable
 from pathlib import Path
 
+from .core import (
+    CharacterComponent,
+    DiscordControllerComponent,
+    IdentityComponent,
+    SuspendedComponent,
+    spawn_entity,
+)
 from .core.world_actor import WorldActor
 from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
@@ -64,6 +72,88 @@ def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[Worl
     return actor, applied
 
 
+def _env_int(name: str) -> int | None:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return None
+    return int(value)
+
+
+def assign_discord_controller(
+    actor: WorldActor,
+    *,
+    discord_user_id: int,
+    default_channel_id: int = 0,
+    character_name: str | None = None,
+) -> str:
+    """Assign a Discord controller to a named character, or the first claimable one."""
+
+    characters = list(
+        actor.world.query().with_all([CharacterComponent, IdentityComponent]).execute_entities()
+    )
+    if character_name:
+        lowered = character_name.lower()
+        matches = [
+            character for character in characters
+            if character.get_component(IdentityComponent).name.lower() == lowered
+        ]
+        if not matches:
+            raise RuntimeError(f"no character named {character_name!r} exists in the world")
+        character = matches[0]
+    else:
+        suspended = [
+            character for character in characters
+            if character.has_component(SuspendedComponent)
+        ]
+        if not suspended:
+            raise RuntimeError("no suspended claimable character exists in the world")
+        character = suspended[0]
+
+    controller = spawn_entity(
+        actor.world,
+        [
+            DiscordControllerComponent(
+                discord_user_id=discord_user_id,
+                default_channel_id=default_channel_id,
+            )
+        ],
+    )
+    actor.assign_controller(character.id, controller.id)
+    if character.has_component(SuspendedComponent):
+        character.remove_component(SuspendedComponent)
+    return character.get_component(IdentityComponent).name
+
+
+async def _run_with_optional_discord(
+    runtime: Awaitable[int],
+    loop: GameLoop,
+    discord_bot,
+) -> int:
+    runtime_task = asyncio.create_task(runtime)
+    if discord_bot is None:
+        return await runtime_task
+
+    discord_task = asyncio.create_task(discord_bot.start())
+    done, _pending = await asyncio.wait(
+        {runtime_task, discord_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+
+    if runtime_task in done:
+        try:
+            return runtime_task.result()
+        finally:
+            await discord_bot.close()
+            await asyncio.gather(discord_task, return_exceptions=True)
+
+    loop.stop()
+    runtime_task.cancel()
+    await asyncio.gather(runtime_task, return_exceptions=True)
+    exc = discord_task.exception()
+    if exc is not None:
+        raise RuntimeError("Discord bot stopped unexpectedly") from exc
+    raise RuntimeError("Discord bot stopped unexpectedly")
+
+
 async def _serve(args) -> None:
     try:
         plugins = select_plugins(args.module, args.plugin)
@@ -73,13 +163,18 @@ async def _serve(args) -> None:
         raise SystemExit(2) from exc
     # TODO: add --auto-load-requires to include missing required plugins automatically.
 
-    host = api_key = None
-    if args.llm:
+    host = api_key = discord_token = None
+    if args.llm or args.discord:
         load_dotenv()
+    if args.llm:
         api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
         host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
         if not api_key:
             raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
+    if args.discord:
+        discord_token = os.environ.get("DISCORD_TOKEN")
+        if not discord_token:
+            raise SystemExit("--discord needs DISCORD_TOKEN (set it in .env or the environment)")
 
     if args.load:
         try:
@@ -137,22 +232,47 @@ async def _serve(args) -> None:
         actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
         autosave=autosave, autosave_every=args.autosave_every,
     )
+    discord_bot = None
+    if args.discord:
+        from .discord import DiscordBot
+
+        discord_bot = DiscordBot(actor, token=discord_token)
+        claim_user_id = args.discord_user_id or _env_int("BUNNYLAND_DISCORD_USER_ID")
+        claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0
+        claim_character = args.discord_character or os.environ.get("BUNNYLAND_DISCORD_CHARACTER")
+        if claim_user_id is not None:
+            claimed = assign_discord_controller(
+                actor,
+                discord_user_id=claim_user_id,
+                default_channel_id=claim_channel_id,
+                character_name=claim_character,
+            )
+            print(f"Assigned Discord user {claim_user_id} to {claimed!r}.")
+            if args.save:
+                save_world(actor, args.save, meta=meta)
+        else:
+            print("Discord bot enabled without a startup character claim.")
+
     max_ticks = args.ticks if args.ticks > 0 else None
     print(f"Running game loop ({'forever' if max_ticks is None else f'{max_ticks} ticks'})...")
     if args.api_port is None:
-        ticks = await loop.run(max_ticks=max_ticks)
+        ticks = await _run_with_optional_discord(loop.run(max_ticks=max_ticks), loop, discord_bot)
     else:
         from .server.runtime import run_loop_with_api
 
         print(f"Serving client API at http://{args.api_host}:{args.api_port}.")
         try:
-            ticks = await run_loop_with_api(
+            ticks = await _run_with_optional_discord(
+                run_loop_with_api(
+                    loop,
+                    actor,
+                    meta,
+                    host=args.api_host,
+                    port=args.api_port,
+                    max_ticks=max_ticks,
+                ),
                 loop,
-                actor,
-                meta,
-                host=args.api_host,
-                port=args.api_port,
-                max_ticks=max_ticks,
+                discord_bot,
             )
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
@@ -213,6 +333,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     serve.add_argument(
         "--verbose", action="store_true", help="log decisions and world generation at INFO"
+    )
+    serve.add_argument(
+        "--discord",
+        action="store_true",
+        help="run the Discord bot against this server process (needs DISCORD_TOKEN)",
+    )
+    serve.add_argument(
+        "--discord-user-id",
+        type=int,
+        default=None,
+        help="assign this Discord user id to a character at startup",
+    )
+    serve.add_argument(
+        "--discord-channel-id",
+        type=int,
+        default=None,
+        help="default Discord channel id for the startup controller",
+    )
+    serve.add_argument(
+        "--discord-character",
+        default=None,
+        help="character name to assign to the startup Discord controller",
     )
 
     args = parser.parse_args(argv)

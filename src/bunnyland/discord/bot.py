@@ -94,5 +94,15 @@ class DiscordBot:  # pragma: no cover - needs network + extra
     def run(self) -> None:
         self.client.run(self.token)
 
+    async def start(self) -> None:
+        """Start the Discord client inside an existing asyncio application."""
+
+        await self.client.start(self.token)
+
+    async def close(self) -> None:
+        """Stop the Discord client when the host game loop is shutting down."""
+
+        await self.client.close()
+
 
 __all__ = ["DiscordBot", "did_you_mean"]

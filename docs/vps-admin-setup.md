@@ -358,9 +358,8 @@ containerized web service, depending on how you prefer to manage static assets.
 
 ## 8. Connect Discord as a bot
 
-The Discord frontend is currently an embedded MVP: `DiscordBot` must run in a process that
-owns the same `WorldActor` as the game loop. The standalone `bunnyland serve` command does
-not yet attach Discord by itself.
+The Discord frontend is an embedded MVP: run it from the same `bunnyland serve` process that
+owns the game loop and API by adding `--discord`.
 
 Create the Discord application:
 
@@ -370,16 +369,12 @@ Create the Discord application:
 4. Generate an OAuth2 URL with scope `bot` and permissions to read and send messages.
 5. Invite the bot to your server.
 6. Put the token in `/etc/bunnyland/server.env` as `DISCORD_TOKEN=...`.
+7. Optionally set the startup claim:
+   `BUNNYLAND_DISCORD_USER_ID=...`, `BUNNYLAND_DISCORD_CHANNEL_ID=...`, and
+   `BUNNYLAND_DISCORD_CHARACTER=Juniper`.
 
-Then run a small host script that creates the world actor, starts the game loop/API, and
-constructs `DiscordBot(actor, token=...)`. The wiring pattern is documented in
-[Discord bot](discord-bot.md): create or load the world, spawn a
-`DiscordControllerComponent` with the numeric Discord user id, assign it to a character,
-then start the bot.
-
-For production, run that host script under systemd the same way as `bunnyland.service`, but
-replace `ExecStart` with the script command. Keep only one process responsible for advancing
-a given world file at a time.
+Then add `--discord` to the existing `bunnyland.service` `ExecStart`. Keep only one process
+responsible for advancing a given world file at a time.
 
 Player commands currently exposed by the bot:
 
