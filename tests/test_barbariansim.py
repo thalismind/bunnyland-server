@@ -32,17 +32,27 @@ from bunnyland.mechanics.barbariansim import (
     ArmorComponent,
     AttackHandler,
     ChallengeHandler,
+    CharacterPoisonedEvent,
+    CleanseCorruptionHandler,
+    CorruptionCleansedEvent,
+    CorruptionComponent,
+    CorruptionGainedEvent,
     DefendHandler,
     DefendingComponent,
     DurabilityComponent,
     ExposureDamageEvent,
     FortificationComponent,
     FortifyHandler,
+    GainCorruptionHandler,
     HeatstrokeStartedEvent,
     ItemBrokenEvent,
     ItemDamagedEvent,
     ItemRepairedEvent,
     PickpocketHandler,
+    PoisonCharacterHandler,
+    PoisonComponent,
+    PoisonProgressedEvent,
+    PoisonTreatedEvent,
     RaidHandler,
     RepairItemHandler,
     ShelterComponent,
@@ -51,6 +61,7 @@ from bunnyland.mechanics.barbariansim import (
     StaminaComponent,
     TemperatureExposureComponent,
     TemperatureResistanceComponent,
+    TreatPoisonHandler,
     WeaponComponent,
     barbariansim_fragments,
     install_barbariansim,
@@ -70,6 +81,10 @@ def _install(actor, *, enabled=frozenset({BoundaryTag.PVP})):
     actor.register_handler(FortifyHandler())
     actor.register_handler(RaidHandler())
     actor.register_handler(RepairItemHandler())
+    actor.register_handler(PoisonCharacterHandler())
+    actor.register_handler(TreatPoisonHandler())
+    actor.register_handler(GainCorruptionHandler())
+    actor.register_handler(CleanseCorruptionHandler())
     actor.register_handler(PickpocketHandler())
 
 
@@ -301,6 +316,57 @@ async def test_temperature_resistance_and_shelter_prevent_exposure_damage():
     assert damage == []
 
 
+async def test_poison_progresses_damages_health_and_can_be_treated():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _target(scenario, health=20.0)
+    poisoned: list[CharacterPoisonedEvent] = []
+    progressed: list[PoisonProgressedEvent] = []
+    treated: list[PoisonTreatedEvent] = []
+    scenario.actor.bus.subscribe(CharacterPoisonedEvent, poisoned.append)
+    scenario.actor.bus.subscribe(PoisonProgressedEvent, progressed.append)
+    scenario.actor.bus.subscribe(PoisonTreatedEvent, treated.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "poison-character", target_id=str(target), severity=2.0)
+    )
+    await scenario.actor.tick(0.0)
+    await scenario.actor.tick(HOUR)
+
+    target_entity = scenario.actor.world.get_entity(target)
+    assert target_entity.has_component(PoisonComponent)
+    assert target_entity.get_component(HealthComponent).current == 18.0
+    assert poisoned[0].severity == 2.0
+    assert progressed[0].damage == 2.0
+
+    await scenario.actor.submit(_cmd(scenario, "treat-poison", target_id=str(target)))
+    await scenario.actor.tick(HOUR)
+
+    assert not target_entity.has_component(PoisonComponent)
+    assert treated[0].character_id == str(target)
+
+
+async def test_corruption_can_be_gained_and_cleansed():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    gained: list[CorruptionGainedEvent] = []
+    cleansed: list[CorruptionCleansedEvent] = []
+    scenario.actor.bus.subscribe(CorruptionGainedEvent, gained.append)
+    scenario.actor.bus.subscribe(CorruptionCleansedEvent, cleansed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "gain-corruption", amount=3.0))
+    await scenario.actor.tick(HOUR)
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(CorruptionComponent).amount == 3.0
+    assert gained[0].amount == 3.0
+
+    await scenario.actor.submit(_cmd(scenario, "cleanse-corruption"))
+    await scenario.actor.tick(HOUR)
+
+    assert not character.has_component(CorruptionComponent)
+    assert cleansed[0].character_id == str(scenario.character)
+
+
 async def test_lethal_attack_requires_lethal_pvp_policy():
     scenario = build_scenario()
     _install(scenario.actor, enabled=frozenset({BoundaryTag.PVP}))
@@ -446,6 +512,8 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     character.add_component(ArmorComponent(rating=1.5))
     character.add_component(StaminaComponent(current=4.0, maximum=10.0))
     character.add_component(TemperatureExposureComponent(heat=12.0, heat_danger=True))
+    character.add_component(PoisonComponent(severity=2.0))
+    character.add_component(CorruptionComponent(amount=3.0))
     scenario.actor.world.get_entity(scenario.room_a).add_component(
         FortificationComponent(rating=2.0, durability=8.0)
     )
@@ -456,6 +524,8 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     assert any("defending" in line for line in fragments)
     assert any("Stamina: 4/10" in line for line in fragments)
     assert any("dangerous heat exposure" in line for line in fragments)
+    assert any("Poisoned: severity 2" in line for line in fragments)
+    assert any("Corruption: 3" in line for line in fragments)
     assert any("armor rating" in line for line in fragments)
     assert any("Reachable weapon" in line for line in fragments)
     assert any("durability 2/2" in line for line in fragments)

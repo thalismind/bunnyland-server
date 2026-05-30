@@ -75,6 +75,19 @@ class TemperatureExposureComponent(Component):
 
 
 @dataclass(frozen=True)
+class PoisonComponent(Component):
+    severity: float = 0.0
+    damage_per_hour: float = 1.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class CorruptionComponent(Component):
+    amount: float = 0.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class StaminaComponent(Component):
     current: float = 10.0
     maximum: float = 10.0
@@ -140,6 +153,31 @@ class ExposureDamageEvent(DomainEvent):
     damage: float
     cause: str
     health: float
+
+
+class CharacterPoisonedEvent(DomainEvent):
+    character_id: str
+    severity: float
+
+
+class PoisonProgressedEvent(DomainEvent):
+    character_id: str
+    severity: float
+    damage: float
+    health: float
+
+
+class PoisonTreatedEvent(DomainEvent):
+    character_id: str
+
+
+class CorruptionGainedEvent(DomainEvent):
+    character_id: str
+    amount: float
+
+
+class CorruptionCleansedEvent(DomainEvent):
+    character_id: str
 
 
 class ItemDamagedEvent(DomainEvent):
@@ -478,6 +516,41 @@ class TemperatureExposureConsequence:
         return events
 
 
+class PoisonConsequence:
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = (
+            world.query()
+            .with_all([CharacterComponent, PoisonComponent, HealthComponent])
+            .with_none([DeadComponent, SuspendedComponent])
+        )
+        for character in query.execute_entities():
+            poison = character.get_component(PoisonComponent)
+            elapsed = max(0, epoch - poison.last_updated_epoch)
+            if elapsed <= 0:
+                continue
+            hours = elapsed / 3600.0
+            damage = poison.severity * poison.damage_per_hour * hours
+            health = character.get_component(HealthComponent)
+            updated_health = replace(health, current=health.current - damage)
+            replace_component(character, updated_health)
+            replace_component(character, replace(poison, last_updated_epoch=epoch))
+            events.append(
+                PoisonProgressedEvent(
+                    **_barbarian_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character.id),
+                        character_id=str(character.id),
+                        severity=poison.severity,
+                        damage=damage,
+                        health=updated_health.current,
+                    )
+                )
+            )
+        return events
+
+
 class AttackHandler:
     command_type = "attack"
 
@@ -799,6 +872,126 @@ class RepairItemHandler:
         )
 
 
+class PoisonCharacterHandler:
+    command_type = "poison-character"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None or target_id is None:
+            return rejected("invalid actor or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        if not _same_room(ctx.world, actor_id, target_id):
+            return rejected("target is not present")
+        severity = float(command.payload.get("severity", 1.0))
+        if severity <= 0:
+            return rejected("poison severity must be positive")
+        target = ctx.entity(target_id)
+        replace_component(
+            target,
+            PoisonComponent(
+                severity=severity,
+                damage_per_hour=float(command.payload.get("damage_per_hour", 1.0)),
+                last_updated_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            CharacterPoisonedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(actor_id),
+                    target_ids=(str(target_id),),
+                    character_id=str(target_id),
+                    severity=severity,
+                )
+            )
+        )
+
+
+class TreatPoisonHandler:
+    command_type = "treat-poison"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id", command.character_id))
+        if actor_id is None or target_id is None:
+            return rejected("invalid actor or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        if not _same_room(ctx.world, actor_id, target_id):
+            return rejected("target is not present")
+        target = ctx.entity(target_id)
+        if not target.has_component(PoisonComponent):
+            return rejected("target is not poisoned")
+        target.remove_component(PoisonComponent)
+        return ok(
+            PoisonTreatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(actor_id),
+                    target_ids=(str(target_id),),
+                    character_id=str(target_id),
+                )
+            )
+        )
+
+
+class GainCorruptionHandler:
+    command_type = "gain-corruption"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        amount = float(command.payload.get("amount", 1.0))
+        if amount <= 0:
+            return rejected("corruption amount must be positive")
+        actor = ctx.entity(actor_id)
+        current = (
+            actor.get_component(CorruptionComponent)
+            if actor.has_component(CorruptionComponent)
+            else CorruptionComponent()
+        )
+        updated = CorruptionComponent(
+            amount=current.amount + amount,
+            last_updated_epoch=ctx.epoch,
+        )
+        replace_component(actor, updated)
+        return ok(
+            CorruptionGainedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    character_id=str(actor_id),
+                    amount=updated.amount,
+                )
+            )
+        )
+
+
+class CleanseCorruptionHandler:
+    command_type = "cleanse-corruption"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        actor = ctx.entity(actor_id)
+        if not actor.has_component(CorruptionComponent):
+            return rejected("character is not corrupted")
+        actor.remove_component(CorruptionComponent)
+        return ok(
+            CorruptionCleansedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    character_id=str(actor_id),
+                )
+            )
+        )
+
+
 class PickpocketHandler:
     command_type = "pickpocket"
 
@@ -854,6 +1047,12 @@ def barbariansim_fragments(world: World, character) -> list[str]:
             lines.append("You are suffering dangerous heat exposure.")
         if exposure.cold_danger:
             lines.append("You are suffering dangerous cold exposure.")
+    if character.has_component(PoisonComponent):
+        poison = character.get_component(PoisonComponent)
+        lines.append(f"Poisoned: severity {poison.severity:g}.")
+    if character.has_component(CorruptionComponent):
+        corruption = character.get_component(CorruptionComponent)
+        lines.append(f"Corruption: {corruption.amount:g}.")
     if character.has_component(DefendingComponent):
         lines.append("You are defending yourself.")
     if character.has_component(ArmorComponent):
@@ -881,6 +1080,7 @@ def barbariansim_fragments(world: World, character) -> list[str]:
 def install_barbariansim(actor) -> None:
     actor.world.register_system(StaminaRegenSystem())
     actor.register_consequence(TemperatureExposureConsequence())
+    actor.register_consequence(PoisonConsequence())
     actor.register_gate(
         PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier))
     )
@@ -889,7 +1089,12 @@ def install_barbariansim(actor) -> None:
 __all__ = [
     "ArmorComponent",
     "AttackHandler",
+    "CharacterPoisonedEvent",
     "ChallengeHandler",
+    "CleanseCorruptionHandler",
+    "CorruptionCleansedEvent",
+    "CorruptionComponent",
+    "CorruptionGainedEvent",
     "DefendHandler",
     "DefendingComponent",
     "DurabilityComponent",
@@ -903,6 +1108,11 @@ __all__ = [
     "ItemDamagedEvent",
     "ItemRepairedEvent",
     "PickpocketHandler",
+    "PoisonCharacterHandler",
+    "PoisonComponent",
+    "PoisonConsequence",
+    "PoisonProgressedEvent",
+    "PoisonTreatedEvent",
     "RaidHandler",
     "RepairItemHandler",
     "ShelterComponent",
@@ -913,6 +1123,7 @@ __all__ = [
     "TemperatureExposureComponent",
     "TemperatureExposureConsequence",
     "TemperatureResistanceComponent",
+    "TreatPoisonHandler",
     "WeaponComponent",
     "barbariansim_fragments",
     "install_barbariansim",
