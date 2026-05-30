@@ -40,7 +40,7 @@ Web, admin, and TUI clients live outside this repo, but they can connect to a ru
 bunnyland server through the optional HTTP/websocket API:
 
 ```bash
-uv run --extra server bunnyland serve --ticks 0 --api-host 127.0.0.1 --api-port 8080
+uv run --extra server bunnyland serve --ticks 0 --api-host 127.0.0.1 --api-port 8765
 ```
 
 The API exposes:
@@ -50,6 +50,9 @@ The API exposes:
 - `GET /world/events/recent` for recently published domain events.
 - `POST /world/commands` to submit a command envelope into the world actor.
 - `WS /world/updates` for an initial snapshot followed by typed domain events.
+
+For a step-by-step Linux VPS deployment with nginx and the web client, see the
+[VPS admin setup guide](vps-admin-setup.md).
 
 ## Connecting an LLM
 

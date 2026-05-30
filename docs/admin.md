@@ -91,9 +91,12 @@ By default all `default_enabled` plugins load. Restrict with repeated `--plugin`
 uv run bunnyland serve --plugin bunnyland.core_verbs --plugin bunnyland.worldgen
 ```
 
-Dependencies are resolved automatically (e.g. `lifesim` and `memory` depend on
-`core_verbs`). A verb whose plugin isn't loaded simply has no handler, and commands for it
-are rejected — disabling a plugin cleanly removes its surface.
+Dependency order is resolved automatically (e.g. `lifesim` and `memory` depend on
+`core_verbs`). When you pass an explicit plugin list, include each required plugin yourself;
+missing requirements are logged as errors and the server exits. Recommended plugins are
+logged as warnings and the server continues. A future `--auto-load-requires` flag may add
+missing requirements automatically. A verb whose plugin isn't loaded simply has no handler,
+and commands for it are rejected — disabling a plugin cleanly removes its surface.
 
 ### Loading external plugins
 

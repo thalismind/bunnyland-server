@@ -39,6 +39,8 @@ uv run bunnyland serve --llm --generator recursive --ticks 20
 
 - **[Running a server](docs/running-a-server.md)** — install, the `serve` loop, the time
   model, and connecting an LLM.
+- **[VPS admin setup](docs/vps-admin-setup.md)** — Linux VPS deployment with nginx,
+  optional Docker, plugin/world setup, web client connection, and Discord bot wiring.
 - **[World creation](docs/world-creation.md)** — generators (`oneshot` vs `recursive`),
   seeds, how generation stays inside the rules, and adding your own generator.
 - **[Discord bot](docs/discord-bot.md)** — creating the bot, the token, inviting it,
