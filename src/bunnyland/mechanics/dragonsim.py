@@ -15,6 +15,7 @@ from relics import Component, Edge, Entity, EntityId, World
 from ..core.commands import SubmittedCommand
 from ..core.components import IdentityComponent
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
+from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 
@@ -57,8 +58,11 @@ class QuestObjectiveComponent(Component):
 
 @dataclass(frozen=True)
 class QuestRewardComponent(Component):
+    quest_id: str
     description: str
+    item_ids: tuple[str, ...] = ()
     claimed: bool = False
+    claimed_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -153,8 +157,23 @@ def _quest_objectives(world: World, quest_id: str) -> list[Entity]:
     ]
 
 
+def _quest_rewards(world: World, quest_id: str) -> list[Entity]:
+    return [
+        entity
+        for entity in world.query().with_all([QuestRewardComponent]).execute_entities()
+        if entity.get_component(QuestRewardComponent).quest_id == quest_id
+    ]
+
+
 def _accepted_by(quest: QuestComponent, character_id: EntityId) -> bool:
     return str(character_id) in quest.accepted_by
+
+
+def _contained_item(world: World, raw_item_id: str) -> tuple[EntityId, Entity] | None:
+    item_id = parse_entity_id(raw_item_id)
+    if item_id is None or not world.has_entity(item_id):
+        return None
+    return item_id, world.get_entity(item_id)
 
 
 class DiscoverLocationHandler:
@@ -272,6 +291,26 @@ class CompleteObjectiveHandler:
         if not _accepted_by(quest, character_id):
             return rejected("quest is not accepted")
 
+        objectives = _quest_objectives(ctx.world, quest.quest_id)
+        will_complete_quest = bool(objectives) and all(
+            item.id == objective_id or item.get_component(QuestObjectiveComponent).completed
+            for item in objectives
+        )
+        rewards: list[Entity] = []
+        reward_items: list[tuple[EntityId, Entity]] = []
+        if will_complete_quest:
+            rewards = [
+                reward
+                for reward in _quest_rewards(ctx.world, quest.quest_id)
+                if not reward.get_component(QuestRewardComponent).claimed
+            ]
+            for reward in rewards:
+                for raw_item_id in reward.get_component(QuestRewardComponent).item_ids:
+                    item = _contained_item(ctx.world, raw_item_id)
+                    if item is None:
+                        return rejected("quest reward item does not exist")
+                    reward_items.append(item)
+
         replace_component(
             objective_entity,
             replace(objective, completed=True, completed_by=str(character_id)),
@@ -289,14 +328,23 @@ class CompleteObjectiveHandler:
                 )
             )
         ]
-        objectives = _quest_objectives(ctx.world, quest.quest_id)
-        if objectives and all(
-            item.get_component(QuestObjectiveComponent).completed for item in objectives
-        ):
+        if will_complete_quest:
             replace_component(
                 quest_entity,
                 replace(quest, status="completed", completed_at_epoch=ctx.epoch),
             )
+            character = ctx.entity(character_id)
+            for item_id, item in reward_items:
+                source_id = container_of(item)
+                if source_id is not None:
+                    ctx.entity(source_id).remove_relationship(Contains, item_id)
+                character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+            for reward in rewards:
+                component = reward.get_component(QuestRewardComponent)
+                replace_component(
+                    reward,
+                    replace(component, claimed=True, claimed_by=str(character_id)),
+                )
             events.append(
                 QuestCompletedEvent(
                     **ctx.event_base(

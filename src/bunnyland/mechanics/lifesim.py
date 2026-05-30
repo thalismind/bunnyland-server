@@ -23,8 +23,9 @@ from ..core.components import (
     IdentityComponent,
     SuspendedComponent,
 )
+from ..core.controllers import LLMControllerComponent
 from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_entity
-from ..core.edges import ContainmentMode, Contains
+from ..core.edges import ContainmentMode, Contains, ControlledBy
 from ..core.events import (
     AdoptionCompletedEvent,
     BirthDueEvent,
@@ -293,6 +294,11 @@ class ResolveBirthHandler:
                 LifeStageComponent(stage="child"),
             ],
         )
+        controller = spawn_entity(
+            ctx.world,
+            [LLMControllerComponent(profile_name="default", model="claude")],
+        )
+        child.add_relationship(ControlledBy(generation=0, since_epoch=ctx.epoch), controller.id)
         room_id = container_of(actor)
         if room_id is not None:
             ctx.entity(room_id).add_relationship(

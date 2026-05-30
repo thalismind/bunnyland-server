@@ -10,7 +10,9 @@ from bunnyland.core import (
     Contains,
     IdentityComponent,
     Lane,
+    PortableComponent,
     build_submitted_command,
+    container_of,
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
@@ -32,6 +34,7 @@ from bunnyland.mechanics.dragonsim import (
     QuestComponent,
     QuestObjectiveCompletedEvent,
     QuestObjectiveComponent,
+    QuestRewardComponent,
     dragonsim_fragments,
 )
 
@@ -88,6 +91,30 @@ def _quest(scenario):
     return quest.id, objective.id
 
 
+def _quest_reward(scenario, quest_id="lost-ring"):
+    item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="silver carrot", kind="item"),
+            PortableComponent(),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), item.id
+    )
+    reward = spawn_entity(
+        scenario.actor.world,
+        [
+            QuestRewardComponent(
+                quest_id=quest_id,
+                description="A silver carrot",
+                item_ids=(str(item.id),),
+            )
+        ],
+    )
+    return reward.id, item.id
+
+
 def _faction(scenario):
     faction = spawn_entity(
         scenario.actor.world,
@@ -115,10 +142,11 @@ async def test_discover_location_marks_poi_and_records_discovery():
     assert discovered[0].location_type == "ruin"
 
 
-async def test_accept_and_complete_quest_objective_completes_quest():
+async def test_accept_and_complete_quest_objective_completes_quest_and_grants_reward():
     scenario = build_scenario()
     _install(scenario.actor)
     quest, objective = _quest(scenario)
+    reward, item = _quest_reward(scenario)
     accepted: list[QuestAcceptedEvent] = []
     completed_objectives: list[QuestObjectiveCompletedEvent] = []
     completed_quests: list[QuestCompletedEvent] = []
@@ -142,6 +170,49 @@ async def test_accept_and_complete_quest_objective_completes_quest():
     assert completed_objectives[0].objective_id == str(objective)
     assert quest_component.status == "completed"
     assert completed_quests[0].quest_key == "lost-ring"
+    assert container_of(scenario.actor.world.get_entity(item)) == scenario.character
+    reward_component = scenario.actor.world.get_entity(reward).get_component(
+        QuestRewardComponent
+    )
+    assert reward_component.claimed is True
+    assert reward_component.claimed_by == str(scenario.character)
+
+
+async def test_complete_final_objective_rejects_missing_reward_item_without_completion():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    quest, objective = _quest(scenario)
+    reward = spawn_entity(
+        scenario.actor.world,
+        [
+            QuestRewardComponent(
+                quest_id="lost-ring",
+                description="A vanished prize",
+                item_ids=("missing_999",),
+            )
+        ],
+    ).id
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "accept-quest", quest_id=str(quest)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "complete-objective", objective_id=str(objective))
+    )
+    await scenario.actor.tick(HOUR)
+
+    quest_component = scenario.actor.world.get_entity(quest).get_component(QuestComponent)
+    objective_component = scenario.actor.world.get_entity(objective).get_component(
+        QuestObjectiveComponent
+    )
+    reward_component = scenario.actor.world.get_entity(reward).get_component(
+        QuestRewardComponent
+    )
+    assert quest_component.status == "active"
+    assert objective_component.completed is False
+    assert reward_component.claimed is False
+    assert any(event.reason == "quest reward item does not exist" for event in rejects)
 
 
 async def test_complete_objective_rejects_unaccepted_quest():

@@ -9,8 +9,10 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    ControlledBy,
     IdentityComponent,
     Lane,
+    LLMControllerComponent,
     SuspendedComponent,
     build_submitted_command,
     spawn_entity,
@@ -167,7 +169,7 @@ async def test_pregnancy_becomes_due_while_suspended_but_birth_waits_for_resume(
     assert children == []
 
 
-async def test_resolve_birth_creates_child_and_parent_edges_after_resume():
+async def test_relationship_pregnancy_and_birth_create_llm_controlled_child():
     scenario = build_scenario()
     _install(scenario.actor)
     character = scenario.actor.world.get_entity(scenario.character)
@@ -177,6 +179,12 @@ async def test_resolve_birth_creates_child_and_parent_edges_after_resume():
     target = _co_parent(scenario)
     resolved: list[BirthResolvedEvent] = []
     scenario.actor.bus.subscribe(BirthResolvedEvent, resolved.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "start-partnership", target_id=str(target))
+    )
+    await scenario.actor.tick(HOUR)
+    assert character.has_relationship(PartnerOf, target)
 
     await scenario.actor.submit(
         _cmd(scenario, "start-pregnancy", co_parent_id=str(target), due_in_seconds=HOUR)
@@ -196,6 +204,13 @@ async def test_resolve_birth_creates_child_and_parent_edges_after_resume():
     assert child.get_component(IdentityComponent).name == "Clover"
     assert child.get_component(LifeStageComponent).stage == "child"
     assert scenario.actor.world.get_entity(target).has_relationship(ParentOf, child.id)
+    controllers = [
+        target_id
+        for _edge, target_id in child.get_relationships(ControlledBy)
+    ]
+    assert len(controllers) == 1
+    controller = scenario.actor.world.get_entity(controllers[0])
+    assert controller.has_component(LLMControllerComponent)
 
 
 async def test_adopt_child_creates_parent_edge():
