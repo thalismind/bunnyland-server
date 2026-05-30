@@ -60,6 +60,15 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Relics ECS Modeling
+
+**One entity can have only one component of each type.**
+
+- Use components for singleton state on an entity.
+- Use edges for repeatable relationships or multi-instance state.
+- If a character can have multiple instances of something, model it as an edge with properties, or as separate entities linked by edges.
+- Example: multiple jealousies must be represented as relationship edges between the relevant characters with properties like `intensity`, not as one `JealousyComponent` on the character.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
