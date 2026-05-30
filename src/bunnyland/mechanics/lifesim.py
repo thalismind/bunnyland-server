@@ -123,6 +123,12 @@ class RoutineComponent(Component):
 
 
 @dataclass(frozen=True)
+class ReputationComponent(Component):
+    score: float = 0.0
+    known_for: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ReproductiveComponent(Component):
     can_be_pregnant: bool = False
     can_cause_pregnancy: bool = False
@@ -228,6 +234,12 @@ class RoutineDueEvent(DomainEvent):
 class RelationshipStatusChangedEvent(DomainEvent):
     target_id: str
     status: str
+
+
+class GossipSpreadEvent(DomainEvent):
+    target_id: str
+    text: str
+    reputation_delta: float
 
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
@@ -825,6 +837,50 @@ class SetRelationshipStatusHandler:
         )
 
 
+class SpreadGossipHandler:
+    command_type = "spread-gossip"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None or target_id is None:
+            return rejected("invalid character or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        if not _same_room(ctx.world, actor_id, target_id):
+            return rejected("target is not present")
+        text = str(command.payload.get("text", "")).strip()
+        if not text:
+            return rejected("gossip text is required")
+        delta = float(command.payload.get("reputation_delta", 0.0))
+        target = ctx.entity(target_id)
+        current = (
+            target.get_component(ReputationComponent)
+            if target.has_component(ReputationComponent)
+            else ReputationComponent()
+        )
+        known_for = current.known_for
+        if text not in known_for:
+            known_for = (*known_for, text)
+        replace_component(
+            target,
+            ReputationComponent(score=current.score + delta, known_for=known_for),
+        )
+        return ok(
+            GossipSpreadEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=_event_room(ctx.world, actor_id),
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    text=text,
+                    reputation_delta=delta,
+                )
+            )
+        )
+
+
 class StartPartnershipHandler:
     command_type = "start-partnership"
 
@@ -1145,6 +1201,10 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(RoutineComponent):
         routine = character.get_component(RoutineComponent)
         lines.append(f"Routine: {routine.activity} due at epoch {routine.next_due_epoch}.")
+    if character.has_component(ReputationComponent):
+        reputation = character.get_component(ReputationComponent)
+        if reputation.known_for:
+            lines.append("You are known for: " + ", ".join(reputation.known_for) + ".")
     if character.has_component(PregnancyComponent):
         pregnancy = character.get_component(PregnancyComponent)
         due = (
@@ -1222,6 +1282,7 @@ __all__ = [
     "EndPartnershipHandler",
     "FindJobHandler",
     "GoToWorkHandler",
+    "GossipSpreadEvent",
     "HomeClaimedEvent",
     "HomeComponent",
     "HouseholdComponent",
@@ -1241,6 +1302,7 @@ __all__ = [
     "PromoteBusinessHandler",
     "QuitJobHandler",
     "ReproductiveComponent",
+    "ReputationComponent",
     "ResolveBirthHandler",
     "RoomClaimComponent",
     "RoomClaimedEvent",
@@ -1252,6 +1314,7 @@ __all__ = [
     "RelationshipStatusChangedEvent",
     "SetRoutineHandler",
     "SetRelationshipStatusHandler",
+    "SpreadGossipHandler",
     "StartPartnershipHandler",
     "StartPregnancyHandler",
     "SellItemHandler",

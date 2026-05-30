@@ -37,6 +37,7 @@ from bunnyland.mechanics.lifesim import (
     CompleteMilestoneHandler,
     CustomerComponent,
     FindJobHandler,
+    GossipSpreadEvent,
     GoToWorkHandler,
     HomeComponent,
     HouseholdComponent,
@@ -54,6 +55,7 @@ from bunnyland.mechanics.lifesim import (
     PromotionEarnedEvent,
     QuitJobHandler,
     ReproductiveComponent,
+    ReputationComponent,
     ResolveBirthHandler,
     RoomClaimComponent,
     RoutineComponent,
@@ -61,6 +63,7 @@ from bunnyland.mechanics.lifesim import (
     SellItemHandler,
     SetRelationshipStatusHandler,
     SetRoutineHandler,
+    SpreadGossipHandler,
     StartPartnershipHandler,
     StartPregnancyHandler,
     WorkShiftCompletedEvent,
@@ -98,6 +101,7 @@ def _install(actor):
     actor.register_handler(ClaimRoomHandler())
     actor.register_handler(SetRoutineHandler())
     actor.register_handler(SetRelationshipStatusHandler())
+    actor.register_handler(SpreadGossipHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -342,6 +346,33 @@ async def test_relationship_status_transition_is_prompt_visible():
     character = scenario.actor.world.get_entity(scenario.character)
     fragments = lifesim_fragments(scenario.actor.world, character)
     assert any("Hazel is your friend" in line for line in fragments)
+
+
+async def test_gossip_changes_target_reputation_and_prompt_context():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _co_parent(scenario)
+    gossip: list[GossipSpreadEvent] = []
+    scenario.actor.bus.subscribe(GossipSpreadEvent, gossip.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "spread-gossip",
+            target_id=str(target),
+            text="rescued a neighbor",
+            reputation_delta=0.25,
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    target_entity = scenario.actor.world.get_entity(target)
+    reputation = target_entity.get_component(ReputationComponent)
+    assert reputation.score == 0.25
+    assert reputation.known_for == ("rescued a neighbor",)
+    assert gossip[0].target_id == str(target)
+    fragments = lifesim_fragments(scenario.actor.world, target_entity)
+    assert any("rescued a neighbor" in line for line in fragments)
 
 
 async def test_start_pregnancy_requires_policy_consent():
