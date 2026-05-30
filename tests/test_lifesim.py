@@ -43,7 +43,7 @@ from bunnyland.mechanics.lifesim import (
     HouseholdComponent,
     HouseholdFundsComponent,
     HouseholdJoinedEvent,
-    JealousyComponent,
+    JealousOf,
     JealousyTriggeredEvent,
     JobScheduleComponent,
     JoinHouseholdHandler,
@@ -406,9 +406,11 @@ async def test_witnessed_romance_between_partner_and_rival_triggers_jealousy():
     )
     await scenario.actor.tick(HOUR)
 
-    jealousy = character.get_component(JealousyComponent)
+    jealousy_edges = character.get_relationships(JealousOf)
+    assert len(jealousy_edges) == 1
+    jealousy, target_id = jealousy_edges[0]
+    assert target_id == rival.id
     assert jealousy.partner_id == str(partner)
-    assert jealousy.rival_id == str(rival.id)
     assert jealousy.intensity == 0.75
     assert events[0].rival_id == str(rival.id)
 

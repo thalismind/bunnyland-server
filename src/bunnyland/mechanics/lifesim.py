@@ -129,14 +129,6 @@ class ReputationComponent(Component):
 
 
 @dataclass(frozen=True)
-class JealousyComponent(Component):
-    partner_id: str
-    rival_id: str
-    intensity: float = 0.0
-    triggered_at_epoch: int = 0
-
-
-@dataclass(frozen=True)
 class ReproductiveComponent(Component):
     can_be_pregnant: bool = False
     can_cause_pregnancy: bool = False
@@ -173,6 +165,13 @@ class PartnerOf(Edge):
 class RelationshipStatus(Edge):
     status: str
     since_epoch: int
+
+
+@dataclass(frozen=True)
+class JealousOf(Edge):
+    partner_id: str
+    intensity: float = 0.0
+    triggered_at_epoch: int = 0
 
 
 class AspirationChosenEvent(DomainEvent):
@@ -914,14 +913,13 @@ class WitnessRomanceHandler:
         ):
             return rejected("participants are not present")
         intensity = float(command.payload.get("intensity", 0.5))
-        replace_component(
-            actor,
-            JealousyComponent(
+        actor.add_relationship(
+            JealousOf(
                 partner_id=str(partner_id),
-                rival_id=str(rival_id),
                 intensity=intensity,
                 triggered_at_epoch=ctx.epoch,
             ),
+            rival_id,
         )
         return ok(
             JealousyTriggeredEvent(
@@ -1261,9 +1259,19 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         reputation = character.get_component(ReputationComponent)
         if reputation.known_for:
             lines.append("You are known for: " + ", ".join(reputation.known_for) + ".")
-    if character.has_component(JealousyComponent):
-        jealousy = character.get_component(JealousyComponent)
-        lines.append(f"You feel jealous about {jealousy.partner_id}.")
+    for edge, rival_id in character.get_relationships(JealousOf):
+        rival_name = "someone"
+        partner_name = "someone"
+        if world.has_entity(rival_id):
+            rival = world.get_entity(rival_id)
+            if rival.has_component(IdentityComponent):
+                rival_name = rival.get_component(IdentityComponent).name
+        partner_id = parse_entity_id(edge.partner_id)
+        if partner_id is not None and world.has_entity(partner_id):
+            partner = world.get_entity(partner_id)
+            if partner.has_component(IdentityComponent):
+                partner_name = partner.get_component(IdentityComponent).name
+        lines.append(f"You feel jealous of {rival_name} over {partner_name}.")
     if character.has_component(PregnancyComponent):
         pregnancy = character.get_component(PregnancyComponent)
         due = (
@@ -1349,7 +1357,7 @@ __all__ = [
     "HouseholdJoinedEvent",
     "JoinHouseholdHandler",
     "JobScheduleComponent",
-    "JealousyComponent",
+    "JealousOf",
     "JealousyTriggeredEvent",
     "LifeStageComponent",
     "MilestoneCompletedEvent",
