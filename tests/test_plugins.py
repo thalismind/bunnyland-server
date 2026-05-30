@@ -28,6 +28,7 @@ from bunnyland.plugins.builtin import (
     COLONYSIM,
     CORE_VERBS,
     ENVIRONMENT,
+    GARDENSIM,
     LIFESIM,
     MECHANISMS,
     MEMORY,
@@ -42,13 +43,13 @@ def test_builtin_plugins_declared():
     ids = {p.id for p in bunnyland_plugins()}
     assert ids == {
         BARBARIANSIM, COLONYSIM, CORE_VERBS, LIFESIM, MEMORY, WORLDGEN, ENVIRONMENT,
-        MECHANISMS, SOCIAL, POLICY, PERSONA,
+        MECHANISMS, SOCIAL, POLICY, PERSONA, GARDENSIM,
     }
 
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 11
+    assert len(select(plugins, None)) == 12
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
 
 

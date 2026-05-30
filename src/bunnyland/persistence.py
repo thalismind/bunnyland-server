@@ -52,6 +52,7 @@ _TYPE_MODULES = (
     "bunnyland.mechanics.lifesim",
     "bunnyland.mechanics.colonysim",
     "bunnyland.mechanics.barbariansim",
+    "bunnyland.mechanics.gardensim",
 )
 
 

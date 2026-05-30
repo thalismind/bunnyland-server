@@ -65,6 +65,31 @@ from ..mechanics.environment import (
     environment_fragments,
     install_environment,
 )
+from ..mechanics.gardensim import (
+    CropComponent,
+    CropGrewEvent,
+    CropGrowthComponent,
+    CropHarvestedEvent,
+    CropReadyEvent,
+    CropWateredEvent,
+    CropWitheredEvent,
+    FertilizeHandler,
+    FertilizerAppliedEvent,
+    FertilizerComponent,
+    HarvestableComponent,
+    HarvestCropHandler,
+    PlantHandler,
+    SeedComponent,
+    SeedPlantedEvent,
+    SoilComponent,
+    SoilTilledEvent,
+    TilledComponent,
+    TillHandler,
+    WaterCropHandler,
+    WateredComponent,
+    gardensim_fragments,
+    install_gardensim,
+)
 from ..mechanics.lifesim import (
     AdoptChildHandler,
     BirthDueComponent,
@@ -122,6 +147,7 @@ POLICY = "bunnyland.policy"
 PERSONA = "bunnyland.persona"
 COLONYSIM = "bunnyland.colonysim"
 BARBARIANSIM = "bunnyland.barbariansim"
+GARDENSIM = "bunnyland.gardensim"
 
 
 def _install_affect(actor) -> None:
@@ -347,6 +373,50 @@ def barbariansim_plugin() -> Plugin:
     )
 
 
+def gardensim_plugin() -> Plugin:
+    return Plugin(
+        id=GARDENSIM,
+        name="Garden Sim",
+        dependencies=DependencyContribution(
+            requires=(CORE_VERBS,),
+            recommends=(ENVIRONMENT, COLONYSIM),
+        ),
+        ecs=EcsContribution(
+            components=(
+                SoilComponent,
+                TilledComponent,
+                WateredComponent,
+                FertilizerComponent,
+                SeedComponent,
+                CropComponent,
+                CropGrowthComponent,
+                HarvestableComponent,
+            )
+        ),
+        commands=CommandContribution(
+            action_handlers=(
+                TillHandler,
+                PlantHandler,
+                WaterCropHandler,
+                FertilizeHandler,
+                HarvestCropHandler,
+            ),
+            typed_events=(
+                SoilTilledEvent,
+                SeedPlantedEvent,
+                CropWateredEvent,
+                FertilizerAppliedEvent,
+                CropGrewEvent,
+                CropReadyEvent,
+                CropWitheredEvent,
+                CropHarvestedEvent,
+            ),
+        ),
+        runtime=RuntimeContribution(service_factories=(install_gardensim,)),
+        content=ContentContribution(prompt_fragments=(gardensim_fragments,)),
+    )
+
+
 def bunnyland_plugins() -> list[Plugin]:
     return [
         core_verbs_plugin(),
@@ -360,6 +430,7 @@ def bunnyland_plugins() -> list[Plugin]:
         persona_plugin(),
         colonysim_plugin(),
         barbariansim_plugin(),
+        gardensim_plugin(),
     ]
 
 
@@ -368,6 +439,7 @@ __all__ = [
     "CORE_VERBS",
     "COLONYSIM",
     "ENVIRONMENT",
+    "GARDENSIM",
     "LIFESIM",
     "MECHANISMS",
     "MEMORY",
@@ -380,6 +452,7 @@ __all__ = [
     "colonysim_plugin",
     "core_verbs_plugin",
     "environment_plugin",
+    "gardensim_plugin",
     "lifesim_plugin",
     "mechanisms_plugin",
     "memory_plugin",

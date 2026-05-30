@@ -101,6 +101,41 @@ def parse_natural_command(text: str) -> ToolCall | None:
         target = _rest(words, 1)
         return ToolCall("use", {"target_id": target}) if target else None
 
+    if verb == "till":
+        soil = _rest(words, 1)
+        return ToolCall("till", {"soil_id": soil}) if soil else None
+
+    if verb == "plant":
+        lowered = [word.lower() for word in words]
+        for marker in ("in", "into"):
+            if marker in lowered[1:]:
+                index = lowered.index(marker)
+                seed = _rest(words[:index], 1)
+                soil = _rest(words, index + 1)
+                if seed and soil:
+                    return ToolCall("plant", {"seed_id": seed, "soil_id": soil})
+        return None
+
+    if verb == "water":
+        soil = _rest(words, 1)
+        return ToolCall("water_crop", {"soil_id": soil}) if soil else None
+
+    if verb == "fertilize":
+        lowered = [word.lower() for word in words]
+        if "with" in lowered[1:]:
+            index = lowered.index("with")
+            soil = _rest(words[:index], 1)
+            fertilizer = _rest(words, index + 1)
+            if soil and fertilizer:
+                return ToolCall(
+                    "fertilize", {"soil_id": soil, "fertilizer_id": fertilizer}
+                )
+        return None
+
+    if verb == "harvest":
+        soil = _rest(words, 1)
+        return ToolCall("harvest_crop", {"soil_id": soil}) if soil else None
+
     if verb == "claim":
         target = _rest(words, 1)
         return ToolCall("claim_ownership", {"target_id": target}) if target else None

@@ -59,9 +59,14 @@ def test_tool_schemas_cover_every_verb():
         "adopt_child",
         "claim_ownership",
         "drop",
+        "fertilize",
+        "harvest_crop",
+        "plant",
         "pickpocket",
         "release_ownership",
         "take_note",
+        "till",
+        "water_crop",
         "remember",
         "reflect",
         "wait",
@@ -121,6 +126,18 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     )
     assert parse_natural_command("claim oak chest") == ToolCall(
         "claim_ownership", {"target_id": "oak chest"}
+    )
+    assert parse_natural_command("till garden bed") == ToolCall(
+        "till", {"soil_id": "garden bed"}
+    )
+    assert parse_natural_command("plant turnip seeds in garden bed") == ToolCall(
+        "plant", {"seed_id": "turnip seeds", "soil_id": "garden bed"}
+    )
+    assert parse_natural_command("water garden bed") == ToolCall(
+        "water_crop", {"soil_id": "garden bed"}
+    )
+    assert parse_natural_command("harvest garden bed") == ToolCall(
+        "harvest_crop", {"soil_id": "garden bed"}
     )
     assert parse_natural_command("release ownership oak chest") == ToolCall(
         "release_ownership", {"target_id": "oak chest"}
