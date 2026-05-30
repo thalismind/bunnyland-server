@@ -17,13 +17,15 @@ from ..core.components import (
     DeadComponent,
     DownedComponent,
     HealthComponent,
+    PortableComponent,
     SuspendedComponent,
 )
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
-from ..core.edges import Wearing
+from ..core.edges import ContainmentMode, Contains, Wearing
 from ..core.events import (
     CharacterAttackedEvent,
     CharacterDefendedEvent,
+    CharacterPickpocketedEvent,
     CombatChallengeEvent,
     EventVisibility,
     FortificationBuiltEvent,
@@ -69,6 +71,12 @@ def pvp_classifier(command: SubmittedCommand):
 def lethal_pvp_classifier(command: SubmittedCommand):
     if command.command_type == "attack" and bool(command.payload.get("lethal", False)):
         return BoundaryTag.LETHAL_PVP, _participants(command)
+    return None
+
+
+def pickpocket_classifier(command: SubmittedCommand):
+    if command.command_type == "pickpocket":
+        return BoundaryTag.PICKPOCKETING, _participants(command)
     return None
 
 
@@ -329,6 +337,48 @@ class RaidHandler:
         )
 
 
+class PickpocketHandler:
+    command_type = "pickpocket"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if actor_id is None or target_id is None or item_id is None:
+            return rejected("invalid thief, target, or item id")
+        if not ctx.world.has_entity(target_id) or not ctx.world.has_entity(item_id):
+            return rejected("target or item does not exist")
+
+        actor = ctx.entity(actor_id)
+        target = ctx.entity(target_id)
+        item = ctx.entity(item_id)
+        if not _can_fight(target):
+            return rejected("target cannot be pickpocketed")
+        if not _same_room(ctx.world, actor_id, target_id):
+            return rejected("target is not present")
+        if container_of(item) != target_id:
+            return rejected("item is not in target inventory")
+        if not item.has_component(PortableComponent) or not item.get_component(
+            PortableComponent
+        ).can_pick_up:
+            return rejected("item cannot be taken")
+
+        target.remove_relationship(Contains, item_id)
+        actor.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+        return ok(
+            CharacterPickpocketedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(actor)) if container_of(actor) else None,
+                    target_ids=(str(target_id), str(item_id)),
+                    target_id=str(target_id),
+                    item_id=str(item_id),
+                )
+            )
+        )
+
+
 def barbariansim_fragments(world: World, character) -> list[str]:
     lines: list[str] = []
     if character.has_component(DefendingComponent):
@@ -349,7 +399,9 @@ def barbariansim_fragments(world: World, character) -> list[str]:
 
 
 def install_barbariansim(actor) -> None:
-    actor.register_gate(PolicyGate((pvp_classifier, lethal_pvp_classifier)))
+    actor.register_gate(
+        PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier))
+    )
 
 
 __all__ = [
@@ -360,11 +412,13 @@ __all__ = [
     "DefendingComponent",
     "FortificationComponent",
     "FortifyHandler",
+    "PickpocketHandler",
     "RaidHandler",
     "SparHandler",
     "WeaponComponent",
     "barbariansim_fragments",
     "install_barbariansim",
     "lethal_pvp_classifier",
+    "pickpocket_classifier",
     "pvp_classifier",
 ]

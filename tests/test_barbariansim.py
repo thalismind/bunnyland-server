@@ -15,11 +15,13 @@ from bunnyland.core import (
     Lane,
     PortableComponent,
     build_submitted_command,
+    container_of,
     spawn_entity,
 )
 from bunnyland.core.events import (
     CharacterAttackedEvent,
     CharacterDefendedEvent,
+    CharacterPickpocketedEvent,
     CombatChallengeEvent,
     CommandRejectedEvent,
     FortificationBuiltEvent,
@@ -33,6 +35,7 @@ from bunnyland.mechanics.barbariansim import (
     DefendingComponent,
     FortificationComponent,
     FortifyHandler,
+    PickpocketHandler,
     RaidHandler,
     SparHandler,
     WeaponComponent,
@@ -53,6 +56,7 @@ def _install(actor, *, enabled=frozenset({BoundaryTag.PVP})):
     actor.register_handler(ChallengeHandler())
     actor.register_handler(FortifyHandler())
     actor.register_handler(RaidHandler())
+    actor.register_handler(PickpocketHandler())
 
 
 def _target(scenario, *, health=20.0, armor=0.0):
@@ -80,6 +84,17 @@ def _weapon(scenario, damage=8.0):
         ],
     )
     scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), item.id
+    )
+    return item.id
+
+
+def _target_item(scenario, target, name="Coin"):
+    item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name=name, kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    scenario.actor.world.get_entity(target).add_relationship(
         Contains(mode=ContainmentMode.INVENTORY), item.id
     )
     return item.id
@@ -232,6 +247,41 @@ async def test_fortify_rejects_unreachable_target():
     await scenario.actor.tick(HOUR)
 
     assert any("not reachable" in event.reason for event in rejects)
+
+
+async def test_pickpocket_requires_pickpocketing_policy():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset())
+    target = _target(scenario)
+    item = _target_item(scenario, target)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "pickpocket", target_id=str(target), item_id=str(item))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert container_of(scenario.actor.world.get_entity(item)) == target
+    assert any("pickpocketing" in event.reason for event in rejects)
+
+
+async def test_pickpocket_transfers_target_inventory_item_when_enabled():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset({BoundaryTag.PICKPOCKETING}))
+    target = _target(scenario)
+    item = _target_item(scenario, target)
+    pickpocketed: list[CharacterPickpocketedEvent] = []
+    scenario.actor.bus.subscribe(CharacterPickpocketedEvent, pickpocketed.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "pickpocket", target_id=str(target), item_id=str(item))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert container_of(scenario.actor.world.get_entity(item)) == scenario.character
+    assert pickpocketed[0].target_id == str(target)
+    assert pickpocketed[0].item_id == str(item)
 
 
 def test_barbariansim_fragments_show_defense_armor_and_weapons():

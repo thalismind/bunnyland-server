@@ -202,6 +202,11 @@ class RaidStartedEvent(DomainEvent):
     damage: float
 
 
+class CharacterPickpocketedEvent(DomainEvent):
+    target_id: str
+    item_id: str
+
+
 # --------------------------------------------------------------------------------------
 # Movement / world events
 # --------------------------------------------------------------------------------------
@@ -339,6 +344,7 @@ __all__ = [
     "CharacterDownedEvent",
     "CharacterAttackedEvent",
     "CharacterDefendedEvent",
+    "CharacterPickpocketedEvent",
     "CharacterRevivedEvent",
     "CombatChallengeEvent",
     "BirthDueEvent",

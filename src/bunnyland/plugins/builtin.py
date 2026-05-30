@@ -29,6 +29,7 @@ from ..mechanics.barbariansim import (
     DefendingComponent,
     FortificationComponent,
     FortifyHandler,
+    PickpocketHandler,
     RaidHandler,
     SparHandler,
     WeaponComponent,
@@ -329,6 +330,7 @@ def barbariansim_plugin() -> Plugin:
                 ChallengeHandler,
                 FortifyHandler,
                 RaidHandler,
+                PickpocketHandler,
             )
         ),
         runtime=RuntimeContribution(service_factories=(install_barbariansim,)),
