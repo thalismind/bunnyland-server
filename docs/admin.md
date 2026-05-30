@@ -68,12 +68,20 @@ that's what world generation uses. The control verbs are the in-world, multi-act
 The world actor always provides the core spine (clock, regeneration, downed/death). Optional
 behaviour is added by **plugins**; the builtins are:
 
-| Plugin id              | Provides                                              |
-|------------------------|------------------------------------------------------|
-| `bunnyland.core_verbs` | move, take, put, use, write, sleep/wake/wait, say, tell |
-| `bunnyland.lifesim`    | hunger/thirst components + systems, eat/drink, affect |
-| `bunnyland.memory`     | take-note / remember (private, focus-lane)           |
-| `bunnyland.worldgen`   | the `oneshot` and `recursive` world generators       |
+| Plugin id               | Provides                                                       |
+|-------------------------|---------------------------------------------------------------|
+| `bunnyland.core_verbs`  | move, take, put, use, write, sleep/wake/wait, say, tell       |
+| `bunnyland.lifesim`     | hunger/thirst components + systems, eat/drink, affect (mood)  |
+| `bunnyland.memory`      | take-note / remember (private, focus-lane)                    |
+| `bunnyland.worldgen`    | the `oneshot` and `recursive` world generators                |
+| `bunnyland.environment` | day/night light cycle, calendar, weather                      |
+| `bunnyland.mechanisms`  | door auto-close and momentary-button reset timers             |
+| `bunnyland.social`      | social bonds that grow through speech (affinity/trust/fear)   |
+| `bunnyland.policy`      | boundary/consent gate (flirting etc.); denied always wins     |
+
+Each mechanic surfaces itself to characters where it can — needs, weather/time, and
+relationships all appear in a "Currently" block in the agent's prompt, and changes (light,
+door state, ...) flow into the room summary an agent perceives.
 
 ### Enabling a subset
 
