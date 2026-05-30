@@ -15,9 +15,11 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     LightComponent,
+    PerceptionComponent,
     RoomSummaryComponent,
     SayHandler,
     SleepingComponent,
+    StealthComponent,
     TemperatureComponent,
     build_submitted_command,
     spawn_entity,
@@ -230,6 +232,34 @@ def test_sleeping_character_perceives_nothing():
     perception = perceive(world, char)
     assert perception.can_perceive is False
     assert perception.entities == ()
+
+
+def test_inactive_perception_component_perceives_nothing():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    char = world.get_entity(scenario.character)
+    char.add_component(PerceptionComponent(active=False))
+
+    perception = perceive(world, char)
+
+    assert perception.can_perceive is False
+
+
+def test_hidden_entity_is_not_visible_in_perception():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    add_object(
+        scenario,
+        scenario.room_a,
+        [
+            IdentityComponent(name="hidden cache", kind="item"),
+            StealthComponent(visibility_level=0.05, hidden_threshold=0.1, hiding=True),
+        ],
+    )
+
+    perception = perceive(world, world.get_entity(scenario.character))
+
+    assert "hidden cache" not in {entity.name for entity in perception.entities}
 
 
 # -- recent context ---------------------------------------------------------------------

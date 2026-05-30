@@ -50,8 +50,12 @@ _VERBS: dict[str, _Verb] = {
     "drink": _Verb("drink", Lane.WORLD, _ACTION, ("source_id",)),
     "say": _Verb("say", Lane.WORLD, _SPEECH, ("text", "intent")),
     "tell": _Verb("tell", Lane.WORLD, _SPEECH, ("target_id", "text", "intent")),
-    "take_note": _Verb("take-note", Lane.FOCUS, _FOCUS, ("text", "tags")),
-    "remember": _Verb("remember", Lane.FOCUS, _FOCUS, ("query", "mode", "limit")),
+    "take_note": _Verb(
+        "take-note", Lane.FOCUS, _FOCUS, ("text", "tags", "scope", "collection")
+    ),
+    "remember": _Verb(
+        "remember", Lane.FOCUS, _FOCUS, ("query", "mode", "limit", "scope", "collection")
+    ),
     "write": _Verb("write", Lane.WORLD, _SPEECH, ("target_id", "text")),
     "wait": _Verb("wait", Lane.WORLD, _FREE, ()),
 }

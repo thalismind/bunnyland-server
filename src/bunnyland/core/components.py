@@ -144,6 +144,58 @@ class LightComponent(Component):
     natural: bool = True
 
 
+# --------------------------------------------------------------------------------------
+# Perception, attention, noise, stealth (spec 11.14)
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PerceptionComponent(Component):
+    active: bool = True
+    visible_entities: frozenset[str] = frozenset()
+    audible_entities: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class HearingComponent(Component):
+    sensitivity: float = 1.0
+
+
+@dataclass(frozen=True)
+class StimulusComponent(Component):
+    stimulus_type: str
+    source_entity_id: str | None
+    room_id: str | None
+    intensity: float = 1.0
+    created_at_epoch: int = 0
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class AttentionComponent(Component):
+    score: float = 0.0
+    focus_entity_id: str | None = None
+    focus_room_id: str | None = None
+    decay_rate: float = 0.1
+    time_since_stimulus: float = 0.0
+
+
+@dataclass(frozen=True)
+class NoiseComponent(Component):
+    loudness: float
+    text: str
+    source_entity_id: str | None = None
+    room_id: str | None = None
+    created_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class StealthComponent(Component):
+    visibility_level: float = 1.0
+    hidden_threshold: float = 0.1
+    hiding: bool = False
+
+
 @dataclass(frozen=True)
 class CharacterComponent(Component):
     species: str = "bunny"
@@ -162,6 +214,7 @@ class MemoryProfileComponent(Component):
     """Names a character's private memory/notes collection (spec 11.16)."""
 
     vector_collection: str
+    shared_collections: tuple[str, ...] = ()
     last_event_seen_id: str | None = None
     last_reflection_epoch: int = 0
 
@@ -313,6 +366,7 @@ __all__ = [
     "AffectComponent",
     "AffectDelta",
     "AffectVector",
+    "AttentionComponent",
     "ButtonComponent",
     "CharacterComponent",
     "ContainerComponent",
@@ -321,6 +375,7 @@ __all__ = [
     "DoorComponent",
     "DownedComponent",
     "FocusPointsComponent",
+    "HearingComponent",
     "HealthComponent",
     "IdentityComponent",
     "InitiativeComponent",
@@ -330,11 +385,15 @@ __all__ = [
     "LightComponent",
     "LockableComponent",
     "MemoryProfileComponent",
+    "NoiseComponent",
+    "PerceptionComponent",
     "PortableComponent",
     "ReadableComponent",
     "RoomComponent",
     "RoomSummaryComponent",
     "SleepingComponent",
+    "StealthComponent",
+    "StimulusComponent",
     "SuspendedComponent",
     "TemperatureComponent",
     "ThoughtComponent",

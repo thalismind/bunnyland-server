@@ -28,6 +28,8 @@ from ..core.edges import ContainmentMode, Contains
 from ..core.events import (
     EventVisibility,
     ItemCraftedEvent,
+    JobAssignedEvent,
+    JobCompletedEvent,
     ReservationCreatedEvent,
     ReservationReleasedEvent,
     ResourceGatheredEvent,
@@ -69,6 +71,7 @@ class JobComponent(Component):
     job_type: str
     priority: int
     assigned: bool = False
+    completed: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,8 +89,18 @@ def _reservation_holder(entity: Entity) -> EntityId | None:
     return reservations[0][1] if reservations else None
 
 
+def _assignment_holder(entity: Entity) -> EntityId | None:
+    assignments = entity.get_relationships(AssignedTo)
+    return assignments[0][1] if assignments else None
+
+
 def _reserved_by_other(entity: Entity, character_id: EntityId) -> bool:
     holder = _reservation_holder(entity)
+    return holder is not None and holder != character_id
+
+
+def _assigned_by_other(entity: Entity, character_id: EntityId) -> bool:
+    holder = _assignment_holder(entity)
     return holder is not None and holder != character_id
 
 
@@ -328,6 +341,79 @@ class CraftHandler:
         )
 
 
+class AssignJobHandler:
+    command_type = "assign-job"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        job_id = parse_entity_id(command.payload.get("job_id"))
+        if character_id is None or job_id is None:
+            return rejected("invalid character or job id")
+        if not ctx.world.has_entity(job_id):
+            return rejected("job does not exist")
+
+        character = ctx.entity(character_id)
+        job_entity = ctx.entity(job_id)
+        if job_id not in reachable_ids(ctx.world, character):
+            return rejected("job is not reachable")
+        if not job_entity.has_component(JobComponent):
+            return rejected("target is not a job")
+        job = job_entity.get_component(JobComponent)
+        if job.completed:
+            return rejected("job is already complete")
+        if _assigned_by_other(job_entity, character_id):
+            return rejected("job is assigned")
+        if job_entity.has_relationship(AssignedTo, character_id):
+            return rejected("job already assigned to you")
+
+        replace_component(job_entity, replace(job, assigned=True))
+        job_entity.add_relationship(AssignedTo(since_epoch=ctx.epoch), character_id)
+        return ok(
+            JobAssignedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(job_id),),
+                    job_id=str(job_id),
+                )
+            )
+        )
+
+
+class CompleteJobHandler:
+    command_type = "complete-job"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        job_id = parse_entity_id(command.payload.get("job_id"))
+        if character_id is None or job_id is None:
+            return rejected("invalid character or job id")
+        if not ctx.world.has_entity(job_id):
+            return rejected("job does not exist")
+
+        job_entity = ctx.entity(job_id)
+        if not job_entity.has_component(JobComponent):
+            return rejected("target is not a job")
+        if not job_entity.has_relationship(AssignedTo, character_id):
+            return rejected("job is not assigned to you")
+
+        job = job_entity.get_component(JobComponent)
+        replace_component(job_entity, replace(job, assigned=False, completed=True))
+        job_entity.remove_relationship(AssignedTo, character_id)
+        return ok(
+            JobCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(job_id),),
+                    job_id=str(job_id),
+                )
+            )
+        )
+
+
 def colonysim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     inventory = []
@@ -351,11 +437,20 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(WorkstationComponent):
             station = entity.get_component(WorkstationComponent)
             lines.append(f"Nearby workstation: {station.station_type}.")
+        if entity.has_component(JobComponent):
+            job = entity.get_component(JobComponent)
+            if not job.completed:
+                status = "assigned" if job.assigned else "available"
+                lines.append(
+                    f"Nearby job: {job.job_type} priority {job.priority} ({status})."
+                )
     return sorted(lines)
 
 
 __all__ = [
     "AssignedTo",
+    "AssignJobHandler",
+    "CompleteJobHandler",
     "CraftHandler",
     "GatherResourceHandler",
     "JobComponent",

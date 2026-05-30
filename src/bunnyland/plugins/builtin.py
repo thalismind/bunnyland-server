@@ -34,6 +34,8 @@ from ..mechanics.barbariansim import (
 )
 from ..mechanics.colonysim import (
     AssignedTo,
+    AssignJobHandler,
+    CompleteJobHandler,
     CraftHandler,
     GatherResourceHandler,
     JobComponent,
@@ -295,6 +297,8 @@ def colonysim_plugin() -> Plugin:
                 ReleaseReservationHandler,
                 GatherResourceHandler,
                 CraftHandler,
+                AssignJobHandler,
+                CompleteJobHandler,
             )
         ),
         content=ContentContribution(prompt_fragments=(colonysim_fragments,)),

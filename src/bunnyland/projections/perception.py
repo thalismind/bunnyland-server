@@ -17,7 +17,9 @@ from ..core.components import (
     DeadComponent,
     DownedComponent,
     IdentityComponent,
+    PerceptionComponent,
     SleepingComponent,
+    StealthComponent,
     SuspendedComponent,
 )
 from ..core.ecs import container_of
@@ -57,6 +59,13 @@ def _reveals_contents(entity: Entity) -> bool:
     return container.open or container.transparent
 
 
+def _is_hidden(entity: Entity) -> bool:
+    if not entity.has_component(StealthComponent):
+        return False
+    stealth = entity.get_component(StealthComponent)
+    return stealth.hiding and stealth.visibility_level <= stealth.hidden_threshold
+
+
 def _visible_children(
     world: World, entity: Entity, *, recurse: bool
 ) -> tuple[PerceivedEntity, ...]:
@@ -65,6 +74,8 @@ def _visible_children(
         if not edge.visible:
             continue
         child = world.get_entity(child_id)
+        if _is_hidden(child):
+            continue
         nested: tuple[PerceivedEntity, ...] = ()
         if recurse and _reveals_contents(child):
             nested = _visible_children(world, child, recurse=False)
@@ -81,6 +92,10 @@ def _visible_children(
 
 def perceive(world: World, character: Entity) -> Perception:
     """Return what ``character`` perceives in its current room."""
+    if character.has_component(PerceptionComponent):
+        perception = character.get_component(PerceptionComponent)
+        if not perception.active:
+            return Perception(can_perceive=False)
     if any(character.has_component(component) for component in _BLOCKING_COMPONENTS):
         return Perception(can_perceive=False)
 

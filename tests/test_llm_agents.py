@@ -26,6 +26,7 @@ from bunnyland.llm_agents import (
     command_from_tool_call,
     did_you_mean,
     name_candidates,
+    parse_natural_command,
     resolve_reference,
     resolve_reference_args,
     suggest_names,
@@ -71,6 +72,43 @@ def test_command_from_tool_call_drops_unknown_arguments():
         call, character_id="char_1", controller_id="ctrl_1", controller_generation=0
     )
     assert command.payload == {"direction": "north"}
+
+
+def test_note_tools_accept_shared_collection_arguments():
+    call = ToolCall(
+        name="take_note",
+        arguments={"text": "shared", "scope": "shared", "collection": "burrow-board"},
+    )
+    command = command_from_tool_call(
+        call, character_id="char_1", controller_id="ctrl_1", controller_generation=0
+    )
+    assert command.payload == {
+        "text": "shared",
+        "scope": "shared",
+        "collection": "burrow-board",
+    }
+
+
+def test_parse_natural_command_maps_common_phrases_to_tool_calls():
+    assert parse_natural_command("go north") == ToolCall("move", {"direction": "north"})
+    assert parse_natural_command("take the brass key") == ToolCall(
+        "take", {"item_id": "the brass key"}
+    )
+    assert parse_natural_command('say "hello there"') == ToolCall(
+        "say", {"text": "hello there"}
+    )
+    assert parse_natural_command("tell Hazel meet me outside") == ToolCall(
+        "tell", {"target_id": "Hazel", "text": "meet me outside"}
+    )
+    assert parse_natural_command("take note the basin is cold") == ToolCall(
+        "take_note", {"text": "the basin is cold"}
+    )
+    assert parse_natural_command("wait") == ToolCall("wait", {})
+
+
+def test_parse_natural_command_returns_none_for_ambiguous_text():
+    assert parse_natural_command("") is None
+    assert parse_natural_command("maybe Hazel knows") is None
 
 
 def test_scripted_agent_replays_then_waits():

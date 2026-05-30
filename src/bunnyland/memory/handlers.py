@@ -19,11 +19,25 @@ from ..core.handlers.base import HandlerContext, HandlerResult, ok, rejected
 from .store import MemoryStore
 
 
-def _collection(ctx: HandlerContext, character_id) -> str | None:
+def _collection(ctx: HandlerContext, character_id, payload: Mapping[str, Any]) -> tuple[str, str]:
     character = ctx.entity(character_id)
     if not character.has_component(MemoryProfileComponent):
-        return None
-    return character.get_component(MemoryProfileComponent).vector_collection
+        raise ValueError("character has no memory profile")
+    profile = character.get_component(MemoryProfileComponent)
+    scope = str(payload.get("scope", "private")).strip().lower()
+    if scope == "private":
+        return profile.vector_collection, "private"
+    if scope != "shared":
+        raise ValueError("memory scope must be private or shared")
+
+    collection = str(payload.get("collection", "")).strip()
+    if not collection and len(profile.shared_collections) == 1:
+        collection = profile.shared_collections[0]
+    if not collection:
+        raise ValueError("shared collection is required")
+    if collection not in profile.shared_collections:
+        raise ValueError("shared collection is not available")
+    return collection, "shared"
 
 
 class TakeNoteHandler:
@@ -40,9 +54,10 @@ class TakeNoteHandler:
             return rejected("invalid character id")
         if not text:
             return rejected("nothing to note")
-        collection = _collection(ctx, character_id)
-        if collection is None:
-            return rejected("character has no memory profile")
+        try:
+            collection, scope = _collection(ctx, character_id, payload)
+        except ValueError as exc:
+            return rejected(str(exc))
 
         tags = tuple(payload.get("tags", ()) or ())
         entry = self.store.add(
@@ -55,6 +70,8 @@ class TakeNoteHandler:
                     actor_id=command.character_id,
                     note_id=entry.id,
                     text=text,
+                    scope=scope,
+                    collection=collection,
                 )
             )
         )
@@ -71,9 +88,10 @@ class RememberHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        collection = _collection(ctx, character_id)
-        if collection is None:
-            return rejected("character has no memory profile")
+        try:
+            collection, scope = _collection(ctx, character_id, payload)
+        except ValueError as exc:
+            return rejected(str(exc))
 
         query = payload.get("query")
         mode = str(payload.get("mode", "recent"))
@@ -87,6 +105,8 @@ class RememberHandler:
                     query=query,
                     mode=mode,
                     results=tuple(entry.text for entry in results),
+                    scope=scope,
+                    collection=collection,
                 )
             )
         )

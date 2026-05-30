@@ -4,8 +4,9 @@ Social meaning flows through dialogue, not separate verbs: an author may declare
 ``SpeechIntent``; otherwise one is inferred from the text. Both author and inferred
 intent are recorded so misinterpretation (and deliberately absurd tone) is visible.
 
-MVP visibility (spec 14.4, 19): ``say`` is heard by active, awake characters in the
-room; ``tell`` is directed to one character and is not overheard.
+Visibility (spec 14.4, 19): ``say`` is heard by active, awake characters in the room.
+``tell`` is directed to one character by default; callers can mark it audible to record
+same-room overhearers without changing the direct target.
 """
 
 from __future__ import annotations
@@ -138,6 +139,13 @@ class TellHandler:
         author = _parse_intent(payload.get("intent"))
         inferred = infer_intent(text)
         final = author or inferred
+        overhearers: tuple[str, ...] = ()
+        if bool(payload.get("audible", False)):
+            overhearers = tuple(
+                str(hearer)
+                for hearer in _audience(ctx, room_id, speaker_id)
+                if hearer != target_id
+            )
 
         return ok(
             SpeechToldEvent(
@@ -150,6 +158,7 @@ class TellHandler:
                     author_intent=author.value if author else None,
                     inferred_intent=inferred.value,
                     final_interpretation=final.value,
+                    overhearer_ids=overhearers,
                 )
             )
         )

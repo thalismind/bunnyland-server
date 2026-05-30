@@ -72,6 +72,19 @@ def tell(scenario, target_id, text, intent=None):
     )
 
 
+def audible_tell(scenario, target_id, text):
+    payload = {"target_id": str(target_id), "text": text, "audible": True}
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="tell",
+        cost=SPEECH_COST,
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
 def collect(actor, event_type):
     seen = []
     actor.bus.subscribe(event_type, seen.append)
@@ -173,3 +186,16 @@ async def test_tell_target_in_another_room_is_rejected():
     await scenario.actor.tick(HOUR)
 
     assert told == []
+
+
+async def test_audible_tell_records_same_room_overhearers():
+    scenario = speech_scenario()
+    listener = add_listener(scenario, scenario.room_a)
+    overhearer = add_listener(scenario, scenario.room_a, name="Clover")
+    told = collect(scenario.actor, SpeechToldEvent)
+
+    await scenario.actor.submit(audible_tell(scenario, listener, "The latch is loose."))
+    await scenario.actor.tick(HOUR)
+
+    assert told[0].target_ids == (str(listener),)
+    assert told[0].overhearer_ids == (str(overhearer),)

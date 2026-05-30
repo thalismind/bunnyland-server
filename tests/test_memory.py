@@ -12,8 +12,9 @@ from bunnyland.core import (
     MemoryProfileComponent,
     OnInsufficientPoints,
     build_submitted_command,
+    replace_component,
 )
-from bunnyland.core.events import NotesSearchedEvent, NoteTakenEvent
+from bunnyland.core.events import CommandRejectedEvent, NotesSearchedEvent, NoteTakenEvent
 from bunnyland.memory import InMemoryStore, install_memory
 
 HOUR = 3600.0
@@ -48,6 +49,36 @@ def remember_cmd(scenario, query=None, mode="recent", limit=5):
         cost=CommandCost(focus=1),
         lane=Lane.FOCUS,
         payload={"query": query, "mode": mode, "limit": limit},
+    )
+
+
+def shared_note_cmd(scenario, text, collection="burrow-board"):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="take-note",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload={"text": text, "scope": "shared", "collection": collection},
+    )
+
+
+def shared_remember_cmd(scenario, query=None, collection="burrow-board"):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="remember",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload={
+            "query": query,
+            "mode": "keyword" if query else "recent",
+            "limit": 5,
+            "scope": "shared",
+            "collection": collection,
+        },
     )
 
 
@@ -105,6 +136,39 @@ async def test_remember_keyword_filters_results():
     results = searched[-1].results
     assert any("basin" in r for r in results)
     assert all("tunnel" not in r for r in results)
+
+
+async def test_shared_notes_use_authorized_shared_collection():
+    scenario, store = memory_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+    replace_component(
+        char,
+        MemoryProfileComponent(
+            vector_collection="juniper", shared_collections=("burrow-board",)
+        ),
+    )
+    taken = collect(scenario.actor, NoteTakenEvent)
+    searched = collect(scenario.actor, NotesSearchedEvent)
+
+    await scenario.actor.submit(shared_note_cmd(scenario, "Basin water is for everyone."))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(shared_remember_cmd(scenario, query="basin"))
+    await scenario.actor.tick(0.0)
+
+    assert taken[-1].scope == "shared"
+    assert taken[-1].collection == "burrow-board"
+    assert searched[-1].results == ("Basin water is for everyone.",)
+    assert len(store.search("juniper", mode="recent")) == 0
+
+
+async def test_shared_notes_reject_unavailable_collection():
+    scenario, _store = memory_scenario()
+    rejects = collect(scenario.actor, CommandRejectedEvent)
+
+    await scenario.actor.submit(shared_note_cmd(scenario, "secret", collection="unknown"))
+    await scenario.actor.tick(0.0)
+
+    assert any(r.reason == "shared collection is not available" for r in rejects)
 
 
 async def test_focus_lane_note_does_not_consume_world_action():

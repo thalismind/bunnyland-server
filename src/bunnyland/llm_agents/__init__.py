@@ -10,6 +10,7 @@ from .dispatch import (
     resolve_reference_args,
     suggest_names,
 )
+from .natural_language import parse_natural_command
 from .tools import REFERENCE_ARG_KEYS, ToolCall, command_from_tool_call, tool_names, tool_schemas
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "command_from_tool_call",
     "did_you_mean",
     "name_candidates",
+    "parse_natural_command",
     "resolve_reference",
     "resolve_reference_args",
     "suggest_names",

@@ -165,6 +165,14 @@ class ItemCraftedEvent(DomainEvent):
     output_ids: tuple[str, ...] = ()
 
 
+class JobAssignedEvent(DomainEvent):
+    job_id: str
+
+
+class JobCompletedEvent(DomainEvent):
+    job_id: str
+
+
 class CharacterAttackedEvent(DomainEvent):
     target_id: str
     weapon_id: str | None = None
@@ -241,6 +249,7 @@ class SpeechToldEvent(DomainEvent):
     author_intent: str | None = None
     inferred_intent: str | None = None
     final_interpretation: str | None = None
+    overhearer_ids: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------------------
@@ -251,12 +260,16 @@ class SpeechToldEvent(DomainEvent):
 class NoteTakenEvent(DomainEvent):
     note_id: str
     text: str
+    scope: str = "private"
+    collection: str | None = None
 
 
 class NotesSearchedEvent(DomainEvent):
     query: str | None
     mode: str
     results: tuple[str, ...] = ()
+    scope: str = "private"
+    collection: str | None = None
 
 
 # --------------------------------------------------------------------------------------
@@ -328,6 +341,8 @@ __all__ = [
     "ItemPutEvent",
     "ItemTakenEvent",
     "ItemUsedEvent",
+    "JobAssignedEvent",
+    "JobCompletedEvent",
     "NoteTakenEvent",
     "NotesSearchedEvent",
     "PartnershipEndedEvent",

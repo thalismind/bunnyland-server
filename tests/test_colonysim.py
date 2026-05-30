@@ -18,11 +18,17 @@ from bunnyland.core import (
 from bunnyland.core.events import (
     CommandRejectedEvent,
     ItemCraftedEvent,
+    JobAssignedEvent,
+    JobCompletedEvent,
     ResourceGatheredEvent,
 )
 from bunnyland.mechanics.colonysim import (
+    AssignedTo,
+    AssignJobHandler,
+    CompleteJobHandler,
     CraftHandler,
     GatherResourceHandler,
+    JobComponent,
     RecipeComponent,
     ReleaseReservationHandler,
     ReservedBy,
@@ -41,6 +47,8 @@ def _install(actor):
     actor.register_handler(ReleaseReservationHandler())
     actor.register_handler(GatherResourceHandler())
     actor.register_handler(CraftHandler())
+    actor.register_handler(AssignJobHandler())
+    actor.register_handler(CompleteJobHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -82,6 +90,20 @@ def _stack(scenario, resource_type, quantity):
         Contains(mode=ContainmentMode.INVENTORY), item.id
     )
     return item.id
+
+
+def _job(scenario, job_type="haul", priority=5):
+    job = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=f"{job_type} job", kind="job"),
+            JobComponent(job_type=job_type, priority=priority),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), job.id
+    )
+    return job.id
 
 
 async def test_reservation_blocks_other_characters_until_released():
@@ -174,9 +196,52 @@ async def test_craft_consumes_inputs_at_reachable_workstation_and_creates_output
     assert output.get_component(ResourceStackComponent).quantity == 1
 
 
+async def test_assign_and_complete_job_updates_assignment_state():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    job = _job(scenario)
+    assigned: list[JobAssignedEvent] = []
+    completed: list[JobCompletedEvent] = []
+    scenario.actor.bus.subscribe(JobAssignedEvent, assigned.append)
+    scenario.actor.bus.subscribe(JobCompletedEvent, completed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "assign-job", job_id=str(job)))
+    await scenario.actor.tick(HOUR)
+
+    job_entity = scenario.actor.world.get_entity(job)
+    assert job_entity.has_relationship(AssignedTo, scenario.character)
+    assert job_entity.get_component(JobComponent).assigned is True
+    assert assigned[0].job_id == str(job)
+
+    await scenario.actor.submit(_cmd(scenario, "complete-job", job_id=str(job)))
+    await scenario.actor.tick(HOUR)
+
+    assert not job_entity.has_relationship(AssignedTo, scenario.character)
+    assert job_entity.get_component(JobComponent).assigned is False
+    assert job_entity.get_component(JobComponent).completed is True
+    assert completed[0].job_id == str(job)
+
+
+async def test_assign_job_rejects_when_assigned_to_someone_else():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    job = _job(scenario)
+    other = spawn_entity(scenario.actor.world, [IdentityComponent(name="Other", kind="character")])
+    job_entity = scenario.actor.world.get_entity(job)
+    job_entity.add_relationship(AssignedTo(since_epoch=0), other.id)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "assign-job", job_id=str(job)))
+    await scenario.actor.tick(HOUR)
+
+    assert any("assigned" in event.reason for event in rejects)
+
+
 def test_colonysim_fragments_show_nearby_resources_and_recipes():
     scenario = build_scenario()
     _resource_node(scenario, "berries", current=5)
+    _job(scenario, "haul", priority=2)
     spawn_entity(
         scenario.actor.world,
         [RecipeComponent(recipe_id="snack", inputs={"berries": 1}, outputs={"snack": 1})],
@@ -188,3 +253,4 @@ def test_colonysim_fragments_show_nearby_resources_and_recipes():
 
     assert any("berries" in line for line in fragments)
     assert any("snack recipe" in line for line in fragments)
+    assert any("Nearby job: haul priority 2" in line for line in fragments)
