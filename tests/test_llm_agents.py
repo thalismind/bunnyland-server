@@ -57,8 +57,10 @@ def test_tool_schemas_cover_every_verb():
         "say",
         "take",
         "adopt_child",
+        "claim_ownership",
         "drop",
         "pickpocket",
+        "release_ownership",
         "take_note",
         "remember",
         "reflect",
@@ -116,6 +118,12 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     )
     assert parse_natural_command("adopt Clover") == ToolCall(
         "adopt_child", {"child_id": "Clover"}
+    )
+    assert parse_natural_command("claim oak chest") == ToolCall(
+        "claim_ownership", {"target_id": "oak chest"}
+    )
+    assert parse_natural_command("release ownership oak chest") == ToolCall(
+        "release_ownership", {"target_id": "oak chest"}
     )
     assert parse_natural_command("take note the basin is cold") == ToolCall(
         "take_note", {"text": "the basin is cold"}

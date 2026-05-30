@@ -39,11 +39,14 @@ from ..mechanics.barbariansim import (
 from ..mechanics.colonysim import (
     AssignedTo,
     AssignJobHandler,
+    ClaimOwnershipHandler,
     CompleteJobHandler,
     CraftHandler,
     GatherResourceHandler,
     JobComponent,
+    Owns,
     RecipeComponent,
+    ReleaseOwnershipHandler,
     ReleaseReservationHandler,
     ReservedBy,
     ReserveHandler,
@@ -295,7 +298,7 @@ def colonysim_plugin() -> Plugin:
                 RecipeComponent,
                 JobComponent,
             ),
-            edges=(ReservedBy, AssignedTo),
+            edges=(ReservedBy, AssignedTo, Owns),
         ),
         commands=CommandContribution(
             action_handlers=(
@@ -305,6 +308,8 @@ def colonysim_plugin() -> Plugin:
                 CraftHandler,
                 AssignJobHandler,
                 CompleteJobHandler,
+                ClaimOwnershipHandler,
+                ReleaseOwnershipHandler,
             )
         ),
         content=ContentContribution(prompt_fragments=(colonysim_fragments,)),

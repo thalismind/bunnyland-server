@@ -178,6 +178,14 @@ class JobCompletedEvent(DomainEvent):
     job_id: str
 
 
+class OwnershipClaimedEvent(DomainEvent):
+    target_id: str
+
+
+class OwnershipReleasedEvent(DomainEvent):
+    target_id: str
+
+
 class CharacterAttackedEvent(DomainEvent):
     target_id: str
     weapon_id: str | None = None
@@ -376,6 +384,8 @@ __all__ = [
     "JobCompletedEvent",
     "NoteTakenEvent",
     "NotesSearchedEvent",
+    "OwnershipClaimedEvent",
+    "OwnershipReleasedEvent",
     "PartnershipEndedEvent",
     "PartnershipStartedEvent",
     "PregnancyStartedEvent",

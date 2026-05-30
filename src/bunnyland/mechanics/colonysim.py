@@ -30,6 +30,8 @@ from ..core.events import (
     ItemCraftedEvent,
     JobAssignedEvent,
     JobCompletedEvent,
+    OwnershipClaimedEvent,
+    OwnershipReleasedEvent,
     ReservationCreatedEvent,
     ReservationReleasedEvent,
     ResourceGatheredEvent,
@@ -84,6 +86,11 @@ class AssignedTo(Edge):
     since_epoch: int
 
 
+@dataclass(frozen=True)
+class Owns(Edge):
+    since_epoch: int
+
+
 def _reservation_holder(entity: Entity) -> EntityId | None:
     reservations = entity.get_relationships(ReservedBy)
     return reservations[0][1] if reservations else None
@@ -102,6 +109,11 @@ def _reserved_by_other(entity: Entity, character_id: EntityId) -> bool:
 def _assigned_by_other(entity: Entity, character_id: EntityId) -> bool:
     holder = _assignment_holder(entity)
     return holder is not None and holder != character_id
+
+
+def _owner(entity: Entity) -> EntityId | None:
+    owners = entity.get_incoming_relationships(Owns)
+    return owners[0][0] if owners else None
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -414,6 +426,70 @@ class CompleteJobHandler:
         )
 
 
+class ClaimOwnershipHandler:
+    command_type = "claim-ownership"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if character_id is None or target_id is None:
+            return rejected("invalid character or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+
+        character = ctx.entity(character_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+        target = ctx.entity(target_id)
+        owner_id = _owner(target)
+        if owner_id == character_id:
+            return rejected("already owned by you")
+        if owner_id is not None:
+            return rejected("target is already owned")
+
+        character.add_relationship(Owns(since_epoch=ctx.epoch), target_id)
+        return ok(
+            OwnershipClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                )
+            )
+        )
+
+
+class ReleaseOwnershipHandler:
+    command_type = "release-ownership"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if character_id is None or target_id is None:
+            return rejected("invalid character or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+
+        character = ctx.entity(character_id)
+        if not character.has_relationship(Owns, target_id):
+            return rejected("not owned by you")
+
+        character.remove_relationship(Owns, target_id)
+        return ok(
+            OwnershipReleasedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                )
+            )
+        )
+
+
 def colonysim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     inventory = []
@@ -444,17 +520,27 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
                 lines.append(
                     f"Nearby job: {job.job_type} priority {job.priority} ({status})."
                 )
+        if character.has_relationship(Owns, entity_id) and entity_id != character.id:
+            name = (
+                entity.get_component(IdentityComponent).name
+                if entity.has_component(IdentityComponent)
+                else "something"
+            )
+            lines.append(f"You own {name}.")
     return sorted(lines)
 
 
 __all__ = [
     "AssignedTo",
     "AssignJobHandler",
+    "ClaimOwnershipHandler",
     "CompleteJobHandler",
     "CraftHandler",
     "GatherResourceHandler",
     "JobComponent",
+    "Owns",
     "RecipeComponent",
+    "ReleaseOwnershipHandler",
     "ReleaseReservationHandler",
     "ReserveHandler",
     "ReservedBy",

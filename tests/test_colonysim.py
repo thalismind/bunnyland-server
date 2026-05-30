@@ -20,16 +20,21 @@ from bunnyland.core.events import (
     ItemCraftedEvent,
     JobAssignedEvent,
     JobCompletedEvent,
+    OwnershipClaimedEvent,
+    OwnershipReleasedEvent,
     ResourceGatheredEvent,
 )
 from bunnyland.mechanics.colonysim import (
     AssignedTo,
     AssignJobHandler,
+    ClaimOwnershipHandler,
     CompleteJobHandler,
     CraftHandler,
     GatherResourceHandler,
     JobComponent,
+    Owns,
     RecipeComponent,
+    ReleaseOwnershipHandler,
     ReleaseReservationHandler,
     ReservedBy,
     ReserveHandler,
@@ -49,6 +54,8 @@ def _install(actor):
     actor.register_handler(CraftHandler())
     actor.register_handler(AssignJobHandler())
     actor.register_handler(CompleteJobHandler())
+    actor.register_handler(ClaimOwnershipHandler())
+    actor.register_handler(ReleaseOwnershipHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -238,9 +245,50 @@ async def test_assign_job_rejects_when_assigned_to_someone_else():
     assert any("assigned" in event.reason for event in rejects)
 
 
+async def test_claim_and_release_ownership_on_reachable_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    node = _resource_node(scenario)
+    claimed: list[OwnershipClaimedEvent] = []
+    released: list[OwnershipReleasedEvent] = []
+    scenario.actor.bus.subscribe(OwnershipClaimedEvent, claimed.append)
+    scenario.actor.bus.subscribe(OwnershipReleasedEvent, released.append)
+
+    await scenario.actor.submit(_cmd(scenario, "claim-ownership", target_id=str(node)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_relationship(Owns, node)
+    assert claimed[0].target_id == str(node)
+
+    await scenario.actor.submit(_cmd(scenario, "release-ownership", target_id=str(node)))
+    await scenario.actor.tick(HOUR)
+
+    assert not character.has_relationship(Owns, node)
+    assert released[0].target_id == str(node)
+
+
+async def test_claim_ownership_rejects_target_owned_by_someone_else():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    node = _resource_node(scenario)
+    other = spawn_entity(scenario.actor.world, [IdentityComponent(name="Other", kind="character")])
+    other.add_relationship(Owns(since_epoch=0), node)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "claim-ownership", target_id=str(node)))
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "target is already owned" for event in rejects)
+
+
 def test_colonysim_fragments_show_nearby_resources_and_recipes():
     scenario = build_scenario()
-    _resource_node(scenario, "berries", current=5)
+    node = _resource_node(scenario, "berries", current=5)
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Owns(since_epoch=0), node
+    )
     _job(scenario, "haul", priority=2)
     spawn_entity(
         scenario.actor.world,
@@ -254,3 +302,4 @@ def test_colonysim_fragments_show_nearby_resources_and_recipes():
     assert any("berries" in line for line in fragments)
     assert any("snack recipe" in line for line in fragments)
     assert any("Nearby job: haul priority 2" in line for line in fragments)
+    assert any("You own berries patch" in line for line in fragments)

@@ -101,6 +101,14 @@ def parse_natural_command(text: str) -> ToolCall | None:
         target = _rest(words, 1)
         return ToolCall("use", {"target_id": target}) if target else None
 
+    if verb == "claim":
+        target = _rest(words, 1)
+        return ToolCall("claim_ownership", {"target_id": target}) if target else None
+
+    if verb == "release" and len(words) > 1 and words[1].lower() == "ownership":
+        target = _rest(words, 2)
+        return ToolCall("release_ownership", {"target_id": target}) if target else None
+
     if verb in {"eat", "drink"}:
         target = _rest(words, 1)
         key = "item_id" if verb == "eat" else "source_id"

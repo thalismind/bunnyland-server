@@ -54,6 +54,8 @@ _VERBS: dict[str, _Verb] = {
     "drop": _Verb("put", Lane.WORLD, _ACTION, ("item_id",)),
     "put": _Verb("put", Lane.WORLD, _ACTION, ("item_id", "target_container_id")),
     "use": _Verb("use", Lane.WORLD, _ACTION, ("target_id", "tool_id")),
+    "claim_ownership": _Verb("claim-ownership", Lane.WORLD, _ACTION, ("target_id",)),
+    "release_ownership": _Verb("release-ownership", Lane.WORLD, _ACTION, ("target_id",)),
     "eat": _Verb("eat", Lane.WORLD, _ACTION, ("item_id",)),
     "drink": _Verb("drink", Lane.WORLD, _ACTION, ("source_id",)),
     "adopt_child": _Verb("adopt-child", Lane.WORLD, _ACTION, ("child_id",)),
