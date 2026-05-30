@@ -82,6 +82,13 @@ class StaminaComponent(Component):
 
 
 @dataclass(frozen=True)
+class DurabilityComponent(Component):
+    current: float
+    maximum: float
+    broken: bool = False
+
+
+@dataclass(frozen=True)
 class WeaponComponent(Component):
     damage: float = UNARMED_DAMAGE
     damage_type: str = "blunt"
@@ -133,6 +140,22 @@ class ExposureDamageEvent(DomainEvent):
     damage: float
     cause: str
     health: float
+
+
+class ItemDamagedEvent(DomainEvent):
+    item_id: str
+    durability: float
+    maximum: float
+
+
+class ItemBrokenEvent(DomainEvent):
+    item_id: str
+
+
+class ItemRepairedEvent(DomainEvent):
+    item_id: str
+    durability: float
+    maximum: float
 
 
 def _barbarian_event_base(epoch: int, **kwargs) -> dict:
@@ -202,6 +225,10 @@ def _weapon_damage(ctx: HandlerContext, actor_id: EntityId, weapon_id: EntityId 
         return -1.0
     weapon = ctx.entity(weapon_id)
     if not weapon.has_component(WeaponComponent):
+        return -1.0
+    if weapon.has_component(DurabilityComponent) and weapon.get_component(
+        DurabilityComponent
+    ).broken:
         return -1.0
     return weapon.get_component(WeaponComponent).damage
 
@@ -281,6 +308,55 @@ def _spend_stamina(
             )
         ),
     )
+
+
+def _damage_item(
+    ctx: HandlerContext,
+    item_id: EntityId | None,
+    *,
+    amount: float,
+    actor_id: EntityId,
+) -> list[DomainEvent]:
+    if item_id is None or amount <= 0:
+        return []
+    item = ctx.entity(item_id)
+    if not item.has_component(DurabilityComponent):
+        return []
+    durability = item.get_component(DurabilityComponent)
+    if durability.broken:
+        return []
+    current = max(0.0, durability.current - amount)
+    broken = current <= 0
+    updated = DurabilityComponent(
+        current=current,
+        maximum=durability.maximum,
+        broken=broken,
+    )
+    replace_component(item, updated)
+    events: list[DomainEvent] = [
+        ItemDamagedEvent(
+            **ctx.event_base(
+                visibility=EventVisibility.PRIVATE,
+                actor_id=str(actor_id),
+                target_ids=(str(item_id),),
+                item_id=str(item_id),
+                durability=current,
+                maximum=durability.maximum,
+            )
+        )
+    ]
+    if broken:
+        events.append(
+            ItemBrokenEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(item_id),),
+                    item_id=str(item_id),
+                )
+            )
+        )
+    return events
 
 
 class TemperatureExposureConsequence:
@@ -517,6 +593,14 @@ def _resolve_attack(
                 )
             )
         )
+    events.extend(
+        _damage_item(
+            ctx,
+            weapon_id,
+            amount=float(command.payload.get("durability_cost", 1.0)),
+            actor_id=actor_id,
+        )
+    )
 
     return ok(*events)
 
@@ -674,6 +758,47 @@ class RaidHandler:
         )
 
 
+class RepairItemHandler:
+    command_type = "repair-item"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if actor_id is None or item_id is None:
+            return rejected("invalid character or item id")
+        if not ctx.world.has_entity(item_id):
+            return rejected("item does not exist")
+        actor = ctx.entity(actor_id)
+        if item_id not in reachable_ids(ctx.world, actor):
+            return rejected("item is not reachable")
+        item = ctx.entity(item_id)
+        if not item.has_component(DurabilityComponent):
+            return rejected("item has no durability")
+        durability = item.get_component(DurabilityComponent)
+        amount = float(command.payload.get("amount", durability.maximum))
+        if amount <= 0:
+            return rejected("repair amount must be positive")
+        current = min(durability.maximum, durability.current + amount)
+        updated = DurabilityComponent(
+            current=current,
+            maximum=durability.maximum,
+            broken=current <= 0,
+        )
+        replace_component(item, updated)
+        return ok(
+            ItemRepairedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(item_id),),
+                    item_id=str(item_id),
+                    durability=current,
+                    maximum=durability.maximum,
+                )
+            )
+        )
+
+
 class PickpocketHandler:
     command_type = "pickpocket"
 
@@ -737,7 +862,14 @@ def barbariansim_fragments(world: World, character) -> list[str]:
         entity = world.get_entity(entity_id)
         if entity.has_component(WeaponComponent):
             weapon = entity.get_component(WeaponComponent)
-            lines.append(f"Reachable weapon: {weapon.damage_type} ({weapon.damage} damage).")
+            durability = ""
+            if entity.has_component(DurabilityComponent):
+                item_durability = entity.get_component(DurabilityComponent)
+                status = "broken" if item_durability.broken else "durability"
+                durability = f", {status} {item_durability.current:g}/{item_durability.maximum:g}"
+            lines.append(
+                f"Reachable weapon: {weapon.damage_type} ({weapon.damage} damage{durability})."
+            )
         if entity.has_component(FortificationComponent):
             fort = entity.get_component(FortificationComponent)
             lines.append(
@@ -760,14 +892,19 @@ __all__ = [
     "ChallengeHandler",
     "DefendHandler",
     "DefendingComponent",
+    "DurabilityComponent",
     "ExposureChangedEvent",
     "ExposureDamageEvent",
     "FortificationComponent",
     "FortifyHandler",
     "FrostbiteStartedEvent",
     "HeatstrokeStartedEvent",
+    "ItemBrokenEvent",
+    "ItemDamagedEvent",
+    "ItemRepairedEvent",
     "PickpocketHandler",
     "RaidHandler",
+    "RepairItemHandler",
     "ShelterComponent",
     "SparHandler",
     "StaminaChangedEvent",

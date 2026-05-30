@@ -34,12 +34,17 @@ from bunnyland.mechanics.barbariansim import (
     ChallengeHandler,
     DefendHandler,
     DefendingComponent,
+    DurabilityComponent,
     ExposureDamageEvent,
     FortificationComponent,
     FortifyHandler,
     HeatstrokeStartedEvent,
+    ItemBrokenEvent,
+    ItemDamagedEvent,
+    ItemRepairedEvent,
     PickpocketHandler,
     RaidHandler,
+    RepairItemHandler,
     ShelterComponent,
     SparHandler,
     StaminaChangedEvent,
@@ -64,6 +69,7 @@ def _install(actor, *, enabled=frozenset({BoundaryTag.PVP})):
     actor.register_handler(ChallengeHandler())
     actor.register_handler(FortifyHandler())
     actor.register_handler(RaidHandler())
+    actor.register_handler(RepairItemHandler())
     actor.register_handler(PickpocketHandler())
 
 
@@ -95,6 +101,14 @@ def _weapon(scenario, damage=8.0):
         Contains(mode=ContainmentMode.INVENTORY), item.id
     )
     return item.id
+
+
+def _durable_weapon(scenario, *, damage=8.0, durability=2.0):
+    item_id = _weapon(scenario, damage=damage)
+    scenario.actor.world.get_entity(item_id).add_component(
+        DurabilityComponent(current=durability, maximum=durability)
+    )
+    return item_id
 
 
 def _target_item(scenario, target, name="Coin"):
@@ -171,6 +185,41 @@ async def test_stamina_regenerates_before_attack_and_spends_on_combat():
     assert changed[0].reason == "attack"
 
 
+async def test_weapon_durability_decreases_breaks_and_repair_restores_use():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset({BoundaryTag.PVP}))
+    target = _target(scenario, health=20.0)
+    weapon = _durable_weapon(scenario, damage=6.0, durability=1.0)
+    damaged: list[ItemDamagedEvent] = []
+    broken: list[ItemBrokenEvent] = []
+    repaired: list[ItemRepairedEvent] = []
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(ItemDamagedEvent, damaged.append)
+    scenario.actor.bus.subscribe(ItemBrokenEvent, broken.append)
+    scenario.actor.bus.subscribe(ItemRepairedEvent, repaired.append)
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "attack", target_id=str(target), weapon_id=str(weapon))
+    )
+    await scenario.actor.tick(HOUR)
+    assert scenario.actor.world.get_entity(weapon).get_component(DurabilityComponent).broken
+    assert damaged[0].durability == 0.0
+    assert broken[0].item_id == str(weapon)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "attack", target_id=str(target), weapon_id=str(weapon))
+    )
+    await scenario.actor.tick(HOUR)
+    assert any("weapon is not usable" in event.reason for event in rejects)
+
+    await scenario.actor.submit(_cmd(scenario, "repair-item", item_id=str(weapon), amount=1.0))
+    await scenario.actor.tick(HOUR)
+    durability = scenario.actor.world.get_entity(weapon).get_component(DurabilityComponent)
+    assert durability.broken is False
+    assert repaired[0].durability == 1.0
+
+
 async def test_low_stamina_blocks_combat_without_damage():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -209,6 +258,26 @@ async def test_hot_room_exposure_damages_health():
     assert character.get_component(HealthComponent).current == 15.0
     assert heatstroke[0].character_id == str(scenario.character)
     assert damage[0].cause == "heat exposure"
+
+
+async def test_cold_room_exposure_damages_health():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(TemperatureComponent(celsius=-10.0))
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=20.0, maximum=20.0))
+    character.add_component(TemperatureExposureComponent())
+    damage: list[ExposureDamageEvent] = []
+    scenario.actor.bus.subscribe(ExposureDamageEvent, damage.append)
+
+    await scenario.actor.tick(HOUR)
+
+    exposure = character.get_component(TemperatureExposureComponent)
+    assert exposure.cold == 15.0
+    assert exposure.cold_danger is True
+    assert character.get_component(HealthComponent).current == 15.0
+    assert damage[0].cause == "cold exposure"
 
 
 async def test_temperature_resistance_and_shelter_prevent_exposure_damage():
@@ -380,7 +449,7 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     scenario.actor.world.get_entity(scenario.room_a).add_component(
         FortificationComponent(rating=2.0, durability=8.0)
     )
-    _weapon(scenario)
+    _durable_weapon(scenario)
 
     fragments = barbariansim_fragments(scenario.actor.world, character)
 
@@ -389,4 +458,5 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     assert any("dangerous heat exposure" in line for line in fragments)
     assert any("armor rating" in line for line in fragments)
     assert any("Reachable weapon" in line for line in fragments)
+    assert any("durability 2/2" in line for line in fragments)
     assert any("Reachable fortification" in line for line in fragments)
