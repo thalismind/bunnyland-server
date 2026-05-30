@@ -30,6 +30,7 @@ from ..core.events import (
     AdoptionCompletedEvent,
     BirthDueEvent,
     BirthResolvedEvent,
+    DomainEvent,
     EventVisibility,
     PartnershipEndedEvent,
     PartnershipStartedEvent,
@@ -44,6 +45,20 @@ DEFAULT_PREGNANCY_SECONDS = 3 * 24 * 60 * 60
 @dataclass(frozen=True)
 class LifeStageComponent(Component):
     stage: str = "adult"
+
+
+@dataclass(frozen=True)
+class AspirationComponent(Component):
+    name: str
+    milestones: tuple[str, ...] = ()
+    completed: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MilestoneComponent(Component):
+    name: str
+    completed_at_epoch: int
+    reward_item_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +93,15 @@ class PartnerOf(Edge):
     since_epoch: int
     status: str = "together"
 
+
+class AspirationChosenEvent(DomainEvent):
+    aspiration: str
+
+
+class MilestoneCompletedEvent(DomainEvent):
+    aspiration: str
+    milestone: str
+    reward_item_id: str | None = None
 
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
@@ -137,6 +161,95 @@ def _partner_edge(entity: Entity, target_id: EntityId) -> PartnerOf | None:
         if related_id == target_id:
             return edge
     return None
+
+
+class ChooseAspirationHandler:
+    command_type = "choose-aspiration"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        name = str(command.payload.get("name", "")).strip()
+        if not name:
+            return rejected("aspiration name is required")
+        milestones = tuple(
+            str(item).strip()
+            for item in command.payload.get("milestones", ())
+            if str(item).strip()
+        )
+        actor = ctx.entity(actor_id)
+        replace_component(actor, AspirationComponent(name=name, milestones=milestones))
+        return ok(
+            AspirationChosenEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    aspiration=name,
+                )
+            )
+        )
+
+
+class CompleteMilestoneHandler:
+    command_type = "complete-milestone"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        actor = ctx.entity(actor_id)
+        if not actor.has_component(AspirationComponent):
+            return rejected("no aspiration selected")
+        aspiration = actor.get_component(AspirationComponent)
+        milestone = str(command.payload.get("milestone", "")).strip()
+        if not milestone:
+            return rejected("milestone is required")
+        if aspiration.milestones and milestone not in aspiration.milestones:
+            return rejected("milestone is not part of aspiration")
+        if milestone in aspiration.completed:
+            return rejected("milestone already completed")
+
+        reward_item_id: str | None = None
+        reward_name = str(command.payload.get("reward_name", "")).strip()
+        if reward_name:
+            reward = spawn_entity(
+                ctx.world,
+                [IdentityComponent(name=reward_name, kind="item")],
+            )
+            actor.add_relationship(Contains(mode=ContainmentMode.INVENTORY), reward.id)
+            reward_item_id = str(reward.id)
+
+        milestone_entity = spawn_entity(
+            ctx.world,
+            [
+                MilestoneComponent(
+                    name=milestone,
+                    completed_at_epoch=ctx.epoch,
+                    reward_item_id=reward_item_id,
+                )
+            ],
+        )
+        del milestone_entity  # milestone entities are queryable history, not linked yet.
+        replace_component(
+            actor,
+            AspirationComponent(
+                name=aspiration.name,
+                milestones=aspiration.milestones,
+                completed=(*aspiration.completed, milestone),
+            ),
+        )
+        return ok(
+            MilestoneCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    aspiration=aspiration.name,
+                    milestone=milestone,
+                    reward_item_id=reward_item_id,
+                )
+            )
+        )
 
 
 class StartPartnershipHandler:
@@ -401,6 +514,13 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     if character.has_component(LifeStageComponent):
         lines.append(f"Your life stage is {character.get_component(LifeStageComponent).stage}.")
+    if character.has_component(AspirationComponent):
+        aspiration = character.get_component(AspirationComponent)
+        if aspiration.completed:
+            done = ", ".join(aspiration.completed)
+            lines.append(f"Your aspiration is {aspiration.name}; completed: {done}.")
+        else:
+            lines.append(f"Your aspiration is {aspiration.name}.")
     if character.has_component(PregnancyComponent):
         pregnancy = character.get_component(PregnancyComponent)
         due = (
@@ -449,10 +569,16 @@ def install_lifesim(actor) -> None:
 
 
 __all__ = [
+    "AspirationChosenEvent",
+    "AspirationComponent",
     "BirthDueComponent",
     "AdoptChildHandler",
+    "ChooseAspirationHandler",
+    "CompleteMilestoneHandler",
     "EndPartnershipHandler",
     "LifeStageComponent",
+    "MilestoneCompletedEvent",
+    "MilestoneComponent",
     "ParentOf",
     "PartnerOf",
     "PregnancyComponent",

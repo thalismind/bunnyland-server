@@ -26,8 +26,12 @@ from bunnyland.core.events import (
 )
 from bunnyland.mechanics.lifesim import (
     AdoptChildHandler,
+    AspirationComponent,
     BirthDueComponent,
+    ChooseAspirationHandler,
+    CompleteMilestoneHandler,
     LifeStageComponent,
+    MilestoneCompletedEvent,
     ParentOf,
     PartnerOf,
     PregnancyComponent,
@@ -55,6 +59,8 @@ def _install(actor):
     actor.register_handler(StartPregnancyHandler())
     actor.register_handler(ResolveBirthHandler())
     actor.register_handler(AdoptChildHandler())
+    actor.register_handler(ChooseAspirationHandler())
+    actor.register_handler(CompleteMilestoneHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -97,6 +103,41 @@ def _cmd(scenario, command_type, **payload):
         lane=Lane.WORLD,
         payload=payload,
     )
+
+
+async def test_aspiration_milestone_completion_can_reward_inventory_item():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    completed: list[MilestoneCompletedEvent] = []
+    scenario.actor.bus.subscribe(MilestoneCompletedEvent, completed.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "choose-aspiration",
+            name="Cozy Homemaker",
+            milestones=("meet a friend",),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "complete-milestone",
+            milestone="meet a friend",
+            reward_name="woven keepsake",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    aspiration = character.get_component(AspirationComponent)
+    assert aspiration.name == "Cozy Homemaker"
+    assert aspiration.completed == ("meet a friend",)
+    reward_id = completed[0].reward_item_id
+    assert reward_id is not None
+    inventory_ids = {str(target_id) for _edge, target_id in character.get_relationships(Contains)}
+    assert reward_id in inventory_ids
 
 
 async def test_start_partnership_creates_bidirectional_edges():
