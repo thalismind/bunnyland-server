@@ -246,6 +246,19 @@ from ..mechanics.policy import (
     install_policy,
 )
 from ..mechanics.social import SocialBond, install_social, relationship_fragments
+from ..mechanics.storyteller import (
+    IncidentBudgetComponent,
+    IncidentComponent,
+    IncidentHistoryComponent,
+    IncidentProposedEvent,
+    IncidentResolvedEvent,
+    IncidentStartedEvent,
+    ResolveIncidentHandler,
+    StorytellerComponent,
+    ThreatPointsComponent,
+    install_storyteller,
+    storyteller_fragments,
+)
 from ..memory import install_memory
 from ..worldgen.generators import WorldGenerator, oneshot_generator, recursive_generator
 from .model import (
@@ -270,6 +283,7 @@ COLONYSIM = "bunnyland.colonysim"
 BARBARIANSIM = "bunnyland.barbariansim"
 GARDENSIM = "bunnyland.gardensim"
 DRAGONSIM = "bunnyland.dragonsim"
+STORYTELLER = "bunnyland.storyteller"
 
 
 def _install_affect(actor) -> None:
@@ -690,6 +704,33 @@ def dragonsim_plugin() -> Plugin:
     )
 
 
+def storyteller_plugin() -> Plugin:
+    return Plugin(
+        id=STORYTELLER,
+        name="Storyteller",
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
+        ecs=EcsContribution(
+            components=(
+                StorytellerComponent,
+                IncidentBudgetComponent,
+                ThreatPointsComponent,
+                IncidentHistoryComponent,
+                IncidentComponent,
+            )
+        ),
+        commands=CommandContribution(
+            action_handlers=(ResolveIncidentHandler,),
+            typed_events=(
+                IncidentProposedEvent,
+                IncidentStartedEvent,
+                IncidentResolvedEvent,
+            ),
+        ),
+        runtime=RuntimeContribution(service_factories=(install_storyteller,)),
+        content=ContentContribution(prompt_fragments=(storyteller_fragments,)),
+    )
+
+
 def bunnyland_plugins() -> list[Plugin]:
     return [
         core_verbs_plugin(),
@@ -705,6 +746,7 @@ def bunnyland_plugins() -> list[Plugin]:
         barbariansim_plugin(),
         gardensim_plugin(),
         dragonsim_plugin(),
+        storyteller_plugin(),
     ]
 
 
@@ -721,6 +763,7 @@ __all__ = [
     "PERSONA",
     "POLICY",
     "SOCIAL",
+    "STORYTELLER",
     "WORLDGEN",
     "barbariansim_plugin",
     "bunnyland_plugins",
@@ -729,6 +772,7 @@ __all__ = [
     "dragonsim_plugin",
     "environment_plugin",
     "gardensim_plugin",
+    "storyteller_plugin",
     "lifesim_plugin",
     "mechanisms_plugin",
     "memory_plugin",
