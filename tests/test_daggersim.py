@@ -19,10 +19,15 @@ from bunnyland.core import (
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.daggersim import (
     AcceptGeneratedQuestHandler,
+    AccountOpenedEvent,
     AskForWorkHandler,
     AskRumorHandler,
+    BankAccountComponent,
+    BankComponent,
     CompleteGeneratedQuestHandler,
     DaggerQuestRewardComponent,
+    DebtComponent,
+    DepositHandler,
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
@@ -34,7 +39,13 @@ from bunnyland.mechanics.daggersim import (
     InstitutionServiceUsedEvent,
     InvestigateRumorHandler,
     JoinInstitutionHandler,
+    LoanComponent,
+    LoanDefaultedEvent,
+    LoanDueConsequence,
+    LoanIssuedEvent,
+    LoanRepaidEvent,
     MemberOfInstitution,
+    OpenBankAccountHandler,
     PlanTravelHandler,
     ProceduralSiteComponent,
     QuestAcceptedEvent,
@@ -44,12 +55,14 @@ from bunnyland.mechanics.daggersim import (
     QuestFailedEvent,
     QuestGeneratedEvent,
     QuestTemplateComponent,
+    RepayLoanHandler,
     RumorBecameExpansionEvent,
     RumorComponent,
     RumorHeardEvent,
     RumorReliabilityComponent,
     RumorTargetComponent,
     RumorVerifiedEvent,
+    TakeLoanHandler,
     TravelCompletedEvent,
     TravelCompletionConsequence,
     TravelHubComponent,
@@ -59,6 +72,7 @@ from bunnyland.mechanics.daggersim import (
     TravelStartedEvent,
     UnrealizedLocationComponent,
     UseInstitutionServiceHandler,
+    WithdrawHandler,
     daggersim_fragments,
 )
 
@@ -75,8 +89,14 @@ def _install(actor):
     actor.register_handler(AskForWorkHandler())
     actor.register_handler(AcceptGeneratedQuestHandler())
     actor.register_handler(CompleteGeneratedQuestHandler())
+    actor.register_handler(OpenBankAccountHandler())
+    actor.register_handler(DepositHandler())
+    actor.register_handler(WithdrawHandler())
+    actor.register_handler(TakeLoanHandler())
+    actor.register_handler(RepayLoanHandler())
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
+    actor.register_consequence(LoanDueConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -180,6 +200,20 @@ def _quest_template(scenario, *, duration_seconds=10 * HOUR):
         Contains(mode=ContainmentMode.ROOM_CONTENT), template.id
     )
     return template.id
+
+
+def _bank(scenario):
+    bank = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Carrot Factors Bank", kind="bank"),
+            BankComponent(name="Carrot Factors Bank", region_id="moss-road"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), bank.id
+    )
+    return bank.id
 
 
 async def test_expand_site_instantiates_unrealized_location():
@@ -424,6 +458,71 @@ async def test_generated_quest_fails_after_deadline():
     assert quest.get_component(GeneratedQuestComponent).status == "failed"
     assert quest.get_component(QuestDeadlineComponent).due_at_epoch < scenario.actor.epoch
     assert failed[0].quest_id == str(quest_id)
+
+
+async def test_bank_account_loan_and_repayment_update_balances():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    bank_id = _bank(scenario)
+    opened: list[AccountOpenedEvent] = []
+    issued: list[LoanIssuedEvent] = []
+    repaid: list[LoanRepaidEvent] = []
+    scenario.actor.bus.subscribe(AccountOpenedEvent, opened.append)
+    scenario.actor.bus.subscribe(LoanIssuedEvent, issued.append)
+    scenario.actor.bus.subscribe(LoanRepaidEvent, repaid.append)
+
+    await scenario.actor.submit(_cmd(scenario, "open-bank-account", bank_id=str(bank_id)))
+    await scenario.actor.tick(HOUR)
+    account_id = parse_entity_id(opened[0].account_id)
+    assert account_id is not None
+
+    await scenario.actor.submit(
+        _cmd(scenario, "take-loan", bank_id=str(bank_id), amount=25)
+    )
+    await scenario.actor.tick(HOUR)
+    loan_id = parse_entity_id(issued[0].loan_id)
+    assert loan_id is not None
+
+    account = scenario.actor.world.get_entity(account_id)
+    loan = scenario.actor.world.get_entity(loan_id)
+    assert account.get_component(BankAccountComponent).balance == 25
+    assert loan.get_component(LoanComponent).balance == 25
+
+    await scenario.actor.submit(_cmd(scenario, "repay-loan", loan_id=str(loan_id), amount=10))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "repay-loan", loan_id=str(loan_id), amount=15))
+    await scenario.actor.tick(HOUR)
+
+    assert account.get_component(BankAccountComponent).balance == 0
+    assert loan.get_component(LoanComponent).balance == 0
+    assert loan.get_component(LoanComponent).status == "repaid"
+    assert repaid[-1].balance == 0
+
+
+async def test_unpaid_loan_defaults_into_debt():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    bank_id = _bank(scenario)
+    issued: list[LoanIssuedEvent] = []
+    defaulted: list[LoanDefaultedEvent] = []
+    scenario.actor.bus.subscribe(LoanIssuedEvent, issued.append)
+    scenario.actor.bus.subscribe(LoanDefaultedEvent, defaulted.append)
+
+    await scenario.actor.submit(_cmd(scenario, "open-bank-account", bank_id=str(bank_id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "take-loan", bank_id=str(bank_id), amount=30, duration_seconds=HOUR)
+    )
+    await scenario.actor.tick(HOUR)
+    loan_id = parse_entity_id(issued[0].loan_id)
+    assert loan_id is not None
+
+    await scenario.actor.tick(HOUR + 1)
+
+    loan = scenario.actor.world.get_entity(loan_id)
+    assert loan.get_component(LoanComponent).status == "defaulted"
+    assert loan.get_component(DebtComponent).amount == 30
+    assert defaulted[0].loan_id == str(loan_id)
 
 
 def test_daggersim_fragments_show_nearby_unrealized_locations():

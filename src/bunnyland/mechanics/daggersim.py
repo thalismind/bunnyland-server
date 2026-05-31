@@ -138,6 +138,35 @@ class DaggerQuestRewardComponent(Component):
     claimed_by: str | None = None
 
 
+@dataclass(frozen=True)
+class BankComponent(Component):
+    name: str
+    region_id: str = ""
+
+
+@dataclass(frozen=True)
+class BankAccountComponent(Component):
+    bank_id: str
+    owner_id: str
+    balance: int = 0
+
+
+@dataclass(frozen=True)
+class LoanComponent(Component):
+    bank_id: str
+    borrower_id: str
+    principal: int
+    balance: int
+    due_at_epoch: int
+    status: str = "active"
+
+
+@dataclass(frozen=True)
+class DebtComponent(Component):
+    amount: int
+    defaulted_at_epoch: int
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -216,6 +245,42 @@ class QuestCompletedEvent(DomainEvent):
 class QuestFailedEvent(DomainEvent):
     quest_id: str
     title: str
+
+
+class AccountOpenedEvent(DomainEvent):
+    bank_id: str
+    account_id: str
+    balance: int
+
+
+class DepositMadeEvent(DomainEvent):
+    account_id: str
+    amount: int
+    balance: int
+
+
+class WithdrawalMadeEvent(DomainEvent):
+    account_id: str
+    amount: int
+    balance: int
+
+
+class LoanIssuedEvent(DomainEvent):
+    bank_id: str
+    loan_id: str
+    amount: int
+    due_at_epoch: int
+
+
+class LoanRepaidEvent(DomainEvent):
+    loan_id: str
+    amount: int
+    balance: int
+
+
+class LoanDefaultedEvent(DomainEvent):
+    loan_id: str
+    amount: int
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -796,6 +861,260 @@ class QuestDeadlineConsequence:
         return events
 
 
+class OpenBankAccountHandler:
+    command_type = "open-bank-account"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        bank_id = parse_entity_id(command.payload.get("bank_id"))
+        if character_id is None or bank_id is None:
+            return rejected("invalid character or bank id")
+        if not ctx.world.has_entity(bank_id):
+            return rejected("bank does not exist")
+        character = ctx.entity(character_id)
+        if bank_id not in reachable_ids(ctx.world, character):
+            return rejected("bank is not reachable")
+        bank = ctx.entity(bank_id)
+        if not bank.has_component(BankComponent):
+            return rejected("target is not a bank")
+        if _bank_account(ctx.world, character_id, bank_id) is not None:
+            return rejected("bank account already exists")
+
+        from ..core.ecs import spawn_entity
+
+        account = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(
+                    name=f"{bank.get_component(BankComponent).name} account",
+                    kind="bank-account",
+                ),
+                BankAccountComponent(bank_id=str(bank_id), owner_id=str(character_id)),
+            ],
+        )
+        bank.add_relationship(Contains(mode=ContainmentMode.CONTAINER), account.id)
+        return ok(
+            AccountOpenedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(bank_id), str(account.id)),
+                    bank_id=str(bank_id),
+                    account_id=str(account.id),
+                    balance=0,
+                )
+            )
+        )
+
+
+class DepositHandler:
+    command_type = "deposit"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        bank_id = parse_entity_id(command.payload.get("bank_id"))
+        amount = int(command.payload.get("amount", 0))
+        if character_id is None or bank_id is None:
+            return rejected("invalid character or bank id")
+        if amount <= 0:
+            return rejected("deposit amount must be positive")
+        account = _bank_account(ctx.world, character_id, bank_id)
+        if account is None:
+            return rejected("bank account does not exist")
+        account_component = account.get_component(BankAccountComponent)
+        updated = replace(account_component, balance=account_component.balance + amount)
+        replace_component(account, updated)
+        return ok(
+            DepositMadeEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(account.id),),
+                    account_id=str(account.id),
+                    amount=amount,
+                    balance=updated.balance,
+                )
+            )
+        )
+
+
+class WithdrawHandler:
+    command_type = "withdraw"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        bank_id = parse_entity_id(command.payload.get("bank_id"))
+        amount = int(command.payload.get("amount", 0))
+        if character_id is None or bank_id is None:
+            return rejected("invalid character or bank id")
+        if amount <= 0:
+            return rejected("withdrawal amount must be positive")
+        account = _bank_account(ctx.world, character_id, bank_id)
+        if account is None:
+            return rejected("bank account does not exist")
+        account_component = account.get_component(BankAccountComponent)
+        if account_component.balance < amount:
+            return rejected("insufficient bank balance")
+        updated = replace(account_component, balance=account_component.balance - amount)
+        replace_component(account, updated)
+        return ok(
+            WithdrawalMadeEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(account.id),),
+                    account_id=str(account.id),
+                    amount=amount,
+                    balance=updated.balance,
+                )
+            )
+        )
+
+
+class TakeLoanHandler:
+    command_type = "take-loan"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        bank_id = parse_entity_id(command.payload.get("bank_id"))
+        amount = int(command.payload.get("amount", 0))
+        duration_seconds = int(command.payload.get("duration_seconds", 7 * 24 * 60 * 60))
+        if character_id is None or bank_id is None:
+            return rejected("invalid character or bank id")
+        if amount <= 0:
+            return rejected("loan amount must be positive")
+        account = _bank_account(ctx.world, character_id, bank_id)
+        if account is None:
+            return rejected("bank account does not exist")
+
+        from ..core.ecs import spawn_entity
+
+        account_component = account.get_component(BankAccountComponent)
+        replace_component(
+            account, replace(account_component, balance=account_component.balance + amount)
+        )
+        due_at = ctx.epoch + duration_seconds
+        loan = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name="bank loan", kind="loan"),
+                LoanComponent(
+                    bank_id=str(bank_id),
+                    borrower_id=str(character_id),
+                    principal=amount,
+                    balance=amount,
+                    due_at_epoch=due_at,
+                ),
+            ],
+        )
+        ctx.entity(character_id).add_relationship(Contains(mode=ContainmentMode.INVENTORY), loan.id)
+        return ok(
+            LoanIssuedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(bank_id), str(loan.id), str(account.id)),
+                    bank_id=str(bank_id),
+                    loan_id=str(loan.id),
+                    amount=amount,
+                    due_at_epoch=due_at,
+                )
+            )
+        )
+
+
+class RepayLoanHandler:
+    command_type = "repay-loan"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        loan_id = parse_entity_id(command.payload.get("loan_id"))
+        amount = int(command.payload.get("amount", 0))
+        if character_id is None or loan_id is None:
+            return rejected("invalid character or loan id")
+        if amount <= 0:
+            return rejected("repayment amount must be positive")
+        if not ctx.world.has_entity(loan_id):
+            return rejected("loan does not exist")
+        loan_entity = ctx.entity(loan_id)
+        if not loan_entity.has_component(LoanComponent):
+            return rejected("target is not a loan")
+        loan = loan_entity.get_component(LoanComponent)
+        if loan.borrower_id != str(character_id):
+            return rejected("loan is not borrowed by character")
+        if loan.status != "active":
+            return rejected("loan is not active")
+        bank_id = parse_entity_id(loan.bank_id)
+        if bank_id is None:
+            return rejected("loan bank is invalid")
+        account = _bank_account(ctx.world, character_id, bank_id)
+        if account is None:
+            return rejected("bank account does not exist")
+        account_component = account.get_component(BankAccountComponent)
+        payment = min(amount, loan.balance)
+        if account_component.balance < payment:
+            return rejected("insufficient bank balance")
+
+        replace_component(
+            account, replace(account_component, balance=account_component.balance - payment)
+        )
+        next_balance = loan.balance - payment
+        status = "repaid" if next_balance == 0 else loan.status
+        replace_component(loan_entity, replace(loan, balance=next_balance, status=status))
+        return ok(
+            LoanRepaidEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(loan_id), str(account.id)),
+                    loan_id=str(loan_id),
+                    amount=payment,
+                    balance=next_balance,
+                )
+            )
+        )
+
+
+class LoanDueConsequence:
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for loan_entity in world.query().with_all([LoanComponent]).execute_entities():
+            loan = loan_entity.get_component(LoanComponent)
+            if loan.status != "active" or epoch <= loan.due_at_epoch:
+                continue
+            replace_component(loan_entity, replace(loan, status="defaulted"))
+            replace_component(
+                loan_entity,
+                DebtComponent(amount=loan.balance, defaulted_at_epoch=epoch),
+            )
+            events.append(
+                LoanDefaultedEvent(
+                    **_travel_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=loan.borrower_id,
+                        target_ids=(str(loan_entity.id),),
+                        loan_id=str(loan_entity.id),
+                        amount=loan.balance,
+                    )
+                )
+            )
+        return events
+
+
+def _bank_account(world: World, owner_id: EntityId, bank_id: EntityId) -> Entity | None:
+    for account in world.query().with_all([BankAccountComponent]).execute_entities():
+        component = account.get_component(BankAccountComponent)
+        if component.owner_id == str(owner_id) and component.bank_id == str(bank_id):
+            return account
+    return None
+
+
 def _service_institution(world: World, service: Entity) -> EntityId | None:
     parent_id = container_of(service)
     if parent_id is not None:
@@ -881,6 +1200,13 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(QuestTemplateComponent):
             template = entity.get_component(QuestTemplateComponent)
             lines.append(f"Work available: {template.title}.")
+        if entity.has_component(BankComponent):
+            lines.append(f"Bank nearby: {entity.get_component(BankComponent).name}.")
+        if entity.has_component(LoanComponent):
+            loan = entity.get_component(LoanComponent)
+            lines.append(
+                f"Loan: {loan.balance} due at epoch {loan.due_at_epoch} ({loan.status})."
+            )
     if character.has_component(TravelPlanComponent):
         plan = character.get_component(TravelPlanComponent)
         lines.append(
@@ -900,14 +1226,21 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
 def install_daggersim(actor) -> None:
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
+    actor.register_consequence(LoanDueConsequence())
 
 
 __all__ = [
     "AskRumorHandler",
     "AcceptGeneratedQuestHandler",
+    "AccountOpenedEvent",
     "AskForWorkHandler",
+    "BankAccountComponent",
+    "BankComponent",
     "CompleteGeneratedQuestHandler",
     "DaggerQuestRewardComponent",
+    "DebtComponent",
+    "DepositHandler",
+    "DepositMadeEvent",
     "ExpandSiteHandler",
     "ExpansionHookComponent",
     "ExpansionRequestedEvent",
@@ -918,7 +1251,13 @@ __all__ = [
     "InstitutionServiceComponent",
     "InstitutionServiceUsedEvent",
     "JoinInstitutionHandler",
+    "LoanComponent",
+    "LoanDefaultedEvent",
+    "LoanDueConsequence",
+    "LoanIssuedEvent",
+    "LoanRepaidEvent",
     "MemberOfInstitution",
+    "OpenBankAccountHandler",
     "PlanTravelHandler",
     "ProceduralSiteComponent",
     "GeneratedQuestComponent",
@@ -929,6 +1268,7 @@ __all__ = [
     "QuestFailedEvent",
     "QuestGeneratedEvent",
     "QuestTemplateComponent",
+    "RepayLoanHandler",
     "RumorBecameExpansionEvent",
     "RumorComponent",
     "RumorDisprovenEvent",
@@ -944,8 +1284,11 @@ __all__ = [
     "TravelPlanComponent",
     "TravelRoute",
     "TravelStartedEvent",
+    "TakeLoanHandler",
     "UnrealizedLocationComponent",
     "UseInstitutionServiceHandler",
+    "WithdrawalMadeEvent",
+    "WithdrawHandler",
     "daggersim_fragments",
     "install_daggersim",
 ]
