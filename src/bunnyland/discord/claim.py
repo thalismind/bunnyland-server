@@ -11,6 +11,9 @@ from ..core import (
     spawn_entity,
 )
 from ..core.world_actor import WorldActor
+from ..mechanics.lifesim import LifeStageComponent
+
+CHILD_LIFE_STAGES = frozenset({"baby", "infant", "toddler", "child"})
 
 
 def list_character_names(actor: WorldActor) -> list[str]:
@@ -45,12 +48,29 @@ def _match_character(characters, character_name: str):
     return None
 
 
+def _is_child_character(character) -> bool:
+    if not character.has_component(LifeStageComponent):
+        return False
+    stage = character.get_component(LifeStageComponent).stage
+    return stage.lower() in CHILD_LIFE_STAGES
+
+
+def _claimable_characters(characters, *, allow_child_claims: bool):
+    return [
+        character
+        for character in characters
+        if character.has_component(SuspendedComponent)
+        and (allow_child_claims or not _is_child_character(character))
+    ]
+
+
 def assign_discord_controller(
     actor: WorldActor,
     *,
     discord_user_id: int,
     default_channel_id: int = 0,
     character_name: str | None = None,
+    allow_child_claims: bool = False,
 ) -> str:
     """Assign a Discord controller to a named character, or the first claimable one."""
 
@@ -65,10 +85,13 @@ def assign_discord_controller(
                 f"no character named {character_name!r} exists in the world. "
                 f"Available characters: {names}"
             )
+        if _is_child_character(character) and not allow_child_claims:
+            name = character.get_component(IdentityComponent).name
+            raise RuntimeError(
+                f"{name} is a child character and cannot be claimed on this server"
+            )
     else:
-        suspended = [
-            character for character in characters if character.has_component(SuspendedComponent)
-        ]
+        suspended = _claimable_characters(characters, allow_child_claims=allow_child_claims)
         if not suspended:
             raise RuntimeError("no suspended claimable character exists in the world")
         character = suspended[0]

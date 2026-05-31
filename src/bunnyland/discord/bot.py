@@ -42,10 +42,11 @@ def _require_discord():  # pragma: no cover - exercised only with the extra
 class DiscordBot:  # pragma: no cover - needs network + extra
     """Maps Discord slash commands to character verbs for the controlling user."""
 
-    def __init__(self, actor: WorldActor, *, token: str) -> None:
+    def __init__(self, actor: WorldActor, *, token: str, allow_child_claims: bool = False) -> None:
         discord, commands = _require_discord()
         self.actor = actor
         self.token = token
+        self.allow_child_claims = allow_child_claims
         intents = discord.Intents.default()
         intents.message_content = True  # required to read "!" command text
         self.client = commands.Bot(command_prefix="!", intents=intents, help_command=None)
@@ -128,6 +129,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
                     discord_user_id=ctx.author.id,
                     default_channel_id=ctx.channel.id,
                     character_name=character,
+                    allow_child_claims=self.allow_child_claims,
                 )
             except RuntimeError as exc:
                 await ctx.send(str(exc))

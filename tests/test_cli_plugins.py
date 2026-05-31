@@ -18,6 +18,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.discord.claim import discord_controlled_character, list_character_names
+from bunnyland.mechanics.lifesim import LifeStageComponent
 from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import DependencyContribution, Plugin, PluginError, bunnyland_plugins
 from bunnyland.plugins.builtin import CORE_VERBS, WORLDGEN
@@ -106,6 +107,78 @@ def test_assign_discord_controller_accepts_unique_prefix():
 
     assert claimed == "Thistle the Innkeeper"
     assert discord_controlled_character(actor, 123)[0] == character.id
+
+
+def test_assign_discord_controller_rejects_child_character_by_default():
+    actor = WorldActor()
+    child = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(species="bunny"),
+            LifeStageComponent(stage="child"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="child character"):
+        assign_discord_controller(actor, discord_user_id=123, character_name="Clover")
+
+    assert child.has_component(SuspendedComponent)
+    assert discord_controlled_character(actor, 123) is None
+
+
+def test_assign_discord_controller_allows_child_character_when_enabled():
+    actor = WorldActor()
+    child = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(species="bunny"),
+            LifeStageComponent(stage="child"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+
+    claimed = assign_discord_controller(
+        actor,
+        discord_user_id=123,
+        character_name="Clover",
+        allow_child_claims=True,
+    )
+
+    assert claimed == "Clover"
+    assert not child.has_component(SuspendedComponent)
+    assert discord_controlled_character(actor, 123)[0] == child.id
+
+
+def test_assign_discord_controller_skips_child_character_for_default_claim():
+    actor = WorldActor()
+    child = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(species="bunny"),
+            LifeStageComponent(stage="child"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    adult = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            LifeStageComponent(stage="adult"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+
+    claimed = assign_discord_controller(actor, discord_user_id=123)
+
+    assert claimed == "Juniper"
+    assert child.has_component(SuspendedComponent)
+    assert not adult.has_component(SuspendedComponent)
+    assert discord_controlled_character(actor, 123)[0] == adult.id
 
 
 def test_world_meta_can_record_loaded_plugin_ids():

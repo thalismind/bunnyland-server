@@ -185,7 +185,9 @@ async def _serve(args) -> None:
     if args.discord:
         from .discord import DiscordBot
 
-        discord_bot = DiscordBot(actor, token=discord_token)
+        discord_bot = DiscordBot(
+            actor, token=discord_token, allow_child_claims=args.discord_allow_child_claims
+        )
         claim_user_id = args.discord_user_id or _env_int("BUNNYLAND_DISCORD_USER_ID")
         claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0
         claim_character = args.discord_character or os.environ.get("BUNNYLAND_DISCORD_CHARACTER")
@@ -195,6 +197,7 @@ async def _serve(args) -> None:
                 discord_user_id=claim_user_id,
                 default_channel_id=claim_channel_id,
                 character_name=claim_character,
+                allow_child_claims=args.discord_allow_child_claims,
             )
             print(f"Assigned Discord user {claim_user_id} to {claimed!r}.")
             if args.save:
@@ -304,6 +307,11 @@ def main(argv: list[str] | None = None) -> int:
         "--discord-character",
         default=None,
         help="character name to assign to the startup Discord controller",
+    )
+    serve.add_argument(
+        "--discord-allow-child-claims",
+        action="store_true",
+        help="allow Discord users to claim child life-stage characters",
     )
 
     args = parser.parse_args(argv)

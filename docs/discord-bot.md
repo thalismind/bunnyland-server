@@ -88,6 +88,10 @@ If `BUNNYLAND_DISCORD_USER_ID` is set, startup creates a Discord controller for 
 and assigns it to `BUNNYLAND_DISCORD_CHARACTER`; if no character name is set, the first
 suspended claimable character is used.
 
+Child life-stage characters are not claimable by default. Start the server with
+`--discord-allow-child-claims` only if that world intentionally allows players to control
+child characters.
+
 If you do not know the numeric user id yet, omit `BUNNYLAND_DISCORD_USER_ID` and claim from
 Discord instead:
 
