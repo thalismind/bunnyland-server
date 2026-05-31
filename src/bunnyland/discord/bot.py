@@ -19,6 +19,7 @@ from ..core.edges import ControlledBy
 from ..core.world_actor import WorldActor
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call
+from .claim import assign_discord_controller
 
 
 def _require_discord():  # pragma: no cover - exercised only with the extra
@@ -91,6 +92,23 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         async def take(ctx, *, item_id: str):
             await ctx.send(await self._submit(ctx.author.id, "take", {"item_id": item_id}))
 
+        @self.client.command(name="claim")
+        async def claim(ctx, *, character: str | None = None):
+            if self._character_for_user(ctx.author.id) is not None:
+                await ctx.send("You are already controlling a character.")
+                return
+            try:
+                claimed = assign_discord_controller(
+                    self.actor,
+                    discord_user_id=ctx.author.id,
+                    default_channel_id=ctx.channel.id,
+                    character_name=character,
+                )
+            except RuntimeError as exc:
+                await ctx.send(str(exc))
+                return
+            await ctx.send(f"You are now controlling {claimed}.")
+
     def run(self) -> None:
         self.client.run(self.token)
 
@@ -105,4 +123,4 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         await self.client.close()
 
 
-__all__ = ["DiscordBot", "did_you_mean"]
+__all__ = ["DiscordBot", "assign_discord_controller", "did_you_mean"]

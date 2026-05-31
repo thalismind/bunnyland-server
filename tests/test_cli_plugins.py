@@ -57,8 +57,9 @@ def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):
     assert "module_foo.missing" in caplog.text
 
 
-def test_cli_discord_requires_token(monkeypatch):
+def test_cli_discord_requires_token(monkeypatch, tmp_path):
     monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SystemExit, match="--discord needs DISCORD_TOKEN"):
         main(["serve", "--discord", "--ticks", "1"])

@@ -376,6 +376,8 @@ Create the Discord application:
 Then add `--discord` to the existing `bunnyland.service` `ExecStart`. Keep only one process
 responsible for advancing a given world file at a time.
 
+If you skip the startup claim, a player can claim from Discord with `!claim [character]`.
+
 Player commands currently exposed by the bot:
 
 | Command             | Effect                  |

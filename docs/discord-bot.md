@@ -88,6 +88,15 @@ If `BUNNYLAND_DISCORD_USER_ID` is set, startup creates a Discord controller for 
 and assigns it to `BUNNYLAND_DISCORD_CHARACTER`; if no character name is set, the first
 suspended claimable character is used.
 
+If you do not know the numeric user id yet, omit `BUNNYLAND_DISCORD_USER_ID` and claim from
+Discord instead:
+
+```text
+!claim Juniper
+```
+
+With no character name, `!claim` assigns the first suspended claimable character.
+
 For embedded tools or tests, you can still construct the bot directly:
 
 ```python
@@ -108,6 +117,7 @@ loop on the same `actor` so ticks process the commands users submit.
 | `!move <direction>`| Move through an exit, e.g. `!move north`.          |
 | `!take <name>`     | Pick up an item, e.g. `!take marsh journal`.       |
 | `!say <text>`      | Speak to everyone in the room.                     |
+| `!claim [name]`    | Claim a suspended character for your Discord user. |
 
 ### Names, not ids
 
