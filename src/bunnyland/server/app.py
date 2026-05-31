@@ -82,6 +82,10 @@ def create_app(
     async def world_snapshot() -> dict:
         return serialize_world(actor, meta)
 
+    @app.get("/world/schema", response_model=WorldSchemaResponse)
+    async def get_world_schema() -> WorldSchemaResponse:
+        return world_schema(actor)
+
     @app.get("/world/events/recent")
     async def recent_events() -> dict:
         return {"events": stream.recent_messages()}
@@ -139,10 +143,6 @@ def create_app(
             }
         )
         return response
-
-    @app.get("/admin/world/schema", response_model=WorldSchemaResponse)
-    async def get_world_schema() -> WorldSchemaResponse:
-        return world_schema(actor)
 
     @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)
     async def generate_room(request: WorldRoomGenerationRequest) -> WorldRoomGenerationResponse:

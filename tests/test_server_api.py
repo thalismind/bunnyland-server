@@ -162,10 +162,10 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     paths = {route.path for route in app.routes}
     assert "/health" in paths
     assert "/world/snapshot" in paths
+    assert "/world/schema" in paths
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
     assert "/admin/world" in paths
-    assert "/admin/world/schema" in paths
     assert "/admin/world/generate-room" in paths
     assert "/admin/world/generate-character" in paths
     assert "/admin/world/generate-item" in paths
