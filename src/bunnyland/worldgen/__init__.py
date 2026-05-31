@@ -5,6 +5,7 @@ breadth-first ``RecursiveWorldGenerator`` that grows the room graph node-by-node
 """
 
 from .builder import StubWorldBuilder, WorldBuilder
+from .defaults import DEFAULT_WORLDGEN_MODEL
 from .generators import (
     GenOptions,
     WorldGenerator,
@@ -36,6 +37,7 @@ from .recursive_builder import (
 __all__ = [
     "CharacterProposal",
     "CharacterSpec",
+    "DEFAULT_WORLDGEN_MODEL",
     "DanglingResolution",
     "DoorProposal",
     "ExitSpec",

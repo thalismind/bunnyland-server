@@ -73,9 +73,11 @@ Cloud](https://ollama.com) by default.
    uv run bunnyland serve --llm --ticks 20
    ```
 
-With `--llm`, both world generation and the characters use the model (default
-`deepseek-v4-flash`; override with `--ollama-model`). Each character keeps its own
-conversation history, so it remembers what it has done.
+With `--llm`, world generation and character controllers can use different models.
+World generation defaults to `deepseek-v4-pro`; character controllers default to
+`deepseek-v4-flash`. Override them separately with `--worldgen-model` and
+`--character-model`, or use `--ollama-model` as a shared override. Each character keeps
+its own conversation history, so it remembers what it has done.
 
 To use a local Ollama instead of the cloud, set `OLLAMA_HOST` to your local server; the API
 key may be any non-empty value for local servers that don't check it.
@@ -88,7 +90,9 @@ key may be any non-empty value for local servers that don't check it.
 | `--generator`    | `oneshot`      | Which world generator to use. See [world creation](world-creation.md). |
 | `--max-rooms`    | `6`            | Room budget for graph-based generators (`recursive`).          |
 | `--llm`          | off            | Drive generation + characters with Ollama (needs `llm` extra). |
-| `--ollama-model` | `deepseek-v4-flash` | Model name passed to Ollama.                              |
+| `--ollama-model` | (none)         | Shared Ollama model override for generation and characters. |
+| `--worldgen-model` | `deepseek-v4-pro` | Ollama model for world generation.                    |
+| `--character-model` | `deepseek-v4-flash` | Default Ollama model for character controllers.    |
 | `--ticks`        | `10`           | Number of rounds to run; `0` runs forever (until Ctrl-C).      |
 | `--tick-seconds` | `1.0`          | Real seconds the loop sleeps between rounds (when `--ticks 0`).  |
 | `--time-scale`   | `3600.0`       | Game seconds that pass per round.                              |

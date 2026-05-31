@@ -31,7 +31,7 @@ from .plugins import (
     select,
 )
 from .prompts.builder import PromptBuilder
-from .worldgen import GenOptions, collect_generators
+from .worldgen import DEFAULT_WORLDGEN_MODEL, GenOptions, collect_generators
 
 BUILTIN_MODULE = "bunnyland.plugins.builtin"
 #: Ollama Cloud endpoint; the API key authenticates against it.
@@ -120,6 +120,8 @@ async def _serve(args) -> None:
         host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
         if not api_key:
             raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
+    worldgen_model = args.worldgen_model or args.ollama_model or DEFAULT_WORLDGEN_MODEL
+    character_model = args.character_model or args.ollama_model or DEFAULT_MODEL
     if args.discord:
         discord_token = os.environ.get("DISCORD_TOKEN")
         if not discord_token:
@@ -146,8 +148,10 @@ async def _serve(args) -> None:
             names = ", ".join(sorted(registry)) or "(none)"
             raise SystemExit(f"unknown generator {args.generator!r}; available: {names}")
 
+        if args.llm:
+            print(f"Generating world with Ollama model {worldgen_model!r} at {host}.")
         options = GenOptions(
-            llm=args.llm, model=args.ollama_model, host=host, api_key=api_key,
+            llm=args.llm, model=worldgen_model, host=host, api_key=api_key,
             max_rooms=args.max_rooms,
         )
         result = await generator.generate(actor, args.seed, options)
@@ -163,8 +167,8 @@ async def _serve(args) -> None:
     if args.llm:
         from .llm_agents import OllamaAgent
 
-        agent = OllamaAgent(model=args.ollama_model, host=host, api_key=api_key)
-        print(f"Driving characters with Ollama model {args.ollama_model!r} at {host}.")
+        agent = OllamaAgent(model=character_model, host=host, api_key=api_key)
+        print(f"Driving characters with default Ollama model {character_model!r} at {host}.")
     else:
         agent = ScriptedAgent([])  # offline: characters wait, the world still ticks
         print("Offline demo (no --llm): characters will wait.")
@@ -256,7 +260,22 @@ def main(argv: list[str] | None = None) -> int:
         "--llm", action="store_true", help="drive characters with Ollama (needs llm extra)"
     )
     serve.add_argument(
-        "--ollama-model", default=DEFAULT_MODEL, help=f"Ollama model (default: {DEFAULT_MODEL})"
+        "--ollama-model",
+        default=None,
+        help=(
+            "shared Ollama model override for generation and characters "
+            f"(defaults: worldgen {DEFAULT_WORLDGEN_MODEL}, characters {DEFAULT_MODEL})"
+        ),
+    )
+    serve.add_argument(
+        "--worldgen-model",
+        default=None,
+        help=f"Ollama model for world generation (default: {DEFAULT_WORLDGEN_MODEL})",
+    )
+    serve.add_argument(
+        "--character-model",
+        default=None,
+        help=f"default Ollama model for character controllers (default: {DEFAULT_MODEL})",
     )
     serve.add_argument(
         "--generator", default="oneshot", help="world generator to use (e.g. oneshot, recursive)"

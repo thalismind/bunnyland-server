@@ -15,8 +15,8 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..llm_agents.agent import DEFAULT_MODEL
 from .builder import StubWorldBuilder
+from .defaults import DEFAULT_WORLDGEN_MODEL
 from .instantiate import InstantiatedWorld, instantiate
 from .recursive import RecursiveWorldGenerator
 from .recursive_builder import StubRecursiveBuilder
@@ -30,7 +30,7 @@ class GenOptions:
     """Runtime knobs passed to a generator (LLM wiring + budgets)."""
 
     llm: bool = False
-    model: str = DEFAULT_MODEL
+    model: str = DEFAULT_WORLDGEN_MODEL
     host: str | None = None
     api_key: str | None = None
     max_rooms: int = 6
@@ -90,6 +90,7 @@ def collect_generators(plugins: Iterable) -> dict[str, WorldGenerator]:
 
 __all__ = [
     "GenOptions",
+    "DEFAULT_WORLDGEN_MODEL",
     "GenerateFn",
     "WorldGenerator",
     "collect_generators",

@@ -10,6 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..llm_agents.agent import DEFAULT_MODEL
+
 
 class RoomSpec(BaseModel):
     key: str
@@ -50,7 +52,7 @@ class CharacterSpec(BaseModel):
     species: str = "bunny"
     controller: str = "suspended"  # llm | suspended
     llm_profile: str = "default"
-    llm_model: str = "llama3"
+    llm_model: str = DEFAULT_MODEL
     with_needs: bool = True
     with_memory: bool = True
     traits: tuple[str, ...] = ()
@@ -130,7 +132,7 @@ class CharacterProposal(BaseModel):
     species: str = "bunny"
     controller: str = "suspended"  # llm | suspended
     llm_profile: str = "default"
-    llm_model: str = "deepseek-v4-flash"
+    llm_model: str = DEFAULT_MODEL
     with_needs: bool = True
     with_memory: bool = True
     traits: tuple[str, ...] = ()

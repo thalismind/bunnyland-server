@@ -22,7 +22,9 @@ from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
 from bunnyland.worldgen import (
     CharacterProposal,
+    CharacterSpec,
     ExitSpec,
+    GenOptions,
     RoomSpec,
     StubWorldBuilder,
     WorldProposal,
@@ -55,6 +57,24 @@ def test_character_proposal_defaults_null_llm_fields():
 
     assert proposal.llm_profile == "default"
     assert proposal.llm_model == "deepseek-v4-flash"
+
+
+def test_character_spec_defaults_to_flash_controller_model():
+    spec = CharacterSpec.model_validate(
+        {
+            "key": "moss",
+            "name": "Moss",
+            "room_key": "burrow",
+            "controller": "llm",
+            "llm_model": None,
+        }
+    )
+
+    assert spec.llm_model == "deepseek-v4-flash"
+
+
+def test_generation_options_default_to_pro_worldgen_model():
+    assert GenOptions(llm=True).model == "deepseek-v4-pro"
 
 
 async def test_instantiate_builds_the_mvp_checklist():

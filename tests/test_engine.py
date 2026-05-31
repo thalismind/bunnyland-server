@@ -39,7 +39,8 @@ async def test_game_loop_stops_when_asked():
     loop = GameLoop(actor, None)  # dispatch set below so the agent can stop the loop
 
     class StoppingAgent:
-        def decide(self, prompt, context, *, character_id):
+        def decide(self, prompt, context, *, character_id, model=None):
+            del model
             loop.stop()
             return None
 

@@ -94,7 +94,6 @@ class StubWorldBuilder:
                     room_key="burrow",
                     controller="llm",
                     llm_profile="elder",
-                    llm_model="llama3",
                     traits=("curious", "talkative"),
                     goals=("learn the marsh's secrets",),
                 ),

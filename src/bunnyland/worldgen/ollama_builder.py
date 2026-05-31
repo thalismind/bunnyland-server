@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 
+from .defaults import DEFAULT_WORLDGEN_MODEL
 from .proposal import WorldProposal
 
 _SYSTEM_PROMPT = """You are the world-builder for an asynchronous social sandbox.
@@ -35,7 +36,7 @@ class OllamaWorldBuilder:
     def __init__(
         self,
         *,
-        model: str = "deepseek-v4-flash",
+        model: str = DEFAULT_WORLDGEN_MODEL,
         host: str | None = None,
         api_key: str | None = None,
     ):

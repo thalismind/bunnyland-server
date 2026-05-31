@@ -224,9 +224,11 @@ class _FakeOllamaClient:
 
     def __init__(self, *args, **kwargs):
         self.calls: list[list[dict]] = []
+        self.models: list[str] = []
 
     def chat(self, *, model, messages, tools):
-        del model, tools
+        del tools
+        self.models.append(model)
         self.calls.append([dict(m) for m in messages])  # snapshot
         return {"message": {"role": "assistant", "content": "ok",
                             "tool_calls": [{"function": {"name": "wait", "arguments": {}}}]}}
@@ -263,6 +265,17 @@ def test_ollama_agent_keeps_history_per_character(monkeypatch):
     assert juniper_call == [{"role": "user", "content": "juniper turn"}]
 
 
+def test_ollama_agent_can_override_model_per_decision(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.Client = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="fallback")
+    agent.decide("turn one", None, character_id="hazel", model="controller-model")
+
+    assert agent._client.models == ["controller-model"]
+
+
 async def test_dispatch_records_wait_when_agent_passes():
     scenario = build_scenario()
     builder = PromptBuilder(scenario.actor.world)
@@ -273,6 +286,16 @@ async def test_dispatch_records_wait_when_agent_passes():
     assert len(decisions) == 1
     assert decisions[0].tool is None
     assert scenario.actor._inbox.empty()
+
+
+async def test_dispatch_uses_controller_model_for_character_decision():
+    scenario = build_scenario()
+    agent = _RecordingAgent([])
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    await dispatch.run_once()
+
+    assert agent.models == ["claude"]
 
 
 def test_resolve_reference_matches_names_case_insensitively():
@@ -331,10 +354,12 @@ class _RecordingAgent:
     def __init__(self, calls):
         self.calls = list(calls)
         self.prompts: list[str] = []
+        self.models: list[str | None] = []
         self._index = 0
 
-    def decide(self, prompt, context, *, character_id):
+    def decide(self, prompt, context, *, character_id, model=None):
         self.prompts.append(prompt)
+        self.models.append(model)
         if self._index >= len(self.calls):
             return None
         call = self.calls[self._index]

@@ -13,6 +13,7 @@ import json
 from collections.abc import Mapping
 from typing import Protocol
 
+from .defaults import DEFAULT_WORLDGEN_MODEL
 from .proposal import (
     CharacterProposal,
     DanglingResolution,
@@ -157,7 +158,7 @@ class OllamaRecursiveBuilder:
     def __init__(
         self,
         *,
-        model: str = "deepseek-v4-flash",
+        model: str = DEFAULT_WORLDGEN_MODEL,
         host: str | None = None,
         api_key: str | None = None,
     ) -> None:

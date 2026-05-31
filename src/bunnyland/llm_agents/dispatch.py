@@ -209,18 +209,24 @@ class ControllerDispatch:
             return False
         return entity.get_component(ActionPointsComponent).current >= 1.0
 
-    def _llm_controller(self, character_id: EntityId) -> tuple[EntityId, int] | None:
+    def _llm_controller(
+        self, character_id: EntityId
+    ) -> tuple[EntityId, int, LLMControllerComponent] | None:
         character = self.actor.world.get_entity(character_id)
         for edge, controller_id in character.get_relationships(ControlledBy):
             controller = self.actor.world.get_entity(controller_id)
             if controller.has_component(LLMControllerComponent):
-                return controller_id, edge.generation
+                return (
+                    controller_id,
+                    edge.generation,
+                    controller.get_component(LLMControllerComponent),
+                )
         return None
 
     async def _decide_for(self, character_id: EntityId) -> Decision:
         controller = self._llm_controller(character_id)
         assert controller is not None  # filtered in _actable_characters
-        controller_id, generation = controller
+        controller_id, generation, controller_component = controller
         cid = str(character_id)
 
         context = self.builder.build(character_id, epoch=self.actor.epoch)
@@ -228,7 +234,12 @@ class ControllerDispatch:
         if pending is not None:
             context = replace(context, warnings=(*context.warnings, pending))
         prompt = render_prompt(context)
-        call = self.agent.decide(prompt, context, character_id=cid)
+        call = self.agent.decide(
+            prompt,
+            context,
+            character_id=cid,
+            model=controller_component.model,
+        )
 
         if call is None:
             logger.info("character %s decided to wait", character_id)

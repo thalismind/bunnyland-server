@@ -28,7 +28,7 @@ class Agent(Protocol):
     """
 
     def decide(
-        self, prompt: str, context: PromptContext, *, character_id: str
+        self, prompt: str, context: PromptContext, *, character_id: str, model: str | None = None
     ) -> ToolCall | None: ...
 
 
@@ -40,9 +40,9 @@ class ScriptedAgent:
         self._index = 0
 
     def decide(
-        self, prompt: str, context: PromptContext, *, character_id: str
+        self, prompt: str, context: PromptContext, *, character_id: str, model: str | None = None
     ) -> ToolCall | None:
-        del prompt, context, character_id
+        del prompt, context, character_id, model
         if self._index >= len(self._calls):
             return None
         call = self._calls[self._index]
@@ -80,14 +80,14 @@ class OllamaAgent:
         self._history: dict[str, list[dict]] = {}
 
     def decide(  # pragma: no cover - needs network + extra
-        self, prompt: str, context: PromptContext, *, character_id: str
+        self, prompt: str, context: PromptContext, *, character_id: str, model: str | None = None
     ) -> ToolCall | None:
         del context
         history = self._history.setdefault(character_id, [])
         history.append({"role": "user", "content": prompt})
 
         response = self._client.chat(
-            model=self._model,
+            model=model or self._model,
             messages=history,
             tools=tool_schemas(),
         )
