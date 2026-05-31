@@ -6,15 +6,16 @@ The inspirations break down cleanly:
 
 | Inspiration    | bunnyland package | Core fantasy                                                                        |
 | -------------- | ----------------- | ----------------------------------------------------------------------------------- |
-| The Sims       | `lifesim`         | characters have needs, moods, relationships, homes, routines, families, memories    |
-| RimWorld       | `colonysim`       | characters organize work, survive incidents, build settlements, spiral emotionally  |
-| Conan Exiles   | `barbariansim`    | harsh survival, weather, combat, crafting, thralls, bases, raids                    |
-| Stardew Valley | `gardensim`       | seasons, crops, animals, gifts, villagers, festivals, cozy production chains        |
-| Skyrim         | `dragonsim`       | open-world exploration, quests, factions, skills-by-use, dungeons, dragons, shouts  |
-| Daggerfall     | `daggersim`       | procedural realms, towns, guilds, banks, law, travel, quests, and dungeons          |
-| Dwarf Fortress | `fortresssim`     | deep settlement simulation, materials, history, disasters, artifacts, absurd detail |
+| The Sims       | `life-sim`        | characters have needs, moods, relationships, homes, routines, families, memories    |
+| RimWorld       | `colony-sim`      | characters organize work, survive incidents, build settlements, spiral emotionally  |
+| Conan Exiles   | `barbarian-sim`   | harsh survival, weather, combat, crafting, thralls, bases, raids                    |
+| Stardew Valley | `garden-sim`      | seasons, crops, animals, gifts, villagers, festivals, cozy production chains        |
+| Skyrim         | `dragon-sim`      | open-world exploration, quests, factions, skills-by-use, dungeons, dragons, shouts  |
+| Dwarf Fortress | `fortress-sim`    | deep settlement simulation, materials, history, disasters, artifacts, absurd detail |
+| Daggerfall     | `dagger-sim`      | procedural realm expands through rumors, guilds, banks, law, travel, and dungeons   |
+| FTL            | `void-sim`        | crews survive ships, stations, planets, alien contact, tech, contracts, and hazards |
 
-For source grounding: The Sims uses traits, emotions, whims, aspirations, skills, careers, crafting hobbies, and life-state systems; RimWorld centers on colonist moods, needs, wounds, illnesses, addictions, social bonds, storyteller incidents, work priorities, and mental breaks; Conan Exiles emphasizes survival, building, thralls, weather, temperature, hunger/thirst, PvP/siege, mounts, pets, purges, and world bosses; Stardew Valley revolves around seasonal crops, fertilizer, skills, villagers, gifts, friendship, farming, fishing, mining, and festivals; Skyrim’s replay loop is open-world exploration, factions, skills, combat, magic, stealth, followers, crafting, dragons, and shouts; Daggerfall contributes procedural scale, guilds, banks, services, law, travel, generated quests, and generated dungeons; Dwarf Fortress goes deeper than all of these with generated worlds, histories, fortress management, geology, migrants, nobles, justice, strange moods, artifacts, tantrum spirals, and many more systems. ([Electronic Arts Inc.][1])
+For source grounding: The Sims uses traits, emotions, whims, aspirations, skills, careers, crafting hobbies, and life-state systems; RimWorld centers on colonist moods, needs, wounds, illnesses, addictions, social bonds, storyteller incidents, work priorities, and mental breaks; Conan Exiles emphasizes survival, building, thralls, weather, temperature, hunger/thirst, PvP/siege, mounts, pets, purges, and world bosses; Stardew Valley revolves around seasonal crops, fertilizer, skills, villagers, gifts, friendship, farming, fishing, mining, and festivals; Skyrim’s replay loop is open-world exploration, factions, skills, combat, magic, stealth, followers, crafting, dragons, and shouts; Daggerfall contributes procedural scale, guilds, banks, services, law, travel, generated quests, and generated dungeons; FTL contributes crewed-ship pressure, subsystem damage, sector travel, distress signals, resource scarcity, and cascading emergencies; Dwarf Fortress goes deeper than all of these with generated worlds, histories, fortress management, geology, migrants, nobles, justice, strange moods, artifacts, tantrum spirals, and many more systems. ([Electronic Arts Inc.][1])
 
 ---
 
@@ -4611,11 +4612,552 @@ loan default -> debt collector request -> generated collector NPC and route -> l
 
 ---
 
-# 8. `fortresssim` package — Dwarf Fortress-inspired mechanics
+# 8. `voidsim` package — FTL-inspired sci-fi frontier mechanics
+
+`void-sim` is the sci-fi frontier package. The internal package name should be `voidsim`,
+matching the existing no-hyphen Python package style while the public-facing package label
+uses the same hyphenated style as `life-sim`, `dragon-sim`, and `dagger-sim`.
+
+Its main inspiration is **FTL**: crews under pressure, ship systems taking damage,
+scarce fuel and supplies, sector travel, distress signals, boarding, hazards, and
+emergencies that cascade across small systems. The package broadens that into bunnyland's
+science-fiction layer: ships, stations, planets, alien contact, tech systems, hazards,
+contracts, salvage, and exploration without turning the core engine into a space game.
+
+## 8.1 Ships, stations, and habitats
+
+### Mechanics
+
+```text
+starship
+station
+outpost
+habitat module
+airlock
+corridor
+cargo bay
+bridge
+engineering
+med bay
+lab
+hydroponics
+hangar
+escape pod
+life-support zone
+```
+
+### Components
+
+```python
+ShipComponent
+StationComponent
+HabitatModuleComponent
+AirlockComponent
+BulkheadComponent
+PressurizedComponent
+LifeSupportComponent
+ShipSystemComponent
+PowerGridComponent
+OxygenComponent
+RadiationShieldComponent
+```
+
+### Systems
+
+```text
+LifeSupportSystem
+PressureSystem
+AirlockSystem
+PowerGridSystem
+ShipIntegritySystem
+ModuleDamageSystem
+HabitatComfortSystem
+StationDockingSystem
+```
+
+### Actions
+
+```text
+open airlock
+seal bulkhead
+repair system
+reroute power
+cycle airlock
+dock
+undock
+inspect ship system
+evacuate module
+```
+
+### Events
+
+```text
+AirlockCycledEvent
+PressureChangedEvent
+LifeSupportFailedEvent
+PowerReroutedEvent
+ShipSystemDamagedEvent
+ShipSystemRepairedEvent
+DockingCompletedEvent
+ModuleEvacuatedEvent
+```
+
+## 8.2 Space travel, orbits, and navigation
+
+### Mechanics
+
+```text
+sector
+star system
+orbit
+planet
+moon
+asteroid belt
+jump route
+fuel
+travel window
+navigation hazard
+scan range
+distress signal
+```
+
+### Components
+
+```python
+StarSystemComponent
+OrbitalBodyComponent
+OrbitComponent
+NavigationRouteComponent
+JumpDriveComponent
+FuelComponent
+SensorComponent
+DistressSignalComponent
+AstrogationComponent
+```
+
+### Systems
+
+```text
+RoutePlanningSystem
+JumpTravelSystem
+FuelConsumptionSystem
+OrbitTransferSystem
+SensorScanSystem
+DistressSignalSystem
+NavigationHazardSystem
+TravelWindowSystem
+```
+
+### Actions
+
+```text
+plot course
+jump
+scan
+answer distress signal
+refuel
+enter orbit
+leave orbit
+land
+launch
+```
+
+### Events
+
+```text
+CoursePlottedEvent
+JumpStartedEvent
+JumpCompletedEvent
+FuelChangedEvent
+SignalDetectedEvent
+NavigationHazardEncounteredEvent
+OrbitEnteredEvent
+LandingCompletedEvent
+```
+
+## 8.3 Crew roles, duty shifts, and shipboard work
+
+### Mechanics
+
+```text
+captain
+pilot
+engineer
+doctor
+scientist
+security
+quartermaster
+comms
+away team
+duty shift
+watch rotation
+morale
+mutiny risk
+```
+
+### Components
+
+```python
+CrewComponent
+CrewRoleComponent
+DutyShiftComponent
+WatchStationComponent
+AwayTeamComponent
+MoraleComponent
+MutinyRiskComponent
+CommandAuthorityComponent
+```
+
+### Systems
+
+```text
+CrewAssignmentSystem
+DutyShiftSystem
+WatchRotationSystem
+AwayTeamSystem
+MoraleSystem
+CommandAuthoritySystem
+MutinyRiskSystem
+```
+
+### Actions
+
+```text
+assign role
+start shift
+end shift
+form away team
+issue ship order
+relieve crew member
+hold briefing
+```
+
+### Events
+
+```text
+CrewRoleAssignedEvent
+DutyShiftStartedEvent
+DutyShiftEndedEvent
+AwayTeamFormedEvent
+ShipOrderIssuedEvent
+MoraleChangedEvent
+MutinyRiskChangedEvent
+```
+
+## 8.4 Technology, research, fabrication, and upgrades
+
+### Mechanics
+
+```text
+tech level
+blueprints
+research topics
+fabricators
+nanoforge
+components
+ship upgrades
+cybernetics
+robots
+drones
+AI cores
+hacking
+data salvage
+```
+
+### Components
+
+```python
+TechLevelComponent
+BlueprintComponent
+ResearchTopicComponent
+FabricatorComponent
+UpgradeSlotComponent
+CyberneticComponent
+RobotComponent
+DroneComponent
+AICoreComponent
+HackingComponent
+DataCacheComponent
+```
+
+### Systems
+
+```text
+ResearchUnlockSystem
+FabricationSystem
+UpgradeInstallationSystem
+CyberneticSurgerySystem
+RobotCommandSystem
+DroneControlSystem
+HackingSystem
+DataSalvageSystem
+```
+
+### Actions
+
+```text
+research technology
+fabricate item
+install upgrade
+repair drone
+command robot
+hack terminal
+recover data
+install cybernetic
+```
+
+### Events
+
+```text
+TechnologyResearchedEvent
+ItemFabricatedEvent
+UpgradeInstalledEvent
+DroneRepairedEvent
+RobotCommandedEvent
+HackSucceededEvent
+HackFailedEvent
+DataRecoveredEvent
+```
+
+## 8.5 Alien contact, diplomacy, and xenobiology
+
+### Mechanics
+
+```text
+alien species
+first contact
+translation
+xenobiology
+alien ecology
+contamination
+quarantine
+cultural protocol
+diplomacy
+trade mission
+hostile encounter
+artifact study
+```
+
+### Components
+
+```python
+AlienSpeciesComponent
+FirstContactComponent
+TranslationMatrixComponent
+XenobiologyComponent
+ContaminationComponent
+QuarantineComponent
+CulturalProtocolComponent
+DiplomaticMissionComponent
+AlienArtifactComponent
+```
+
+### Systems
+
+```text
+FirstContactSystem
+TranslationSystem
+XenobiologySystem
+ContaminationSystem
+QuarantineSystem
+CulturalProtocolSystem
+DiplomacySystem
+AlienArtifactSystem
+```
+
+### Actions
+
+```text
+initiate contact
+attempt translation
+study organism
+quarantine sample
+follow protocol
+negotiate
+trade with aliens
+study artifact
+```
+
+### Events
+
+```text
+FirstContactEvent
+TranslationProgressedEvent
+ContaminationDetectedEvent
+QuarantineStartedEvent
+DiplomacyChangedEvent
+AlienTradeCompletedEvent
+ArtifactStudiedEvent
+```
+
+## 8.6 Space hazards, damage control, and emergencies
+
+### Mechanics
+
+```text
+vacuum exposure
+decompression
+radiation storm
+solar flare
+meteor strike
+reactor leak
+fire
+toxic atmosphere
+gravity failure
+medical emergency
+boarding action
+system cascade failure
+```
+
+### Components
+
+```python
+VacuumExposureComponent
+RadiationComponent
+ReactorComponent
+GravityComponent
+DamageControlComponent
+EmergencyComponent
+BoardingThreatComponent
+HazardSuitComponent
+```
+
+### Systems
+
+```text
+VacuumExposureSystem
+DecompressionSystem
+RadiationSystem
+ReactorLeakSystem
+GravityFailureSystem
+DamageControlSystem
+EmergencyResponseSystem
+BoardingDefenseSystem
+```
+
+### Actions
+
+```text
+don hazard suit
+patch hull
+fight fire
+stabilize reactor
+restore gravity
+treat radiation
+repel boarders
+call emergency
+```
+
+### Events
+
+```text
+DecompressionStartedEvent
+RadiationStormEvent
+MeteorStrikeEvent
+ReactorLeakEvent
+GravityFailedEvent
+HullPatchedEvent
+EmergencyResolvedEvent
+BoardingRepelledEvent
+```
+
+## 8.7 Contracts, salvage, cargo, and frontier economy
+
+### Mechanics
+
+```text
+cargo contracts
+passenger transport
+salvage rights
+bounty contracts
+mining claims
+survey contracts
+smuggling
+customs inspection
+black market
+insurance
+ship mortgage
+station fees
+```
+
+### Components
+
+```python
+ContractComponent
+CargoComponent
+PassengerComponent
+SalvageClaimComponent
+BountyContractComponent
+MiningClaimComponent
+SurveyDataComponent
+SmugglingComponent
+CustomsComponent
+InsuranceComponent
+ShipMortgageComponent
+StationFeeComponent
+```
+
+### Systems
+
+```text
+ContractGenerationSystem
+CargoManifestSystem
+PassengerSystem
+SalvageRightsSystem
+BountyContractSystem
+MiningClaimSystem
+CustomsInspectionSystem
+BlackMarketSystem
+InsuranceSystem
+MortgageSystem
+```
+
+### Actions
+
+```text
+accept contract
+load cargo
+unload cargo
+claim salvage
+scan cargo
+smuggle item
+pay station fee
+file insurance claim
+make mortgage payment
+```
+
+### Events
+
+```text
+ContractAcceptedEvent
+ContractCompletedEvent
+CargoLoadedEvent
+CargoDeliveredEvent
+SalvageClaimedEvent
+CustomsInspectionEvent
+SmugglingDetectedEvent
+InsurancePaidEvent
+MortgageDefaultedEvent
+```
+
+## 8.8 How `voidsim` uses worldgen
+
+`voidsim` should use the same expansion pattern as `dagger-sim`, but with space frontiers
+instead of civic fantasy frontiers.
+
+```text
+distress signal -> generated derelict -> salvage contract -> boarding hazard -> data/loot consequences
+survey contract -> generated planet site -> alien ecology -> sample quarantine -> research unlock
+ship mortgage default -> creditor faction pressure -> bounty/impound event -> legal or underworld choices
+```
+
+---
+
+# 9. `fortresssim` package — Dwarf Fortress-inspired mechanics
 
 Dwarf Fortress is the “mother of all sims” here, but it is intentionally not practical to exhaustively scope. The useful direction for bunnyland is to borrow *depth patterns*: generated world history, materials, geology, settlement logistics, strange moods, artifacts, nobles, justice, taverns, libraries, hospitals, sieges, migrants, trade caravans, tantrum spirals, and the fact that the world continues beyond any one character. Dwarf Fortress includes generated worlds and histories, fortress mode, adventure mode, legends mode, geology, z-level digging, farming, migrants, caravans, nobles, mandates, justice, vampires, strange moods, artifacts, and fortress-ending spirals. ([Wikipedia][8])
 
-## 8.1 World generation and history
+## 9.1 World generation and history
 
 ### Mechanics
 
@@ -4667,7 +5209,7 @@ LegendRecordedEvent
 
 ---
 
-## 8.2 Materials and item specificity
+## 9.2 Materials and item specificity
 
 ### Mechanics
 
@@ -4720,7 +5262,7 @@ ItemDamagedEvent
 
 ---
 
-## 8.3 Workshops and production chains
+## 9.3 Workshops and production chains
 
 ### Mechanics
 
@@ -4769,7 +5311,7 @@ StockCountUpdatedEvent
 
 ---
 
-## 8.4 Strange moods and artifacts
+## 9.4 Strange moods and artifacts
 
 ### Mechanics
 
@@ -4814,7 +5356,7 @@ StrangeMoodFailedEvent
 
 ---
 
-## 8.5 Nobles, mandates, justice
+## 9.5 Nobles, mandates, justice
 
 ### Mechanics
 
@@ -4864,7 +5406,7 @@ PunishmentAppliedEvent
 
 ---
 
-## 8.6 Tantrum spirals and social collapse
+## 9.6 Tantrum spirals and social collapse
 
 ### Mechanics
 
@@ -4907,7 +5449,7 @@ ColonyCollapseWarningEvent
 
 ---
 
-## 8.7 Taverns, temples, libraries, hospitals
+## 9.7 Taverns, temples, libraries, hospitals
 
 ### Mechanics
 
@@ -4964,11 +5506,11 @@ InstitutionReputationChangedEvent
 
 ---
 
-# 9. Cross-package mechanics we should expect
+# 10. Cross-package mechanics we should expect
 
 These are not one game’s feature. They are the glue that makes all packages interact.
 
-## 9.1 Perception, attention, and stimuli
+## 10.1 Perception, attention, and stimuli
 
 ### Mechanics
 
@@ -5019,7 +5561,7 @@ CharacterDetectedEvent
 
 ---
 
-## 9.2 Notes, memory, and reflection
+## 10.2 Notes, memory, and reflection
 
 ### Mechanics
 
@@ -5082,7 +5624,7 @@ ReadableTextReadEvent
 
 ---
 
-## 9.3 Economy, value, trade, and ownership
+## 10.3 Economy, value, trade, and ownership
 
 ### Mechanics
 
@@ -5157,7 +5699,7 @@ BillPaidEvent
 
 ---
 
-## 9.4 Crafting, recipes, tools, and workstations
+## 10.4 Crafting, recipes, tools, and workstations
 
 ### Components
 
@@ -5198,7 +5740,7 @@ dismantle
 
 ---
 
-## 9.5 Construction and world modification
+## 10.5 Construction and world modification
 
 ### Components
 
@@ -5236,7 +5778,7 @@ decorate
 
 ---
 
-## 9.6 Resource nodes and regeneration
+## 10.6 Resource nodes and regeneration
 
 ### Components
 
@@ -5260,7 +5802,7 @@ SeasonalResourceSystem
 
 ---
 
-## 9.7 Animals, wildlife, monsters
+## 10.7 Animals, wildlife, monsters
 
 ### Components
 
@@ -5288,7 +5830,7 @@ AnimalNeedsSystem
 
 ---
 
-## 9.8 Fire, fluids, weather hazards
+## 10.8 Fire, fluids, weather hazards
 
 ### Components
 
@@ -5314,7 +5856,7 @@ StructuralDamageSystem
 
 ---
 
-## 9.9 Policies and boundaries
+## 10.9 Policies and boundaries
 
 ### Components
 
@@ -5349,11 +5891,11 @@ Suspended characters cannot die.
 
 ---
 
-# 10. Package-level class inventory
+# 11. Package-level class inventory
 
 This is the class taxonomy I would expect in the codebase.
 
-## 10.1 Component classes
+## 11.1 Component classes
 
 ```text
 IdentityComponent
@@ -5393,7 +5935,7 @@ MemoryProfileComponent
 NoteEntryComponent
 ```
 
-## 10.2 Edge classes
+## 11.2 Edge classes
 
 ```text
 Contains
@@ -5416,7 +5958,7 @@ Targets
 ParticipatingIn
 ```
 
-## 10.3 System classes
+## 11.3 System classes
 
 ```text
 WorldClockSystem
@@ -5443,7 +5985,7 @@ StorytellerIncidentSystem
 MemoryWriteSystem
 ```
 
-## 10.4 Action handlers
+## 11.4 Action handlers
 
 ```text
 MoveActionHandler
@@ -5469,7 +6011,7 @@ GiftActionHandler
 ResearchActionHandler
 ```
 
-## 10.5 Services
+## 11.5 Services
 
 ```text
 CommandQueueService
@@ -5490,7 +6032,7 @@ PersistenceService
 PluginLoader
 ```
 
-## 10.6 Generators
+## 11.6 Generators
 
 ```text
 WorldBuilderGenerator
@@ -5505,7 +6047,7 @@ DungeonGenerator
 LoreGenerator
 ```
 
-## 10.7 Projections
+## 11.7 Projections
 
 ```text
 RoomSummaryProjection
@@ -5519,7 +6061,7 @@ FactionRelationProjection
 QuestLogProjection
 ```
 
-## 10.8 Typed events
+## 11.8 Typed events
 
 ```text
 ActorMovedEvent
@@ -5549,7 +6091,7 @@ PluginLoadedEvent
 
 ---
 
-# 11. Suggested build ordering
+# 12. Suggested build ordering
 
 Even though this is an exhaustive catalogue, the implementation order should be ruthless.
 
@@ -5664,7 +6206,21 @@ language skills/pacification
 supernatural afflictions
 ```
 
-## Phase 8 — fortress sim
+## Phase 8 — void sim
+
+```text
+ships/stations/habitats
+life support/pressure/airlocks
+space travel/orbits/navigation
+crew roles/duty shifts
+technology/research/fabrication
+alien contact/xenobiology
+space hazards/damage control
+contracts/salvage/cargo
+frontier economy
+```
+
+## Phase 9 — fortress sim
 
 ```text
 deep materials
@@ -5680,7 +6236,7 @@ legends mode
 
 ---
 
-# 12. The most important design warning
+# 13. The most important design warning
 
 The dangerous failure mode is trying to make one giant `SimulationSystem`.
 
