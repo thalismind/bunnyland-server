@@ -187,6 +187,27 @@ class BountyComponent(Component):
     region_id: str
 
 
+@dataclass(frozen=True)
+class ClassTemplateComponent(Component):
+    class_name: str
+    primary_skills: tuple[str, ...] = ()
+    major_skills: tuple[str, ...] = ()
+    minor_skills: tuple[str, ...] = ()
+    advantages: tuple[str, ...] = ()
+    disadvantages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CustomClassComponent(Component):
+    class_name: str
+    primary_skills: tuple[str, ...] = ()
+    major_skills: tuple[str, ...] = ()
+    minor_skills: tuple[str, ...] = ()
+    advantages: tuple[str, ...] = ()
+    disadvantages: tuple[str, ...] = ()
+    finalized_at_epoch: int = 0
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -317,6 +338,13 @@ class BountyPostedEvent(DomainEvent):
 class FinePaidEvent(DomainEvent):
     crime_id: str
     amount: int
+
+
+class CustomClassCreatedEvent(DomainEvent):
+    class_name: str
+    primary_skills: tuple[str, ...] = ()
+    major_skills: tuple[str, ...] = ()
+    minor_skills: tuple[str, ...] = ()
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -1255,6 +1283,72 @@ class PayFineHandler:
         )
 
 
+class CreateCustomClassHandler:
+    command_type = "create-custom-class"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        template_id = parse_entity_id(command.payload.get("template_id"))
+        if character_id is None or template_id is None:
+            return rejected("invalid character or class template id")
+        if not ctx.world.has_entity(template_id):
+            return rejected("class template does not exist")
+
+        character = ctx.entity(character_id)
+        if template_id not in reachable_ids(ctx.world, character):
+            return rejected("class template is not reachable")
+        template_entity = ctx.entity(template_id)
+        if not template_entity.has_component(ClassTemplateComponent):
+            return rejected("target is not a class template")
+        if character.has_component(CustomClassComponent):
+            return rejected("character already has a custom class")
+
+        template = template_entity.get_component(ClassTemplateComponent)
+        class_name = str(command.payload.get("class_name", template.class_name)).strip()
+        custom_class = CustomClassComponent(
+            class_name=class_name or template.class_name,
+            primary_skills=_string_tuple(
+                command.payload.get("primary_skills"), template.primary_skills
+            ),
+            major_skills=_string_tuple(
+                command.payload.get("major_skills"), template.major_skills
+            ),
+            minor_skills=_string_tuple(
+                command.payload.get("minor_skills"), template.minor_skills
+            ),
+            advantages=_string_tuple(command.payload.get("advantages"), template.advantages),
+            disadvantages=_string_tuple(
+                command.payload.get("disadvantages"), template.disadvantages
+            ),
+            finalized_at_epoch=ctx.epoch,
+        )
+        replace_component(character, custom_class)
+        return ok(
+            CustomClassCreatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(template_id),),
+                    class_name=custom_class.class_name,
+                    primary_skills=custom_class.primary_skills,
+                    major_skills=custom_class.major_skills,
+                    minor_skills=custom_class.minor_skills,
+                )
+            )
+        )
+
+
+def _string_tuple(raw: object, default: tuple[str, ...]) -> tuple[str, ...]:
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        return tuple(part.strip() for part in raw.split(",") if part.strip())
+    if isinstance(raw, list | tuple):
+        return tuple(str(part).strip() for part in raw if str(part).strip())
+    return default
+
+
 def _current_law_region(
     world: World, character: Entity
 ) -> tuple[EntityId, LawRegionComponent] | None:
@@ -1369,6 +1463,12 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(CrimeRecordComponent):
             crime = entity.get_component(CrimeRecordComponent)
             lines.append(f"Crime record: {crime.crime_type} ({crime.status}).")
+        if entity.has_component(ClassTemplateComponent):
+            template = entity.get_component(ClassTemplateComponent)
+            lines.append(f"Class template available: {template.class_name}.")
+    if character.has_component(CustomClassComponent):
+        custom_class = character.get_component(CustomClassComponent)
+        lines.append(f"Custom class: {custom_class.class_name}.")
     if character.has_component(TravelPlanComponent):
         plan = character.get_component(TravelPlanComponent)
         lines.append(
@@ -1402,8 +1502,12 @@ __all__ = [
     "BountyPostedEvent",
     "CompleteGeneratedQuestHandler",
     "CommitCrimeHandler",
+    "ClassTemplateComponent",
+    "CreateCustomClassHandler",
     "CrimeCommittedEvent",
     "CrimeRecordComponent",
+    "CustomClassComponent",
+    "CustomClassCreatedEvent",
     "DaggerQuestRewardComponent",
     "DebtComponent",
     "DepositHandler",

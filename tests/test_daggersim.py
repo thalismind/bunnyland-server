@@ -26,10 +26,14 @@ from bunnyland.mechanics.daggersim import (
     BankComponent,
     BountyComponent,
     BountyPostedEvent,
+    ClassTemplateComponent,
     CommitCrimeHandler,
     CompleteGeneratedQuestHandler,
+    CreateCustomClassHandler,
     CrimeCommittedEvent,
     CrimeRecordComponent,
+    CustomClassComponent,
+    CustomClassCreatedEvent,
     DaggerQuestRewardComponent,
     DebtComponent,
     DepositHandler,
@@ -104,6 +108,7 @@ def _install(actor):
     actor.register_handler(RepayLoanHandler())
     actor.register_handler(CommitCrimeHandler())
     actor.register_handler(PayFineHandler())
+    actor.register_handler(CreateCustomClassHandler())
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
@@ -230,6 +235,27 @@ def _law_region(scenario):
     scenario.actor.world.get_entity(scenario.room_a).add_component(
         LawRegionComponent(region_id="moss-road", fines={"trespass": 15, "default": 10})
     )
+
+
+def _class_template(scenario):
+    template = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Moonlit Forager template", kind="class-template"),
+            ClassTemplateComponent(
+                class_name="Moonlit Forager",
+                primary_skills=("foraging", "stealth", "gardening"),
+                major_skills=("cooking", "animal speech", "memory"),
+                minor_skills=("etiquette", "knife", "weather lore"),
+                advantages=("night vision",),
+                disadvantages=("heat weakness",),
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), template.id
+    )
+    return template.id
 
 
 async def test_expand_site_instantiates_unrealized_location():
@@ -579,6 +605,33 @@ async def test_crime_posts_bounty_and_pay_fine_resolves_record_from_bank_account
     assert crime.get_component(CrimeRecordComponent).status == "paid"
     assert not crime.has_component(BountyComponent)
     assert paid[0].crime_id == str(crime_id)
+
+
+async def test_create_custom_class_from_template_sets_character_build():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    template_id = _class_template(scenario)
+    created: list[CustomClassCreatedEvent] = []
+    scenario.actor.bus.subscribe(CustomClassCreatedEvent, created.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "create-custom-class",
+            template_id=str(template_id),
+            class_name="Rainpath Scout",
+            primary_skills=("foraging", "stealth", "weather lore"),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    custom_class = character.get_component(CustomClassComponent)
+    assert custom_class.class_name == "Rainpath Scout"
+    assert custom_class.primary_skills == ("foraging", "stealth", "weather lore")
+    assert custom_class.major_skills == ("cooking", "animal speech", "memory")
+    assert custom_class.advantages == ("night vision",)
+    assert created[0].class_name == "Rainpath Scout"
 
 
 def test_daggersim_fragments_show_nearby_unrealized_locations():
