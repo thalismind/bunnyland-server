@@ -387,6 +387,39 @@ from ..mechanics.storyteller import (
     install_storyteller,
     storyteller_fragments,
 )
+from ..mechanics.voidsim import (
+    AirlockComponent,
+    AirlockCycledEvent,
+    BulkheadComponent,
+    CycleAirlockHandler,
+    DockedTo,
+    DockHandler,
+    DockingCompletedEvent,
+    EvacuateModuleHandler,
+    HabitatModuleComponent,
+    InspectShipSystemHandler,
+    LifeSupportComponent,
+    LifeSupportFailedEvent,
+    ModuleEvacuatedEvent,
+    OpenAirlockHandler,
+    OxygenComponent,
+    PowerGridComponent,
+    PowerReroutedEvent,
+    PressureChangedEvent,
+    PressurizedComponent,
+    RadiationShieldComponent,
+    RepairSystemHandler,
+    ReroutePowerHandler,
+    SealBulkheadHandler,
+    ShipComponent,
+    ShipSystemComponent,
+    ShipSystemDamagedEvent,
+    ShipSystemRepairedEvent,
+    StationComponent,
+    UndockHandler,
+    install_voidsim,
+    voidsim_fragments,
+)
 from ..memory import install_memory
 from ..worldgen.generators import WorldGenerator, oneshot_generator, recursive_generator
 from .model import (
@@ -412,6 +445,7 @@ BARBARIANSIM = "bunnyland.barbariansim"
 GARDENSIM = "bunnyland.gardensim"
 DRAGONSIM = "bunnyland.dragonsim"
 DAGGERSIM = "bunnyland.daggersim"
+VOIDSIM = "bunnyland.voidsim"
 STORYTELLER = "bunnyland.storyteller"
 
 
@@ -975,6 +1009,58 @@ def daggersim_plugin() -> Plugin:
     )
 
 
+def voidsim_plugin() -> Plugin:
+    return Plugin(
+        id=VOIDSIM,
+        name="Void Sim",
+        dependencies=DependencyContribution(
+            requires=(CORE_VERBS,),
+            recommends=(WORLDGEN, ENVIRONMENT),
+        ),
+        ecs=EcsContribution(
+            components=(
+                ShipComponent,
+                StationComponent,
+                HabitatModuleComponent,
+                AirlockComponent,
+                BulkheadComponent,
+                PressurizedComponent,
+                LifeSupportComponent,
+                ShipSystemComponent,
+                PowerGridComponent,
+                OxygenComponent,
+                RadiationShieldComponent,
+            ),
+            edges=(DockedTo,),
+        ),
+        commands=CommandContribution(
+            action_handlers=(
+                OpenAirlockHandler,
+                CycleAirlockHandler,
+                SealBulkheadHandler,
+                RepairSystemHandler,
+                ReroutePowerHandler,
+                InspectShipSystemHandler,
+                DockHandler,
+                UndockHandler,
+                EvacuateModuleHandler,
+            ),
+            typed_events=(
+                AirlockCycledEvent,
+                PressureChangedEvent,
+                LifeSupportFailedEvent,
+                PowerReroutedEvent,
+                ShipSystemDamagedEvent,
+                ShipSystemRepairedEvent,
+                DockingCompletedEvent,
+                ModuleEvacuatedEvent,
+            ),
+        ),
+        runtime=RuntimeContribution(service_factories=(install_voidsim,)),
+        content=ContentContribution(prompt_fragments=(voidsim_fragments,)),
+    )
+
+
 def storyteller_plugin() -> Plugin:
     return Plugin(
         id=STORYTELLER,
@@ -1018,6 +1104,7 @@ def bunnyland_plugins() -> list[Plugin]:
         gardensim_plugin(),
         dragonsim_plugin(),
         daggersim_plugin(),
+        voidsim_plugin(),
         storyteller_plugin(),
     ]
 
@@ -1037,6 +1124,7 @@ __all__ = [
     "POLICY",
     "SOCIAL",
     "STORYTELLER",
+    "VOIDSIM",
     "WORLDGEN",
     "barbariansim_plugin",
     "bunnyland_plugins",
@@ -1053,5 +1141,6 @@ __all__ = [
     "persona_plugin",
     "policy_plugin",
     "social_plugin",
+    "voidsim_plugin",
     "worldgen_plugin",
 ]
