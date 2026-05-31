@@ -8,7 +8,10 @@ import pytest
 from bunnyland.core import ExitTo, IdentityComponent
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
 from bunnyland.core.events import ActorMovedEvent
+from bunnyland.engine import GameLoop
+from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.persistence import WorldMeta, load_world
+from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
 from bunnyland.server import app as server_app
 from bunnyland.server.admin import save_configured_world
@@ -123,15 +126,26 @@ def test_event_serialization_includes_type_and_json_fields(scenario):
 def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(scenario):
     pytest.importorskip("fastapi")
 
-    app = create_app(scenario.actor)
+    loop = GameLoop(
+        scenario.actor,
+        ControllerDispatch(
+            scenario.actor,
+            PromptBuilder(scenario.actor.world),
+            ScriptedAgent([]),
+        ),
+    )
+    app = create_app(scenario.actor, loop=loop)
 
     paths = {route.path for route in app.routes}
     assert "/health" in paths
     assert "/world/snapshot" in paths
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
-    assert "/world" in paths
-    assert "/world/save" in paths
+    assert "/admin/world" in paths
+    assert "/admin/world/save" in paths
+    assert "/admin/runtime" in paths
+    assert "/admin/pause" in paths
+    assert "/admin/resume" in paths
     assert "/world/updates" in paths
 
 

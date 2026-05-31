@@ -9,6 +9,7 @@ from .models import (
     CommandResponse,
     WorldPatchRequest,
     WorldPatchResponse,
+    WorldRuntimeResponse,
     WorldSaveResponse,
 )
 from .serialization import event_message, serialize_event, serialize_world
@@ -21,6 +22,7 @@ __all__ = [
     "EventSubscription",
     "WorldPatchRequest",
     "WorldPatchResponse",
+    "WorldRuntimeResponse",
     "WorldSaveResponse",
     "event_message",
     "serialize_event",

@@ -132,6 +132,13 @@ class WorldSaveResponse(BaseModel):
     saved_at: str | None = None
 
 
+class WorldRuntimeResponse(BaseModel):
+    ok: bool = True
+    world_epoch: int
+    paused: bool
+    running: bool
+
+
 __all__ = [
     "CommandCostRequest",
     "CommandRequest",
@@ -140,5 +147,6 @@ __all__ = [
     "EdgePatchSpec",
     "WorldPatchRequest",
     "WorldPatchResponse",
+    "WorldRuntimeResponse",
     "WorldSaveResponse",
 ]

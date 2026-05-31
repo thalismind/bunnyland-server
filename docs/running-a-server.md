@@ -50,6 +50,8 @@ The API exposes:
 - `GET /world/events/recent` for recently published domain events.
 - `POST /world/commands` to submit a command envelope into the world actor.
 - `WS /world/updates` for an initial snapshot followed by typed domain events.
+- `GET /admin/runtime`, `POST /admin/pause`, and `POST /admin/resume` for
+  server-level tick control; protect `/admin/*` at your reverse proxy.
 
 For a step-by-step Linux VPS deployment with nginx and the web client, see the
 [VPS admin setup guide](vps-admin-setup.md).
@@ -96,6 +98,7 @@ key may be any non-empty value for local servers that don't check it.
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](admin.md).   |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
 | `--load`         | (none)         | Resume a saved world instead of generating. See [persistence](persistence.md). |
+| `--load-paused`  | off            | Start the server tick cycle paused when used with `--load`.    |
 | `--save`         | (none)         | Save the world to this path on exit.                           |
 | `--autosave-every`| `0`           | Autosave every N ticks (needs `--save`).                       |
 

@@ -30,6 +30,7 @@ class GameLoop:
         time_scale: float = 3600.0,
         autosave: Callable[[int], None] | None = None,
         autosave_every: int = 0,
+        paused: bool = False,
     ) -> None:
         self.actor = actor
         self.dispatch = dispatch
@@ -38,6 +39,21 @@ class GameLoop:
         self.autosave = autosave
         self.autosave_every = autosave_every
         self._running = False
+        self._paused = paused
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def pause(self) -> None:
+        self._paused = True
+
+    def resume(self) -> None:
+        self._paused = False
 
     async def run(self, max_ticks: int | None = None) -> int:
         """Run the loop. Stops after ``max_ticks`` iterations, or until ``stop()``.
@@ -49,6 +65,9 @@ class GameLoop:
         self._running = True
         ticks = 0
         while self._running and (max_ticks is None or ticks < max_ticks):
+            if self._paused:
+                await asyncio.sleep(self.tick_seconds)
+                continue
             await self.actor.tick(self.tick_seconds * self.time_scale)
             await self.dispatch.run_once()
             ticks += 1

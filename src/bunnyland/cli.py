@@ -180,6 +180,7 @@ async def _serve(args) -> None:
     loop = GameLoop(
         actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
         autosave=autosave, autosave_every=args.autosave_every,
+        paused=bool(args.load and args.load_paused),
     )
     discord_bot = None
     if args.discord:
@@ -264,6 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         "--max-rooms", type=int, default=6, help="room budget for graph-based generators"
     )
     serve.add_argument("--load", default=None, help="reload a saved world (skips generation)")
+    serve.add_argument(
+        "--load-paused",
+        action="store_true",
+        help="start the tick cycle paused when reloading with --load",
+    )
     serve.add_argument("--save", default=None, help="save the world to this path on exit")
     serve.add_argument(
         "--autosave-every", type=int, default=0, help="autosave every N ticks (needs --save)"

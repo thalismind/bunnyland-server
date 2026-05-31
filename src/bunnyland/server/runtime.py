@@ -30,7 +30,7 @@ async def run_loop_with_api(
             "bunnyland server API requires uvicorn; install the server dependencies first"
         ) from exc
 
-    app = create_app(actor, meta, save_path=save_path)
+    app = create_app(actor, meta, loop=loop, save_path=save_path)
     server = uvicorn.Server(
         uvicorn.Config(app, host=host, port=port, log_level="info")
     )

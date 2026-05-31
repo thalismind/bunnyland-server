@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
@@ -13,6 +14,7 @@ from .models import (
     CommandResponse,
     WorldPatchRequest,
     WorldPatchResponse,
+    WorldRuntimeResponse,
     WorldSaveResponse,
 )
 from .patches import WorldPatchError, apply_world_patch
@@ -20,6 +22,9 @@ from .serialization import serialize_world
 from .subscriptions import EventStream
 
 WEBSOCKET_HEARTBEAT_SECONDS = 30.0
+
+if TYPE_CHECKING:
+    from ..engine import GameLoop
 
 # Imported at module scope (not inside ``create_app``) so that FastAPI can resolve the
 # ``websocket: WebSocket`` annotation on the route handler. Under ``from __future__ import
@@ -38,6 +43,7 @@ def create_app(
     actor: WorldActor,
     meta: WorldMeta | None = None,
     *,
+    loop: GameLoop | None = None,
     save_path: str | Path | None = None,
     title: str = "bunnyland",
 ):
@@ -69,13 +75,40 @@ def create_app(
     async def recent_events() -> dict:
         return {"events": stream.recent_messages()}
 
+    def _runtime_response() -> WorldRuntimeResponse:
+        if loop is None:
+            raise HTTPException(status_code=409, detail="server runtime is not attached")
+        return WorldRuntimeResponse(
+            world_epoch=actor.epoch,
+            paused=loop.paused,
+            running=loop.running,
+        )
+
+    @app.get("/admin/runtime", response_model=WorldRuntimeResponse)
+    async def runtime_status() -> WorldRuntimeResponse:
+        return _runtime_response()
+
+    @app.post("/admin/pause", response_model=WorldRuntimeResponse)
+    async def pause_world() -> WorldRuntimeResponse:
+        if loop is None:
+            raise HTTPException(status_code=409, detail="server runtime is not attached")
+        loop.pause()
+        return _runtime_response()
+
+    @app.post("/admin/resume", response_model=WorldRuntimeResponse)
+    async def resume_world() -> WorldRuntimeResponse:
+        if loop is None:
+            raise HTTPException(status_code=409, detail="server runtime is not attached")
+        loop.resume()
+        return _runtime_response()
+
     @app.post("/world/commands", response_model=CommandResponse, status_code=202)
     async def submit_command(request: CommandRequest) -> CommandResponse:
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
         await actor.submit(command)
         return CommandResponse(queued=True, command_id=command.command_id)
 
-    @app.patch("/world", response_model=WorldPatchResponse)
+    @app.patch("/admin/world", response_model=WorldPatchResponse)
     async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:
         try:
             async with actor._lock:
@@ -96,7 +129,7 @@ def create_app(
         )
         return response
 
-    @app.post("/world/save", response_model=WorldSaveResponse)
+    @app.post("/admin/world/save", response_model=WorldSaveResponse)
     async def save_world_now() -> WorldSaveResponse:
         if save_path is None:
             raise HTTPException(status_code=409, detail="server was not started with --save")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from bunnyland.core import WorldActor, container_of
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
@@ -45,3 +47,23 @@ async def test_game_loop_stops_when_asked():
 
     # No max_ticks: the agent stops the loop during the first dispatch.
     assert await loop.run() == 1
+
+
+async def test_game_loop_pause_blocks_ticks_until_resumed():
+    actor = WorldActor()
+    builder = PromptBuilder(actor.world)
+    loop = GameLoop(
+        actor,
+        ControllerDispatch(actor, builder, ScriptedAgent([])),
+        tick_seconds=0.01,
+        paused=True,
+    )
+
+    task = asyncio.create_task(loop.run(max_ticks=1))
+    await asyncio.sleep(0.03)
+    assert actor.epoch == 0
+    assert not task.done()
+
+    loop.resume()
+    assert await asyncio.wait_for(task, timeout=1.0) == 1
+    assert actor.epoch > 0
