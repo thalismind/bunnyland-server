@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..core import (
     CharacterComponent,
+    ControlledBy,
     DiscordControllerComponent,
     IdentityComponent,
     SuspendedComponent,
@@ -57,4 +58,19 @@ def assign_discord_controller(
     return character.get_component(IdentityComponent).name
 
 
-__all__ = ["assign_discord_controller"]
+def discord_controlled_character(actor: WorldActor, discord_user_id: int):
+    """Find the character controlled by a Discord user, if any."""
+
+    controllers = actor.world.query().with_all([DiscordControllerComponent]).execute_entities()
+    for entity in controllers:
+        if entity.get_component(DiscordControllerComponent).discord_user_id != discord_user_id:
+            continue
+        controller_id = entity.id
+        for character in actor.world.query().with_all([]).execute_entities():
+            for edge, target in character.get_relationships(ControlledBy):
+                if target == controller_id:
+                    return character.id, controller_id, edge.generation
+    return None
+
+
+__all__ = ["assign_discord_controller", "discord_controlled_character"]

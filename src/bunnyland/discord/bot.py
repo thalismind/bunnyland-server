@@ -14,12 +14,10 @@ name-resolution helpers below are.
 
 from __future__ import annotations
 
-from ..core.controllers import DiscordControllerComponent
-from ..core.edges import ControlledBy
 from ..core.world_actor import WorldActor
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call
-from .claim import assign_discord_controller
+from .claim import assign_discord_controller, discord_controlled_character
 
 
 def _require_discord():  # pragma: no cover - exercised only with the extra
@@ -47,14 +45,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
     def _character_for_user(self, discord_user_id: int):
         """Find the character controlled by a Discord controller for this user."""
-        for entity in self.actor.world.query().with_all([DiscordControllerComponent]):
-            if entity.get_component(DiscordControllerComponent).discord_user_id == discord_user_id:
-                controller_id = entity.id
-                for character in self.actor.world.query().with_all([]):
-                    for edge, target in character.get_relationships(ControlledBy):
-                        if target == controller_id:
-                            return character.id, controller_id, edge.generation
-        return None
+        return discord_controlled_character(self.actor, discord_user_id)
 
     async def _submit(self, discord_user_id: int, tool: str, arguments: dict) -> str:
         found = self._character_for_user(discord_user_id)
@@ -108,6 +99,18 @@ class DiscordBot:  # pragma: no cover - needs network + extra
                 await ctx.send(str(exc))
                 return
             await ctx.send(f"You are now controlling {claimed}.")
+
+        @self.client.event
+        async def on_ready():
+            print(f"Discord bot connected as {self.client.user}.", flush=True)
+
+        @self.client.event
+        async def on_command_error(ctx, error):
+            if isinstance(error, commands.CommandNotFound):
+                return
+            cause = error.original if isinstance(error, commands.CommandInvokeError) else error
+            print(f"Discord command failed: {cause!r}", flush=True)
+            await ctx.send(f"Command failed: {cause}")
 
     def run(self) -> None:
         self.client.run(self.token)

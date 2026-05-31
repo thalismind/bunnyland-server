@@ -17,6 +17,7 @@ from bunnyland.core import (
     WorldActor,
     spawn_entity,
 )
+from bunnyland.discord.claim import discord_controlled_character
 from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import DependencyContribution, Plugin, PluginError, bunnyland_plugins
 from bunnyland.plugins.builtin import CORE_VERBS, WORLDGEN
@@ -87,6 +88,7 @@ def test_assign_discord_controller_claims_suspended_character():
     discord = controller.get_component(DiscordControllerComponent)
     assert discord.discord_user_id == 123
     assert discord.default_channel_id == 456
+    assert discord_controlled_character(actor, 123) == (character.id, controller_id, 0)
 
 
 def test_world_meta_can_record_loaded_plugin_ids():
