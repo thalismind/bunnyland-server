@@ -82,6 +82,15 @@ from ..mechanics.colonysim import (
     colonysim_fragments,
 )
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
+from ..mechanics.daggersim import (
+    ExpandSiteHandler,
+    ExpansionHookComponent,
+    ExpansionRequestedEvent,
+    GeneratedSiteInstantiatedEvent,
+    ProceduralSiteComponent,
+    UnrealizedLocationComponent,
+    daggersim_fragments,
+)
 from ..mechanics.dragonsim import (
     AcceptQuestHandler,
     CompleteObjectiveHandler,
@@ -283,6 +292,7 @@ COLONYSIM = "bunnyland.colonysim"
 BARBARIANSIM = "bunnyland.barbariansim"
 GARDENSIM = "bunnyland.gardensim"
 DRAGONSIM = "bunnyland.dragonsim"
+DAGGERSIM = "bunnyland.daggersim"
 STORYTELLER = "bunnyland.storyteller"
 
 
@@ -704,6 +714,29 @@ def dragonsim_plugin() -> Plugin:
     )
 
 
+def daggersim_plugin() -> Plugin:
+    return Plugin(
+        id=DAGGERSIM,
+        name="Dagger Sim",
+        dependencies=DependencyContribution(
+            requires=(CORE_VERBS,),
+            recommends=(WORLDGEN,),
+        ),
+        ecs=EcsContribution(
+            components=(
+                ProceduralSiteComponent,
+                UnrealizedLocationComponent,
+                ExpansionHookComponent,
+            ),
+        ),
+        commands=CommandContribution(
+            action_handlers=(ExpandSiteHandler,),
+            typed_events=(ExpansionRequestedEvent, GeneratedSiteInstantiatedEvent),
+        ),
+        content=ContentContribution(prompt_fragments=(daggersim_fragments,)),
+    )
+
+
 def storyteller_plugin() -> Plugin:
     return Plugin(
         id=STORYTELLER,
@@ -746,6 +779,7 @@ def bunnyland_plugins() -> list[Plugin]:
         barbariansim_plugin(),
         gardensim_plugin(),
         dragonsim_plugin(),
+        daggersim_plugin(),
         storyteller_plugin(),
     ]
 
@@ -754,6 +788,7 @@ __all__ = [
     "BARBARIANSIM",
     "CORE_VERBS",
     "COLONYSIM",
+    "DAGGERSIM",
     "DRAGONSIM",
     "ENVIRONMENT",
     "GARDENSIM",
@@ -769,6 +804,7 @@ __all__ = [
     "bunnyland_plugins",
     "colonysim_plugin",
     "core_verbs_plugin",
+    "daggersim_plugin",
     "dragonsim_plugin",
     "environment_plugin",
     "gardensim_plugin",
