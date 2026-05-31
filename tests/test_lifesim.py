@@ -5,6 +5,7 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    ActionPointsComponent,
     CharacterComponent,
     CommandCost,
     ContainmentMode,
@@ -27,10 +28,14 @@ from bunnyland.core.events import (
 from bunnyland.mechanics.lifesim import (
     AdoptChildHandler,
     AspirationComponent,
+    AssessTaxHandler,
+    BillComponent,
+    BillPaidEvent,
     BirthDueComponent,
     BusinessOwnerComponent,
     BusinessSaleEvent,
     CareerComponent,
+    ChargeRentHandler,
     ChooseAspirationHandler,
     ClaimHomeHandler,
     ClaimRoomHandler,
@@ -39,6 +44,7 @@ from bunnyland.mechanics.lifesim import (
     FindJobHandler,
     GossipSpreadEvent,
     GoToWorkHandler,
+    HasBill,
     HasRoutine,
     HomeComponent,
     HouseholdComponent,
@@ -56,6 +62,8 @@ from bunnyland.mechanics.lifesim import (
     OwnsBusiness,
     ParentOf,
     PartnerOf,
+    PayBillHandler,
+    PayWageHandler,
     PracticeSkillHandler,
     PregnancyComponent,
     PromoteBusinessHandler,
@@ -77,6 +85,8 @@ from bunnyland.mechanics.lifesim import (
     StartPartnershipHandler,
     StartPregnancyHandler,
     StudySkillHandler,
+    TaxAssessedEvent,
+    WagePaidEvent,
     WitnessRomanceHandler,
     WorkShiftCompletedEvent,
     install_lifesim,
@@ -108,6 +118,10 @@ def _install(actor):
     actor.register_handler(FindJobHandler())
     actor.register_handler(GoToWorkHandler())
     actor.register_handler(QuitJobHandler())
+    actor.register_handler(PayWageHandler())
+    actor.register_handler(AssessTaxHandler())
+    actor.register_handler(ChargeRentHandler())
+    actor.register_handler(PayBillHandler())
     actor.register_handler(OpenBusinessHandler())
     actor.register_handler(SellItemHandler())
     actor.register_handler(PromoteBusinessHandler())
@@ -155,6 +169,20 @@ def _cmd(scenario, command_type, **payload):
         character_id=str(scenario.character),
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
+def _cmd_for(scenario, character_id, command_type, **payload):
+    generation = scenario.actor.current_generation(character_id, scenario.controller)
+    assert generation is not None
+    return build_submitted_command(
+        character_id=str(character_id),
+        controller_id=str(scenario.controller),
+        controller_generation=generation,
         command_type=command_type,
         cost=CommandCost(action=1),
         lane=Lane.WORLD,
@@ -276,6 +304,69 @@ async def test_career_shift_pays_funds_and_can_promote():
     assert schedule.next_shift_epoch == scenario.actor.epoch + HOUR
     assert shifts[0].earned == 24
     assert promotions[0].level == 2
+
+
+async def test_household_economy_pays_wages_taxes_rent_and_bills():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    employer = scenario.actor.world.get_entity(scenario.character)
+    employer.add_component(HouseholdFundsComponent(balance=100))
+    worker = spawn_entity(
+        scenario.actor.world,
+        [
+            ActionPointsComponent(current=5.0, maximum=5.0),
+            IdentityComponent(name="Marigold", kind="character"),
+            CharacterComponent(),
+            HouseholdFundsComponent(balance=5),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), worker.id
+    )
+    worker.add_relationship(ControlledBy(generation=0), scenario.controller)
+    wages: list[WagePaidEvent] = []
+    taxes: list[TaxAssessedEvent] = []
+    paid: list[BillPaidEvent] = []
+    scenario.actor.bus.subscribe(WagePaidEvent, wages.append)
+    scenario.actor.bus.subscribe(TaxAssessedEvent, taxes.append)
+    scenario.actor.bus.subscribe(BillPaidEvent, paid.append)
+
+    await scenario.actor.submit(_cmd(scenario, "pay-wage", worker_id=str(worker.id), amount=25))
+    await scenario.actor.tick(HOUR)
+
+    assert employer.get_component(HouseholdFundsComponent).balance == 75
+    assert worker.get_component(HouseholdFundsComponent).balance == 30
+    assert wages[0].worker_balance == 30
+
+    await scenario.actor.submit(_cmd(scenario, "assess-tax", amount=20, reason="market tax"))
+    await scenario.actor.tick(HOUR)
+    tax_bill_id = employer.get_relationships(HasBill)[0][1]
+    assert taxes[0].bill_id == str(tax_bill_id)
+
+    await scenario.actor.submit(_cmd(scenario, "pay-bill", bill_id=str(tax_bill_id)))
+    await scenario.actor.tick(HOUR)
+
+    assert employer.get_component(HouseholdFundsComponent).balance == 55
+    assert scenario.actor.world.get_entity(tax_bill_id).get_component(
+        BillComponent
+    ).paid_at_epoch == scenario.actor.epoch
+
+    await scenario.actor.submit(
+        _cmd(scenario, "charge-rent", tenant_id=str(worker.id), amount=15, reason="stall rent")
+    )
+    await scenario.actor.tick(HOUR)
+    rent_bill_id = worker.get_relationships(HasBill)[0][1]
+
+    await scenario.actor.submit(
+        _cmd_for(scenario, worker.id, "pay-bill", bill_id=str(rent_bill_id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert worker.get_component(HouseholdFundsComponent).balance == 15
+    assert employer.get_component(HouseholdFundsComponent).balance == 70
+    assert paid[-1].bill_id == str(rent_bill_id)
+    fragments = lifesim_fragments(scenario.actor.world, worker)
+    assert not any("Unpaid bills" in line for line in fragments)
 
 
 async def test_business_sale_moves_item_out_of_inventory_and_pays_funds():

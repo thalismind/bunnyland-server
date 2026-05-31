@@ -68,6 +68,15 @@ class HouseholdFundsComponent(Component):
 
 
 @dataclass(frozen=True)
+class BillComponent(Component):
+    amount: int
+    reason: str
+    due_epoch: int = 0
+    creditor_id: str | None = None
+    paid_at_epoch: int | None = None
+
+
+@dataclass(frozen=True)
 class CareerComponent(Component):
     title: str
     level: int = 1
@@ -167,6 +176,11 @@ class HasRoutine(Edge):
 
 
 @dataclass(frozen=True)
+class HasBill(Edge):
+    pass
+
+
+@dataclass(frozen=True)
 class OwnsBusiness(Edge):
     pass
 
@@ -207,6 +221,39 @@ class CareerStartedEvent(DomainEvent):
 class WorkShiftCompletedEvent(DomainEvent):
     title: str
     earned: int
+    balance: int
+
+
+class WagePaidEvent(DomainEvent):
+    worker_id: str
+    amount: int
+    payer_balance: int
+    worker_balance: int
+
+
+class BillCreatedEvent(DomainEvent):
+    bill_id: str
+    amount: int
+    reason: str
+    due_epoch: int
+
+
+class TaxAssessedEvent(DomainEvent):
+    bill_id: str
+    amount: int
+    reason: str
+
+
+class RentChargedEvent(DomainEvent):
+    bill_id: str
+    tenant_id: str
+    amount: int
+    reason: str
+
+
+class BillPaidEvent(DomainEvent):
+    bill_id: str
+    amount: int
     balance: int
 
 
@@ -468,6 +515,36 @@ def _first_business(
         if business.has_component(BusinessOwnerComponent):
             return business
     return None
+
+
+def _funds(entity: Entity) -> HouseholdFundsComponent:
+    if entity.has_component(HouseholdFundsComponent):
+        return entity.get_component(HouseholdFundsComponent)
+    return HouseholdFundsComponent()
+
+
+def _create_bill(
+    ctx: HandlerContext,
+    debtor: Entity,
+    *,
+    amount: int,
+    reason: str,
+    due_epoch: int,
+    creditor_id: str | None = None,
+) -> Entity:
+    bill = spawn_entity(
+        ctx.world,
+        [
+            BillComponent(
+                amount=amount,
+                reason=reason,
+                due_epoch=due_epoch,
+                creditor_id=creditor_id,
+            )
+        ],
+    )
+    debtor.add_relationship(HasBill(), bill.id)
+    return bill
 
 
 def kinship_label(world: World, source_id: EntityId, target_id: EntityId) -> str | None:
@@ -798,6 +875,185 @@ class QuitJobHandler:
         career = actor.get_component(CareerComponent)
         replace_component(actor, replace(career, active=False))
         return ok()
+
+
+class PayWageHandler:
+    command_type = "pay-wage"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        payer_id = parse_entity_id(command.character_id)
+        worker_id = parse_entity_id(command.payload.get("worker_id"))
+        if payer_id is None or worker_id is None:
+            return rejected("invalid payer or worker id")
+        if not ctx.world.has_entity(worker_id):
+            return rejected("worker does not exist")
+        payer = ctx.entity(payer_id)
+        worker = ctx.entity(worker_id)
+        if not _same_room(ctx.world, payer_id, worker_id):
+            return rejected("worker is not present")
+        amount = int(command.payload.get("amount", 0))
+        if amount <= 0:
+            return rejected("wage amount must be positive")
+        payer_funds = _funds(payer)
+        if payer_funds.balance < amount:
+            return rejected("insufficient household funds")
+        worker_funds = _funds(worker)
+        updated_payer = HouseholdFundsComponent(balance=payer_funds.balance - amount)
+        updated_worker = HouseholdFundsComponent(balance=worker_funds.balance + amount)
+        replace_component(payer, updated_payer)
+        replace_component(worker, updated_worker)
+        return ok(
+            WagePaidEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(payer_id),
+                    target_ids=(str(worker_id),),
+                    worker_id=str(worker_id),
+                    amount=amount,
+                    payer_balance=updated_payer.balance,
+                    worker_balance=updated_worker.balance,
+                )
+            )
+        )
+
+
+class AssessTaxHandler:
+    command_type = "assess-tax"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        amount = int(command.payload.get("amount", 0))
+        if amount <= 0:
+            return rejected("tax amount must be positive")
+        reason = str(command.payload.get("reason", "taxes")).strip() or "taxes"
+        due_epoch = int(command.payload.get("due_epoch", ctx.epoch))
+        actor = ctx.entity(actor_id)
+        bill = _create_bill(ctx, actor, amount=amount, reason=reason, due_epoch=due_epoch)
+        return ok(
+            TaxAssessedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(bill.id),),
+                    bill_id=str(bill.id),
+                    amount=amount,
+                    reason=reason,
+                )
+            ),
+            BillCreatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(bill.id),),
+                    bill_id=str(bill.id),
+                    amount=amount,
+                    reason=reason,
+                    due_epoch=due_epoch,
+                )
+            ),
+        )
+
+
+class ChargeRentHandler:
+    command_type = "charge-rent"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        landlord_id = parse_entity_id(command.character_id)
+        tenant_id = parse_entity_id(command.payload.get("tenant_id"))
+        if landlord_id is None or tenant_id is None:
+            return rejected("invalid landlord or tenant id")
+        if not ctx.world.has_entity(tenant_id):
+            return rejected("tenant does not exist")
+        if not _same_room(ctx.world, landlord_id, tenant_id):
+            return rejected("tenant is not present")
+        amount = int(command.payload.get("amount", 0))
+        if amount <= 0:
+            return rejected("rent amount must be positive")
+        reason = str(command.payload.get("reason", "rent")).strip() or "rent"
+        due_epoch = int(command.payload.get("due_epoch", ctx.epoch))
+        tenant = ctx.entity(tenant_id)
+        bill = _create_bill(
+            ctx,
+            tenant,
+            amount=amount,
+            reason=reason,
+            due_epoch=due_epoch,
+            creditor_id=str(landlord_id),
+        )
+        return ok(
+            RentChargedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(landlord_id),
+                    target_ids=(str(tenant_id), str(bill.id)),
+                    bill_id=str(bill.id),
+                    tenant_id=str(tenant_id),
+                    amount=amount,
+                    reason=reason,
+                )
+            ),
+            BillCreatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(landlord_id),
+                    target_ids=(str(tenant_id), str(bill.id)),
+                    bill_id=str(bill.id),
+                    amount=amount,
+                    reason=reason,
+                    due_epoch=due_epoch,
+                )
+            ),
+        )
+
+
+class PayBillHandler:
+    command_type = "pay-bill"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        bill_id = parse_entity_id(command.payload.get("bill_id"))
+        if actor_id is None or bill_id is None:
+            return rejected("invalid character or bill id")
+        if not ctx.world.has_entity(bill_id):
+            return rejected("bill does not exist")
+        actor = ctx.entity(actor_id)
+        if not actor.has_relationship(HasBill, bill_id):
+            return rejected("bill does not belong to character")
+        bill_entity = ctx.entity(bill_id)
+        if not bill_entity.has_component(BillComponent):
+            return rejected("target is not a bill")
+        bill = bill_entity.get_component(BillComponent)
+        if bill.paid_at_epoch is not None:
+            return rejected("bill is already paid")
+        funds = _funds(actor)
+        if funds.balance < bill.amount:
+            return rejected("insufficient household funds")
+        updated_funds = HouseholdFundsComponent(balance=funds.balance - bill.amount)
+        replace_component(actor, updated_funds)
+        if bill.creditor_id is not None:
+            creditor_id = parse_entity_id(bill.creditor_id)
+            if creditor_id is not None and ctx.world.has_entity(creditor_id):
+                creditor = ctx.entity(creditor_id)
+                creditor_funds = _funds(creditor)
+                replace_component(
+                    creditor,
+                    HouseholdFundsComponent(balance=creditor_funds.balance + bill.amount),
+                )
+        replace_component(bill_entity, replace(bill, paid_at_epoch=ctx.epoch))
+        return ok(
+            BillPaidEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(bill_id),),
+                    bill_id=str(bill_id),
+                    amount=bill.amount,
+                    balance=updated_funds.balance,
+                )
+            )
+        )
 
 
 class OpenBusinessHandler:
@@ -1480,6 +1736,18 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(HouseholdFundsComponent):
         funds = character.get_component(HouseholdFundsComponent)
         lines.append(f"Household funds: {funds.balance}.")
+    unpaid_bills = []
+    for _edge, bill_id in character.get_relationships(HasBill):
+        if not world.has_entity(bill_id):
+            continue
+        bill_entity = world.get_entity(bill_id)
+        if not bill_entity.has_component(BillComponent):
+            continue
+        bill = bill_entity.get_component(BillComponent)
+        if bill.paid_at_epoch is None:
+            unpaid_bills.append(f"{bill.reason} ({bill.amount})")
+    if unpaid_bills:
+        lines.append("Unpaid bills: " + ", ".join(sorted(unpaid_bills)) + ".")
     for _edge, business_id in character.get_relationships(OwnsBusiness):
         if not world.has_entity(business_id):
             continue
@@ -1581,6 +1849,10 @@ def install_lifesim(actor) -> None:
 __all__ = [
     "AspirationChosenEvent",
     "AspirationComponent",
+    "AssessTaxHandler",
+    "BillComponent",
+    "BillCreatedEvent",
+    "BillPaidEvent",
     "BirthDueComponent",
     "AdoptChildHandler",
     "BusinessOpenedEvent",
@@ -1589,6 +1861,7 @@ __all__ = [
     "BusinessSaleEvent",
     "CareerComponent",
     "CareerStartedEvent",
+    "ChargeRentHandler",
     "ChooseAspirationHandler",
     "ClaimHomeHandler",
     "ClaimRoomHandler",
@@ -1598,6 +1871,7 @@ __all__ = [
     "FindJobHandler",
     "GoToWorkHandler",
     "GossipSpreadEvent",
+    "HasBill",
     "HasRoutine",
     "HomeClaimedEvent",
     "HomeComponent",
@@ -1617,6 +1891,8 @@ __all__ = [
     "OwnsBusiness",
     "ParentOf",
     "PartnerOf",
+    "PayBillHandler",
+    "PayWageHandler",
     "PracticeSkillHandler",
     "PregnancyComponent",
     "PregnancyDueConsequence",
@@ -1625,6 +1901,7 @@ __all__ = [
     "QuitJobHandler",
     "ReproductiveComponent",
     "ReputationComponent",
+    "RentChargedEvent",
     "ResolveBirthHandler",
     "RoomClaimComponent",
     "RoomClaimedEvent",
@@ -1644,6 +1921,8 @@ __all__ = [
     "StartPregnancyHandler",
     "StudySkillHandler",
     "SellItemHandler",
+    "TaxAssessedEvent",
+    "WagePaidEvent",
     "WorkShiftCompletedEvent",
     "WitnessRomanceHandler",
     "adult_classifier",
