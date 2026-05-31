@@ -448,6 +448,7 @@ from ..mechanics.voidsim import (
     voidsim_fragments,
 )
 from ..memory import install_memory
+from ..worldgen.apartment import APARTMENT_DEMO
 from ..worldgen.examples import (
     BARBARIANSIM_DEMO,
     COLONYSIM_DEMO,
@@ -616,7 +617,7 @@ def lifesim_plugin() -> Plugin:
         runtime=RuntimeContribution(service_factories=(_install_affect, install_lifesim)),
         content=ContentContribution(
             prompt_fragments=(need_fragments, lifesim_fragments),
-            world_generators=(LIFESIM_DEMO,),
+            world_generators=(LIFESIM_DEMO, APARTMENT_DEMO),
         ),
     )
 

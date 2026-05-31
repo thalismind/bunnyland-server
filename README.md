@@ -84,7 +84,9 @@ uv run bunnyland serve --generator voidsim-demo --ticks 5
 ```
 
 The demos are `lifesim-demo`, `gardensim-demo`, `colonysim-demo`, `barbariansim-demo`,
-`dragonsim-demo`, `daggersim-demo`, and `voidsim-demo`.
+`dragonsim-demo`, `daggersim-demo`, and `voidsim-demo`. There is also a larger life-sim
+showcase, `apartment-demo`: a quirky NYC apartment building of eccentric tenants with
+backstories, homes, and daily routines, a rat-man in the warren below, and hidden corners.
 
 ## Development
 

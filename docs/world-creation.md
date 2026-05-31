@@ -68,17 +68,20 @@ uv run bunnyland serve --generator voidsim-demo --ticks 5
 | `dragonsim-demo`     | A village, an undiscovered barrow, a faction, and a quest |
 | `daggersim-demo`     | A town with a bank, guild, rumor, travel route, and a frontier site to expand |
 | `voidsim-demo`       | A ship of habitat modules with life support, power, a damaged reactor, and a distress beacon |
+| `apartment-demo`     | A five-storey NYC apartment building of quirky tenants with backstories, homes, and daily routines, a rat-man in the warren below, and hidden corners to find |
 
 Each demo builds on the shared life-sim basics (every character has needs), then layers on
 its own package's components. Each is contributed by its sim's plugin, so it only appears
-when that plugin is enabled (the default set enables all of them). They live in
-`src/bunnyland/worldgen/examples.py` and double as worked examples for the section below.
+when that plugin is enabled (the default set enables all of them). The per-package demos live
+in `src/bunnyland/worldgen/examples.py` and double as worked examples for the section below;
+the larger `apartment-demo` (also contributed by the life-sim plugin) lives in
+`src/bunnyland/worldgen/apartment.py`.
 
 An unknown `--generator` name lists what the enabled plugins actually provide:
 
 ```
-unknown generator 'maze'; available: barbariansim-demo, colonysim-demo, daggersim-demo,
-dragonsim-demo, gardensim-demo, lifesim-demo, oneshot, recursive, voidsim-demo
+unknown generator 'maze'; available: apartment-demo, barbariansim-demo, colonysim-demo,
+daggersim-demo, dragonsim-demo, gardensim-demo, lifesim-demo, oneshot, recursive, voidsim-demo
 ```
 
 ## Seeds
