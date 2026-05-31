@@ -221,6 +221,7 @@ async def _serve(args) -> None:
                     meta,
                     host=args.api_host,
                     port=args.api_port,
+                    save_path=args.save,
                     max_ticks=max_ticks,
                 ),
                 loop,

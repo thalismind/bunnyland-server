@@ -330,6 +330,18 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+
+    location = /api/world/save {
+        auth_basic "Bunnyland world editor";
+        auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
+
+        proxy_pass http://127.0.0.1:8765/world/save;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 }
 ```
 
@@ -393,6 +405,8 @@ curl -i -X PATCH https://sandbox.example.com/api/world
 curl -fsS -u editor:YOUR_PASSWORD -X PATCH https://sandbox.example.com/api/world \
   -H 'Content-Type: application/json' \
   --data '{"operations":[]}'
+curl -i -X POST https://sandbox.example.com/api/world/save
+curl -fsS -u editor:YOUR_PASSWORD -X POST https://sandbox.example.com/api/world/save
 cd /opt/bunnyland/server
 /opt/bunnyland/.local/bin/uv run --extra server python - <<'PY'
 import asyncio
@@ -408,8 +422,9 @@ asyncio.run(main())
 PY
 ```
 
-The unauthenticated `PATCH` check should return `401 Unauthorized`; the authenticated
-empty patch should return JSON with the current `world_epoch`.
+The unauthenticated `PATCH` and save checks should return `401 Unauthorized`. The
+authenticated empty patch should return JSON with the current `world_epoch`, and the
+authenticated save should include the server-side save path.
 
 If the page loads but **Connect Live** fails, check:
 

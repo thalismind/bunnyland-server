@@ -8,9 +8,10 @@ import pytest
 from bunnyland.core import ExitTo, IdentityComponent
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
 from bunnyland.core.events import ActorMovedEvent
-from bunnyland.persistence import WorldMeta
+from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
 from bunnyland.server import app as server_app
+from bunnyland.server.admin import save_configured_world
 from bunnyland.server.app import create_app
 from bunnyland.server.models import WorldPatchRequest
 from bunnyland.server.patches import apply_world_patch
@@ -130,7 +131,25 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
     assert "/world" in paths
+    assert "/world/save" in paths
     assert "/world/updates" in paths
+
+
+def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):
+    path = tmp_path / "admin-save.json"
+
+    response = save_configured_world(
+        scenario.actor,
+        path,
+        meta=WorldMeta(seed="moss", generator="oneshot"),
+    )
+
+    assert response.ok is True
+    assert response.path == str(path)
+    assert response.saved_at_epoch == scenario.actor.epoch
+    reloaded, meta = load_world(path)
+    assert reloaded.epoch == scenario.actor.epoch
+    assert meta.seed == "moss"
 
 
 def test_world_patch_updates_component_and_edge(scenario):

@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
-from .models import CommandRequest, CommandResponse, WorldPatchRequest, WorldPatchResponse
+from .admin import save_configured_world
+from .models import (
+    CommandRequest,
+    CommandResponse,
+    WorldPatchRequest,
+    WorldPatchResponse,
+    WorldSaveResponse,
+)
 from .patches import WorldPatchError, apply_world_patch
 from .serialization import serialize_world
 from .subscriptions import EventStream
@@ -26,7 +34,13 @@ except ImportError:  # pragma: no cover - exercised only without optional deps
     FastAPI = HTTPException = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
 
 
-def create_app(actor: WorldActor, meta: WorldMeta | None = None, *, title: str = "bunnyland"):
+def create_app(
+    actor: WorldActor,
+    meta: WorldMeta | None = None,
+    *,
+    save_path: str | Path | None = None,
+    title: str = "bunnyland",
+):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
 
     if FastAPI is None:
@@ -81,6 +95,16 @@ def create_app(actor: WorldActor, meta: WorldMeta | None = None, *, title: str =
             }
         )
         return response
+
+    @app.post("/world/save", response_model=WorldSaveResponse)
+    async def save_world_now() -> WorldSaveResponse:
+        if save_path is None:
+            raise HTTPException(status_code=409, detail="server was not started with --save")
+        try:
+            async with actor._lock:
+                return save_configured_world(actor, save_path, meta=meta)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.websocket("/world/updates")
     async def world_updates(websocket: WebSocket) -> None:

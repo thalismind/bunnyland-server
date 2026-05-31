@@ -124,6 +124,14 @@ class WorldPatchResponse(BaseModel):
     deleted_entities: list[str] = Field(default_factory=list)
 
 
+class WorldSaveResponse(BaseModel):
+    ok: bool = True
+    path: str
+    world_epoch: int
+    saved_at_epoch: int
+    saved_at: str | None = None
+
+
 __all__ = [
     "CommandCostRequest",
     "CommandRequest",
@@ -132,4 +140,5 @@ __all__ = [
     "EdgePatchSpec",
     "WorldPatchRequest",
     "WorldPatchResponse",
+    "WorldSaveResponse",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from ..core.world_actor import WorldActor
 from ..engine import GameLoop
@@ -17,6 +18,7 @@ async def run_loop_with_api(
     *,
     host: str,
     port: int,
+    save_path: str | Path | None = None,
     max_ticks: int | None,
 ) -> int:
     """Run uvicorn and the game loop until either one stops."""
@@ -28,7 +30,7 @@ async def run_loop_with_api(
             "bunnyland server API requires uvicorn; install the server dependencies first"
         ) from exc
 
-    app = create_app(actor, meta)
+    app = create_app(actor, meta, save_path=save_path)
     server = uvicorn.Server(
         uvicorn.Config(app, host=host, port=port, log_level="info")
     )
