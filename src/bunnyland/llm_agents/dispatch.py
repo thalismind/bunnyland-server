@@ -171,8 +171,12 @@ class ControllerDispatch:
         # character_id -> a "did you mean..." note to surface on its next prompt, so an
         # agent that named something unreachable gets the same guidance a human does.
         self._feedback: dict[str, str] = {}
+        # Counts dispatch turns so a controller can act only every N ticks (the world still
+        # ticks every iteration; only the agent's decisions are throttled).
+        self._tick = 0
 
     async def run_once(self) -> list[Decision]:
+        self._tick += 1
         decisions: list[Decision] = []
         for character_id in self._actable_characters():
             decisions.append(await self._decide_for(character_id))
@@ -188,9 +192,16 @@ class ControllerDispatch:
         for entity in query.execute_entities():
             if not self._has_action_point(entity):
                 continue
-            if self._llm_controller(entity.id) is not None:
+            controller = self._llm_controller(entity.id)
+            if controller is not None and self._acts_this_tick(controller[0]):
                 actable.append(entity.id)
         return actable
+
+    def _acts_this_tick(self, controller_id: EntityId) -> bool:
+        """Whether the controller's act-every-N-ticks cadence lands on the current tick."""
+        controller = self.actor.world.get_entity(controller_id)
+        interval = max(1, controller.get_component(LLMControllerComponent).act_every_ticks)
+        return self._tick % interval == 0
 
     @staticmethod
     def _has_action_point(entity) -> bool:

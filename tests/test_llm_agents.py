@@ -197,6 +197,28 @@ async def test_dispatch_submits_a_command_for_an_llm_character():
     assert not scenario.actor._inbox.empty()
 
 
+async def test_dispatch_throttles_controller_by_act_every_ticks():
+    from dataclasses import replace
+
+    from bunnyland.core import replace_component
+    from bunnyland.core.controllers import LLMControllerComponent
+
+    scenario = build_scenario()
+    builder = PromptBuilder(scenario.actor.world)
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    replace_component(
+        controller,
+        replace(controller.get_component(LLMControllerComponent), act_every_ticks=2),
+    )
+    agent = ScriptedAgent([ToolCall("move", {"direction": "north"})])
+    dispatch = ControllerDispatch(scenario.actor, builder, agent)
+
+    # Tick 1 is skipped (1 % 2 != 0); tick 2 is the controller's turn.
+    assert await dispatch.run_once() == []
+    second = await dispatch.run_once()
+    assert [decision.tool for decision in second] == ["move"]
+
+
 class _FakeOllamaClient:
     """Records the messages sent on each chat call and replies with a fixed tool call."""
 
