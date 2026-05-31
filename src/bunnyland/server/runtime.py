@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..core.world_actor import WorldActor
 from ..engine import GameLoop
 from ..persistence import WorldMeta
 from .app import create_app
+
+if TYPE_CHECKING:
+    from ..worldgen import GenOptions
 
 
 async def run_loop_with_api(
@@ -19,7 +23,8 @@ async def run_loop_with_api(
     host: str,
     port: int,
     save_path: str | Path | None = None,
-    max_ticks: int | None,
+    worldgen_options: GenOptions | None = None,
+    max_ticks: int | None = None,
 ) -> int:
     """Run uvicorn and the game loop until either one stops."""
 
@@ -30,7 +35,13 @@ async def run_loop_with_api(
             "bunnyland server API requires uvicorn; install the server dependencies first"
         ) from exc
 
-    app = create_app(actor, meta, loop=loop, save_path=save_path)
+    app = create_app(
+        actor,
+        meta,
+        loop=loop,
+        save_path=save_path,
+        worldgen_options=worldgen_options,
+    )
     server = uvicorn.Server(
         uvicorn.Config(app, host=host, port=port, log_level="info")
     )

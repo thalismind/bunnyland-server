@@ -60,6 +60,7 @@ class EdgePatchSpec(BaseModel):
 
 class AddEntityPatchRequest(BaseModel):
     op: Literal["add_entity"]
+    client_id: str | None = None
     prefab: str = "entity"
     components: list[ComponentPatchSpec] = Field(default_factory=list)
 
@@ -117,11 +118,49 @@ class WorldPatchRequest(BaseModel):
     operations: list[WorldPatchOperation] = Field(default_factory=list)
 
 
+class WorldRoomGenerationRequest(BaseModel):
+    door_entity_id: str
+    direction: str | None = None
+    prompt: str = ""
+
+
+class WorldCharacterGenerationRequest(BaseModel):
+    room_entity_id: str
+    prompt: str = ""
+
+
+class WorldItemGenerationRequest(BaseModel):
+    container_entity_id: str
+    prompt: str = ""
+
+
 class WorldPatchResponse(BaseModel):
     ok: bool = True
     world_epoch: int
     changed_entities: list[dict[str, Any]] = Field(default_factory=list)
     deleted_entities: list[str] = Field(default_factory=list)
+
+
+class WorldRoomGenerationResponse(BaseModel):
+    ok: bool = True
+    source_room_id: str
+    door_entity_id: str
+    generated_title: str
+    patch: WorldPatchRequest
+
+
+class WorldCharacterGenerationResponse(BaseModel):
+    ok: bool = True
+    room_entity_id: str
+    generated_name: str
+    patch: WorldPatchRequest
+
+
+class WorldItemGenerationResponse(BaseModel):
+    ok: bool = True
+    container_entity_id: str
+    generated_name: str
+    patch: WorldPatchRequest
 
 
 class WorldSaveResponse(BaseModel):
@@ -145,6 +184,12 @@ __all__ = [
     "CommandResponse",
     "ComponentPatchSpec",
     "EdgePatchSpec",
+    "WorldCharacterGenerationRequest",
+    "WorldCharacterGenerationResponse",
+    "WorldItemGenerationRequest",
+    "WorldItemGenerationResponse",
+    "WorldRoomGenerationRequest",
+    "WorldRoomGenerationResponse",
     "WorldPatchRequest",
     "WorldPatchResponse",
     "WorldRuntimeResponse",

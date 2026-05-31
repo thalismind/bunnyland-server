@@ -5,7 +5,17 @@ from datetime import UTC, datetime
 
 import pytest
 
-from bunnyland.core import ExitTo, IdentityComponent
+from bunnyland.core import (
+    CharacterComponent,
+    ContainerComponent,
+    ContainmentMode,
+    Contains,
+    DoorComponent,
+    ExitTo,
+    IdentityComponent,
+    RoomComponent,
+    spawn_entity,
+)
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
 from bunnyland.core.events import ActorMovedEvent
 from bunnyland.engine import GameLoop
@@ -16,8 +26,18 @@ from bunnyland.server import CommandRequest, EventStream, serialize_event, seria
 from bunnyland.server import app as server_app
 from bunnyland.server.admin import save_configured_world
 from bunnyland.server.app import create_app
-from bunnyland.server.models import WorldPatchRequest
+from bunnyland.server.models import (
+    WorldCharacterGenerationRequest,
+    WorldItemGenerationRequest,
+    WorldPatchRequest,
+    WorldRoomGenerationRequest,
+)
 from bunnyland.server.patches import apply_world_patch
+from bunnyland.server.worldgen import (
+    generate_character_patch,
+    generate_item_patch,
+    generate_room_patch,
+)
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -142,6 +162,9 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
     assert "/admin/world" in paths
+    assert "/admin/world/generate-room" in paths
+    assert "/admin/world/generate-character" in paths
+    assert "/admin/world/generate-item" in paths
     assert "/admin/world/save" in paths
     assert "/admin/runtime" in paths
     assert "/admin/pause" in paths
@@ -238,6 +261,127 @@ def test_world_patch_adds_and_deletes_entity(scenario):
     assert add_response.ok is True
     assert delete_response.ok is True
     assert entity_id in delete_response.deleted_entities
+
+
+def test_world_patch_can_reference_client_ids_within_one_request(scenario):
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "add_entity",
+                        "client_id": "$room",
+                        "components": [
+                            {
+                                "type": "RoomComponent",
+                                "fields": {"title": "Moonlit Cellar"},
+                            }
+                        ],
+                    },
+                    {
+                        "op": "set_edge",
+                        "source_id": str(scenario.room_a),
+                        "target_id": "$room",
+                        "edge": {"type": "ExitTo", "fields": {"direction": "down"}},
+                    },
+                ]
+            }
+        ),
+    )
+
+    assert response.ok is True
+    assert len(response.changed_entities) == 2
+    exits = scenario.actor.world.get_entity(scenario.room_a).get_relationships(ExitTo)
+    assert any(edge.direction == "down" for edge, _target in exits)
+
+
+def test_worldgen_room_patch_expands_selected_door(scenario):
+    door = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="east door", kind="door"),
+            DoorComponent(open=False),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), door.id
+    )
+
+    generated = generate_room_patch(
+        scenario.actor,
+        WorldRoomGenerationRequest(
+            door_entity_id=str(door.id),
+            prompt="Moonlit Cellar",
+        ),
+    )
+    response = apply_world_patch(scenario.actor, generated.patch)
+
+    assert generated.generated_title == "Moonlit Cellar"
+    assert response.ok is True
+    assert scenario.actor.world.get_entity(door.id).get_component(DoorComponent).open is True
+    exits = scenario.actor.world.get_entity(scenario.room_a).get_relationships(ExitTo)
+    target_ids = [target for edge, target in exits if edge.direction == "east"]
+    assert target_ids
+    assert scenario.actor.world.get_entity(target_ids[0]).has_component(RoomComponent)
+
+
+def test_worldgen_character_patch_places_character_in_selected_room(scenario):
+    generated = generate_character_patch(
+        scenario.actor,
+        WorldCharacterGenerationRequest(
+            room_entity_id=str(scenario.room_a),
+            prompt="Mossy Sage",
+        ),
+    )
+    response = apply_world_patch(scenario.actor, generated.patch)
+
+    assert generated.generated_name == "Mossy Sage"
+    room_contains = scenario.actor.world.get_entity(scenario.room_a).get_relationships(
+        Contains
+    )
+    character_ids = [
+        target
+        for edge, target in room_contains
+        if edge.mode == ContainmentMode.ROOM_CONTENT
+        and scenario.actor.world.get_entity(target).has_component(CharacterComponent)
+    ]
+    assert response.ok is True
+    assert len(character_ids) == 2
+
+
+def test_worldgen_item_patch_accepts_room_character_and_container_destinations(scenario):
+    chest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="oak chest", kind="container"),
+            ContainerComponent(open=True),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), chest.id
+    )
+
+    for container_id, prompt, mode in [
+        (scenario.room_a, "a sun coin", ContainmentMode.ROOM_CONTENT),
+        (scenario.character, "a pocket map", ContainmentMode.INVENTORY),
+        (chest.id, "a brass key", ContainmentMode.CONTAINER),
+    ]:
+        generated = generate_item_patch(
+            scenario.actor,
+            WorldItemGenerationRequest(
+                container_entity_id=str(container_id),
+                prompt=prompt,
+            ),
+        )
+        apply_world_patch(scenario.actor, generated.patch)
+        relationships = scenario.actor.world.get_entity(container_id).get_relationships(Contains)
+        assert any(
+            edge.mode == mode
+            and scenario.actor.world.get_entity(target).get_component(IdentityComponent).name
+            == generated.generated_name
+            for edge, target in relationships
+        )
 
 
 def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypatch):

@@ -12,19 +12,27 @@ from .admin import save_configured_world
 from .models import (
     CommandRequest,
     CommandResponse,
+    WorldCharacterGenerationRequest,
+    WorldCharacterGenerationResponse,
+    WorldItemGenerationRequest,
+    WorldItemGenerationResponse,
     WorldPatchRequest,
     WorldPatchResponse,
+    WorldRoomGenerationRequest,
+    WorldRoomGenerationResponse,
     WorldRuntimeResponse,
     WorldSaveResponse,
 )
 from .patches import WorldPatchError, apply_world_patch
 from .serialization import serialize_world
 from .subscriptions import EventStream
+from .worldgen import generate_character_patch, generate_item_patch, generate_room_patch
 
 WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 
 if TYPE_CHECKING:
     from ..engine import GameLoop
+    from ..worldgen import GenOptions
 
 # Imported at module scope (not inside ``create_app``) so that FastAPI can resolve the
 # ``websocket: WebSocket`` annotation on the route handler. Under ``from __future__ import
@@ -45,6 +53,7 @@ def create_app(
     *,
     loop: GameLoop | None = None,
     save_path: str | Path | None = None,
+    worldgen_options: GenOptions | None = None,
     title: str = "bunnyland",
 ):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
@@ -128,6 +137,38 @@ def create_app(
             }
         )
         return response
+
+    @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)
+    async def generate_room(request: WorldRoomGenerationRequest) -> WorldRoomGenerationResponse:
+        try:
+            return generate_room_patch(actor, request, options=worldgen_options)
+        except WorldPatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post(
+        "/admin/world/generate-character",
+        response_model=WorldCharacterGenerationResponse,
+    )
+    async def generate_character(
+        request: WorldCharacterGenerationRequest,
+    ) -> WorldCharacterGenerationResponse:
+        try:
+            return generate_character_patch(actor, request, options=worldgen_options)
+        except WorldPatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/admin/world/generate-item", response_model=WorldItemGenerationResponse)
+    async def generate_item(request: WorldItemGenerationRequest) -> WorldItemGenerationResponse:
+        try:
+            return generate_item_patch(actor, request, options=worldgen_options)
+        except WorldPatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/admin/world/save", response_model=WorldSaveResponse)
     async def save_world_now() -> WorldSaveResponse:

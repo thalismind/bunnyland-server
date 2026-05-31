@@ -227,6 +227,13 @@ async def _serve(args) -> None:
                     host=args.api_host,
                     port=args.api_port,
                     save_path=args.save,
+                    worldgen_options=GenOptions(
+                        llm=args.llm,
+                        model=worldgen_model,
+                        host=host,
+                        api_key=api_key,
+                        max_rooms=args.max_rooms,
+                    ),
                     max_ticks=max_ticks,
                 ),
                 loop,

@@ -39,6 +39,19 @@ class RecursiveWorldBuilder(Protocol):
         self, room: RoomNodeProposal, *, known_rooms: Mapping[str, str]
     ) -> RoomContentsProposal: ...
 
+    def propose_character(
+        self, room: RoomNodeProposal, *, prompt: str, known_rooms: Mapping[str, str]
+    ) -> CharacterProposal: ...
+
+    def propose_item(
+        self,
+        *,
+        container_name: str,
+        container_kind: str,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+    ) -> ItemProposal: ...
+
     def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]: ...
 
     def propose_container_contents(self, *, name: str) -> list[ItemProposal]: ...
@@ -126,6 +139,23 @@ class StubRecursiveBuilder:
                 ],
             )
         return RoomContentsProposal(objects=[ItemProposal(name="a smooth pebble")])
+
+    def propose_character(
+        self, room: RoomNodeProposal, *, prompt: str, known_rooms: Mapping[str, str]
+    ) -> CharacterProposal:
+        del room, known_rooms
+        return CharacterProposal(name=prompt or "Mossy Visitor", controller="suspended")
+
+    def propose_item(
+        self,
+        *,
+        container_name: str,
+        container_kind: str,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+    ) -> ItemProposal:
+        del container_name, container_kind, known_rooms
+        return ItemProposal(name=prompt or "a smooth pebble")
 
     def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]:
         del species
@@ -232,6 +262,35 @@ class OllamaRecursiveBuilder:
             '"characters":[{"name","species","controller":"llm|suspended","llm_profile"}]}.'
         )
         return RoomContentsProposal.model_validate(self._ask(instruction))
+
+    def propose_character(  # pragma: no cover - needs network + extra
+        self, room: RoomNodeProposal, *, prompt: str, known_rooms: Mapping[str, str]
+    ) -> CharacterProposal:
+        reminder = "; ".join(f"{title}" for title in known_rooms.values())
+        instruction = (
+            f"Rooms so far: {reminder}. Create one character for {room.title!r} "
+            f"({room.description}). Theme/request: {prompt!r}. Reply JSON "
+            '{"name","species","controller":"llm|suspended","llm_profile","traits","goals"}. '
+            "Use controller=suspended unless the request explicitly asks for an LLM character."
+        )
+        return CharacterProposal.model_validate(self._ask(instruction))
+
+    def propose_item(  # pragma: no cover - needs network + extra
+        self,
+        *,
+        container_name: str,
+        container_kind: str,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+    ) -> ItemProposal:
+        reminder = "; ".join(f"{title}" for title in known_rooms.values())
+        instruction = (
+            f"Rooms so far: {reminder}. Create one item for {container_name!r} "
+            f"(container kind: {container_kind}). Theme/request: {prompt!r}. Reply JSON "
+            '{"name","kind","portable","nutrition","satiety","hydration","renewable",'
+            '"open","writable","key_name","locked"}.'
+        )
+        return ItemProposal.model_validate(self._ask(instruction))
 
     def propose_inventory(  # pragma: no cover - needs network + extra
         self, *, name: str, species: str
