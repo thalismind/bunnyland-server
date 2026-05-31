@@ -53,6 +53,27 @@ uv run bunnyland serve --llm --generator recursive --ticks 20
 The full design is in [`bunnyland_specification.md`](bunnyland_specification.md); the build
 plan is in [`PLAN.md`](PLAN.md).
 
+## Simulation packages
+
+Mechanics ship as **plugins** you enable per world, so a world is whatever bundle you turn
+on. Each sim package adds its own components, verbs, systems, and prompt fragments without
+touching the others — emergence comes from small systems reacting to shared events. The
+full catalogue is in [`bunnyland_mechanics.md`](bunnyland_mechanics.md).
+
+| Package         | Inspired by      | Key mechanics it introduces |
+|-----------------|------------------|-----------------------------|
+| **Life Sim**    | The Sims         | Needs, moods/thoughts, social bonds and jealousy, romance, family and pregnancy, skill progression, careers and household economy |
+| **Colony Sim**  | RimWorld         | Work priorities and jobs, resource gathering, crafting recipes and workstations, ownership and reservations |
+| **Garden Sim**  | Stardew Valley   | Soil and tilling, planting/watering/fertilizing, seasonal crop growth, and harvesting |
+| **Barbarian Sim** | Conan Exiles   | Survival combat, stamina, temperature exposure, gear durability, poison and corruption |
+| **Dragon Sim**  | Skyrim           | Open-world discovery, radiant quests and objectives, factions and reputation |
+| **Dagger Sim**  | Daggerfall       | Procedural frontier expansion, rumors, travel logistics, guilds/institutions and services, banking and debt, civic law and fines, custom classes and spells, language pacification, supernatural afflictions, procedural dungeons, etiquette and social approach |
+| **Void Sim**    | FTL              | Ships, stations and habitat modules, life support, pressure and airlocks, power grids, ship-system repair, and docking |
+
+Foundational plugins back these up: **Environment** (time, weather, fire), **Mechanisms**
+(doors, buttons), **Social Bonds**, **Policy & Boundaries**, **Persona**, **Storyteller**
+(paced incidents), **Memory** (private notes and recall), and **World Generators**.
+
 ## Development
 
 ```bash
