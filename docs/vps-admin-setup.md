@@ -243,13 +243,29 @@ curl -fsS http://127.0.0.1:8765/health
 Serve the homepage at the apex domain, serve the web client at the sandbox domain, and proxy
 the Bunnyland API under `/api` on the sandbox domain.
 
-Add this `map` once in nginx's `http` block. A clean way on Ubuntu is a file such as
+Install `apache2-utils` if you do not already have `htpasswd`, then create the editor
+password file:
+
+```bash
+sudo apt install -y apache2-utils
+sudo install -d -o root -g www-data -m 0750 /etc/nginx/bunnyland
+sudo htpasswd -c /etc/nginx/bunnyland/world-editor.htpasswd editor
+sudo chown root:www-data /etc/nginx/bunnyland/world-editor.htpasswd
+sudo chmod 0640 /etc/nginx/bunnyland/world-editor.htpasswd
+```
+
+Add these `map`s once in nginx's `http` block. A clean way on Ubuntu is a file such as
 `/etc/nginx/conf.d/bunnyland-upgrade-map.conf`:
 
 ```nginx
 map $http_upgrade $connection_upgrade {
     default upgrade;
     '' close;
+}
+
+map $request_method $bunnyland_patch_realm {
+    default off;
+    PATCH "Bunnyland world editor";
 }
 ```
 
@@ -301,6 +317,18 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 3600s;
+    }
+
+    location = /api/world {
+        auth_basic $bunnyland_patch_realm;
+        auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
+
+        proxy_pass http://127.0.0.1:8765/world;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
@@ -361,6 +389,10 @@ curl -fsS -I https://home.example.com/
 curl -fsS https://sandbox.example.com/config.json
 curl -fsS https://sandbox.example.com/api/health
 curl -fsS https://sandbox.example.com/api/world/snapshot
+curl -i -X PATCH https://sandbox.example.com/api/world
+curl -fsS -u editor:YOUR_PASSWORD -X PATCH https://sandbox.example.com/api/world \
+  -H 'Content-Type: application/json' \
+  --data '{"operations":[]}'
 cd /opt/bunnyland/server
 /opt/bunnyland/.local/bin/uv run --extra server python - <<'PY'
 import asyncio
@@ -375,6 +407,9 @@ async def main():
 asyncio.run(main())
 PY
 ```
+
+The unauthenticated `PATCH` check should return `401 Unauthorized`; the authenticated
+empty patch should return JSON with the current `world_epoch`.
 
 If the page loads but **Connect Live** fails, check:
 

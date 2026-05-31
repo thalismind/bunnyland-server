@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -48,4 +48,88 @@ class CommandResponse(BaseModel):
     command_id: str
 
 
-__all__ = ["CommandCostRequest", "CommandRequest", "CommandResponse"]
+class ComponentPatchSpec(BaseModel):
+    type: str
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class EdgePatchSpec(BaseModel):
+    type: str
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class AddEntityPatchRequest(BaseModel):
+    op: Literal["add_entity"]
+    prefab: str = "entity"
+    components: list[ComponentPatchSpec] = Field(default_factory=list)
+
+
+class DeleteEntityPatchRequest(BaseModel):
+    op: Literal["delete_entity"]
+    entity_id: str
+
+
+class AddComponentPatchRequest(BaseModel):
+    op: Literal["add_component"]
+    entity_id: str
+    component: ComponentPatchSpec
+
+
+class SetComponentPatchRequest(BaseModel):
+    op: Literal["set_component"]
+    entity_id: str
+    component: ComponentPatchSpec
+
+
+class RemoveComponentPatchRequest(BaseModel):
+    op: Literal["remove_component"]
+    entity_id: str
+    component_type: str
+
+
+class SetEdgePatchRequest(BaseModel):
+    op: Literal["set_edge"]
+    source_id: str
+    target_id: str
+    edge: EdgePatchSpec
+
+
+class RemoveEdgePatchRequest(BaseModel):
+    op: Literal["remove_edge"]
+    source_id: str
+    target_id: str
+    edge_type: str
+
+
+WorldPatchOperation = Annotated[
+    AddEntityPatchRequest
+    | DeleteEntityPatchRequest
+    | AddComponentPatchRequest
+    | SetComponentPatchRequest
+    | RemoveComponentPatchRequest
+    | SetEdgePatchRequest
+    | RemoveEdgePatchRequest,
+    Field(discriminator="op"),
+]
+
+
+class WorldPatchRequest(BaseModel):
+    operations: list[WorldPatchOperation] = Field(default_factory=list)
+
+
+class WorldPatchResponse(BaseModel):
+    ok: bool = True
+    world_epoch: int
+    changed_entities: list[dict[str, Any]] = Field(default_factory=list)
+    deleted_entities: list[str] = Field(default_factory=list)
+
+
+__all__ = [
+    "CommandCostRequest",
+    "CommandRequest",
+    "CommandResponse",
+    "ComponentPatchSpec",
+    "EdgePatchSpec",
+    "WorldPatchRequest",
+    "WorldPatchResponse",
+]

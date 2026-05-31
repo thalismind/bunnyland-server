@@ -5,12 +5,15 @@ from datetime import UTC, datetime
 
 import pytest
 
+from bunnyland.core import ExitTo, IdentityComponent
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
 from bunnyland.core.events import ActorMovedEvent
 from bunnyland.persistence import WorldMeta
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
 from bunnyland.server import app as server_app
 from bunnyland.server.app import create_app
+from bunnyland.server.models import WorldPatchRequest
+from bunnyland.server.patches import apply_world_patch
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -126,7 +129,82 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/snapshot" in paths
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
+    assert "/world" in paths
     assert "/world/updates" in paths
+
+
+def test_world_patch_updates_component_and_edge(scenario):
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "set_component",
+                        "entity_id": str(scenario.character),
+                        "component": {
+                            "type": "IdentityComponent",
+                            "fields": {
+                                "name": "Hazel",
+                                "kind": "character",
+                                "tags": ["editor"],
+                            },
+                        },
+                    },
+                    {
+                        "op": "set_edge",
+                        "source_id": str(scenario.room_a),
+                        "target_id": str(scenario.room_b),
+                        "edge": {
+                            "type": "ExitTo",
+                            "fields": {"direction": "east", "label": "arch"},
+                        },
+                    },
+                ]
+            }
+        ),
+    )
+
+    assert response.ok is True
+    character = scenario.actor.world.get_entity(scenario.character)
+    identity = character.get_component(IdentityComponent)
+    assert identity.name == "Hazel"
+    assert identity.tags == ("editor",)
+    exits = scenario.actor.world.get_entity(scenario.room_a).get_relationships(ExitTo)
+    assert any(edge.direction == "east" and target == scenario.room_b for edge, target in exits)
+
+
+def test_world_patch_adds_and_deletes_entity(scenario):
+    add_response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "add_entity",
+                        "components": [
+                            {
+                                "type": "IdentityComponent",
+                                "fields": {"name": "Lantern", "kind": "item"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+    entity_id = add_response.changed_entities[0]["id"]
+
+    delete_response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {"operations": [{"op": "delete_entity", "entity_id": entity_id}]}
+        ),
+    )
+
+    assert add_response.ok is True
+    assert delete_response.ok is True
+    assert entity_id in delete_response.deleted_entities
 
 
 def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypatch):

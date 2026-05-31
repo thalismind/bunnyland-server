@@ -6,7 +6,8 @@ import asyncio
 
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
-from .models import CommandRequest, CommandResponse
+from .models import CommandRequest, CommandResponse, WorldPatchRequest, WorldPatchResponse
+from .patches import WorldPatchError, apply_world_patch
 from .serialization import serialize_world
 from .subscriptions import EventStream
 
@@ -19,10 +20,10 @@ WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 # parameter as a query field, closing every connection with a 403. Optional dependency, so
 # fall back to ``None`` and raise a friendly error from ``create_app`` if it is missing.
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
 except ImportError:  # pragma: no cover - exercised only without optional deps
-    FastAPI = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
+    FastAPI = HTTPException = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
 
 
 def create_app(actor: WorldActor, meta: WorldMeta | None = None, *, title: str = "bunnyland"):
@@ -59,6 +60,27 @@ def create_app(actor: WorldActor, meta: WorldMeta | None = None, *, title: str =
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
         await actor.submit(command)
         return CommandResponse(queued=True, command_id=command.command_id)
+
+    @app.patch("/world", response_model=WorldPatchResponse)
+    async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:
+        try:
+            async with actor._lock:
+                response = apply_world_patch(actor, request)
+        except WorldPatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        stream.broadcast(
+            {
+                "type": "patch",
+                "data": {
+                    "world_epoch": response.world_epoch,
+                    "changed_entities": [entity["id"] for entity in response.changed_entities],
+                    "deleted_entities": response.deleted_entities,
+                },
+            }
+        )
+        return response
 
     @app.websocket("/world/updates")
     async def world_updates(websocket: WebSocket) -> None:

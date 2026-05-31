@@ -34,6 +34,10 @@ class EventStream:
     def record(self, event: DomainEvent) -> None:
         message = event_message(event)
         self._recent.append(message)
+        self.broadcast(message)
+
+    def broadcast(self, message: dict[str, Any]) -> None:
+        """Fan out a websocket message without adding it to recent domain history."""
         for subscription in tuple(self._subscribers):
             queue = subscription.queue
             if queue.full():
