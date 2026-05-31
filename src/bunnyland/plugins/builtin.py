@@ -448,6 +448,15 @@ from ..mechanics.voidsim import (
     voidsim_fragments,
 )
 from ..memory import install_memory
+from ..worldgen.examples import (
+    BARBARIANSIM_DEMO,
+    COLONYSIM_DEMO,
+    DAGGERSIM_DEMO,
+    DRAGONSIM_DEMO,
+    GARDENSIM_DEMO,
+    LIFESIM_DEMO,
+    VOIDSIM_DEMO,
+)
 from ..worldgen.generators import WorldGenerator, oneshot_generator, recursive_generator
 from .model import (
     CommandContribution,
@@ -605,7 +614,10 @@ def lifesim_plugin() -> Plugin:
             )
         ),
         runtime=RuntimeContribution(service_factories=(_install_affect, install_lifesim)),
-        content=ContentContribution(prompt_fragments=(need_fragments, lifesim_fragments)),
+        content=ContentContribution(
+            prompt_fragments=(need_fragments, lifesim_fragments),
+            world_generators=(LIFESIM_DEMO,),
+        ),
     )
 
 
@@ -751,7 +763,10 @@ def colonysim_plugin() -> Plugin:
                 ReleaseOwnershipHandler,
             )
         ),
-        content=ContentContribution(prompt_fragments=(colonysim_fragments,)),
+        content=ContentContribution(
+            prompt_fragments=(colonysim_fragments,),
+            world_generators=(COLONYSIM_DEMO,),
+        ),
     )
 
 
@@ -807,7 +822,10 @@ def barbariansim_plugin() -> Plugin:
             )
         ),
         runtime=RuntimeContribution(service_factories=(install_barbariansim,)),
-        content=ContentContribution(prompt_fragments=(barbariansim_fragments,)),
+        content=ContentContribution(
+            prompt_fragments=(barbariansim_fragments,),
+            world_generators=(BARBARIANSIM_DEMO,),
+        ),
     )
 
 
@@ -851,7 +869,10 @@ def gardensim_plugin() -> Plugin:
             ),
         ),
         runtime=RuntimeContribution(service_factories=(install_gardensim,)),
-        content=ContentContribution(prompt_fragments=(gardensim_fragments,)),
+        content=ContentContribution(
+            prompt_fragments=(gardensim_fragments,),
+            world_generators=(GARDENSIM_DEMO,),
+        ),
     )
 
 
@@ -890,7 +911,10 @@ def dragonsim_plugin() -> Plugin:
                 FactionLeftEvent,
             ),
         ),
-        content=ContentContribution(prompt_fragments=(dragonsim_fragments,)),
+        content=ContentContribution(
+            prompt_fragments=(dragonsim_fragments,),
+            world_generators=(DRAGONSIM_DEMO,),
+        ),
     )
 
 
@@ -1032,7 +1056,10 @@ def daggersim_plugin() -> Plugin:
             ),
         ),
         runtime=RuntimeContribution(service_factories=(install_daggersim,)),
-        content=ContentContribution(prompt_fragments=(daggersim_fragments,)),
+        content=ContentContribution(
+            prompt_fragments=(daggersim_fragments,),
+            world_generators=(DAGGERSIM_DEMO,),
+        ),
     )
 
 
@@ -1110,7 +1137,10 @@ def voidsim_plugin() -> Plugin:
             ),
         ),
         runtime=RuntimeContribution(service_factories=(install_voidsim,)),
-        content=ContentContribution(prompt_fragments=(voidsim_fragments,)),
+        content=ContentContribution(
+            prompt_fragments=(voidsim_fragments,),
+            world_generators=(VOIDSIM_DEMO,),
+        ),
     )
 
 

@@ -72,9 +72,13 @@ def test_worldgen_plugin_contributes_named_generators():
 
     registry = collect_generators(bunnyland_plugins())
     assert {"oneshot", "recursive"} <= set(registry)
-    # generators are selected by name and disappear if the plugin is dropped
+    # generators are selected by name and disappear if their plugin is dropped
     without = collect_generators([p for p in bunnyland_plugins() if p.id != WORLDGEN])
-    assert without == {}
+    assert "oneshot" not in without and "recursive" not in without
+    # each sim plugin also contributes its own example world, tied to that plugin
+    assert "voidsim-demo" in registry
+    without_void = collect_generators([p for p in bunnyland_plugins() if p.id != VOIDSIM])
+    assert "voidsim-demo" not in without_void
 
 
 def test_select_unknown_id_raises():

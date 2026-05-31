@@ -74,6 +74,16 @@ Foundational plugins back these up: **Environment** (time, weather, fire), **Mec
 (doors, buttons), **Social Bonds**, **Policy & Boundaries**, **Persona**, **Storyteller**
 (paced incidents), **Memory** (private notes and recall), and **World Generators**.
 
+Each sim package ships a ready-to-play example world that shows off its mechanics (and the
+life-sim needs every character shares). Spin one up with its `<sim>-demo` generator:
+
+```bash
+uv run bunnyland serve --generator voidsim-demo --ticks 5
+```
+
+The demos are `lifesim-demo`, `gardensim-demo`, `colonysim-demo`, `barbariansim-demo`,
+`dragonsim-demo`, `daggersim-demo`, and `voidsim-demo`.
+
 ## Development
 
 ```bash
