@@ -24,13 +24,19 @@ from bunnyland.mechanics.daggersim import (
     AskRumorHandler,
     BankAccountComponent,
     BankComponent,
+    BountyComponent,
+    BountyPostedEvent,
+    CommitCrimeHandler,
     CompleteGeneratedQuestHandler,
+    CrimeCommittedEvent,
+    CrimeRecordComponent,
     DaggerQuestRewardComponent,
     DebtComponent,
     DepositHandler,
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
+    FinePaidEvent,
     GeneratedQuestComponent,
     GeneratedSiteInstantiatedEvent,
     InstitutionComponent,
@@ -39,6 +45,7 @@ from bunnyland.mechanics.daggersim import (
     InstitutionServiceUsedEvent,
     InvestigateRumorHandler,
     JoinInstitutionHandler,
+    LawRegionComponent,
     LoanComponent,
     LoanDefaultedEvent,
     LoanDueConsequence,
@@ -46,6 +53,7 @@ from bunnyland.mechanics.daggersim import (
     LoanRepaidEvent,
     MemberOfInstitution,
     OpenBankAccountHandler,
+    PayFineHandler,
     PlanTravelHandler,
     ProceduralSiteComponent,
     QuestAcceptedEvent,
@@ -94,6 +102,8 @@ def _install(actor):
     actor.register_handler(WithdrawHandler())
     actor.register_handler(TakeLoanHandler())
     actor.register_handler(RepayLoanHandler())
+    actor.register_handler(CommitCrimeHandler())
+    actor.register_handler(PayFineHandler())
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
@@ -214,6 +224,12 @@ def _bank(scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), bank.id
     )
     return bank.id
+
+
+def _law_region(scenario):
+    scenario.actor.world.get_entity(scenario.room_a).add_component(
+        LawRegionComponent(region_id="moss-road", fines={"trespass": 15, "default": 10})
+    )
 
 
 async def test_expand_site_instantiates_unrealized_location():
@@ -523,6 +539,46 @@ async def test_unpaid_loan_defaults_into_debt():
     assert loan.get_component(LoanComponent).status == "defaulted"
     assert loan.get_component(DebtComponent).amount == 30
     assert defaulted[0].loan_id == str(loan_id)
+
+
+async def test_crime_posts_bounty_and_pay_fine_resolves_record_from_bank_account():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _law_region(scenario)
+    bank_id = _bank(scenario)
+    opened: list[AccountOpenedEvent] = []
+    crimes: list[CrimeCommittedEvent] = []
+    bounties: list[BountyPostedEvent] = []
+    paid: list[FinePaidEvent] = []
+    scenario.actor.bus.subscribe(AccountOpenedEvent, opened.append)
+    scenario.actor.bus.subscribe(CrimeCommittedEvent, crimes.append)
+    scenario.actor.bus.subscribe(BountyPostedEvent, bounties.append)
+    scenario.actor.bus.subscribe(FinePaidEvent, paid.append)
+
+    await scenario.actor.submit(_cmd(scenario, "open-bank-account", bank_id=str(bank_id)))
+    await scenario.actor.tick(HOUR)
+    account_id = parse_entity_id(opened[0].account_id)
+    assert account_id is not None
+    await scenario.actor.submit(_cmd(scenario, "deposit", bank_id=str(bank_id), amount=20))
+    await scenario.actor.tick(HOUR)
+
+    await scenario.actor.submit(_cmd(scenario, "commit-crime", crime_type="trespass"))
+    await scenario.actor.tick(HOUR)
+    crime_id = parse_entity_id(crimes[0].crime_id)
+    assert crime_id is not None
+    crime = scenario.actor.world.get_entity(crime_id)
+    assert crime.get_component(CrimeRecordComponent).fine == 15
+    assert crime.get_component(BountyComponent).amount == 15
+    assert bounties[0].amount == 15
+
+    await scenario.actor.submit(_cmd(scenario, "pay-fine", crime_id=str(crime_id)))
+    await scenario.actor.tick(HOUR)
+
+    account = scenario.actor.world.get_entity(account_id)
+    assert account.get_component(BankAccountComponent).balance == 5
+    assert crime.get_component(CrimeRecordComponent).status == "paid"
+    assert not crime.has_component(BountyComponent)
+    assert paid[0].crime_id == str(crime_id)
 
 
 def test_daggersim_fragments_show_nearby_unrealized_locations():

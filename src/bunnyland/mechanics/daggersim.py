@@ -167,6 +167,26 @@ class DebtComponent(Component):
     defaulted_at_epoch: int
 
 
+@dataclass(frozen=True)
+class LawRegionComponent(Component):
+    region_id: str
+    fines: dict[str, int]
+
+
+@dataclass(frozen=True)
+class CrimeRecordComponent(Component):
+    crime_type: str
+    region_id: str
+    fine: int
+    status: str = "open"
+
+
+@dataclass(frozen=True)
+class BountyComponent(Component):
+    amount: int
+    region_id: str
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -280,6 +300,22 @@ class LoanRepaidEvent(DomainEvent):
 
 class LoanDefaultedEvent(DomainEvent):
     loan_id: str
+    amount: int
+
+
+class CrimeCommittedEvent(DomainEvent):
+    crime_id: str
+    crime_type: str
+    fine: int
+
+
+class BountyPostedEvent(DomainEvent):
+    crime_id: str
+    amount: int
+
+
+class FinePaidEvent(DomainEvent):
+    crime_id: str
     amount: int
 
 
@@ -1115,6 +1151,129 @@ def _bank_account(world: World, owner_id: EntityId, bank_id: EntityId) -> Entity
     return None
 
 
+class CommitCrimeHandler:
+    command_type = "commit-crime"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        crime_type = str(command.payload.get("crime_type", "")).strip()
+        if character_id is None or not crime_type:
+            return rejected("invalid character or crime type")
+        character = ctx.entity(character_id)
+        law_region = _current_law_region(ctx.world, character)
+        if law_region is None:
+            return rejected("no law region applies")
+        region_id, law = law_region
+        fine = int(law.fines.get(crime_type, law.fines.get("default", 0)))
+        if fine <= 0:
+            return rejected("crime is not fineable")
+
+        from ..core.ecs import spawn_entity
+
+        crime = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=f"{crime_type} charge", kind="crime-record"),
+                CrimeRecordComponent(
+                    crime_type=crime_type,
+                    region_id=law.region_id,
+                    fine=fine,
+                ),
+                BountyComponent(amount=fine, region_id=law.region_id),
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), crime.id)
+        return ok(
+            CrimeCommittedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(region_id),
+                    target_ids=(str(crime.id),),
+                    crime_id=str(crime.id),
+                    crime_type=crime_type,
+                    fine=fine,
+                )
+            ),
+            BountyPostedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(region_id),
+                    target_ids=(str(crime.id),),
+                    crime_id=str(crime.id),
+                    amount=fine,
+                )
+            ),
+        )
+
+
+class PayFineHandler:
+    command_type = "pay-fine"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        crime_id = parse_entity_id(command.payload.get("crime_id"))
+        if character_id is None or crime_id is None:
+            return rejected("invalid character or crime id")
+        if not ctx.world.has_entity(crime_id):
+            return rejected("crime record does not exist")
+        character = ctx.entity(character_id)
+        if crime_id not in reachable_ids(ctx.world, character):
+            return rejected("crime record is not reachable")
+        crime_entity = ctx.entity(crime_id)
+        if not crime_entity.has_component(CrimeRecordComponent):
+            return rejected("target is not a crime record")
+        crime = crime_entity.get_component(CrimeRecordComponent)
+        if crime.status != "open":
+            return rejected("crime record is not open")
+        account = _any_bank_account(ctx.world, character_id)
+        if account is None:
+            return rejected("bank account does not exist")
+        account_component = account.get_component(BankAccountComponent)
+        if account_component.balance < crime.fine:
+            return rejected("insufficient bank balance")
+
+        replace_component(
+            account,
+            replace(account_component, balance=account_component.balance - crime.fine),
+        )
+        replace_component(crime_entity, replace(crime, status="paid"))
+        if crime_entity.has_component(BountyComponent):
+            crime_entity.remove_component(BountyComponent)
+        return ok(
+            FinePaidEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(crime_id), str(account.id)),
+                    crime_id=str(crime_id),
+                    amount=crime.fine,
+                )
+            )
+        )
+
+
+def _current_law_region(
+    world: World, character: Entity
+) -> tuple[EntityId, LawRegionComponent] | None:
+    room_id = container_of(character)
+    if room_id is not None and world.has_entity(room_id):
+        room = world.get_entity(room_id)
+        if room.has_component(LawRegionComponent):
+            return room_id, room.get_component(LawRegionComponent)
+    return None
+
+
+def _any_bank_account(world: World, owner_id: EntityId) -> Entity | None:
+    for account in world.query().with_all([BankAccountComponent]).execute_entities():
+        component = account.get_component(BankAccountComponent)
+        if component.owner_id == str(owner_id):
+            return account
+    return None
+
+
 def _service_institution(world: World, service: Entity) -> EntityId | None:
     parent_id = container_of(service)
     if parent_id is not None:
@@ -1207,6 +1366,9 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(
                 f"Loan: {loan.balance} due at epoch {loan.due_at_epoch} ({loan.status})."
             )
+        if entity.has_component(CrimeRecordComponent):
+            crime = entity.get_component(CrimeRecordComponent)
+            lines.append(f"Crime record: {crime.crime_type} ({crime.status}).")
     if character.has_component(TravelPlanComponent):
         plan = character.get_component(TravelPlanComponent)
         lines.append(
@@ -1236,7 +1398,12 @@ __all__ = [
     "AskForWorkHandler",
     "BankAccountComponent",
     "BankComponent",
+    "BountyComponent",
+    "BountyPostedEvent",
     "CompleteGeneratedQuestHandler",
+    "CommitCrimeHandler",
+    "CrimeCommittedEvent",
+    "CrimeRecordComponent",
     "DaggerQuestRewardComponent",
     "DebtComponent",
     "DepositHandler",
@@ -1244,6 +1411,7 @@ __all__ = [
     "ExpandSiteHandler",
     "ExpansionHookComponent",
     "ExpansionRequestedEvent",
+    "FinePaidEvent",
     "GeneratedSiteInstantiatedEvent",
     "InvestigateRumorHandler",
     "InstitutionComponent",
@@ -1251,6 +1419,7 @@ __all__ = [
     "InstitutionServiceComponent",
     "InstitutionServiceUsedEvent",
     "JoinInstitutionHandler",
+    "LawRegionComponent",
     "LoanComponent",
     "LoanDefaultedEvent",
     "LoanDueConsequence",
@@ -1258,6 +1427,7 @@ __all__ = [
     "LoanRepaidEvent",
     "MemberOfInstitution",
     "OpenBankAccountHandler",
+    "PayFineHandler",
     "PlanTravelHandler",
     "ProceduralSiteComponent",
     "GeneratedQuestComponent",
