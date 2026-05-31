@@ -21,6 +21,7 @@ from .proposal import (
     ItemProposal,
     RoomContentsProposal,
     RoomNodeProposal,
+    StoryEventProposal,
 )
 
 
@@ -68,6 +69,15 @@ class RecursiveWorldBuilder(Protocol):
         known_rooms: Mapping[str, str],
         schema_context: str = "",
     ) -> ItemProposal: ...
+
+    def propose_event(
+        self,
+        room: RoomNodeProposal,
+        *,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
+    ) -> StoryEventProposal: ...
 
     def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]: ...
 
@@ -191,6 +201,27 @@ class StubRecursiveBuilder:
     ) -> ItemProposal:
         del container_name, container_kind, known_rooms, schema_context
         return ItemProposal(name=prompt or "a smooth pebble")
+
+    def propose_event(
+        self,
+        room: RoomNodeProposal,
+        *,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
+    ) -> StoryEventProposal:
+        del room, known_rooms, schema_context
+        title = prompt or "A sudden rustle"
+        return StoryEventProposal(
+            title=title,
+            kind="story_event",
+            summary=f"{title} draws attention in the room.",
+            severity=1.0,
+            budget_spent=1.0,
+            tags=("generated",),
+            stimulus_intensity=1.0,
+            objects=[ItemProposal(name="a dropped clue", kind="item")],
+        )
 
     def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]:
         del species
@@ -358,6 +389,31 @@ class OllamaRecursiveBuilder:
             '"open","writable","key_name","locked"}.'
         )
         return ItemProposal.model_validate(
+            self._ask(self._with_schema_context(instruction, schema_context))
+        )
+
+    def propose_event(  # pragma: no cover - needs network + extra
+        self,
+        room: RoomNodeProposal,
+        *,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
+    ) -> StoryEventProposal:
+        reminder = "; ".join(f"{title}" for title in known_rooms.values())
+        instruction = (
+            f"Rooms so far: {reminder}. Create one plausible event, incident, or encounter "
+            f"that could happen in {room.title!r} ({room.description}). Theme/request: "
+            f"{prompt!r}. Reply JSON "
+            '{"title","kind","summary","severity","budget_spent","tags","stimulus_type",'
+            '"stimulus_intensity","objects":[{"name","kind","portable","nutrition",'
+            '"satiety","hydration","renewable","open","writable","key_name","locked"}],'
+            '"characters":[{"name","species","controller":"llm|suspended","llm_profile",'
+            '"traits","goals"}]}. Keep objects and characters empty unless the event needs '
+            "new physical entities. Use controller=suspended unless the request explicitly "
+            "asks for an LLM character."
+        )
+        return StoryEventProposal.model_validate(
             self._ask(self._with_schema_context(instruction, schema_context))
         )
 

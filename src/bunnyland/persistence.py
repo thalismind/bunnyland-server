@@ -50,6 +50,7 @@ _TYPE_MODULES = (
     "bunnyland.mechanics.policy",
     "bunnyland.mechanics.persona",
     "bunnyland.mechanics.lifesim",
+    "bunnyland.mechanics.storyteller",
     "bunnyland.mechanics.colonysim",
     "bunnyland.mechanics.barbariansim",
     "bunnyland.mechanics.gardensim",

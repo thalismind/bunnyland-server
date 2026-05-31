@@ -21,6 +21,7 @@ from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
 from bunnyland.core.events import ActorMovedEvent
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
+from bunnyland.mechanics.storyteller import IncidentComponent
 from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
@@ -29,6 +30,7 @@ from bunnyland.server.admin import save_configured_world
 from bunnyland.server.app import create_app
 from bunnyland.server.models import (
     WorldCharacterGenerationRequest,
+    WorldEventGenerationRequest,
     WorldItemGenerationRequest,
     WorldPatchRequest,
     WorldRoomGenerationRequest,
@@ -37,6 +39,7 @@ from bunnyland.server.patches import apply_world_patch
 from bunnyland.server.schema import world_schema
 from bunnyland.server.worldgen import (
     generate_character_patch,
+    generate_event_patch,
     generate_item_patch,
     generate_room_patch,
 )
@@ -47,6 +50,7 @@ from bunnyland.worldgen import (
     ItemProposal,
     RoomContentsProposal,
     RoomNodeProposal,
+    StoryEventProposal,
 )
 
 
@@ -176,6 +180,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/admin/world/generate-room" in paths
     assert "/admin/world/generate-character" in paths
     assert "/admin/world/generate-item" in paths
+    assert "/admin/world/generate-event" in paths
     assert "/admin/world/save" in paths
     assert "/admin/runtime" in paths
     assert "/admin/pause" in paths
@@ -261,6 +266,11 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
             captured["item"] = schema_context
             return ItemProposal(name="schema bell")
 
+        def propose_event(self, room, *, prompt, known_rooms, schema_context=""):
+            del room, prompt, known_rooms
+            captured["event"] = schema_context
+            return StoryEventProposal(title="Schema Event")
+
     monkeypatch.setattr(server_worldgen, "_builder", lambda options: CapturingBuilder())
 
     door = spawn_entity(
@@ -289,8 +299,13 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
         WorldItemGenerationRequest(container_entity_id=str(scenario.room_a), prompt="bell"),
         options=GenOptions(llm=True),
     )
+    generate_event_patch(
+        scenario.actor,
+        WorldEventGenerationRequest(room_entity_id=str(scenario.room_a), prompt="rustle"),
+        options=GenOptions(llm=True),
+    )
 
-    for key in ["room", "contents", "doors", "character", "item"]:
+    for key in ["room", "contents", "doors", "character", "item", "event"]:
         assert '"RoomComponent"' in captured[key]
         assert '"IdentityComponent"' in captured[key]
         assert '"Contains"' in captured[key]
@@ -489,6 +504,38 @@ def test_worldgen_item_patch_accepts_room_character_and_container_destinations(s
             == generated.generated_name
             for edge, target in relationships
         )
+
+
+def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
+    generated = generate_event_patch(
+        scenario.actor,
+        WorldEventGenerationRequest(
+            room_entity_id=str(scenario.room_a),
+            prompt="a bell rings",
+        ),
+    )
+    response = apply_world_patch(scenario.actor, generated.patch)
+
+    assert generated.generated_title == "a bell rings"
+    assert response.ok is True
+    room_contains = scenario.actor.world.get_entity(scenario.room_a).get_relationships(
+        Contains
+    )
+    incidents = [
+        scenario.actor.world.get_entity(target)
+        for _edge, target in room_contains
+        if scenario.actor.world.get_entity(target).has_component(IncidentComponent)
+    ]
+    assert incidents
+    incident = incidents[0].get_component(IncidentComponent)
+    assert incident.room_id == str(scenario.room_a)
+    assert incident.kind == "story_event"
+    assert any(
+        scenario.actor.world.get_entity(target).get_component(IdentityComponent).name
+        == "a dropped clue"
+        for _edge, target in room_contains
+        if scenario.actor.world.get_entity(target).has_component(IdentityComponent)
+    )
 
 
 def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypatch):

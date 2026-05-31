@@ -14,6 +14,8 @@ from .models import (
     CommandResponse,
     WorldCharacterGenerationRequest,
     WorldCharacterGenerationResponse,
+    WorldEventGenerationRequest,
+    WorldEventGenerationResponse,
     WorldItemGenerationRequest,
     WorldItemGenerationResponse,
     WorldPatchRequest,
@@ -28,7 +30,12 @@ from .patches import WorldPatchError, apply_world_patch
 from .schema import world_schema
 from .serialization import serialize_world
 from .subscriptions import EventStream
-from .worldgen import generate_character_patch, generate_item_patch, generate_room_patch
+from .worldgen import (
+    generate_character_patch,
+    generate_event_patch,
+    generate_item_patch,
+    generate_room_patch,
+)
 
 WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 
@@ -171,6 +178,17 @@ def create_app(
     async def generate_item(request: WorldItemGenerationRequest) -> WorldItemGenerationResponse:
         try:
             return generate_item_patch(actor, request, options=worldgen_options)
+        except WorldPatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/admin/world/generate-event", response_model=WorldEventGenerationResponse)
+    async def generate_event(
+        request: WorldEventGenerationRequest,
+    ) -> WorldEventGenerationResponse:
+        try:
+            return generate_event_patch(actor, request, options=worldgen_options)
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:

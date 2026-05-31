@@ -25,6 +25,7 @@ from .proposal import (
     RoomContentsProposal,
     RoomNodeProposal,
     RoomSpec,
+    StoryEventProposal,
     WorldProposal,
 )
 from .recursive import RecursiveWorldGenerator
@@ -51,6 +52,7 @@ __all__ = [
     "RoomContentsProposal",
     "RoomNodeProposal",
     "RoomSpec",
+    "StoryEventProposal",
     "StubRecursiveBuilder",
     "StubWorldBuilder",
     "WorldBuilder",

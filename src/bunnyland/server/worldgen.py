@@ -15,6 +15,7 @@ from ..core.components import (
     LightComponent,
     LockableComponent,
     RoomComponent,
+    StimulusComponent,
     SuspendedComponent,
     TemperatureComponent,
 )
@@ -22,9 +23,10 @@ from ..core.controllers import LLMControllerComponent, SuspendedControllerCompon
 from ..core.ecs import container_of, parse_entity_id
 from ..core.edges import ContainmentMode, Contains, ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
+from ..mechanics.storyteller import IncidentComponent
 from ..worldgen import DoorProposal, GenOptions, RoomNodeProposal, StubRecursiveBuilder
 from ..worldgen.instantiate import _character_components, _object_components
-from ..worldgen.proposal import CharacterProposal, ItemProposal
+from ..worldgen.proposal import CharacterProposal, ItemProposal, StoryEventProposal
 from ..worldgen.recursive import _opposite
 from .models import (
     AddEntityPatchRequest,
@@ -34,6 +36,8 @@ from .models import (
     SetEdgePatchRequest,
     WorldCharacterGenerationRequest,
     WorldCharacterGenerationResponse,
+    WorldEventGenerationRequest,
+    WorldEventGenerationResponse,
     WorldItemGenerationRequest,
     WorldItemGenerationResponse,
     WorldPatchRequest,
@@ -173,7 +177,7 @@ def collect_room_expansion_context(
 
 
 def collect_room_selection_context(
-    actor: WorldActor, request: WorldCharacterGenerationRequest
+    actor: WorldActor, request: WorldCharacterGenerationRequest | WorldEventGenerationRequest
 ) -> RoomSelectionContext:
     room_id = parse_entity_id(request.room_entity_id)
     if room_id is None or not actor.world.has_entity(room_id):
@@ -377,6 +381,35 @@ def _door_operations(room_id: str, key: str, door: DoorProposal) -> list:
     ]
 
 
+def _event_components(
+    event: StoryEventProposal, room_id: str, epoch: int
+) -> list[ComponentPatchSpec]:
+    summary = event.summary or event.title
+    tags = tuple(dict.fromkeys((event.kind, *event.tags)))
+    return [
+        _component_spec(IdentityComponent(name=event.title, kind="incident", tags=tags)),
+        _component_spec(DescriptionComponent(short=summary, long=summary)),
+        _component_spec(
+            IncidentComponent(
+                kind=event.kind,
+                budget_spent=max(0.0, event.budget_spent),
+                started_at_epoch=epoch,
+                room_id=room_id,
+            )
+        ),
+        _component_spec(
+            StimulusComponent(
+                stimulus_type=event.stimulus_type or event.kind,
+                source_entity_id=None,
+                room_id=room_id,
+                intensity=max(0.0, event.stimulus_intensity),
+                created_at_epoch=epoch,
+                text=summary,
+            )
+        ),
+    ]
+
+
 def build_room_generation_response(
     context: RoomExpansionContext,
     *,
@@ -480,6 +513,46 @@ def build_item_generation_response(
     )
 
 
+def build_event_generation_response(
+    context: RoomSelectionContext, event: StoryEventProposal, *, epoch: int
+) -> WorldEventGenerationResponse:
+    event_id = "$generated_event"
+    operations: list[Any] = [
+        AddEntityPatchRequest(
+            op="add_entity",
+            client_id=event_id,
+            components=_event_components(event, context.room_id, epoch),
+        ),
+        SetEdgePatchRequest(
+            op="set_edge",
+            source_id=context.room_id,
+            target_id=event_id,
+            edge=_edge_spec(Contains(mode=ContainmentMode.ROOM_CONTENT)),
+        ),
+    ]
+    for index, item in enumerate(event.objects):
+        operations.extend(
+            _object_operations(context.room_id, f"$generated_event_object_{index}", item)
+        )
+    for index, character in enumerate(event.characters):
+        character.key = f"generated_event_character_{index}"
+        operations.extend(
+            _character_operations(
+                context.room_id,
+                f"$generated_event_character_{index}",
+                f"$generated_event_controller_{index}",
+                character,
+                epoch,
+            )
+        )
+    return WorldEventGenerationResponse(
+        room_entity_id=context.room_id,
+        generated_title=event.title,
+        generated_kind=event.kind,
+        patch=WorldPatchRequest(operations=operations),
+    )
+
+
 def generate_room_patch(
     actor: WorldActor,
     request: WorldRoomGenerationRequest,
@@ -553,16 +626,36 @@ def generate_item_patch(
     return build_item_generation_response(context, item)
 
 
+def generate_event_patch(
+    actor: WorldActor,
+    request: WorldEventGenerationRequest,
+    *,
+    options: GenOptions | None = None,
+) -> WorldEventGenerationResponse:
+    context = collect_room_selection_context(actor, request)
+    options = options or GenOptions()
+    builder = _builder(options)
+    event = builder.propose_event(
+        context.room,
+        prompt=context.prompt,
+        known_rooms=context.known_rooms,
+        schema_context=_dm_schema_context(actor, options),
+    )
+    return build_event_generation_response(context, event, epoch=actor.epoch)
+
+
 __all__ = [
     "RoomExpansionContext",
     "RoomSelectionContext",
     "build_room_generation_response",
     "build_character_generation_response",
+    "build_event_generation_response",
     "build_item_generation_response",
     "collect_container_selection_context",
     "collect_room_expansion_context",
     "collect_room_selection_context",
     "generate_character_patch",
+    "generate_event_patch",
     "generate_item_patch",
     "generate_room_patch",
 ]

@@ -134,6 +134,11 @@ class WorldItemGenerationRequest(BaseModel):
     prompt: str = ""
 
 
+class WorldEventGenerationRequest(BaseModel):
+    room_entity_id: str
+    prompt: str = ""
+
+
 class WorldPatchResponse(BaseModel):
     ok: bool = True
     world_epoch: int
@@ -160,6 +165,14 @@ class WorldItemGenerationResponse(BaseModel):
     ok: bool = True
     container_entity_id: str
     generated_name: str
+    patch: WorldPatchRequest
+
+
+class WorldEventGenerationResponse(BaseModel):
+    ok: bool = True
+    room_entity_id: str
+    generated_title: str
+    generated_kind: str
     patch: WorldPatchRequest
 
 
@@ -205,6 +218,8 @@ __all__ = [
     "EdgePatchSpec",
     "WorldCharacterGenerationRequest",
     "WorldCharacterGenerationResponse",
+    "WorldEventGenerationRequest",
+    "WorldEventGenerationResponse",
     "WorldItemGenerationRequest",
     "WorldItemGenerationResponse",
     "WorldRoomGenerationRequest",

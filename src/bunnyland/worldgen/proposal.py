@@ -152,6 +152,21 @@ class RoomContentsProposal(BaseModel):
     characters: list[CharacterProposal] = Field(default_factory=list)
 
 
+class StoryEventProposal(BaseModel):
+    """A room-scoped event/incident/encounter proposed by the DM."""
+
+    title: str
+    kind: str = "story_event"
+    summary: str = ""
+    severity: float = 1.0
+    budget_spent: float = 0.0
+    tags: tuple[str, ...] = ()
+    stimulus_type: str = "story_event"
+    stimulus_intensity: float = 1.0
+    objects: list[ItemProposal] = Field(default_factory=list)
+    characters: list[CharacterProposal] = Field(default_factory=list)
+
+
 __all__ = [
     "CharacterProposal",
     "CharacterSpec",
@@ -163,5 +178,6 @@ __all__ = [
     "RoomContentsProposal",
     "RoomNodeProposal",
     "RoomSpec",
+    "StoryEventProposal",
     "WorldProposal",
 ]
