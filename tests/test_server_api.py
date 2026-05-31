@@ -31,6 +31,20 @@ def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario)
     )
 
 
+def test_editor_display_component_serializes_emoji_for_clients(scenario):
+    from bunnyland.core import EditorDisplayComponent
+
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        EditorDisplayComponent(emoji="🦊")
+    )
+
+    snapshot = serialize_world(scenario.actor)
+
+    entities = {entity["id"]: entity for entity in snapshot["entities"]}
+    character = entities[str(scenario.character)]
+    assert character["components"]["EditorDisplayComponent"]["emoji"] == "🦊"
+
+
 def test_command_request_builds_submitted_command():
     request = CommandRequest(
         character_id="entity_1",

@@ -40,6 +40,17 @@ class LifecycleComponent(Component):
     created_at_epoch: int = 0
 
 
+@dataclass(frozen=True)
+class EditorDisplayComponent(Component):
+    """A custom emoji the web client/graph editor shows instead of the kind default.
+
+    Purely presentational: the engine never reads it. When absent, clients fall back to
+    their built-in per-kind iconography.
+    """
+
+    emoji: str = ""
+
+
 # --------------------------------------------------------------------------------------
 # Affect, thoughts (spec 11.12). Mood is multidimensional, not a single scalar.
 # --------------------------------------------------------------------------------------
