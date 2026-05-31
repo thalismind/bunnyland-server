@@ -41,6 +41,28 @@ class ExpansionHookComponent(Component):
     priority: int = 0
 
 
+@dataclass(frozen=True)
+class RumorComponent(Component):
+    text: str
+    heard_by: tuple[str, ...] = ()
+    state: str = "unverified"
+
+
+@dataclass(frozen=True)
+class RumorSourceComponent(Component):
+    source_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RumorReliabilityComponent(Component):
+    score: float = 1.0
+
+
+@dataclass(frozen=True)
+class RumorTargetComponent(Component):
+    target_id: str
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -53,6 +75,26 @@ class GeneratedSiteInstantiatedEvent(DomainEvent):
     site_type: str
     detail_level: str
     generator_plugin_id: str | None = None
+
+
+class RumorHeardEvent(DomainEvent):
+    rumor_id: str
+    text: str
+
+
+class RumorVerifiedEvent(DomainEvent):
+    rumor_id: str
+    text: str
+
+
+class RumorDisprovenEvent(DomainEvent):
+    rumor_id: str
+    text: str
+
+
+class RumorBecameExpansionEvent(DomainEvent):
+    rumor_id: str
+    site_id: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -139,32 +181,189 @@ class ExpandSiteHandler:
         )
 
 
+class AskRumorHandler:
+    command_type = "ask-rumor"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        rumor_id = _selected_rumor_id(ctx, character_id, command.payload.get("rumor_id"))
+        if rumor_id is None:
+            return rejected("rumor does not exist")
+
+        character = ctx.entity(character_id)
+        if rumor_id not in reachable_ids(ctx.world, character):
+            return rejected("rumor is not reachable")
+        rumor_entity = ctx.entity(rumor_id)
+        if not rumor_entity.has_component(RumorComponent):
+            return rejected("target is not a rumor")
+
+        rumor = rumor_entity.get_component(RumorComponent)
+        if str(character_id) in rumor.heard_by:
+            return rejected("rumor already heard")
+
+        heard_by = tuple((*rumor.heard_by, str(character_id)))
+        replace_component(rumor_entity, replace(rumor, heard_by=heard_by))
+        return ok(
+            RumorHeardEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(rumor_id),),
+                    rumor_id=str(rumor_id),
+                    text=rumor.text,
+                )
+            )
+        )
+
+
+class InvestigateRumorHandler:
+    command_type = "investigate-rumor"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        rumor_id = parse_entity_id(command.payload.get("rumor_id"))
+        if character_id is None or rumor_id is None:
+            return rejected("invalid character or rumor id")
+        if not ctx.world.has_entity(rumor_id):
+            return rejected("rumor does not exist")
+
+        character = ctx.entity(character_id)
+        if rumor_id not in reachable_ids(ctx.world, character):
+            return rejected("rumor is not reachable")
+        rumor_entity = ctx.entity(rumor_id)
+        if not rumor_entity.has_component(RumorComponent):
+            return rejected("target is not a rumor")
+
+        rumor = rumor_entity.get_component(RumorComponent)
+        if str(character_id) not in rumor.heard_by:
+            return rejected("rumor has not been heard")
+        if rumor.state != "unverified":
+            return rejected("rumor is already resolved")
+
+        reliability = (
+            rumor_entity.get_component(RumorReliabilityComponent).score
+            if rumor_entity.has_component(RumorReliabilityComponent)
+            else 1.0
+        )
+        verified = reliability >= 0.5
+        state = "verified" if verified else "disproven"
+        replace_component(rumor_entity, replace(rumor, state=state))
+
+        events: list[DomainEvent] = []
+        event_type = RumorVerifiedEvent if verified else RumorDisprovenEvent
+        events.append(
+            event_type(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(rumor_id),),
+                    rumor_id=str(rumor_id),
+                    text=rumor.text,
+                )
+            )
+        )
+        if verified and rumor_entity.has_component(RumorTargetComponent):
+            target_id = parse_entity_id(rumor_entity.get_component(RumorTargetComponent).target_id)
+            if target_id is not None and ctx.world.has_entity(target_id):
+                target = ctx.entity(target_id)
+                if target.has_component(ProceduralSiteComponent):
+                    site = target.get_component(ProceduralSiteComponent)
+                    hook = (
+                        target.get_component(ExpansionHookComponent)
+                        if target.has_component(ExpansionHookComponent)
+                        else None
+                    )
+                    generator_id = (
+                        hook.generator_plugin_id if hook is not None else site.generator_id
+                    )
+                    events.append(
+                        RumorBecameExpansionEvent(
+                            **ctx.event_base(
+                                visibility=EventVisibility.PRIVATE,
+                                actor_id=str(character_id),
+                                room_id=_room_id(ctx.world, character_id),
+                                target_ids=(str(rumor_id), str(target_id)),
+                                rumor_id=str(rumor_id),
+                                site_id=str(target_id),
+                            )
+                        )
+                    )
+                    events.append(
+                        ExpansionRequestedEvent(
+                            **ctx.event_base(
+                                visibility=EventVisibility.PRIVATE,
+                                actor_id=str(character_id),
+                                room_id=_room_id(ctx.world, character_id),
+                                target_ids=(str(target_id),),
+                                site_id=str(target_id),
+                                site_type=site.site_type,
+                                trigger="rumor",
+                                generator_plugin_id=generator_id,
+                            )
+                        )
+                    )
+        return ok(*events)
+
+
+def _selected_rumor_id(
+    ctx: HandlerContext, character_id: EntityId, requested_id: object
+) -> EntityId | None:
+    parsed = parse_entity_id(requested_id)
+    if parsed is not None:
+        return parsed
+    character = ctx.entity(character_id)
+    for entity_id in reachable_ids(ctx.world, character):
+        entity = ctx.entity(entity_id)
+        if not entity.has_component(RumorComponent):
+            continue
+        rumor = entity.get_component(RumorComponent)
+        if str(character_id) not in rumor.heard_by:
+            return entity_id
+    return None
+
+
 def daggersim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        if not entity.has_component(UnrealizedLocationComponent):
-            continue
-        unrealized = entity.get_component(UnrealizedLocationComponent)
-        if unrealized.detail_level == "instantiated":
-            continue
-        site_type = (
-            entity.get_component(ProceduralSiteComponent).site_type
-            if entity.has_component(ProceduralSiteComponent)
-            else "site"
-        )
-        lines.append(
-            f"Nearby unrealized {site_type}: {_name(entity)} ({unrealized.summary})."
-        )
+        if entity.has_component(UnrealizedLocationComponent):
+            unrealized = entity.get_component(UnrealizedLocationComponent)
+            if unrealized.detail_level != "instantiated":
+                site_type = (
+                    entity.get_component(ProceduralSiteComponent).site_type
+                    if entity.has_component(ProceduralSiteComponent)
+                    else "site"
+                )
+                lines.append(
+                    f"Nearby unrealized {site_type}: {_name(entity)} ({unrealized.summary})."
+                )
+        if entity.has_component(RumorComponent):
+            rumor = entity.get_component(RumorComponent)
+            if str(character.id) in rumor.heard_by:
+                lines.append(f"Rumor: {rumor.text} ({rumor.state}).")
     return sorted(lines)
 
 
 __all__ = [
+    "AskRumorHandler",
     "ExpandSiteHandler",
     "ExpansionHookComponent",
     "ExpansionRequestedEvent",
     "GeneratedSiteInstantiatedEvent",
+    "InvestigateRumorHandler",
     "ProceduralSiteComponent",
+    "RumorBecameExpansionEvent",
+    "RumorComponent",
+    "RumorDisprovenEvent",
+    "RumorHeardEvent",
+    "RumorReliabilityComponent",
+    "RumorSourceComponent",
+    "RumorTargetComponent",
+    "RumorVerifiedEvent",
     "UnrealizedLocationComponent",
     "daggersim_fragments",
 ]

@@ -83,11 +83,21 @@ from ..mechanics.colonysim import (
 )
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.daggersim import (
+    AskRumorHandler,
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
     GeneratedSiteInstantiatedEvent,
+    InvestigateRumorHandler,
     ProceduralSiteComponent,
+    RumorBecameExpansionEvent,
+    RumorComponent,
+    RumorDisprovenEvent,
+    RumorHeardEvent,
+    RumorReliabilityComponent,
+    RumorSourceComponent,
+    RumorTargetComponent,
+    RumorVerifiedEvent,
     UnrealizedLocationComponent,
     daggersim_fragments,
 )
@@ -727,11 +737,22 @@ def daggersim_plugin() -> Plugin:
                 ProceduralSiteComponent,
                 UnrealizedLocationComponent,
                 ExpansionHookComponent,
+                RumorComponent,
+                RumorSourceComponent,
+                RumorReliabilityComponent,
+                RumorTargetComponent,
             ),
         ),
         commands=CommandContribution(
-            action_handlers=(ExpandSiteHandler,),
-            typed_events=(ExpansionRequestedEvent, GeneratedSiteInstantiatedEvent),
+            action_handlers=(ExpandSiteHandler, AskRumorHandler, InvestigateRumorHandler),
+            typed_events=(
+                ExpansionRequestedEvent,
+                GeneratedSiteInstantiatedEvent,
+                RumorHeardEvent,
+                RumorVerifiedEvent,
+                RumorDisprovenEvent,
+                RumorBecameExpansionEvent,
+            ),
         ),
         content=ContentContribution(prompt_fragments=(daggersim_fragments,)),
     )
