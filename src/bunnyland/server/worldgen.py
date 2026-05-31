@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from ..content import content_library_context
 from ..core.components import (
     CharacterComponent,
     ContainerComponent,
@@ -265,7 +266,10 @@ def _builder(options: GenOptions):
 def _dm_schema_context(actor: WorldActor, options: GenOptions) -> str:
     if not options.llm:
         return ""
-    return dm_schema_context(actor)
+    return (
+        f"{dm_schema_context(actor)}\n\n"
+        f"Reusable ECS content library examples: {content_library_context()}"
+    )
 
 
 def _room_components(room: RoomNodeProposal) -> list[ComponentPatchSpec]:

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 import bunnyland.server.worldgen as server_worldgen
+from bunnyland.content import load_content_library
 from bunnyland.core import (
     CharacterComponent,
     ContainerComponent,
@@ -174,6 +175,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/health" in paths
     assert "/world/snapshot" in paths
     assert "/world/schema" in paths
+    assert "/world/library" in paths
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
     assert "/admin/world" in paths
@@ -220,6 +222,30 @@ def test_world_schema_includes_available_types_and_live_usage(scenario):
     assert schema.components["RoomComponent"].count == 2
     assert schema.edges["Contains"].used is True
     assert schema.edges["Contains"].count == 1
+
+
+def test_content_library_fragments_are_valid_world_patches(scenario):
+    library = load_content_library()
+
+    assert library.fragments
+    assert any(fragment.id == "item/three-berries" for fragment in library.fragments)
+    for fragment in library.fragments:
+        operations = [*fragment.operations]
+        if fragment.root_client_id and fragment.attach_edge is not None:
+            operations.append(
+                {
+                    "op": "set_edge",
+                    "source_id": str(scenario.room_a),
+                    "target_id": fragment.root_client_id,
+                    "edge": fragment.attach_edge.model_dump(mode="json"),
+                }
+            )
+        response = apply_world_patch(
+            scenario.actor,
+            WorldPatchRequest.model_validate({"operations": operations}),
+        )
+        assert response.ok is True
+        assert response.changed_entities
 
 
 def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, monkeypatch):
@@ -309,6 +335,7 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
         assert '"RoomComponent"' in captured[key]
         assert '"IdentityComponent"' in captured[key]
         assert '"Contains"' in captured[key]
+        assert "item/three-berries" in captured[key]
 
 
 def test_world_patch_updates_component_and_edge(scenario):

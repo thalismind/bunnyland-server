@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..content import load_content_library
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
 from .admin import save_configured_world
@@ -92,6 +93,10 @@ def create_app(
     @app.get("/world/schema", response_model=WorldSchemaResponse)
     async def get_world_schema() -> WorldSchemaResponse:
         return world_schema(actor)
+
+    @app.get("/world/library")
+    async def get_world_library() -> dict:
+        return load_content_library().model_dump(mode="json")
 
     @app.get("/world/events/recent")
     async def recent_events() -> dict:

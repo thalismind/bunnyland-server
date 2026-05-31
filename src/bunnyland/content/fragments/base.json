@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "library_id": "bunnyland.base",
+  "title": "Bunnyland Base Content",
+  "description": "Small reusable ECS patch fragments for starter worlds, editor import, and DM examples.",
+  "fragments": [
+    {
+      "schema_version": 1,
+      "id": "item/three-berries",
+      "title": "Three Berries",
+      "kind": "item",
+      "description": "A small portable food item for starter rooms.",
+      "tags": ["starter", "food", "natural"],
+      "root_client_id": "$item",
+      "attach_edge": {
+        "type": "Contains",
+        "fields": { "mode": "room_content", "visible": true, "discovered": true }
+      },
+      "operations": [
+        {
+          "op": "add_entity",
+          "client_id": "$item",
+          "components": [
+            {
+              "type": "IdentityComponent",
+              "fields": {
+                "name": "three berries",
+                "kind": "food",
+                "tags": ["starter", "food", "natural"]
+              }
+            },
+            { "type": "PortableComponent", "fields": { "can_pick_up": true } },
+            { "type": "FoodComponent", "fields": { "nutrition": 5.0, "satiety": 20.0 } },
+            { "type": "ConsumableComponent", "fields": { "current_uses": 1, "max_uses": 1 } }
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "item/stone-water-basin",
+      "title": "Stone Water Basin",
+      "kind": "item",
+      "description": "A fixed drink source for a room.",
+      "tags": ["starter", "water", "fixture"],
+      "root_client_id": "$item",
+      "attach_edge": {
+        "type": "Contains",
+        "fields": { "mode": "room_content", "visible": true, "discovered": true }
+      },
+      "operations": [
+        {
+          "op": "add_entity",
+          "client_id": "$item",
+          "components": [
+            {
+              "type": "IdentityComponent",
+              "fields": {
+                "name": "a stone basin of water",
+                "kind": "water",
+                "tags": ["starter", "water", "fixture"]
+              }
+            },
+            { "type": "DrinkableComponent", "fields": { "hydration": 25.0, "purity": 1.0 } }
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "item/oak-chest",
+      "title": "Oak Chest",
+      "kind": "container",
+      "description": "A simple room container that can hold imported items.",
+      "tags": ["starter", "container"],
+      "root_client_id": "$item",
+      "attach_edge": {
+        "type": "Contains",
+        "fields": { "mode": "room_content", "visible": true, "discovered": true }
+      },
+      "operations": [
+        {
+          "op": "add_entity",
+          "client_id": "$item",
+          "components": [
+            {
+              "type": "IdentityComponent",
+              "fields": {
+                "name": "an oak chest",
+                "kind": "container",
+                "tags": ["starter", "storage"]
+              }
+            },
+            { "type": "ContainerComponent", "fields": { "allow_add": true, "allow_remove": true, "open": false } }
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "item/scrap-of-paper",
+      "title": "Scrap Of Paper",
+      "kind": "item",
+      "description": "A readable and writable note object.",
+      "tags": ["starter", "paper", "writable"],
+      "root_client_id": "$item",
+      "attach_edge": {
+        "type": "Contains",
+        "fields": { "mode": "room_content", "visible": true, "discovered": true }
+      },
+      "operations": [
+        {
+          "op": "add_entity",
+          "client_id": "$item",
+          "components": [
+            {
+              "type": "IdentityComponent",
+              "fields": {
+                "name": "a scrap of paper",
+                "kind": "paper",
+                "tags": ["starter", "paper", "writable"]
+              }
+            },
+            { "type": "PortableComponent", "fields": { "can_pick_up": true } },
+            { "type": "ReadableComponent", "fields": { "title": "scrap of paper", "text": "" } },
+            { "type": "WritableComponent", "fields": { "erasable": true } }
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "resource/berry-patch",
+      "title": "Berry Patch",
+      "kind": "resource_node",
+      "description": "A renewable berry source for colony-style gathering.",
+      "tags": ["starter", "resource", "food"],
+      "root_client_id": "$resource",
+      "attach_edge": {
+        "type": "Contains",
+        "fields": { "mode": "room_content", "visible": true, "discovered": true }
+      },
+      "operations": [
+        {
+          "op": "add_entity",
+          "client_id": "$resource",
+          "components": [
+            {
+              "type": "IdentityComponent",
+              "fields": {
+                "name": "berries patch",
+                "kind": "resource_node",
+                "tags": ["starter", "resource", "food"]
+              }
+            },
+            {
+              "type": "ResourceNodeComponent",
+              "fields": {
+                "resource_type": "berries",
+                "current": 5,
+                "maximum": 5,
+                "regen_per_day": 2.0
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "station/crafting-mat",
+      "title": "Crafting Mat",
+      "kind": "workstation",
+      "description": "A basic crafting station for simple recipes.",
+      "tags": ["starter", "crafting", "station"],
+      "root_client_id": "$station",
+      "attach_edge": {
+        "type": "Contains",
+        "fields": { "mode": "room_content", "visible": true, "discovered": true }
+      },
+      "operations": [
+        {
+          "op": "add_entity",
+          "client_id": "$station",
+          "components": [
+            {
+              "type": "IdentityComponent",
+              "fields": {
+                "name": "a woven crafting mat",
+                "kind": "workstation",
+                "tags": ["starter", "crafting"]
+              }
+            },
+            { "type": "WorkstationComponent", "fields": { "station_type": "crafting", "quality": 1.0 } }
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "recipe/berry-snack",
+      "title": "Berry Snack Recipe",
+      "kind": "recipe",
+      "description": "Turns gathered berries into a snack resource stack.",
+      "tags": ["starter", "recipe", "food"],
+      "root_client_id": "$recipe",
+      "operations": [
+        {
+          "op": "add_entity",
+          "client_id": "$recipe",
+          "components": [
+            {
+              "type": "IdentityComponent",
+              "fields": {
+                "name": "berry snack recipe",
+                "kind": "recipe",
+                "tags": ["starter", "food"]
+              }
+            },
+            {
+              "type": "RecipeComponent",
+              "fields": {
+                "recipe_id": "berry-snack",
+                "inputs": { "berries": 2 },
+                "outputs": { "snack": 1 },
+                "required_station": null,
+                "action_cost": 1
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "id": "recipe/simple-club",
+      "title": "Simple Club Recipe",
+      "kind": "recipe",
+      "description": "A workstation recipe example using resource stacks.",
+      "tags": ["starter", "recipe", "tool"],
+      "root_client_id": "$recipe",
+      "operations": [
+        {
+          "op": "add_entity",
+          "client_id": "$recipe",
+          "components": [
+            {
+              "type": "IdentityComponent",
+              "fields": {
+                "name": "simple club recipe",
+                "kind": "recipe",
+                "tags": ["starter", "tool"]
+              }
+            },
+            {
+              "type": "RecipeComponent",
+              "fields": {
+                "recipe_id": "simple-club",
+                "inputs": { "wood": 2 },
+                "outputs": { "club": 1 },
+                "required_station": "crafting",
+                "action_cost": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
