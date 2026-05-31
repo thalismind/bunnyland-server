@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..core.ecs import container_of
+from ..core.events import CommandExecutedEvent, CommandRejectedEvent
 from ..core.world_actor import WorldActor
 from ..projections import RoomSummaryProjection
 from .claim import discord_controlled_character
@@ -35,4 +36,32 @@ def render_look(actor: WorldActor, discord_user_id: int) -> str:
     return summary.visible_summary
 
 
-__all__ = ["HELP_TEXT", "render_look"]
+def render_move_result(
+    actor: WorldActor,
+    discord_user_id: int,
+    event: CommandExecutedEvent | CommandRejectedEvent,
+) -> str:
+    """Render a Discord response for a completed move command."""
+
+    if isinstance(event, CommandRejectedEvent):
+        return f"Move failed: {event.reason}."
+    return render_look(actor, discord_user_id)
+
+
+def render_action_result(
+    actor: WorldActor,
+    discord_user_id: int,
+    tool: str,
+    event: CommandExecutedEvent | CommandRejectedEvent,
+) -> str:
+    """Render a Discord confirmation for a completed action command."""
+
+    if tool == "move":
+        return render_move_result(actor, discord_user_id, event)
+    label = tool.replace("_", " ")
+    if isinstance(event, CommandRejectedEvent):
+        return f"{label.capitalize()} failed: {event.reason}."
+    return f"Done: {label}."
+
+
+__all__ = ["HELP_TEXT", "render_action_result", "render_look", "render_move_result"]

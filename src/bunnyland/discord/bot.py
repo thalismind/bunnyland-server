@@ -14,11 +14,18 @@ name-resolution helpers below are.
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
+
+from ..core.commands import OnInsufficientPoints
+from ..core.events import CommandExecutedEvent, CommandRejectedEvent
 from ..core.world_actor import WorldActor
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call
 from .claim import assign_discord_controller, discord_controlled_character, list_character_names
-from .view import HELP_TEXT, render_look
+from .view import HELP_TEXT, render_action_result, render_look
+
+MOVE_RESULT_TIMEOUT_SECONDS = 120.0
 
 
 def _require_discord():  # pragma: no cover - exercised only with the extra
@@ -42,22 +49,32 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         intents = discord.Intents.default()
         intents.message_content = True  # required to read "!" command text
         self.client = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+        self._pending: dict[str, asyncio.Future[CommandExecutedEvent | CommandRejectedEvent]] = {}
+        self.actor.bus.subscribe(CommandExecutedEvent, self._complete_pending)
+        self.actor.bus.subscribe(CommandRejectedEvent, self._complete_pending)
         self._register_commands()
 
     def _character_for_user(self, discord_user_id: int):
         """Find the character controlled by a Discord controller for this user."""
         return discord_controlled_character(self.actor, discord_user_id)
 
-    async def _submit(self, discord_user_id: int, tool: str, arguments: dict) -> str:
+    def _complete_pending(self, event: CommandExecutedEvent | CommandRejectedEvent) -> None:
+        future = self._pending.pop(event.command_id, None)
+        if future is not None and not future.done():
+            future.set_result(event)
+
+    async def _build_command(
+        self, discord_user_id: int, tool: str, arguments: dict
+    ):
         found = self._character_for_user(discord_user_id)
         if found is None:
-            return "You are not controlling a character yet."
+            return None, "You are not controlling a character yet."
         character_id, controller_id, generation = found
 
         character = self.actor.world.get_entity(character_id)
         resolved, unresolved = resolve_reference_args(self.actor.world, character, arguments)
         if unresolved:
-            return did_you_mean(arguments, unresolved)
+            return None, did_you_mean(arguments, unresolved)
 
         command = command_from_tool_call(
             ToolCall(name=tool, arguments=resolved),
@@ -66,23 +83,39 @@ class DiscordBot:  # pragma: no cover - needs network + extra
             controller_generation=generation,
             submitted_at_epoch=self.actor.epoch,
         )
+        return command, None
+
+    async def _submit_action(self, discord_user_id: int, tool: str, arguments: dict) -> str:
+        command, error = await self._build_command(discord_user_id, tool, arguments)
+        if error is not None:
+            return error
+        command = replace(command, on_insufficient_points=OnInsufficientPoints.DENY)
+        future = asyncio.get_running_loop().create_future()
+        self._pending[command.command_id] = future
         await self.actor.submit(command)
-        return f"Queued: {tool}."
+        try:
+            event = await asyncio.wait_for(future, timeout=MOVE_RESULT_TIMEOUT_SECONDS)
+        except TimeoutError:
+            self._pending.pop(command.command_id, None)
+            return f"{tool.replace('_', ' ').capitalize()} queued, but it has not run yet."
+        return render_action_result(self.actor, discord_user_id, tool, event)
 
     def _register_commands(self) -> None:
         discord, commands = _require_discord()
 
         @self.client.command(name="move")
         async def move(ctx, direction: str):
-            await ctx.send(await self._submit(ctx.author.id, "move", {"direction": direction}))
+            await ctx.send(
+                await self._submit_action(ctx.author.id, "move", {"direction": direction})
+            )
 
         @self.client.command(name="say")
         async def say(ctx, *, text: str):
-            await ctx.send(await self._submit(ctx.author.id, "say", {"text": text}))
+            await ctx.send(await self._submit_action(ctx.author.id, "say", {"text": text}))
 
         @self.client.command(name="take")
         async def take(ctx, *, item_id: str):
-            await ctx.send(await self._submit(ctx.author.id, "take", {"item_id": item_id}))
+            await ctx.send(await self._submit_action(ctx.author.id, "take", {"item_id": item_id}))
 
         @self.client.command(name="claim")
         async def claim(ctx, *, character: str | None = None):
