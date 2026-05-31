@@ -19,30 +19,58 @@ from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.voidsim import (
     AirlockComponent,
     AirlockCycledEvent,
+    AnswerDistressSignalHandler,
+    AstrogationComponent,
     BulkheadComponent,
+    CoursePlottedEvent,
     CycleAirlockHandler,
+    DistressSignalComponent,
     DockedTo,
     DockHandler,
     DockingCompletedEvent,
+    EnterOrbitHandler,
     EvacuateModuleHandler,
+    FuelChangedEvent,
+    FuelComponent,
     HabitatModuleComponent,
     InspectShipSystemHandler,
+    JumpCompletedEvent,
+    JumpDriveComponent,
+    JumpHandler,
+    JumpRoute,
+    JumpStartedEvent,
+    JumpTravelConsequence,
+    LandHandler,
+    LandingCompletedEvent,
+    LaunchHandler,
+    LeaveOrbitHandler,
     LifeSupportComponent,
     LifeSupportConsequence,
     LifeSupportFailedEvent,
     ModuleEvacuatedEvent,
+    NavigationHazardEncounteredEvent,
+    NavigationRouteComponent,
     OpenAirlockHandler,
+    OrbitalBodyComponent,
+    OrbitComponent,
+    OrbitEnteredEvent,
     OxygenComponent,
+    PlotCourseHandler,
     PowerGridComponent,
     PowerReroutedEvent,
     PressureChangedEvent,
     PressurizedComponent,
+    RefuelHandler,
     RepairSystemHandler,
     ReroutePowerHandler,
+    ScanHandler,
     SealBulkheadHandler,
+    SensorComponent,
     ShipComponent,
     ShipSystemComponent,
     ShipSystemRepairedEvent,
+    SignalDetectedEvent,
+    StarSystemComponent,
     StationComponent,
     UndockHandler,
     voidsim_fragments,
@@ -61,7 +89,17 @@ def _install(actor):
     actor.register_handler(DockHandler())
     actor.register_handler(UndockHandler())
     actor.register_handler(EvacuateModuleHandler())
+    actor.register_handler(PlotCourseHandler())
+    actor.register_handler(JumpHandler())
+    actor.register_handler(ScanHandler())
+    actor.register_handler(AnswerDistressSignalHandler())
+    actor.register_handler(RefuelHandler())
+    actor.register_handler(EnterOrbitHandler())
+    actor.register_handler(LeaveOrbitHandler())
+    actor.register_handler(LandHandler())
+    actor.register_handler(LaunchHandler())
     actor.register_consequence(LifeSupportConsequence())
+    actor.register_consequence(JumpTravelConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -395,3 +433,245 @@ def test_voidsim_fragments_describe_module_and_systems():
     assert any("engineering module" in line for line in fragments)
     assert any("Module oxygen: 80/100" in line for line in fragments)
     assert any("Ship system reactor" in line for line in fragments)
+
+
+# --- 8.2 Space travel, orbits, and navigation -----------------------------------------
+
+
+def _system(scenario, room_id, name):
+    scenario.actor.world.get_entity(room_id).add_component(StarSystemComponent(name=name))
+
+
+def _ship_in(scenario, room_id, **fields):
+    ship = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=fields.get("name", "Burrow Runner"), kind="ship"),
+            ShipComponent(name=fields.get("name", "Burrow Runner")),
+            FuelComponent(level=fields.get("fuel", 100.0), maximum=100.0),
+            JumpDriveComponent(),
+            SensorComponent(),
+        ],
+    )
+    scenario.actor.world.get_entity(room_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), ship.id
+    )
+    return ship.id
+
+
+def _jump_route(scenario, *, fuel_cost=10.0, hazard="none", jump_seconds=1):
+    origin = scenario.actor.world.get_entity(scenario.room_a)
+    origin.add_relationship(
+        JumpRoute(
+            fuel_cost=fuel_cost, hazard=hazard, jump_seconds=jump_seconds, label="moss lane"
+        ),
+        scenario.room_b,
+    )
+
+
+async def test_plot_course_then_jump_completes_travel():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    _system(scenario, scenario.room_b, "Proxima")
+    _jump_route(scenario, fuel_cost=10.0, jump_seconds=1)
+    ship_id = _ship_in(scenario, scenario.room_a, fuel=100.0)
+    plotted: list[CoursePlottedEvent] = []
+    started: list[JumpStartedEvent] = []
+    completed: list[JumpCompletedEvent] = []
+    fuel: list[FuelChangedEvent] = []
+    scenario.actor.bus.subscribe(CoursePlottedEvent, plotted.append)
+    scenario.actor.bus.subscribe(JumpStartedEvent, started.append)
+    scenario.actor.bus.subscribe(JumpCompletedEvent, completed.append)
+    scenario.actor.bus.subscribe(FuelChangedEvent, fuel.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "plot-course", ship_id=str(ship_id), destination_id=str(scenario.room_b))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "jump", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(HOUR)
+
+    ship = scenario.actor.world.get_entity(ship_id)
+    assert container_of(ship) == scenario.room_b
+    assert not ship.has_component(NavigationRouteComponent)
+    assert ship.get_component(FuelComponent).level == 90.0
+    assert plotted[0].destination_id == str(scenario.room_b)
+    assert started[0].destination_id == str(scenario.room_b)
+    assert completed[0].destination_id == str(scenario.room_b)
+    assert fuel[0].level == 90.0
+
+
+async def test_jump_rejected_without_plotted_course():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    ship_id = _ship_in(scenario, scenario.room_a)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "jump", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    assert any(event.reason == "no course plotted" for event in rejects)
+
+
+async def test_jump_rejected_without_enough_fuel():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    _system(scenario, scenario.room_b, "Proxima")
+    _jump_route(scenario, fuel_cost=50.0)
+    ship_id = _ship_in(scenario, scenario.room_a, fuel=10.0)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "plot-course", ship_id=str(ship_id), destination_id=str(scenario.room_b))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "jump", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    assert any(event.reason == "not enough fuel to jump" for event in rejects)
+
+
+async def test_hazardous_jump_warns_unskilled_pilot_only():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    _system(scenario, scenario.room_b, "Proxima")
+    _jump_route(scenario, hazard="ion storm")
+    ship_id = _ship_in(scenario, scenario.room_a)
+    hazards: list[NavigationHazardEncounteredEvent] = []
+    scenario.actor.bus.subscribe(NavigationHazardEncounteredEvent, hazards.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "plot-course", ship_id=str(ship_id), destination_id=str(scenario.room_b))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "jump", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    assert hazards and hazards[0].hazard == "ion storm"
+
+
+async def test_skilled_pilot_avoids_hazard_warning():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    _system(scenario, scenario.room_b, "Proxima")
+    _jump_route(scenario, hazard="ion storm")
+    ship_id = _ship_in(scenario, scenario.room_a)
+    scenario.actor.world.get_entity(scenario.character).add_component(AstrogationComponent(skill=5))
+    hazards: list[NavigationHazardEncounteredEvent] = []
+    scenario.actor.bus.subscribe(NavigationHazardEncounteredEvent, hazards.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "plot-course", ship_id=str(ship_id), destination_id=str(scenario.room_b))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "jump", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    assert hazards == []
+
+
+async def test_scan_detects_then_answer_distress_signal():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    ship_id = _ship_in(scenario, scenario.room_a)
+    signal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="mayday beacon", kind="signal"),
+            DistressSignalComponent(text="Hull breach, send aid."),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), signal.id
+    )
+    detected: list[SignalDetectedEvent] = []
+    scenario.actor.bus.subscribe(SignalDetectedEvent, detected.append)
+
+    await scenario.actor.submit(_cmd(scenario, "scan", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    assert detected and detected[0].signal_id == str(signal.id)
+    scanned = scenario.actor.world.get_entity(signal.id).get_component(DistressSignalComponent)
+    assert scanned.detected
+
+    await scenario.actor.submit(
+        _cmd(scenario, "answer-distress-signal", signal_id=str(signal.id))
+    )
+    await scenario.actor.tick(HOUR)
+    answered = scenario.actor.world.get_entity(signal.id).get_component(DistressSignalComponent)
+    assert answered.answered is True
+
+
+async def test_refuel_fills_tank():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    ship_id = _ship_in(scenario, scenario.room_a, fuel=20.0)
+    fuel: list[FuelChangedEvent] = []
+    scenario.actor.bus.subscribe(FuelChangedEvent, fuel.append)
+
+    await scenario.actor.submit(_cmd(scenario, "refuel", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    assert scenario.actor.world.get_entity(ship_id).get_component(FuelComponent).level == 100.0
+    assert fuel[0].level == 100.0
+
+
+async def test_enter_orbit_land_launch_and_leave():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    ship_id = _ship_in(scenario, scenario.room_a)
+    body = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Verdant III", kind="planet"),
+            OrbitalBodyComponent(body_type="planet", landable=True),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), body.id
+    )
+    orbited: list[OrbitEnteredEvent] = []
+    landed: list[LandingCompletedEvent] = []
+    scenario.actor.bus.subscribe(OrbitEnteredEvent, orbited.append)
+    scenario.actor.bus.subscribe(LandingCompletedEvent, landed.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "enter-orbit", ship_id=str(ship_id), body_id=str(body.id))
+    )
+    await scenario.actor.tick(HOUR)
+    ship = scenario.actor.world.get_entity(ship_id)
+    assert ship.get_component(OrbitComponent).altitude == "orbit"
+    assert orbited[0].body_id == str(body.id)
+
+    await scenario.actor.submit(_cmd(scenario, "land", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    orbit = scenario.actor.world.get_entity(ship_id).get_component(OrbitComponent)
+    assert orbit.altitude == "surface"
+    assert landed[0].body_id == str(body.id)
+
+    await scenario.actor.submit(_cmd(scenario, "launch", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    orbit = scenario.actor.world.get_entity(ship_id).get_component(OrbitComponent)
+    assert orbit.altitude == "orbit"
+
+    await scenario.actor.submit(_cmd(scenario, "leave-orbit", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    assert not scenario.actor.world.get_entity(ship_id).has_component(OrbitComponent)
+
+
+async def test_land_rejected_when_not_in_orbit():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    ship_id = _ship_in(scenario, scenario.room_a)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "land", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+    assert any(event.reason == "ship must be in orbit to land" for event in rejects)

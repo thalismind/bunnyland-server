@@ -97,9 +97,77 @@ class RadiationShieldComponent(Component):
     strength: float = 100.0
 
 
+# --- 8.2 Space travel, orbits, and navigation -----------------------------------------
+
+
+@dataclass(frozen=True)
+class StarSystemComponent(Component):
+    name: str
+
+
+@dataclass(frozen=True)
+class OrbitalBodyComponent(Component):
+    body_type: str  # planet | moon | asteroid-belt | station
+    landable: bool = True
+
+
+@dataclass(frozen=True)
+class OrbitComponent(Component):
+    body_id: str
+    altitude: str = "orbit"  # orbit | surface
+
+
+@dataclass(frozen=True)
+class NavigationRouteComponent(Component):
+    destination_id: str
+    fuel_cost: float = 0.0
+    hazard: str = "none"
+    jump_seconds: float = 0.0
+    status: str = "plotted"  # plotted | jumping
+    arrive_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class JumpDriveComponent(Component):
+    charged: bool = True
+    jump_seconds: float = 3600.0
+
+
+@dataclass(frozen=True)
+class FuelComponent(Component):
+    level: float = 100.0
+    maximum: float = 100.0
+
+
+@dataclass(frozen=True)
+class SensorComponent(Component):
+    scan_range: float = 1.0
+
+
+@dataclass(frozen=True)
+class DistressSignalComponent(Component):
+    text: str
+    source_site_id: str | None = None
+    detected: bool = False
+    answered: bool = False
+
+
+@dataclass(frozen=True)
+class AstrogationComponent(Component):
+    skill: int = 0
+
+
 @dataclass(frozen=True)
 class DockedTo(Edge):
     port: str = "main"
+
+
+@dataclass(frozen=True)
+class JumpRoute(Edge):
+    fuel_cost: float = 10.0
+    hazard: str = "none"
+    jump_seconds: float = 3600.0
+    label: str = ""
 
 
 class AirlockCycledEvent(DomainEvent):
@@ -141,6 +209,49 @@ class DockingCompletedEvent(DomainEvent):
 class ModuleEvacuatedEvent(DomainEvent):
     module_id: str
     evacuee_ids: tuple[str, ...] = ()
+
+
+class CoursePlottedEvent(DomainEvent):
+    ship_id: str
+    destination_id: str
+    fuel_cost: float
+
+
+class JumpStartedEvent(DomainEvent):
+    ship_id: str
+    destination_id: str
+    arrive_at_epoch: int
+
+
+class JumpCompletedEvent(DomainEvent):
+    ship_id: str
+    destination_id: str
+
+
+class FuelChangedEvent(DomainEvent):
+    ship_id: str
+    level: float
+    maximum: float
+
+
+class SignalDetectedEvent(DomainEvent):
+    signal_id: str
+    text: str
+
+
+class NavigationHazardEncounteredEvent(DomainEvent):
+    ship_id: str
+    hazard: str
+
+
+class OrbitEnteredEvent(DomainEvent):
+    ship_id: str
+    body_id: str
+
+
+class LandingCompletedEvent(DomainEvent):
+    ship_id: str
+    body_id: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -491,6 +602,396 @@ def _docked(ship: Entity, station_id: EntityId) -> bool:
     return any(target_id == station_id for _edge, target_id in ship.get_relationships(DockedTo))
 
 
+#: Astrogation skill at or above which a pilot avoids a hazardous jump's complications.
+_HAZARD_SKILL_THRESHOLD = 3
+
+
+def _jump_route(origin: Entity, destination_id: EntityId) -> JumpRoute | None:
+    for edge, target_id in origin.get_relationships(JumpRoute):
+        if target_id == destination_id:
+            return edge
+    return None
+
+
+class PlotCourseHandler:
+    command_type = "plot-course"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+        )
+        if ship is None:
+            return rejected(error if error else "target is not a ship")
+        destination_id = parse_entity_id(command.payload.get("destination_id"))
+        if destination_id is None or not ctx.world.has_entity(destination_id):
+            return rejected("destination does not exist")
+        if not ctx.entity(destination_id).has_component(StarSystemComponent):
+            return rejected("destination is not a star system")
+        origin_id = container_of(ship)
+        if origin_id is None or not ctx.world.has_entity(origin_id):
+            return rejected("ship is not in a star system")
+        route = _jump_route(ctx.entity(origin_id), destination_id)
+        if route is None:
+            return rejected("no jump route to destination")
+
+        replace_component(
+            ship,
+            NavigationRouteComponent(
+                destination_id=str(destination_id),
+                fuel_cost=route.fuel_cost,
+                hazard=route.hazard,
+                jump_seconds=route.jump_seconds,
+                status="plotted",
+            ),
+        )
+        return ok(
+            CoursePlottedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(ship.id), str(destination_id)),
+                    ship_id=str(ship.id),
+                    destination_id=str(destination_id),
+                    fuel_cost=route.fuel_cost,
+                )
+            )
+        )
+
+
+class JumpHandler:
+    command_type = "jump"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+        )
+        if ship is None:
+            return rejected(error if error else "target is not a ship")
+        if not ship.has_component(NavigationRouteComponent):
+            return rejected("no course plotted")
+        route = ship.get_component(NavigationRouteComponent)
+        if route.status == "jumping":
+            return rejected("ship is already jumping")
+        if not ship.has_component(JumpDriveComponent) or not ship.get_component(
+            JumpDriveComponent
+        ).charged:
+            return rejected("jump drive is not charged")
+        if not ship.has_component(FuelComponent):
+            return rejected("ship has no fuel tank")
+        fuel = ship.get_component(FuelComponent)
+        if fuel.level < route.fuel_cost:
+            return rejected("not enough fuel to jump")
+
+        new_fuel = replace(fuel, level=fuel.level - route.fuel_cost)
+        replace_component(ship, new_fuel)
+        arrive_at = ctx.epoch + int(route.jump_seconds)
+        replace_component(ship, replace(route, status="jumping", arrive_at_epoch=arrive_at))
+
+        events: list[DomainEvent] = [
+            FuelChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(ship.id),),
+                    ship_id=str(ship.id),
+                    level=new_fuel.level,
+                    maximum=new_fuel.maximum,
+                )
+            ),
+            JumpStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(ship.id),),
+                    ship_id=str(ship.id),
+                    destination_id=route.destination_id,
+                    arrive_at_epoch=arrive_at,
+                )
+            ),
+        ]
+        if route.hazard and route.hazard != "none":
+            character = ctx.entity(character_id)
+            skill = (
+                character.get_component(AstrogationComponent).skill
+                if character.has_component(AstrogationComponent)
+                else 0
+            )
+            if skill < _HAZARD_SKILL_THRESHOLD:
+                events.append(
+                    NavigationHazardEncounteredEvent(
+                        **ctx.event_base(
+                            visibility=EventVisibility.ROOM,
+                            actor_id=str(character_id),
+                            room_id=_room_id(ctx.world, character_id),
+                            target_ids=(str(ship.id),),
+                            ship_id=str(ship.id),
+                            hazard=route.hazard,
+                        )
+                    )
+                )
+        return ok(*events)
+
+
+class ScanHandler:
+    command_type = "scan"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), SensorComponent
+        )
+        if ship is None:
+            return rejected(error if error else "no sensor to scan with")
+        origin_id = container_of(ship)
+        if origin_id is None or not ctx.world.has_entity(origin_id):
+            return rejected("ship is not in a star system")
+
+        events: list[DomainEvent] = []
+        for content_id in contents(ctx.entity(origin_id)):
+            signal_entity = ctx.entity(content_id)
+            if not signal_entity.has_component(DistressSignalComponent):
+                continue
+            signal = signal_entity.get_component(DistressSignalComponent)
+            if signal.detected:
+                continue
+            replace_component(signal_entity, replace(signal, detected=True))
+            events.append(
+                SignalDetectedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(content_id),),
+                        signal_id=str(content_id),
+                        text=signal.text,
+                    )
+                )
+            )
+        if not events:
+            return rejected("scan finds nothing")
+        return ok(*events)
+
+
+class AnswerDistressSignalHandler:
+    command_type = "answer-distress-signal"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        signal_entity, error = _reachable_component(
+            ctx, character_id, command.payload.get("signal_id"), DistressSignalComponent
+        )
+        if signal_entity is None:
+            return rejected(error if error else "target is not a distress signal")
+        signal = signal_entity.get_component(DistressSignalComponent)
+        if not signal.detected:
+            return rejected("signal has not been detected")
+        if signal.answered:
+            return rejected("signal already answered")
+        replace_component(signal_entity, replace(signal, answered=True))
+        return ok()
+
+
+class RefuelHandler:
+    command_type = "refuel"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), FuelComponent
+        )
+        if ship is None:
+            return rejected(error if error else "ship has no fuel tank")
+        fuel = ship.get_component(FuelComponent)
+        if fuel.level >= fuel.maximum:
+            return rejected("fuel tank is already full")
+
+        raw_amount = command.payload.get("amount")
+        if raw_amount is None:
+            new_level = fuel.maximum
+        else:
+            try:
+                new_level = min(fuel.maximum, fuel.level + float(raw_amount))
+            except (TypeError, ValueError):
+                return rejected("invalid fuel amount")
+        replace_component(ship, replace(fuel, level=new_level))
+        return ok(
+            FuelChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(ship.id),),
+                    ship_id=str(ship.id),
+                    level=new_level,
+                    maximum=fuel.maximum,
+                )
+            )
+        )
+
+
+class EnterOrbitHandler:
+    command_type = "enter-orbit"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+        )
+        if ship is None:
+            return rejected(error if error else "target is not a ship")
+        body, error = _reachable_component(
+            ctx, character_id, command.payload.get("body_id"), OrbitalBodyComponent
+        )
+        if body is None:
+            return rejected(error if error else "target is not an orbital body")
+
+        replace_component(ship, OrbitComponent(body_id=str(body.id), altitude="orbit"))
+        return ok(
+            OrbitEnteredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(ship.id), str(body.id)),
+                    ship_id=str(ship.id),
+                    body_id=str(body.id),
+                )
+            )
+        )
+
+
+class LeaveOrbitHandler:
+    command_type = "leave-orbit"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+        )
+        if ship is None:
+            return rejected(error if error else "target is not a ship")
+        if not ship.has_component(OrbitComponent):
+            return rejected("ship is not in orbit")
+        ship.remove_component(OrbitComponent)
+        return ok()
+
+
+class LandHandler:
+    command_type = "land"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+        )
+        if ship is None:
+            return rejected(error if error else "target is not a ship")
+        if not ship.has_component(OrbitComponent):
+            return rejected("ship must be in orbit to land")
+        orbit = ship.get_component(OrbitComponent)
+        if orbit.altitude == "surface":
+            return rejected("ship is already landed")
+        body_id = parse_entity_id(orbit.body_id)
+        if body_id is None or not ctx.world.has_entity(body_id):
+            return rejected("orbital body no longer exists")
+        body = ctx.entity(body_id)
+        if body.has_component(OrbitalBodyComponent) and not body.get_component(
+            OrbitalBodyComponent
+        ).landable:
+            return rejected("body cannot be landed on")
+
+        replace_component(ship, replace(orbit, altitude="surface"))
+        return ok(
+            LandingCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(ship.id), str(body_id)),
+                    ship_id=str(ship.id),
+                    body_id=str(body_id),
+                )
+            )
+        )
+
+
+class LaunchHandler:
+    command_type = "launch"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+        )
+        if ship is None:
+            return rejected(error if error else "target is not a ship")
+        if not ship.has_component(OrbitComponent):
+            return rejected("ship is not landed")
+        orbit = ship.get_component(OrbitComponent)
+        if orbit.altitude != "surface":
+            return rejected("ship is not on a surface")
+        replace_component(ship, replace(orbit, altitude="orbit"))
+        return ok()
+
+
+class JumpTravelConsequence:
+    """Complete in-progress jumps: move the ship to its destination system."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = world.query().with_all([ShipComponent, NavigationRouteComponent])
+        for ship in query.execute_entities():
+            route = ship.get_component(NavigationRouteComponent)
+            if route.status != "jumping" or epoch < route.arrive_at_epoch:
+                continue
+            destination_id = parse_entity_id(route.destination_id)
+            if destination_id is None or not world.has_entity(destination_id):
+                continue
+            origin_id = container_of(ship)
+            if origin_id is not None and world.has_entity(origin_id):
+                world.get_entity(origin_id).remove_relationship(Contains, ship.id)
+            world.get_entity(destination_id).add_relationship(
+                Contains(mode=ContainmentMode.ROOM_CONTENT), ship.id
+            )
+            ship.remove_component(NavigationRouteComponent)
+            events.append(
+                JumpCompletedEvent(
+                    **_void_event(
+                        epoch,
+                        visibility=EventVisibility.ROOM,
+                        room_id=str(destination_id),
+                        target_ids=(str(ship.id), str(destination_id)),
+                        ship_id=str(ship.id),
+                        destination_id=str(destination_id),
+                    )
+                )
+            )
+        return events
+
+
 class LifeSupportConsequence:
     """Drain or replenish module oxygen based on life support, and flag failures."""
 
@@ -572,42 +1073,95 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
                     lines.append(
                         f"{_name(entity)} is docked at {_name(world.get_entity(station_id))}."
                     )
+        if entity.has_component(FuelComponent):
+            fuel = entity.get_component(FuelComponent)
+            lines.append(f"{_name(entity)} fuel: {fuel.level:.0f}/{fuel.maximum:.0f}.")
+        if entity.has_component(OrbitComponent):
+            orbit = entity.get_component(OrbitComponent)
+            where = "landed on" if orbit.altitude == "surface" else "in orbit of"
+            body_id = parse_entity_id(orbit.body_id)
+            if body_id is not None and world.has_entity(body_id):
+                body_name = _name(world.get_entity(body_id))
+                lines.append(f"{_name(entity)} is {where} {body_name}.")
+        if entity.has_component(NavigationRouteComponent):
+            route = entity.get_component(NavigationRouteComponent)
+            lines.append(f"{_name(entity)} course: {route.status} (hazard: {route.hazard}).")
+        if entity.has_component(DistressSignalComponent):
+            signal = entity.get_component(DistressSignalComponent)
+            if signal.detected and not signal.answered:
+                lines.append(f"Distress signal: {signal.text}")
+        if entity.has_component(OrbitalBodyComponent):
+            body = entity.get_component(OrbitalBodyComponent)
+            lines.append(f"Orbital body nearby: {_name(entity)} ({body.body_type}).")
+    if module_id is not None and world.has_entity(module_id):
+        current = world.get_entity(module_id)
+        if current.has_component(StarSystemComponent):
+            lines.append(f"Current system: {current.get_component(StarSystemComponent).name}.")
     return sorted(lines)
 
 
 def install_voidsim(actor) -> None:
     actor.register_consequence(LifeSupportConsequence())
+    actor.register_consequence(JumpTravelConsequence())
 
 
 __all__ = [
     "AirlockComponent",
     "AirlockCycledEvent",
+    "AnswerDistressSignalHandler",
+    "AstrogationComponent",
     "BulkheadComponent",
+    "CoursePlottedEvent",
     "CycleAirlockHandler",
+    "DistressSignalComponent",
     "DockHandler",
     "DockedTo",
     "DockingCompletedEvent",
+    "EnterOrbitHandler",
     "EvacuateModuleHandler",
+    "FuelChangedEvent",
+    "FuelComponent",
     "HabitatModuleComponent",
     "InspectShipSystemHandler",
+    "JumpCompletedEvent",
+    "JumpDriveComponent",
+    "JumpHandler",
+    "JumpRoute",
+    "JumpStartedEvent",
+    "JumpTravelConsequence",
+    "LandHandler",
+    "LandingCompletedEvent",
+    "LaunchHandler",
+    "LeaveOrbitHandler",
     "LifeSupportComponent",
     "LifeSupportConsequence",
     "LifeSupportFailedEvent",
     "ModuleEvacuatedEvent",
+    "NavigationHazardEncounteredEvent",
+    "NavigationRouteComponent",
     "OpenAirlockHandler",
+    "OrbitComponent",
+    "OrbitEnteredEvent",
+    "OrbitalBodyComponent",
     "OxygenComponent",
+    "PlotCourseHandler",
     "PowerGridComponent",
     "PowerReroutedEvent",
     "PressureChangedEvent",
     "PressurizedComponent",
     "RadiationShieldComponent",
+    "RefuelHandler",
     "RepairSystemHandler",
     "ReroutePowerHandler",
+    "ScanHandler",
     "SealBulkheadHandler",
+    "SensorComponent",
     "ShipComponent",
     "ShipSystemComponent",
     "ShipSystemDamagedEvent",
     "ShipSystemRepairedEvent",
+    "SignalDetectedEvent",
+    "StarSystemComponent",
     "StationComponent",
     "UndockHandler",
     "install_voidsim",
