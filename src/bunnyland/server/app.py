@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
 from .models import CommandRequest, CommandResponse
 from .serialization import serialize_world
 from .subscriptions import EventStream
+
+WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 
 # Imported at module scope (not inside ``create_app``) so that FastAPI can resolve the
 # ``websocket: WebSocket`` annotation on the route handler. Under ``from __future__ import
@@ -59,11 +63,18 @@ def create_app(actor: WorldActor, meta: WorldMeta | None = None, *, title: str =
     @app.websocket("/world/updates")
     async def world_updates(websocket: WebSocket) -> None:
         await websocket.accept()
-        await websocket.send_json({"type": "snapshot", "data": serialize_world(actor, meta)})
         subscription = stream.subscribe()
         try:
+            await websocket.send_json({"type": "snapshot", "data": serialize_world(actor, meta)})
             while True:
-                await websocket.send_json(await subscription.queue.get())
+                try:
+                    message = await asyncio.wait_for(
+                        subscription.queue.get(),
+                        timeout=WEBSOCKET_HEARTBEAT_SECONDS,
+                    )
+                except TimeoutError:
+                    message = {"type": "heartbeat", "data": {"world_epoch": actor.epoch}}
+                await websocket.send_json(message)
         except WebSocketDisconnect:
             pass
         finally:

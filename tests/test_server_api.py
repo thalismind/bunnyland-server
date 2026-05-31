@@ -9,6 +9,7 @@ from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
 from bunnyland.core.events import ActorMovedEvent
 from bunnyland.persistence import WorldMeta
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
+from bunnyland.server import app as server_app
 from bunnyland.server.app import create_app
 
 
@@ -112,3 +113,20 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
     assert "/world/updates" in paths
+
+
+def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypatch):
+    pytest.importorskip("fastapi")
+    testclient = pytest.importorskip("fastapi.testclient")
+    monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
+
+    app = create_app(scenario.actor)
+
+    with testclient.TestClient(app) as client:
+        with client.websocket_connect("/world/updates") as websocket:
+            snapshot = websocket.receive_json()
+            heartbeat = websocket.receive_json()
+
+    assert snapshot["type"] == "snapshot"
+    assert snapshot["data"]["world_epoch"] == scenario.actor.epoch
+    assert heartbeat == {"type": "heartbeat", "data": {"world_epoch": scenario.actor.epoch}}
