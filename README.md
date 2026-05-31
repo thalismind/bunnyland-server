@@ -56,7 +56,7 @@ plan is in [`PLAN.md`](PLAN.md).
 ## Development
 
 ```bash
-uv run pytest            # 122 tests
+uv run pytest
 uv run ruff check src tests
 ```
 
