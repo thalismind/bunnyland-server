@@ -108,6 +108,14 @@ from ..mechanics.dragonsim import (
 from ..mechanics.eat_drink import DrinkHandler, EatHandler
 from ..mechanics.environment import (
     CalendarComponent,
+    ExtinguishHandler,
+    FireComponent,
+    FireDamageEvent,
+    FireExtinguishedEvent,
+    FireSpreadEvent,
+    FireStartedEvent,
+    FlammableComponent,
+    IgniteHandler,
     TimeOfDayComponent,
     WeatherComponent,
     environment_fragments,
@@ -419,7 +427,22 @@ def environment_plugin() -> Plugin:
         id=ENVIRONMENT,
         name="Environment",
         ecs=EcsContribution(
-            components=(CalendarComponent, TimeOfDayComponent, WeatherComponent)
+            components=(
+                CalendarComponent,
+                TimeOfDayComponent,
+                WeatherComponent,
+                FlammableComponent,
+                FireComponent,
+            )
+        ),
+        commands=CommandContribution(
+            action_handlers=(IgniteHandler, ExtinguishHandler),
+            typed_events=(
+                FireStartedEvent,
+                FireSpreadEvent,
+                FireDamageEvent,
+                FireExtinguishedEvent,
+            ),
         ),
         runtime=RuntimeContribution(service_factories=(_environment_factory,)),
         content=ContentContribution(prompt_fragments=(environment_fragments,)),

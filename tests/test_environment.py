@@ -2,14 +2,32 @@
 
 from __future__ import annotations
 
+from conftest import build_scenario
+
 from bunnyland.core import (
+    CommandCost,
+    ContainmentMode,
+    Contains,
+    HealthComponent,
+    IdentityComponent,
+    Lane,
     LightComponent,
+    PortableComponent,
     RoomComponent,
     WorldActor,
+    build_submitted_command,
     spawn_entity,
 )
 from bunnyland.mechanics.environment import (
     CalendarComponent,
+    ExtinguishHandler,
+    FireComponent,
+    FireDamageEvent,
+    FireExtinguishedEvent,
+    FireSpreadEvent,
+    FireStartedEvent,
+    FlammableComponent,
+    IgniteHandler,
     TimeOfDayChangedEvent,
     TimeOfDayComponent,
     WeatherChangedEvent,
@@ -28,6 +46,18 @@ def _world():
     actor = WorldActor()
     install_environment(actor)
     return actor
+
+
+def _cmd(scenario, command_type, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
 
 
 def test_time_of_day_derivation():
@@ -146,3 +176,66 @@ async def test_fragment_mentions_weather_when_not_clear():
     await actor.tick(4 * DAY + 19 * HOUR)  # dusk on day 5 (rain)
     fragment = environment_fragments(actor.world, character=None)[0]
     assert "rain" in fragment and "dusk" in fragment
+
+
+# -- fire ------------------------------------------------------------------------------
+
+
+async def test_fire_spreads_from_room_and_damages_character_health():
+    scenario = build_scenario()
+    install_environment(scenario.actor)
+    scenario.actor.register_handler(IgniteHandler())
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(FlammableComponent(fuel=3.0))
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=20.0, maximum=20.0))
+    blanket = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="dry blanket", kind="item"),
+            PortableComponent(can_pick_up=True),
+            FlammableComponent(fuel=2.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), blanket.id)
+    started: list[FireStartedEvent] = []
+    spread: list[FireSpreadEvent] = []
+    damage: list[FireDamageEvent] = []
+    scenario.actor.bus.subscribe(FireStartedEvent, started.append)
+    scenario.actor.bus.subscribe(FireSpreadEvent, spread.append)
+    scenario.actor.bus.subscribe(FireDamageEvent, damage.append)
+
+    await scenario.actor.submit(_cmd(scenario, "ignite", target_id=str(scenario.room_a)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.tick(HOUR)
+
+    assert room.has_component(FireComponent)
+    assert blanket.has_component(FireComponent)
+    assert character.get_component(HealthComponent).current == 12.0
+    assert started[0].target_id == str(scenario.room_a)
+    assert spread[0].target_id == str(blanket.id)
+    assert damage[0].health == 12.0
+    assert "fire here" in " ".join(environment_fragments(scenario.actor.world, character))
+
+
+async def test_extinguish_removes_fire_and_stops_damage():
+    scenario = build_scenario()
+    install_environment(scenario.actor)
+    scenario.actor.register_handler(IgniteHandler())
+    scenario.actor.register_handler(ExtinguishHandler())
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(FlammableComponent(fuel=3.0))
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=20.0, maximum=20.0))
+    extinguished: list[FireExtinguishedEvent] = []
+    scenario.actor.bus.subscribe(FireExtinguishedEvent, extinguished.append)
+
+    await scenario.actor.submit(_cmd(scenario, "ignite", target_id=str(scenario.room_a)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "extinguish", target_id=str(scenario.room_a)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.tick(HOUR)
+
+    assert not room.has_component(FireComponent)
+    assert character.get_component(HealthComponent).current == 20.0
+    assert extinguished[0].target_id == str(scenario.room_a)

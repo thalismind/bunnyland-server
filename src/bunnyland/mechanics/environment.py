@@ -17,9 +17,20 @@ from uuid import uuid4
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from relics import Component, World
 
-from ..core.components import LightComponent, RoomComponent, WorldClockComponent
-from ..core.ecs import replace_component
+from ..core.commands import SubmittedCommand
+from ..core.components import (
+    CharacterComponent,
+    DeadComponent,
+    HealthComponent,
+    LightComponent,
+    RoomComponent,
+    SuspendedComponent,
+    WorldClockComponent,
+)
+from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
+from ..core.edges import Contains
 from ..core.events import DomainEvent, EventVisibility
+from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -44,6 +55,8 @@ _PHASES = (
 _WEATHER_BY_DAY = ("clear", "clear", "cloudy", "overcast", "rain", "cloudy", "overcast")
 _WEATHER_INTENSITY = {"clear": 0.0, "cloudy": 0.3, "overcast": 0.5, "rain": 0.7, "storm": 1.0}
 _WEATHER_LIGHT = {"clear": 1.0, "cloudy": 0.85, "overcast": 0.65, "rain": 0.5, "storm": 0.3}
+FIRE_DAMAGE_PER_HOUR = 8.0
+FIRE_FUEL_PER_HOUR = 1.0
 
 
 # -- components (spec 11.2, 11.13) ------------------------------------------------------
@@ -67,6 +80,18 @@ class WeatherComponent(Component):
     intensity: float = 0.0
 
 
+@pydantic_dataclass(frozen=True)
+class FlammableComponent(Component):
+    fuel: float = 4.0
+
+
+@pydantic_dataclass(frozen=True)
+class FireComponent(Component):
+    intensity: float = 1.0
+    fuel: float = 4.0
+    last_updated_epoch: int = 0
+
+
 class TimeOfDayChangedEvent(DomainEvent):
     phase: str
     hour: int
@@ -76,6 +101,26 @@ class TimeOfDayChangedEvent(DomainEvent):
 class WeatherChangedEvent(DomainEvent):
     condition: str
     intensity: float
+
+
+class FireStartedEvent(DomainEvent):
+    target_id: str
+    intensity: float
+
+
+class FireSpreadEvent(DomainEvent):
+    source_id: str
+    target_id: str
+
+
+class FireDamageEvent(DomainEvent):
+    target_id: str
+    damage: float
+    health: float
+
+
+class FireExtinguishedEvent(DomainEvent):
+    target_id: str
 
 
 # -- derivation -------------------------------------------------------------------------
@@ -177,42 +222,238 @@ class EnvironmentConsequence:
                 replace_component(room, replace(light, level=level))
 
 
+@dataclass
+class FireConsequence:
+    """Advance burning entities, spread room fires, and apply direct fire damage."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        burning = list(world.query().with_all([FireComponent]).execute_entities())
+        for entity in burning:
+            fire = entity.get_component(FireComponent)
+            elapsed = max(0, epoch - fire.last_updated_epoch)
+            if elapsed <= 0:
+                continue
+            hours = elapsed / SECONDS_PER_HOUR
+            room_id = (
+                str(entity.id) if entity.has_component(RoomComponent) else container_of(entity)
+            )
+            target_ids = self._damage_targets(world, entity)
+            for target in target_ids:
+                events.extend(_damage_fire_target(world, epoch, entity.id, target, hours))
+            if entity.has_component(RoomComponent):
+                events.extend(_spread_room_fire(world, epoch, entity))
+            fuel = fire.fuel - FIRE_FUEL_PER_HOUR * max(0.1, fire.intensity) * hours
+            if fuel <= 0:
+                entity.remove_component(FireComponent)
+                events.append(
+                    FireExtinguishedEvent(
+                        **_event_base(
+                            epoch,
+                            room_id=str(room_id) if room_id is not None else None,
+                            target_ids=(str(entity.id),),
+                            target_id=str(entity.id),
+                        )
+                    )
+                )
+            else:
+                replace_component(entity, replace(fire, fuel=fuel, last_updated_epoch=epoch))
+        return events
+
+    @staticmethod
+    def _damage_targets(world: World, entity) -> list:
+        if entity.has_component(HealthComponent):
+            return [entity]
+        if not entity.has_component(RoomComponent):
+            return []
+        targets = []
+        for _edge, target_id in entity.get_relationships(Contains):
+            if world.has_entity(target_id):
+                targets.append(world.get_entity(target_id))
+        return targets
+
+
+def _damage_fire_target(
+    world: World, epoch: int, source_id, target, hours: float
+) -> list[DomainEvent]:
+    if not target.has_component(CharacterComponent) or not target.has_component(HealthComponent):
+        return []
+    if target.has_component(DeadComponent) or target.has_component(SuspendedComponent):
+        return []
+    damage = FIRE_DAMAGE_PER_HOUR * hours
+    health = target.get_component(HealthComponent)
+    updated = replace(health, current=health.current - damage)
+    replace_component(target, updated)
+    room_id = container_of(target) or source_id
+    return [
+        FireDamageEvent(
+            **_event_base(
+                epoch,
+                room_id=str(room_id),
+                actor_id=str(source_id),
+                target_ids=(str(target.id),),
+                target_id=str(target.id),
+                damage=damage,
+                health=updated.current,
+            )
+        )
+    ]
+
+
+def _spread_room_fire(world: World, epoch: int, room) -> list[DomainEvent]:
+    events: list[DomainEvent] = []
+    for _edge, target_id in room.get_relationships(Contains):
+        if not world.has_entity(target_id):
+            continue
+        target = world.get_entity(target_id)
+        if target.has_component(FireComponent) or not target.has_component(FlammableComponent):
+            continue
+        fuel = target.get_component(FlammableComponent).fuel
+        replace_component(target, FireComponent(fuel=fuel, last_updated_epoch=epoch))
+        events.append(
+            FireSpreadEvent(
+                **_event_base(
+                    epoch,
+                    room_id=str(room.id),
+                    actor_id=str(room.id),
+                    target_ids=(str(target_id),),
+                    source_id=str(room.id),
+                    target_id=str(target_id),
+                )
+            )
+        )
+    return events
+
+
+class IgniteHandler:
+    command_type = "ignite"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None:
+            return rejected("invalid character id")
+        actor = ctx.entity(actor_id)
+        if target_id is None:
+            target_id = container_of(actor)
+        if target_id is None or not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        if target_id not in reachable_ids(ctx.world, actor):
+            return rejected("target is not reachable")
+        target = ctx.entity(target_id)
+        if target.has_component(FireComponent):
+            return rejected("target is already burning")
+        if not target.has_component(FlammableComponent):
+            return rejected("target is not flammable")
+        fuel = target.get_component(FlammableComponent).fuel
+        intensity = float(command.payload.get("intensity", 1.0))
+        if intensity <= 0:
+            return rejected("fire intensity must be positive")
+        replace_component(
+            target,
+            FireComponent(intensity=intensity, fuel=fuel, last_updated_epoch=ctx.epoch),
+        )
+        return ok(
+            FireStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(actor)) if container_of(actor) else None,
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    intensity=intensity,
+                )
+            )
+        )
+
+
+class ExtinguishHandler:
+    command_type = "extinguish"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None:
+            return rejected("invalid character id")
+        actor = ctx.entity(actor_id)
+        if target_id is None:
+            target_id = container_of(actor)
+        if target_id is None or not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        if target_id not in reachable_ids(ctx.world, actor):
+            return rejected("target is not reachable")
+        target = ctx.entity(target_id)
+        if not target.has_component(FireComponent):
+            return rejected("target is not burning")
+        target.remove_component(FireComponent)
+        return ok(
+            FireExtinguishedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(actor)) if container_of(actor) else None,
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                )
+            )
+        )
+
+
 # -- prompt fragment (spec 16.3) --------------------------------------------------------
 
 
 def environment_fragments(world: World, character) -> list[str]:
     """A status line describing the time of day, for the foundation prompt."""
-    del character
+    lines: list[str] = []
     query = world.query().with_all([WorldClockComponent, TimeOfDayComponent])
     clocks = list(query.execute_entities())
-    if not clocks:
-        return []
-    clock = clocks[0]
-    calendar = (
-        clock.get_component(CalendarComponent)
-        if clock.has_component(CalendarComponent)
-        else None
-    )
-    phase = clock.get_component(TimeOfDayComponent).phase
-    weather = (
-        clock.get_component(WeatherComponent).condition
-        if clock.has_component(WeatherComponent)
-        else None
-    )
-    sky = f"{weather} {phase}" if weather and weather != "clear" else phase
-    if calendar is None:
-        return [f"It is {sky}."]
-    return [f"It is {sky} (day {calendar.day}, {calendar.season})."]
+    if clocks:
+        clock = clocks[0]
+        calendar = (
+            clock.get_component(CalendarComponent)
+            if clock.has_component(CalendarComponent)
+            else None
+        )
+        phase = clock.get_component(TimeOfDayComponent).phase
+        weather = (
+            clock.get_component(WeatherComponent).condition
+            if clock.has_component(WeatherComponent)
+            else None
+        )
+        sky = f"{weather} {phase}" if weather and weather != "clear" else phase
+        if calendar is None:
+            lines.append(f"It is {sky}.")
+        else:
+            lines.append(f"It is {sky} (day {calendar.day}, {calendar.season}).")
+    if character is not None:
+        room_id = container_of(character)
+        if room_id is not None and world.has_entity(room_id):
+            room = world.get_entity(room_id)
+            if room.has_component(FireComponent):
+                lines.append("There is a fire here.")
+        if character.has_component(FireComponent):
+            lines.append("You are on fire.")
+    return lines
 
 
 def install_environment(actor: WorldActor) -> None:
     """Register the environment consequence on an actor."""
     actor.register_consequence(EnvironmentConsequence())
+    actor.register_consequence(FireConsequence())
 
 
 __all__ = [
     "CalendarComponent",
     "EnvironmentConsequence",
+    "ExtinguishHandler",
+    "FireComponent",
+    "FireConsequence",
+    "FireDamageEvent",
+    "FireExtinguishedEvent",
+    "FireSpreadEvent",
+    "FireStartedEvent",
+    "FlammableComponent",
+    "IgniteHandler",
     "TimeOfDayChangedEvent",
     "TimeOfDayComponent",
     "WeatherChangedEvent",
