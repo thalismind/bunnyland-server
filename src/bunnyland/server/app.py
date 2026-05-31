@@ -22,8 +22,10 @@ from .models import (
     WorldRoomGenerationResponse,
     WorldRuntimeResponse,
     WorldSaveResponse,
+    WorldSchemaResponse,
 )
 from .patches import WorldPatchError, apply_world_patch
+from .schema import world_schema
 from .serialization import serialize_world
 from .subscriptions import EventStream
 from .worldgen import generate_character_patch, generate_item_patch, generate_room_patch
@@ -137,6 +139,10 @@ def create_app(
             }
         )
         return response
+
+    @app.get("/admin/world/schema", response_model=WorldSchemaResponse)
+    async def get_world_schema() -> WorldSchemaResponse:
+        return world_schema(actor)
 
     @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)
     async def generate_room(request: WorldRoomGenerationRequest) -> WorldRoomGenerationResponse:

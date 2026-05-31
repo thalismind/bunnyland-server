@@ -17,6 +17,7 @@ from .models import (
     WorldRoomGenerationResponse,
     WorldRuntimeResponse,
     WorldSaveResponse,
+    WorldSchemaResponse,
 )
 from .serialization import event_message, serialize_event, serialize_world
 from .subscriptions import EventStream, EventSubscription
@@ -36,6 +37,7 @@ __all__ = [
     "WorldRoomGenerationResponse",
     "WorldRuntimeResponse",
     "WorldSaveResponse",
+    "WorldSchemaResponse",
     "event_message",
     "serialize_event",
     "serialize_world",

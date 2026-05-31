@@ -178,11 +178,30 @@ class WorldRuntimeResponse(BaseModel):
     running: bool
 
 
+class EcsTypeSchema(BaseModel):
+    name: str
+    module: str
+    qualname: str
+    json_schema: dict[str, Any]
+    used: bool = False
+    count: int = 0
+    schema_error: str | None = None
+
+
+class WorldSchemaResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    components: dict[str, EcsTypeSchema] = Field(default_factory=dict)
+    edges: dict[str, EcsTypeSchema] = Field(default_factory=dict)
+
+
 __all__ = [
     "CommandCostRequest",
     "CommandRequest",
     "CommandResponse",
     "ComponentPatchSpec",
+    "EcsTypeSchema",
     "EdgePatchSpec",
     "WorldCharacterGenerationRequest",
     "WorldCharacterGenerationResponse",
@@ -194,4 +213,5 @@ __all__ = [
     "WorldPatchResponse",
     "WorldRuntimeResponse",
     "WorldSaveResponse",
+    "WorldSchemaResponse",
 ]

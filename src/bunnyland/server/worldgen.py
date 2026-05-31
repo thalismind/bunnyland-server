@@ -41,6 +41,7 @@ from .models import (
     WorldRoomGenerationResponse,
 )
 from .patches import WorldPatchError
+from .schema import dm_schema_context
 from .serialization import jsonable
 
 _DIRECTIONS = (
@@ -255,6 +256,12 @@ def _builder(options: GenOptions):
             api_key=options.api_key,
         )
     return StubRecursiveBuilder()
+
+
+def _dm_schema_context(actor: WorldActor, options: GenOptions) -> str:
+    if not options.llm:
+        return ""
+    return dm_schema_context(actor)
 
 
 def _room_components(room: RoomNodeProposal) -> list[ComponentPatchSpec]:
@@ -480,7 +487,9 @@ def generate_room_patch(
     options: GenOptions | None = None,
 ) -> WorldRoomGenerationResponse:
     context = collect_room_expansion_context(actor, request)
-    builder = _builder(options or GenOptions())
+    options = options or GenOptions()
+    builder = _builder(options)
+    schema_context = _dm_schema_context(actor, options)
     door = DoorProposal(
         direction=context.direction,
         locked=context.locked,
@@ -491,10 +500,13 @@ def generate_room_patch(
         context.prompt or context.door_name,
         behind=door,
         known_rooms=context.known_rooms,
+        schema_context=schema_context,
     )
     known_rooms = {**context.known_rooms, "$generated_room": room.description or room.title}
-    contents = builder.propose_contents(room, known_rooms=known_rooms)
-    doors = builder.propose_doors(room)
+    contents = builder.propose_contents(
+        room, known_rooms=known_rooms, schema_context=schema_context
+    )
+    doors = builder.propose_doors(room, schema_context=schema_context)
     return build_room_generation_response(
         context,
         room=room,
@@ -511,11 +523,13 @@ def generate_character_patch(
     options: GenOptions | None = None,
 ) -> WorldCharacterGenerationResponse:
     context = collect_room_selection_context(actor, request)
-    builder = _builder(options or GenOptions())
+    options = options or GenOptions()
+    builder = _builder(options)
     character = builder.propose_character(
         context.room,
         prompt=context.prompt,
         known_rooms=context.known_rooms,
+        schema_context=_dm_schema_context(actor, options),
     )
     return build_character_generation_response(context, character, epoch=actor.epoch)
 
@@ -527,12 +541,14 @@ def generate_item_patch(
     options: GenOptions | None = None,
 ) -> WorldItemGenerationResponse:
     context = collect_container_selection_context(actor, request)
-    builder = _builder(options or GenOptions())
+    options = options or GenOptions()
+    builder = _builder(options)
     item = builder.propose_item(
         container_name=context.container_name,
         container_kind=context.container_kind,
         prompt=context.prompt,
         known_rooms=context.known_rooms,
+        schema_context=_dm_schema_context(actor, options),
     )
     return build_item_generation_response(context, item)
 

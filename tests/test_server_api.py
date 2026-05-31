@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+import bunnyland.server.worldgen as server_worldgen
 from bunnyland.core import (
     CharacterComponent,
     ContainerComponent,
@@ -33,11 +34,13 @@ from bunnyland.server.models import (
     WorldRoomGenerationRequest,
 )
 from bunnyland.server.patches import apply_world_patch
+from bunnyland.server.schema import world_schema
 from bunnyland.server.worldgen import (
     generate_character_patch,
     generate_item_patch,
     generate_room_patch,
 )
+from bunnyland.worldgen import GenOptions, ItemProposal
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -162,6 +165,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
     assert "/admin/world" in paths
+    assert "/admin/world/schema" in paths
     assert "/admin/world/generate-room" in paths
     assert "/admin/world/generate-character" in paths
     assert "/admin/world/generate-item" in paths
@@ -187,6 +191,53 @@ def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):
     reloaded, meta = load_world(path)
     assert reloaded.epoch == scenario.actor.epoch
     assert meta.seed == "moss"
+
+
+def test_world_schema_includes_available_types_and_live_usage(scenario):
+    schema = world_schema(scenario.actor)
+
+    assert schema.ok is True
+    assert schema.world_epoch == scenario.actor.epoch
+    assert "RoomComponent" in schema.components
+    assert "IdentityComponent" in schema.components
+    assert "Contains" in schema.edges
+    room_schema = schema.components["RoomComponent"].json_schema
+    assert room_schema["properties"]["title"]["type"] == "string"
+    assert "title" in room_schema["required"]
+    assert schema.components["RoomComponent"].used is True
+    assert schema.components["RoomComponent"].count == 2
+    assert schema.edges["Contains"].used is True
+    assert schema.edges["Contains"].count == 1
+
+
+def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, monkeypatch):
+    captured = {}
+
+    class CapturingBuilder:
+        def propose_item(
+            self,
+            *,
+            container_name,
+            container_kind,
+            prompt,
+            known_rooms,
+            schema_context="",
+        ):
+            del container_name, container_kind, prompt, known_rooms
+            captured["schema_context"] = schema_context
+            return ItemProposal(name="schema bell")
+
+    monkeypatch.setattr(server_worldgen, "_builder", lambda options: CapturingBuilder())
+
+    generate_item_patch(
+        scenario.actor,
+        WorldItemGenerationRequest(container_entity_id=str(scenario.room_a), prompt="bell"),
+        options=GenOptions(llm=True),
+    )
+
+    assert '"RoomComponent"' in captured["schema_context"]
+    assert '"IdentityComponent"' in captured["schema_context"]
+    assert '"Contains"' in captured["schema_context"]
 
 
 def test_world_patch_updates_component_and_edge(scenario):

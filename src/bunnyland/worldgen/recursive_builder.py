@@ -26,21 +26,37 @@ from .proposal import (
 
 class RecursiveWorldBuilder(Protocol):
     def propose_room(
-        self, seed: str, *, behind: DoorProposal | None, known_rooms: Mapping[str, str]
+        self,
+        seed: str,
+        *,
+        behind: DoorProposal | None,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> RoomNodeProposal: ...
 
-    def propose_doors(self, room: RoomNodeProposal) -> list[DoorProposal]: ...
+    def propose_doors(
+        self, room: RoomNodeProposal, *, schema_context: str = ""
+    ) -> list[DoorProposal]: ...
 
     def resolve_dangling_door(
         self, door: DoorProposal, *, room: RoomNodeProposal, candidates: Mapping[str, str]
     ) -> DanglingResolution: ...
 
     def propose_contents(
-        self, room: RoomNodeProposal, *, known_rooms: Mapping[str, str]
+        self,
+        room: RoomNodeProposal,
+        *,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> RoomContentsProposal: ...
 
     def propose_character(
-        self, room: RoomNodeProposal, *, prompt: str, known_rooms: Mapping[str, str]
+        self,
+        room: RoomNodeProposal,
+        *,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> CharacterProposal: ...
 
     def propose_item(
@@ -50,6 +66,7 @@ class RecursiveWorldBuilder(Protocol):
         container_kind: str,
         prompt: str,
         known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> ItemProposal: ...
 
     def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]: ...
@@ -68,9 +85,14 @@ class StubRecursiveBuilder:
     system_prompt = ""  # deterministic; no LLM prompt
 
     def propose_room(
-        self, seed: str, *, behind: DoorProposal | None, known_rooms: Mapping[str, str]
+        self,
+        seed: str,
+        *,
+        behind: DoorProposal | None,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> RoomNodeProposal:
-        del seed, known_rooms
+        del seed, known_rooms, schema_context
         if behind is None:
             return RoomNodeProposal(
                 title=self.ROOT_TITLE,
@@ -90,7 +112,10 @@ class StubRecursiveBuilder:
             description=f"a {title.lower()}",
         )
 
-    def propose_doors(self, room: RoomNodeProposal) -> list[DoorProposal]:
+    def propose_doors(
+        self, room: RoomNodeProposal, *, schema_context: str = ""
+    ) -> list[DoorProposal]:
+        del schema_context
         if room.title == self.ROOT_TITLE:
             return [
                 DoorProposal(direction="north", beyond_hint="North Tunnel"),
@@ -116,9 +141,13 @@ class StubRecursiveBuilder:
         return DanglingResolution(action="link", target_room_key=target)
 
     def propose_contents(
-        self, room: RoomNodeProposal, *, known_rooms: Mapping[str, str]
+        self,
+        room: RoomNodeProposal,
+        *,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> RoomContentsProposal:
-        del known_rooms
+        del known_rooms, schema_context
         if room.title == self.ROOT_TITLE:
             return RoomContentsProposal(
                 objects=[
@@ -141,9 +170,14 @@ class StubRecursiveBuilder:
         return RoomContentsProposal(objects=[ItemProposal(name="a smooth pebble")])
 
     def propose_character(
-        self, room: RoomNodeProposal, *, prompt: str, known_rooms: Mapping[str, str]
+        self,
+        room: RoomNodeProposal,
+        *,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> CharacterProposal:
-        del room, known_rooms
+        del room, known_rooms, schema_context
         return CharacterProposal(name=prompt or "Mossy Visitor", controller="suspended")
 
     def propose_item(
@@ -153,8 +187,9 @@ class StubRecursiveBuilder:
         container_kind: str,
         prompt: str,
         known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> ItemProposal:
-        del container_name, container_kind, known_rooms
+        del container_name, container_kind, known_rooms, schema_context
         return ItemProposal(name=prompt or "a smooth pebble")
 
     def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]:
@@ -212,8 +247,23 @@ class OllamaRecursiveBuilder:
         self._history.append(dict(message))
         return json.loads(message["content"])
 
+    @staticmethod
+    def _with_schema_context(instruction: str, schema_context: str) -> str:
+        if not schema_context:
+            return instruction
+        return (
+            f"{instruction}\n\nLive ECS JSON schemas for this world: {schema_context}\n"
+            "Use these exact component and edge names when choosing ECS-compatible "
+            "details, but still reply ONLY with the requested JSON shape."
+        )
+
     def propose_room(  # pragma: no cover - needs network + extra
-        self, seed: str, *, behind: DoorProposal | None, known_rooms: Mapping[str, str]
+        self,
+        seed: str,
+        *,
+        behind: DoorProposal | None,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> RoomNodeProposal:
         if behind is None:
             instruction = (
@@ -225,10 +275,13 @@ class OllamaRecursiveBuilder:
                 f"Through the {behind.direction} door ({behind.beyond_hint!r}) lies a new room. "
                 "Describe it as JSON with keys title, biome, indoor, light, celsius, description."
             )
-        return RoomNodeProposal.model_validate(self._ask(instruction))
+        del known_rooms
+        return RoomNodeProposal.model_validate(
+            self._ask(self._with_schema_context(instruction, schema_context))
+        )
 
     def propose_doors(  # pragma: no cover - needs network + extra
-        self, room: RoomNodeProposal
+        self, room: RoomNodeProposal, *, schema_context: str = ""
     ) -> list[DoorProposal]:
         instruction = (
             f"List the doors leading out of {room.title!r} as a JSON object "
@@ -236,7 +289,7 @@ class OllamaRecursiveBuilder:
             '"hidden","beyond_hint"}]}. Most doors are bidirectional; mark slides, '
             "cliffs, and one-way portals bidirectional=false."
         )
-        data = self._ask(instruction)
+        data = self._ask(self._with_schema_context(instruction, schema_context))
         return [DoorProposal.model_validate(d) for d in data.get("doors", [])]
 
     def resolve_dangling_door(  # pragma: no cover - needs network + extra
@@ -252,7 +305,11 @@ class OllamaRecursiveBuilder:
         return DanglingResolution.model_validate(self._ask(instruction))
 
     def propose_contents(  # pragma: no cover - needs network + extra
-        self, room: RoomNodeProposal, *, known_rooms: Mapping[str, str]
+        self,
+        room: RoomNodeProposal,
+        *,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> RoomContentsProposal:
         reminder = "; ".join(f"{title}" for title in known_rooms.values())
         instruction = (
@@ -261,10 +318,17 @@ class OllamaRecursiveBuilder:
             '"renewable","open","writable","key_name","locked"}],'
             '"characters":[{"name","species","controller":"llm|suspended","llm_profile"}]}.'
         )
-        return RoomContentsProposal.model_validate(self._ask(instruction))
+        return RoomContentsProposal.model_validate(
+            self._ask(self._with_schema_context(instruction, schema_context))
+        )
 
     def propose_character(  # pragma: no cover - needs network + extra
-        self, room: RoomNodeProposal, *, prompt: str, known_rooms: Mapping[str, str]
+        self,
+        room: RoomNodeProposal,
+        *,
+        prompt: str,
+        known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> CharacterProposal:
         reminder = "; ".join(f"{title}" for title in known_rooms.values())
         instruction = (
@@ -273,7 +337,9 @@ class OllamaRecursiveBuilder:
             '{"name","species","controller":"llm|suspended","llm_profile","traits","goals"}. '
             "Use controller=suspended unless the request explicitly asks for an LLM character."
         )
-        return CharacterProposal.model_validate(self._ask(instruction))
+        return CharacterProposal.model_validate(
+            self._ask(self._with_schema_context(instruction, schema_context))
+        )
 
     def propose_item(  # pragma: no cover - needs network + extra
         self,
@@ -282,6 +348,7 @@ class OllamaRecursiveBuilder:
         container_kind: str,
         prompt: str,
         known_rooms: Mapping[str, str],
+        schema_context: str = "",
     ) -> ItemProposal:
         reminder = "; ".join(f"{title}" for title in known_rooms.values())
         instruction = (
@@ -290,7 +357,9 @@ class OllamaRecursiveBuilder:
             '{"name","kind","portable","nutrition","satiety","hydration","renewable",'
             '"open","writable","key_name","locked"}.'
         )
-        return ItemProposal.model_validate(self._ask(instruction))
+        return ItemProposal.model_validate(
+            self._ask(self._with_schema_context(instruction, schema_context))
+        )
 
     def propose_inventory(  # pragma: no cover - needs network + extra
         self, *, name: str, species: str
