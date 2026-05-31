@@ -95,7 +95,9 @@ Discord instead:
 !claim Juniper
 ```
 
-With no character name, `!claim` assigns the first suspended claimable character.
+Character names can be shortened when the prefix is unique. With no character name,
+`!claim` assigns the first suspended claimable character. Use `!characters` to list the
+current world's character names.
 
 For embedded tools or tests, you can still construct the bot directly:
 
@@ -118,6 +120,7 @@ loop on the same `actor` so ticks process the commands users submit.
 | `!take <name>`     | Pick up an item, e.g. `!take marsh journal`.       |
 | `!say <text>`      | Speak to everyone in the room.                     |
 | `!claim [name]`    | Claim a suspended character for your Discord user. |
+| `!characters`      | List character names in the current world.         |
 
 ### Names, not ids
 

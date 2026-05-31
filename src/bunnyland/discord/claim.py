@@ -13,6 +13,38 @@ from ..core import (
 from ..core.world_actor import WorldActor
 
 
+def list_character_names(actor: WorldActor) -> list[str]:
+    """Return public character names in the current world."""
+
+    characters = actor.world.query().with_all([CharacterComponent, IdentityComponent])
+    return [
+        character.get_component(IdentityComponent).name
+        for character in characters.execute_entities()
+    ]
+
+
+def _match_character(characters, character_name: str):
+    lowered = character_name.lower()
+    exact = [
+        character
+        for character in characters
+        if character.get_component(IdentityComponent).name.lower() == lowered
+    ]
+    if exact:
+        return exact[0]
+    prefix = [
+        character
+        for character in characters
+        if character.get_component(IdentityComponent).name.lower().startswith(lowered)
+    ]
+    if len(prefix) == 1:
+        return prefix[0]
+    if len(prefix) > 1:
+        names = ", ".join(character.get_component(IdentityComponent).name for character in prefix)
+        raise RuntimeError(f"multiple characters match {character_name!r}: {names}")
+    return None
+
+
 def assign_discord_controller(
     actor: WorldActor,
     *,
@@ -26,15 +58,13 @@ def assign_discord_controller(
         actor.world.query().with_all([CharacterComponent, IdentityComponent]).execute_entities()
     )
     if character_name:
-        lowered = character_name.lower()
-        matches = [
-            character
-            for character in characters
-            if character.get_component(IdentityComponent).name.lower() == lowered
-        ]
-        if not matches:
-            raise RuntimeError(f"no character named {character_name!r} exists in the world")
-        character = matches[0]
+        character = _match_character(characters, character_name)
+        if character is None:
+            names = ", ".join(list_character_names(actor))
+            raise RuntimeError(
+                f"no character named {character_name!r} exists in the world. "
+                f"Available characters: {names}"
+            )
     else:
         suspended = [
             character for character in characters if character.has_component(SuspendedComponent)
@@ -73,4 +103,4 @@ def discord_controlled_character(actor: WorldActor, discord_user_id: int):
     return None
 
 
-__all__ = ["assign_discord_controller", "discord_controlled_character"]
+__all__ = ["assign_discord_controller", "discord_controlled_character", "list_character_names"]

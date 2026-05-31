@@ -17,7 +17,7 @@ from bunnyland.core import (
     WorldActor,
     spawn_entity,
 )
-from bunnyland.discord.claim import discord_controlled_character
+from bunnyland.discord.claim import discord_controlled_character, list_character_names
 from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import DependencyContribution, Plugin, PluginError, bunnyland_plugins
 from bunnyland.plugins.builtin import CORE_VERBS, WORLDGEN
@@ -89,6 +89,23 @@ def test_assign_discord_controller_claims_suspended_character():
     assert discord.discord_user_id == 123
     assert discord.default_channel_id == 456
     assert discord_controlled_character(actor, 123) == (character.id, controller_id, 0)
+    assert list_character_names(actor) == ["Juniper"]
+
+
+def test_assign_discord_controller_accepts_unique_prefix():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Thistle the Innkeeper", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+
+    claimed = assign_discord_controller(actor, discord_user_id=123, character_name="Thistle")
+
+    assert claimed == "Thistle the Innkeeper"
+    assert discord_controlled_character(actor, 123)[0] == character.id
 
 
 def test_world_meta_can_record_loaded_plugin_ids():
