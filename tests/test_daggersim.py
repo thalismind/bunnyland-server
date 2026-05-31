@@ -18,10 +18,15 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.daggersim import (
+    AcceptGeneratedQuestHandler,
+    AskForWorkHandler,
     AskRumorHandler,
+    CompleteGeneratedQuestHandler,
+    DaggerQuestRewardComponent,
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
+    GeneratedQuestComponent,
     GeneratedSiteInstantiatedEvent,
     InstitutionComponent,
     InstitutionJoinedEvent,
@@ -32,6 +37,13 @@ from bunnyland.mechanics.daggersim import (
     MemberOfInstitution,
     PlanTravelHandler,
     ProceduralSiteComponent,
+    QuestAcceptedEvent,
+    QuestCompletedEvent,
+    QuestDeadlineComponent,
+    QuestDeadlineConsequence,
+    QuestFailedEvent,
+    QuestGeneratedEvent,
+    QuestTemplateComponent,
     RumorBecameExpansionEvent,
     RumorComponent,
     RumorHeardEvent,
@@ -60,7 +72,11 @@ def _install(actor):
     actor.register_handler(PlanTravelHandler())
     actor.register_handler(JoinInstitutionHandler())
     actor.register_handler(UseInstitutionServiceHandler())
+    actor.register_handler(AskForWorkHandler())
+    actor.register_handler(AcceptGeneratedQuestHandler())
+    actor.register_handler(CompleteGeneratedQuestHandler())
     actor.register_consequence(TravelCompletionConsequence())
+    actor.register_consequence(QuestDeadlineConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -145,6 +161,25 @@ def _institution(scenario, *, required_rank="member"):
     )
     institution.add_relationship(Contains(mode=ContainmentMode.CONTAINER), service.id)
     return institution.id, service.id
+
+
+def _quest_template(scenario, *, duration_seconds=10 * HOUR):
+    template = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ratcatcher errand", kind="quest-template"),
+            QuestTemplateComponent(
+                title="Clear the North Tunnel",
+                objective="Drive the rats away from the old milestone.",
+                reward_item_name="guild writ",
+                duration_seconds=duration_seconds,
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), template.id
+    )
+    return template.id
 
 
 async def test_expand_site_instantiates_unrealized_location():
@@ -327,6 +362,68 @@ async def test_institution_service_rejects_insufficient_rank():
     await scenario.actor.tick(HOUR)
 
     assert any(event.reason == "institution rank is too low" for event in rejects)
+
+
+async def test_generated_quest_can_be_accepted_completed_and_rewarded():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    template_id = _quest_template(scenario)
+    generated: list[QuestGeneratedEvent] = []
+    accepted: list[QuestAcceptedEvent] = []
+    completed: list[QuestCompletedEvent] = []
+    scenario.actor.bus.subscribe(QuestGeneratedEvent, generated.append)
+    scenario.actor.bus.subscribe(QuestAcceptedEvent, accepted.append)
+    scenario.actor.bus.subscribe(QuestCompletedEvent, completed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "ask-for-work", template_id=str(template_id)))
+    await scenario.actor.tick(HOUR)
+    quest_id = parse_entity_id(generated[0].quest_id)
+    assert quest_id is not None
+
+    await scenario.actor.submit(
+        _cmd(scenario, "accept-generated-quest", quest_id=str(quest_id))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "complete-generated-quest", quest_id=str(quest_id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    quest = scenario.actor.world.get_entity(quest_id)
+    assert quest.get_component(GeneratedQuestComponent).status == "completed"
+    assert quest.get_component(DaggerQuestRewardComponent).claimed is True
+    assert accepted[0].quest_id == str(quest_id)
+    reward_id = parse_entity_id(completed[0].reward_item_id)
+    assert reward_id is not None
+    reward = scenario.actor.world.get_entity(reward_id)
+    assert reward.get_component(IdentityComponent).name == "guild writ"
+    assert container_of(reward) == scenario.character
+
+
+async def test_generated_quest_fails_after_deadline():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    template_id = _quest_template(scenario, duration_seconds=HOUR)
+    generated: list[QuestGeneratedEvent] = []
+    failed: list[QuestFailedEvent] = []
+    scenario.actor.bus.subscribe(QuestGeneratedEvent, generated.append)
+    scenario.actor.bus.subscribe(QuestFailedEvent, failed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "ask-for-work", template_id=str(template_id)))
+    await scenario.actor.tick(HOUR)
+    quest_id = parse_entity_id(generated[0].quest_id)
+    assert quest_id is not None
+
+    await scenario.actor.submit(
+        _cmd(scenario, "accept-generated-quest", quest_id=str(quest_id))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(1)
+
+    quest = scenario.actor.world.get_entity(quest_id)
+    assert quest.get_component(GeneratedQuestComponent).status == "failed"
+    assert quest.get_component(QuestDeadlineComponent).due_at_epoch < scenario.actor.epoch
+    assert failed[0].quest_id == str(quest_id)
 
 
 def test_daggersim_fragments_show_nearby_unrealized_locations():

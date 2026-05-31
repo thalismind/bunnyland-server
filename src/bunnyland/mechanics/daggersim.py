@@ -110,6 +110,34 @@ class MemberOfInstitution(Edge):
     since_epoch: int = 0
 
 
+@dataclass(frozen=True)
+class QuestTemplateComponent(Component):
+    title: str
+    objective: str
+    reward_item_name: str
+    duration_seconds: int = 24 * 60 * 60
+
+
+@dataclass(frozen=True)
+class GeneratedQuestComponent(Component):
+    title: str
+    objective: str
+    status: str = "offered"
+    accepted_by: str | None = None
+
+
+@dataclass(frozen=True)
+class QuestDeadlineComponent(Component):
+    due_at_epoch: int
+
+
+@dataclass(frozen=True)
+class DaggerQuestRewardComponent(Component):
+    item_name: str
+    claimed: bool = False
+    claimed_by: str | None = None
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -166,6 +194,28 @@ class InstitutionServiceUsedEvent(DomainEvent):
     service_id: str
     service_name: str
     output_item_id: str | None = None
+
+
+class QuestGeneratedEvent(DomainEvent):
+    quest_id: str
+    title: str
+    due_at_epoch: int
+
+
+class QuestAcceptedEvent(DomainEvent):
+    quest_id: str
+    title: str
+
+
+class QuestCompletedEvent(DomainEvent):
+    quest_id: str
+    title: str
+    reward_item_id: str
+
+
+class QuestFailedEvent(DomainEvent):
+    quest_id: str
+    title: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -564,7 +614,9 @@ class UseInstitutionServiceHandler:
 
         output_item_id: str | None = None
         if service.output_item_name:
-            output = _spawn_service_output(ctx.world, character, service.output_item_name)
+            output = _spawn_inventory_item(
+                ctx.world, character, service.output_item_name, kind="service-output"
+            )
             output_item_id = str(output.id)
         return ok(
             InstitutionServiceUsedEvent(
@@ -580,6 +632,168 @@ class UseInstitutionServiceHandler:
                 )
             )
         )
+
+
+class AskForWorkHandler:
+    command_type = "ask-for-work"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        template_id = parse_entity_id(command.payload.get("template_id"))
+        if character_id is None or template_id is None:
+            return rejected("invalid character or template id")
+        if not ctx.world.has_entity(template_id):
+            return rejected("quest template does not exist")
+
+        character = ctx.entity(character_id)
+        if template_id not in reachable_ids(ctx.world, character):
+            return rejected("quest template is not reachable")
+        template_entity = ctx.entity(template_id)
+        if not template_entity.has_component(QuestTemplateComponent):
+            return rejected("target is not a quest template")
+
+        from ..core.ecs import spawn_entity
+
+        template = template_entity.get_component(QuestTemplateComponent)
+        due_at = ctx.epoch + template.duration_seconds
+        quest = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=template.title, kind="quest"),
+                GeneratedQuestComponent(title=template.title, objective=template.objective),
+                QuestDeadlineComponent(due_at_epoch=due_at),
+                DaggerQuestRewardComponent(item_name=template.reward_item_name),
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), quest.id)
+        return ok(
+            QuestGeneratedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest.id),),
+                    quest_id=str(quest.id),
+                    title=template.title,
+                    due_at_epoch=due_at,
+                )
+            )
+        )
+
+
+class AcceptGeneratedQuestHandler:
+    command_type = "accept-generated-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_id = parse_entity_id(command.payload.get("quest_id"))
+        if character_id is None or quest_id is None:
+            return rejected("invalid character or quest id")
+        if not ctx.world.has_entity(quest_id):
+            return rejected("quest does not exist")
+
+        character = ctx.entity(character_id)
+        if quest_id not in reachable_ids(ctx.world, character):
+            return rejected("quest is not reachable")
+        quest = ctx.entity(quest_id)
+        if not quest.has_component(GeneratedQuestComponent):
+            return rejected("target is not a generated quest")
+        component = quest.get_component(GeneratedQuestComponent)
+        if component.status != "offered":
+            return rejected("quest is not offered")
+
+        replace_component(
+            quest,
+            replace(component, status="active", accepted_by=str(character_id)),
+        )
+        return ok(
+            QuestAcceptedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id),),
+                    quest_id=str(quest_id),
+                    title=component.title,
+                )
+            )
+        )
+
+
+class CompleteGeneratedQuestHandler:
+    command_type = "complete-generated-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_id = parse_entity_id(command.payload.get("quest_id"))
+        if character_id is None or quest_id is None:
+            return rejected("invalid character or quest id")
+        if not ctx.world.has_entity(quest_id):
+            return rejected("quest does not exist")
+
+        character = ctx.entity(character_id)
+        if quest_id not in reachable_ids(ctx.world, character):
+            return rejected("quest is not reachable")
+        quest = ctx.entity(quest_id)
+        if not quest.has_component(GeneratedQuestComponent):
+            return rejected("target is not a generated quest")
+        component = quest.get_component(GeneratedQuestComponent)
+        if component.status != "active":
+            return rejected("quest is not active")
+        if component.accepted_by != str(character_id):
+            return rejected("quest is not accepted by character")
+        if quest.has_component(QuestDeadlineComponent):
+            deadline = quest.get_component(QuestDeadlineComponent)
+            if ctx.epoch > deadline.due_at_epoch:
+                return rejected("quest deadline has passed")
+        if not quest.has_component(DaggerQuestRewardComponent):
+            return rejected("quest has no reward")
+
+        reward = quest.get_component(DaggerQuestRewardComponent)
+        item = _spawn_inventory_item(ctx.world, character, reward.item_name, kind="quest-reward")
+        replace_component(quest, replace(component, status="completed"))
+        replace_component(
+            quest,
+            replace(reward, claimed=True, claimed_by=str(character_id)),
+        )
+        return ok(
+            QuestCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id), str(item.id)),
+                    quest_id=str(quest_id),
+                    title=component.title,
+                    reward_item_id=str(item.id),
+                )
+            )
+        )
+
+
+class QuestDeadlineConsequence:
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = world.query().with_all([GeneratedQuestComponent, QuestDeadlineComponent])
+        for quest in query.execute_entities():
+            component = quest.get_component(GeneratedQuestComponent)
+            deadline = quest.get_component(QuestDeadlineComponent)
+            if component.status != "active" or epoch <= deadline.due_at_epoch:
+                continue
+            replace_component(quest, replace(component, status="failed"))
+            events.append(
+                QuestFailedEvent(
+                    **_travel_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=component.accepted_by,
+                        target_ids=(str(quest.id),),
+                        quest_id=str(quest.id),
+                        title=component.title,
+                    )
+                )
+            )
+        return events
 
 
 def _service_institution(world: World, service: Entity) -> EntityId | None:
@@ -605,13 +819,13 @@ def _rank_allows(actual: str, required: str) -> bool:
     return actual == required
 
 
-def _spawn_service_output(world: World, character: Entity, name: str) -> Entity:
+def _spawn_inventory_item(world: World, character: Entity, name: str, *, kind: str) -> Entity:
     from ..core.components import PortableComponent
     from ..core.ecs import spawn_entity
 
     output = spawn_entity(
         world,
-        [IdentityComponent(name=name, kind="service-output"), PortableComponent()],
+        [IdentityComponent(name=name, kind=kind), PortableComponent()],
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), output.id)
     return output
@@ -661,6 +875,12 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(
                 f"Institution nearby: {institution.name} ({institution.institution_type})."
             )
+        if entity.has_component(GeneratedQuestComponent):
+            quest = entity.get_component(GeneratedQuestComponent)
+            lines.append(f"Generated quest: {quest.title} ({quest.status}).")
+        if entity.has_component(QuestTemplateComponent):
+            template = entity.get_component(QuestTemplateComponent)
+            lines.append(f"Work available: {template.title}.")
     if character.has_component(TravelPlanComponent):
         plan = character.get_component(TravelPlanComponent)
         lines.append(
@@ -679,10 +899,15 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
 
 def install_daggersim(actor) -> None:
     actor.register_consequence(TravelCompletionConsequence())
+    actor.register_consequence(QuestDeadlineConsequence())
 
 
 __all__ = [
     "AskRumorHandler",
+    "AcceptGeneratedQuestHandler",
+    "AskForWorkHandler",
+    "CompleteGeneratedQuestHandler",
+    "DaggerQuestRewardComponent",
     "ExpandSiteHandler",
     "ExpansionHookComponent",
     "ExpansionRequestedEvent",
@@ -696,6 +921,14 @@ __all__ = [
     "MemberOfInstitution",
     "PlanTravelHandler",
     "ProceduralSiteComponent",
+    "GeneratedQuestComponent",
+    "QuestAcceptedEvent",
+    "QuestCompletedEvent",
+    "QuestDeadlineComponent",
+    "QuestDeadlineConsequence",
+    "QuestFailedEvent",
+    "QuestGeneratedEvent",
+    "QuestTemplateComponent",
     "RumorBecameExpansionEvent",
     "RumorComponent",
     "RumorDisprovenEvent",

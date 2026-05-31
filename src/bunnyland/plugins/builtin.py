@@ -83,10 +83,15 @@ from ..mechanics.colonysim import (
 )
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.daggersim import (
+    AcceptGeneratedQuestHandler,
+    AskForWorkHandler,
     AskRumorHandler,
+    CompleteGeneratedQuestHandler,
+    DaggerQuestRewardComponent,
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
+    GeneratedQuestComponent,
     GeneratedSiteInstantiatedEvent,
     InstitutionComponent,
     InstitutionJoinedEvent,
@@ -97,6 +102,10 @@ from ..mechanics.daggersim import (
     MemberOfInstitution,
     PlanTravelHandler,
     ProceduralSiteComponent,
+    QuestDeadlineComponent,
+    QuestFailedEvent,
+    QuestGeneratedEvent,
+    QuestTemplateComponent,
     RumorBecameExpansionEvent,
     RumorComponent,
     RumorDisprovenEvent,
@@ -115,6 +124,12 @@ from ..mechanics.daggersim import (
     UseInstitutionServiceHandler,
     daggersim_fragments,
     install_daggersim,
+)
+from ..mechanics.daggersim import (
+    QuestAcceptedEvent as DaggerQuestAcceptedEvent,
+)
+from ..mechanics.daggersim import (
+    QuestCompletedEvent as DaggerQuestCompletedEvent,
 )
 from ..mechanics.dragonsim import (
     AcceptQuestHandler,
@@ -761,6 +776,10 @@ def daggersim_plugin() -> Plugin:
                 TravelPlanComponent,
                 InstitutionComponent,
                 InstitutionServiceComponent,
+                QuestTemplateComponent,
+                GeneratedQuestComponent,
+                QuestDeadlineComponent,
+                DaggerQuestRewardComponent,
             ),
             edges=(TravelRoute, MemberOfInstitution),
         ),
@@ -772,6 +791,9 @@ def daggersim_plugin() -> Plugin:
                 PlanTravelHandler,
                 JoinInstitutionHandler,
                 UseInstitutionServiceHandler,
+                AskForWorkHandler,
+                AcceptGeneratedQuestHandler,
+                CompleteGeneratedQuestHandler,
             ),
             typed_events=(
                 ExpansionRequestedEvent,
@@ -784,6 +806,10 @@ def daggersim_plugin() -> Plugin:
                 TravelCompletedEvent,
                 InstitutionJoinedEvent,
                 InstitutionServiceUsedEvent,
+                QuestGeneratedEvent,
+                DaggerQuestAcceptedEvent,
+                DaggerQuestCompletedEvent,
+                QuestFailedEvent,
             ),
         ),
         runtime=RuntimeContribution(service_factories=(install_daggersim,)),
