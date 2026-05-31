@@ -13,7 +13,7 @@ from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.commands import SubmittedCommand
-from ..core.components import IdentityComponent
+from ..core.components import HealthComponent, IdentityComponent
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
@@ -208,6 +208,23 @@ class CustomClassComponent(Component):
     finalized_at_epoch: int = 0
 
 
+@dataclass(frozen=True)
+class SpellTemplateComponent(Component):
+    spell_name: str
+    effect_type: str
+    magnitude: float
+    cost: int = 1
+
+
+@dataclass(frozen=True)
+class CustomSpellComponent(Component):
+    spell_name: str
+    effect_type: str
+    magnitude: float
+    cost: int = 1
+    creator_id: str | None = None
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -345,6 +362,22 @@ class CustomClassCreatedEvent(DomainEvent):
     primary_skills: tuple[str, ...] = ()
     major_skills: tuple[str, ...] = ()
     minor_skills: tuple[str, ...] = ()
+
+
+class SpellCreatedEvent(DomainEvent):
+    spell_id: str
+    spell_name: str
+    effect_type: str
+    magnitude: float
+
+
+class SpellCastEvent(DomainEvent):
+    spell_id: str
+    spell_name: str
+    target_id: str
+    effect_type: str
+    magnitude: float
+    target_health: float | None = None
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -1339,6 +1372,112 @@ class CreateCustomClassHandler:
         )
 
 
+class CreateSpellHandler:
+    command_type = "create-spell"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        template_id = parse_entity_id(command.payload.get("template_id"))
+        if character_id is None or template_id is None:
+            return rejected("invalid character or spell template id")
+        if not ctx.world.has_entity(template_id):
+            return rejected("spell template does not exist")
+
+        character = ctx.entity(character_id)
+        if template_id not in reachable_ids(ctx.world, character):
+            return rejected("spell template is not reachable")
+        template_entity = ctx.entity(template_id)
+        if not template_entity.has_component(SpellTemplateComponent):
+            return rejected("target is not a spell template")
+
+        from ..core.ecs import spawn_entity
+
+        template = template_entity.get_component(SpellTemplateComponent)
+        spell_name = str(command.payload.get("spell_name", template.spell_name)).strip()
+        spell = CustomSpellComponent(
+            spell_name=spell_name or template.spell_name,
+            effect_type=template.effect_type,
+            magnitude=template.magnitude,
+            cost=template.cost,
+            creator_id=str(character_id),
+        )
+        spell_entity = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=spell.spell_name, kind="spell"),
+                spell,
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), spell_entity.id)
+        return ok(
+            SpellCreatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(spell_entity.id),),
+                    spell_id=str(spell_entity.id),
+                    spell_name=spell.spell_name,
+                    effect_type=spell.effect_type,
+                    magnitude=spell.magnitude,
+                )
+            )
+        )
+
+
+class CastSpellHandler:
+    command_type = "cast-spell"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        spell_id = parse_entity_id(command.payload.get("spell_id"))
+        target_id = parse_entity_id(command.payload.get("target_id")) or character_id
+        if character_id is None or spell_id is None or target_id is None:
+            return rejected("invalid character, spell, or target id")
+        if not ctx.world.has_entity(spell_id) or not ctx.world.has_entity(target_id):
+            return rejected("spell or target does not exist")
+
+        character = ctx.entity(character_id)
+        if spell_id not in reachable_ids(ctx.world, character):
+            return rejected("spell is not reachable")
+        spell_entity = ctx.entity(spell_id)
+        if not spell_entity.has_component(CustomSpellComponent):
+            return rejected("target spell is not custom")
+        target = ctx.entity(target_id)
+        spell = spell_entity.get_component(CustomSpellComponent)
+        target_health = _apply_spell_effect(target, spell)
+        return ok(
+            SpellCastEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(spell_id), str(target_id)),
+                    spell_id=str(spell_id),
+                    spell_name=spell.spell_name,
+                    target_id=str(target_id),
+                    effect_type=spell.effect_type,
+                    magnitude=spell.magnitude,
+                    target_health=target_health,
+                )
+            )
+        )
+
+
+def _apply_spell_effect(target: Entity, spell: CustomSpellComponent) -> float | None:
+    if not target.has_component(HealthComponent):
+        return None
+    health = target.get_component(HealthComponent)
+    if spell.effect_type == "heal":
+        current = min(health.maximum, health.current + spell.magnitude)
+    elif spell.effect_type == "harm":
+        current = max(0.0, health.current - spell.magnitude)
+    else:
+        return health.current
+    replace_component(target, replace(health, current=current))
+    return current
+
+
 def _string_tuple(raw: object, default: tuple[str, ...]) -> tuple[str, ...]:
     if raw is None:
         return default
@@ -1466,6 +1605,12 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(ClassTemplateComponent):
             template = entity.get_component(ClassTemplateComponent)
             lines.append(f"Class template available: {template.class_name}.")
+        if entity.has_component(SpellTemplateComponent):
+            template = entity.get_component(SpellTemplateComponent)
+            lines.append(f"Spell formula available: {template.spell_name}.")
+        if entity.has_component(CustomSpellComponent):
+            spell = entity.get_component(CustomSpellComponent)
+            lines.append(f"Known custom spell: {spell.spell_name} ({spell.effect_type}).")
     if character.has_component(CustomClassComponent):
         custom_class = character.get_component(CustomClassComponent)
         lines.append(f"Custom class: {custom_class.class_name}.")
@@ -1502,12 +1647,15 @@ __all__ = [
     "BountyPostedEvent",
     "CompleteGeneratedQuestHandler",
     "CommitCrimeHandler",
+    "CastSpellHandler",
     "ClassTemplateComponent",
     "CreateCustomClassHandler",
+    "CreateSpellHandler",
     "CrimeCommittedEvent",
     "CrimeRecordComponent",
     "CustomClassComponent",
     "CustomClassCreatedEvent",
+    "CustomSpellComponent",
     "DaggerQuestRewardComponent",
     "DebtComponent",
     "DepositHandler",
@@ -1551,6 +1699,9 @@ __all__ = [
     "RumorSourceComponent",
     "RumorTargetComponent",
     "RumorVerifiedEvent",
+    "SpellCastEvent",
+    "SpellCreatedEvent",
+    "SpellTemplateComponent",
     "TravelCompletedEvent",
     "TravelCompletionConsequence",
     "TravelHubComponent",

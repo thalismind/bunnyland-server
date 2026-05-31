@@ -16,6 +16,7 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
+from bunnyland.core.components import HealthComponent
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.daggersim import (
     AcceptGeneratedQuestHandler,
@@ -26,14 +27,17 @@ from bunnyland.mechanics.daggersim import (
     BankComponent,
     BountyComponent,
     BountyPostedEvent,
+    CastSpellHandler,
     ClassTemplateComponent,
     CommitCrimeHandler,
     CompleteGeneratedQuestHandler,
     CreateCustomClassHandler,
+    CreateSpellHandler,
     CrimeCommittedEvent,
     CrimeRecordComponent,
     CustomClassComponent,
     CustomClassCreatedEvent,
+    CustomSpellComponent,
     DaggerQuestRewardComponent,
     DebtComponent,
     DepositHandler,
@@ -74,6 +78,9 @@ from bunnyland.mechanics.daggersim import (
     RumorReliabilityComponent,
     RumorTargetComponent,
     RumorVerifiedEvent,
+    SpellCastEvent,
+    SpellCreatedEvent,
+    SpellTemplateComponent,
     TakeLoanHandler,
     TravelCompletedEvent,
     TravelCompletionConsequence,
@@ -109,6 +116,8 @@ def _install(actor):
     actor.register_handler(CommitCrimeHandler())
     actor.register_handler(PayFineHandler())
     actor.register_handler(CreateCustomClassHandler())
+    actor.register_handler(CreateSpellHandler())
+    actor.register_handler(CastSpellHandler())
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
@@ -249,6 +258,25 @@ def _class_template(scenario):
                 minor_skills=("etiquette", "knife", "weather lore"),
                 advantages=("night vision",),
                 disadvantages=("heat weakness",),
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), template.id
+    )
+    return template.id
+
+
+def _spell_template(scenario):
+    template = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="mend sprout formula", kind="spell-template"),
+            SpellTemplateComponent(
+                spell_name="Mend Sprout",
+                effect_type="heal",
+                magnitude=4.0,
+                cost=1,
             ),
         ],
     )
@@ -632,6 +660,46 @@ async def test_create_custom_class_from_template_sets_character_build():
     assert custom_class.major_skills == ("cooking", "animal speech", "memory")
     assert custom_class.advantages == ("night vision",)
     assert created[0].class_name == "Rainpath Scout"
+
+
+async def test_create_and_cast_custom_spell_heals_target_health():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    template_id = _spell_template(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=3.0, maximum=10.0))
+    created: list[SpellCreatedEvent] = []
+    cast: list[SpellCastEvent] = []
+    scenario.actor.bus.subscribe(SpellCreatedEvent, created.append)
+    scenario.actor.bus.subscribe(SpellCastEvent, cast.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "create-spell",
+            template_id=str(template_id),
+            spell_name="Mend Moss",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    spell_id = parse_entity_id(created[0].spell_id)
+    assert spell_id is not None
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "cast-spell",
+            spell_id=str(spell_id),
+            target_id=str(scenario.character),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    spell = scenario.actor.world.get_entity(spell_id)
+    assert spell.get_component(CustomSpellComponent).spell_name == "Mend Moss"
+    assert container_of(spell) == scenario.character
+    assert character.get_component(HealthComponent).current == 7.0
+    assert cast[0].target_health == 7.0
 
 
 def test_daggersim_fragments_show_nearby_unrealized_locations():
