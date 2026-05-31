@@ -40,7 +40,14 @@ from bunnyland.server.worldgen import (
     generate_item_patch,
     generate_room_patch,
 )
-from bunnyland.worldgen import GenOptions, ItemProposal
+from bunnyland.worldgen import (
+    CharacterProposal,
+    DoorProposal,
+    GenOptions,
+    ItemProposal,
+    RoomContentsProposal,
+    RoomNodeProposal,
+)
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -214,6 +221,33 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
     captured = {}
 
     class CapturingBuilder:
+        def propose_room(
+            self,
+            seed,
+            *,
+            behind,
+            known_rooms,
+            schema_context="",
+        ):
+            del seed, behind, known_rooms
+            captured["room"] = schema_context
+            return RoomNodeProposal(title="Schema Room")
+
+        def propose_contents(self, room, *, known_rooms, schema_context=""):
+            del room, known_rooms
+            captured["contents"] = schema_context
+            return RoomContentsProposal()
+
+        def propose_doors(self, room, *, schema_context=""):
+            del room
+            captured["doors"] = schema_context
+            return [DoorProposal(direction="north")]
+
+        def propose_character(self, room, *, prompt, known_rooms, schema_context=""):
+            del room, prompt, known_rooms
+            captured["character"] = schema_context
+            return CharacterProposal(name="Schema Bun")
+
         def propose_item(
             self,
             *,
@@ -224,20 +258,42 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
             schema_context="",
         ):
             del container_name, container_kind, prompt, known_rooms
-            captured["schema_context"] = schema_context
+            captured["item"] = schema_context
             return ItemProposal(name="schema bell")
 
     monkeypatch.setattr(server_worldgen, "_builder", lambda options: CapturingBuilder())
 
+    door = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="schema east door", kind="door"),
+            DoorComponent(open=False),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), door.id
+    )
+
+    generate_room_patch(
+        scenario.actor,
+        WorldRoomGenerationRequest(door_entity_id=str(door.id), direction="east"),
+        options=GenOptions(llm=True),
+    )
+    generate_character_patch(
+        scenario.actor,
+        WorldCharacterGenerationRequest(room_entity_id=str(scenario.room_a), prompt="bun"),
+        options=GenOptions(llm=True),
+    )
     generate_item_patch(
         scenario.actor,
         WorldItemGenerationRequest(container_entity_id=str(scenario.room_a), prompt="bell"),
         options=GenOptions(llm=True),
     )
 
-    assert '"RoomComponent"' in captured["schema_context"]
-    assert '"IdentityComponent"' in captured["schema_context"]
-    assert '"Contains"' in captured["schema_context"]
+    for key in ["room", "contents", "doors", "character", "item"]:
+        assert '"RoomComponent"' in captured[key]
+        assert '"IdentityComponent"' in captured[key]
+        assert '"Contains"' in captured[key]
 
 
 def test_world_patch_updates_component_and_edge(scenario):
