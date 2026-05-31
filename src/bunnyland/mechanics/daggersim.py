@@ -91,6 +91,25 @@ class TravelRoute(Edge):
     label: str = ""
 
 
+@dataclass(frozen=True)
+class InstitutionComponent(Component):
+    name: str
+    institution_type: str = "guild"
+
+
+@dataclass(frozen=True)
+class InstitutionServiceComponent(Component):
+    service_name: str
+    required_rank: str = "member"
+    output_item_name: str | None = None
+
+
+@dataclass(frozen=True)
+class MemberOfInstitution(Edge):
+    rank: str = "member"
+    since_epoch: int = 0
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -134,6 +153,19 @@ class TravelStartedEvent(DomainEvent):
 class TravelCompletedEvent(DomainEvent):
     destination_id: str
     mode: str
+
+
+class InstitutionJoinedEvent(DomainEvent):
+    institution_id: str
+    institution_name: str
+    rank: str
+
+
+class InstitutionServiceUsedEvent(DomainEvent):
+    institution_id: str
+    service_id: str
+    service_name: str
+    output_item_id: str | None = None
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -456,6 +488,135 @@ def _travel_event_base(epoch: int, **kwargs) -> dict:
     return base
 
 
+class JoinInstitutionHandler:
+    command_type = "join-institution"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        institution_id = parse_entity_id(command.payload.get("institution_id"))
+        rank = str(command.payload.get("rank", "member")).strip() or "member"
+        if character_id is None or institution_id is None:
+            return rejected("invalid character or institution id")
+        if not ctx.world.has_entity(institution_id):
+            return rejected("institution does not exist")
+
+        character = ctx.entity(character_id)
+        if institution_id not in reachable_ids(ctx.world, character):
+            return rejected("institution is not reachable")
+        institution = ctx.entity(institution_id)
+        if not institution.has_component(InstitutionComponent):
+            return rejected("target is not an institution")
+        if character.has_relationship(MemberOfInstitution, institution_id):
+            return rejected("already an institution member")
+
+        character.add_relationship(
+            MemberOfInstitution(rank=rank, since_epoch=ctx.epoch), institution_id
+        )
+        component = institution.get_component(InstitutionComponent)
+        return ok(
+            InstitutionJoinedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(institution_id),),
+                    institution_id=str(institution_id),
+                    institution_name=component.name,
+                    rank=rank,
+                )
+            )
+        )
+
+
+class UseInstitutionServiceHandler:
+    command_type = "use-institution-service"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        service_id = parse_entity_id(command.payload.get("service_id"))
+        if character_id is None or service_id is None:
+            return rejected("invalid character or service id")
+        if not ctx.world.has_entity(service_id):
+            return rejected("service does not exist")
+
+        character = ctx.entity(character_id)
+        reachable = reachable_ids(ctx.world, character)
+        service_parent_id = container_of(ctx.entity(service_id))
+        if service_id not in reachable and service_parent_id not in reachable:
+            return rejected("service is not reachable")
+        service_entity = ctx.entity(service_id)
+        if not service_entity.has_component(InstitutionServiceComponent):
+            return rejected("target is not an institution service")
+
+        institution_id = _service_institution(ctx.world, service_entity)
+        if institution_id is None:
+            return rejected("service is not attached to an institution")
+        institution = ctx.entity(institution_id)
+        if not institution.has_component(InstitutionComponent):
+            return rejected("service institution is invalid")
+        membership = _institution_membership(character, institution_id)
+        if membership is None:
+            return rejected("not an institution member")
+
+        service = service_entity.get_component(InstitutionServiceComponent)
+        if not _rank_allows(membership.rank, service.required_rank):
+            return rejected("institution rank is too low")
+
+        output_item_id: str | None = None
+        if service.output_item_name:
+            output = _spawn_service_output(ctx.world, character, service.output_item_name)
+            output_item_id = str(output.id)
+        return ok(
+            InstitutionServiceUsedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(institution_id), str(service_id)),
+                    institution_id=str(institution_id),
+                    service_id=str(service_id),
+                    service_name=service.service_name,
+                    output_item_id=output_item_id,
+                )
+            )
+        )
+
+
+def _service_institution(world: World, service: Entity) -> EntityId | None:
+    parent_id = container_of(service)
+    if parent_id is not None:
+        return parent_id
+    return None
+
+
+def _institution_membership(
+    character: Entity, institution_id: EntityId
+) -> MemberOfInstitution | None:
+    for edge, target_id in character.get_relationships(MemberOfInstitution):
+        if target_id == institution_id:
+            return edge
+    return None
+
+
+def _rank_allows(actual: str, required: str) -> bool:
+    ranks = {"guest": 0, "member": 1, "adept": 2, "officer": 3, "master": 4}
+    if actual in ranks and required in ranks:
+        return ranks[actual] >= ranks[required]
+    return actual == required
+
+
+def _spawn_service_output(world: World, character: Entity, name: str) -> Entity:
+    from ..core.components import PortableComponent
+    from ..core.ecs import spawn_entity
+
+    output = spawn_entity(
+        world,
+        [IdentityComponent(name=name, kind="service-output"), PortableComponent()],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), output.id)
+    return output
+
+
 def _selected_rumor_id(
     ctx: HandlerContext, character_id: EntityId, requested_id: object
 ) -> EntityId | None:
@@ -495,11 +656,24 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         if entity.id != character.id and entity.has_component(TravelHubComponent):
             hub = entity.get_component(TravelHubComponent)
             lines.append(f"Travel destination: {hub.name}.")
+        if entity.has_component(InstitutionComponent):
+            institution = entity.get_component(InstitutionComponent)
+            lines.append(
+                f"Institution nearby: {institution.name} ({institution.institution_type})."
+            )
     if character.has_component(TravelPlanComponent):
         plan = character.get_component(TravelPlanComponent)
         lines.append(
             f"Traveling by {plan.mode}; arrival due at epoch {plan.arrive_at_epoch}."
         )
+    for edge, institution_id in character.get_relationships(MemberOfInstitution):
+        if world.has_entity(institution_id):
+            institution = world.get_entity(institution_id)
+            if institution.has_component(InstitutionComponent):
+                lines.append(
+                    f"Institution membership: "
+                    f"{institution.get_component(InstitutionComponent).name} ({edge.rank})."
+                )
     return sorted(lines)
 
 
@@ -514,6 +688,12 @@ __all__ = [
     "ExpansionRequestedEvent",
     "GeneratedSiteInstantiatedEvent",
     "InvestigateRumorHandler",
+    "InstitutionComponent",
+    "InstitutionJoinedEvent",
+    "InstitutionServiceComponent",
+    "InstitutionServiceUsedEvent",
+    "JoinInstitutionHandler",
+    "MemberOfInstitution",
     "PlanTravelHandler",
     "ProceduralSiteComponent",
     "RumorBecameExpansionEvent",
@@ -532,6 +712,7 @@ __all__ = [
     "TravelRoute",
     "TravelStartedEvent",
     "UnrealizedLocationComponent",
+    "UseInstitutionServiceHandler",
     "daggersim_fragments",
     "install_daggersim",
 ]

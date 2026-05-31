@@ -11,6 +11,8 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     build_submitted_command,
+    container_of,
+    parse_entity_id,
     replace_component,
     spawn_entity,
 )
@@ -21,7 +23,13 @@ from bunnyland.mechanics.daggersim import (
     ExpansionHookComponent,
     ExpansionRequestedEvent,
     GeneratedSiteInstantiatedEvent,
+    InstitutionComponent,
+    InstitutionJoinedEvent,
+    InstitutionServiceComponent,
+    InstitutionServiceUsedEvent,
     InvestigateRumorHandler,
+    JoinInstitutionHandler,
+    MemberOfInstitution,
     PlanTravelHandler,
     ProceduralSiteComponent,
     RumorBecameExpansionEvent,
@@ -38,6 +46,7 @@ from bunnyland.mechanics.daggersim import (
     TravelRoute,
     TravelStartedEvent,
     UnrealizedLocationComponent,
+    UseInstitutionServiceHandler,
     daggersim_fragments,
 )
 
@@ -49,6 +58,8 @@ def _install(actor):
     actor.register_handler(AskRumorHandler())
     actor.register_handler(InvestigateRumorHandler())
     actor.register_handler(PlanTravelHandler())
+    actor.register_handler(JoinInstitutionHandler())
+    actor.register_handler(UseInstitutionServiceHandler())
     actor.register_consequence(TravelCompletionConsequence())
 
 
@@ -108,6 +119,32 @@ def _travel_route(scenario, *, travel_seconds=2 * HOUR):
         TravelRoute(travel_seconds=travel_seconds, label="moss road"),
         scenario.room_b,
     )
+
+
+def _institution(scenario, *, required_rank="member"):
+    institution = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Burrow Cartographers", kind="institution"),
+            InstitutionComponent(name="Burrow Cartographers", institution_type="guild"),
+        ],
+    )
+    service = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="local map service", kind="service"),
+            InstitutionServiceComponent(
+                service_name="local map",
+                required_rank=required_rank,
+                output_item_name="moss road map",
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), institution.id
+    )
+    institution.add_relationship(Contains(mode=ContainmentMode.CONTAINER), service.id)
+    return institution.id, service.id
 
 
 async def test_expand_site_instantiates_unrealized_location():
@@ -245,6 +282,53 @@ async def test_travel_mode_speed_shortens_route_time():
     assert not character.has_component(TravelPlanComponent)
 
 
+async def test_join_institution_and_use_member_service_grants_output_item():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    institution_id, service_id = _institution(scenario)
+    joined: list[InstitutionJoinedEvent] = []
+    used: list[InstitutionServiceUsedEvent] = []
+    scenario.actor.bus.subscribe(InstitutionJoinedEvent, joined.append)
+    scenario.actor.bus.subscribe(InstitutionServiceUsedEvent, used.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "join-institution", institution_id=str(institution_id))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "use-institution-service", service_id=str(service_id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_relationship(MemberOfInstitution, institution_id)
+    assert joined[0].institution_name == "Burrow Cartographers"
+    output_id = parse_entity_id(used[0].output_item_id)
+    assert output_id is not None
+    output = scenario.actor.world.get_entity(output_id)
+    assert output.get_component(IdentityComponent).name == "moss road map"
+    assert container_of(output) == scenario.character
+
+
+async def test_institution_service_rejects_insufficient_rank():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    institution_id, service_id = _institution(scenario, required_rank="officer")
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "join-institution", institution_id=str(institution_id))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "use-institution-service", service_id=str(service_id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "institution rank is too low" for event in rejects)
+
+
 def test_daggersim_fragments_show_nearby_unrealized_locations():
     scenario = build_scenario()
     _site(scenario)
@@ -288,3 +372,15 @@ def test_daggersim_fragments_show_travel_plan():
     fragments = daggersim_fragments(scenario.actor.world, character)
 
     assert any("Traveling by foot" in line for line in fragments)
+
+
+def test_daggersim_fragments_show_institutions_and_memberships():
+    scenario = build_scenario()
+    institution_id, _service_id = _institution(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(MemberOfInstitution(rank="member"), institution_id)
+
+    fragments = daggersim_fragments(scenario.actor.world, character)
+
+    assert any("Institution nearby: Burrow Cartographers" in line for line in fragments)
+    assert any("Institution membership: Burrow Cartographers" in line for line in fragments)
