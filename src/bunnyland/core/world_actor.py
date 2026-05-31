@@ -14,8 +14,9 @@ initiative order with random tie-breaks.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import random
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
 from relics import EntityId, World
@@ -70,6 +71,7 @@ CONTROL_COMMANDS = frozenset({"take-control", "release-to-llm", "suspend", "resu
 
 #: A policy gate inspects a command against the world and returns ``(allowed, reason)``.
 CommandGate = Callable[[World, SubmittedCommand], tuple[bool, "str | None"]]
+AfterTickHook = Callable[["WorldActor"], None | Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,7 @@ class WorldActor:
         #: Policy gates: (world, command) -> (allowed, reason). Any deny rejects the
         #: command before it costs anything (spec 20). Plugins register these.
         self._gates: list[CommandGate] = []
+        self._after_tick: list[AfterTickHook] = []
         self._inbox: asyncio.Queue[SubmittedCommand] = asyncio.Queue()
         self._rng = rng or random.Random()
         self._lock = asyncio.Lock()
@@ -122,6 +125,10 @@ class WorldActor:
     def register_gate(self, gate: CommandGate) -> None:
         """Add a policy gate that can veto a command before it executes (spec 20)."""
         self._gates.append(gate)
+
+    def register_after_tick(self, hook: AfterTickHook) -> None:
+        """Run ``hook`` at the end of every tick while the actor owns the world lock."""
+        self._after_tick.append(hook)
 
     # -- clock --------------------------------------------------------------------------
 
@@ -163,11 +170,18 @@ class WorldActor:
             await self._process_commands()
             # Phase 6: consequence systems (downed/death transitions, etc.).
             await self._run_consequences()
+            await self._run_after_tick()
 
     async def _run_consequences(self) -> None:
         for consequence in self._consequences:
             for event in consequence.process(self.world, self.epoch):
                 await self._publish(event)
+
+    async def _run_after_tick(self) -> None:
+        for hook in self._after_tick:
+            result = hook(self)
+            if inspect.isawaitable(result):
+                await result
 
     async def _ingest(self) -> None:
         while not self._inbox.empty():

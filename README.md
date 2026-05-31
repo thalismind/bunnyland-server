@@ -49,6 +49,8 @@ uv run bunnyland serve --llm --generator recursive --ticks 20
   characters; enabling/disabling plugins.
 - **[Saving & reloading](docs/persistence.md)** — save/autosave/reload a world, and what
   is (and isn't) persisted.
+- **[Scripting](docs/scripting.md)** — external JSON scripts for deterministic tests,
+  plugin scenarios, and scripted events.
 
 The full design is in [`bunnyland_specification.md`](bunnyland_specification.md); the build
 plan is in [`PLAN.md`](PLAN.md).

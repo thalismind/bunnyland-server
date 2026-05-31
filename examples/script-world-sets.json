@@ -1,0 +1,26 @@
+[
+  {
+    "name": "scripted-marsh-bell",
+    "generator": "oneshot",
+    "seed": "a quiet scripted marsh",
+    "plugins": ["bunnyland.core_verbs"],
+    "scripts": ["examples/scripts/epoch_bell.json"]
+  },
+  {
+    "name": "scripted-arrival-marker",
+    "generator": "oneshot",
+    "seed": "a quiet scripted marsh",
+    "plugins": ["bunnyland.core_verbs"],
+    "scripts": ["examples/scripts/move_arrival_patch.json"]
+  },
+  {
+    "name": "scripted-llm-only",
+    "generator": "oneshot",
+    "seed": "a quiet scripted marsh",
+    "plugins": ["bunnyland.core_verbs"],
+    "scripts": [
+      "examples/scripts/epoch_bell.json",
+      "examples/scripts/llm_only_prompt.json"
+    ]
+  }
+]

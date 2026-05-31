@@ -1,0 +1,44 @@
+{
+  "id": "examples.move_arrival_patch",
+  "name": "Move Arrival Patch",
+  "version": "0.1.0",
+  "blocks": [
+    {
+      "name": "leave-arrival-marker",
+      "trigger": {
+        "event_type": "ActorMovedEvent"
+      },
+      "execution": "once",
+      "actions": [
+        {
+          "kind": "patch_world",
+          "operations": [
+            {
+              "op": "add_entity",
+              "bind": "arrival_marker",
+              "contain_in": {
+                "components": ["RoomComponent"],
+                "room_title": "North Tunnel"
+              },
+              "components": [
+                {
+                  "type": "IdentityComponent",
+                  "fields": {
+                    "name": "a chalk arrival mark",
+                    "kind": "marker"
+                  }
+                },
+                {
+                  "type": "PortableComponent",
+                  "fields": {
+                    "can_pick_up": false
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

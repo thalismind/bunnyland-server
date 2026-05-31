@@ -1,0 +1,30 @@
+{
+  "id": "examples.llm_only_prompt",
+  "name": "LLM Only Prompt",
+  "version": "0.1.0",
+  "blocks": [
+    {
+      "name": "llm-character-notice",
+      "trigger": {
+        "epoch_at_least": 10
+      },
+      "execution": "once",
+      "actions": [
+        {
+          "kind": "submit_command",
+          "target": {
+            "mode": "each",
+            "query": {
+              "components": ["CharacterComponent"],
+              "controller_kind": "llm"
+            }
+          },
+          "command_type": "say",
+          "payload": {
+            "text": "Only the LLM-controlled characters hear this scheduled prompt."
+          }
+        }
+      ]
+    }
+  ]
+}
