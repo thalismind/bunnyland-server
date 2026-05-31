@@ -8,8 +8,10 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    ExitTo,
     IdentityComponent,
     Lane,
+    RoomComponent,
     build_submitted_command,
     container_of,
     parse_entity_id,
@@ -25,6 +27,7 @@ from bunnyland.mechanics.daggersim import (
     AskForWorkHandler,
     AskRumorHandler,
     AttemptPacifyHandler,
+    AutomapComponent,
     BankAccountComponent,
     BankComponent,
     BountyComponent,
@@ -46,6 +49,16 @@ from bunnyland.mechanics.daggersim import (
     DaggerQuestRewardComponent,
     DebtComponent,
     DepositHandler,
+    DungeonComponent,
+    DungeonEnteredEvent,
+    DungeonExitedEvent,
+    DungeonGeneratedEvent,
+    DungeonObjectiveComponent,
+    DungeonObjectiveFoundEvent,
+    DungeonRequestedEvent,
+    DungeonRoomComponent,
+    DungeonRoomDiscoveredEvent,
+    EnterDungeonHandler,
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
@@ -64,13 +77,16 @@ from bunnyland.mechanics.daggersim import (
     JoinInstitutionHandler,
     LanguageSkillComponent,
     LawRegionComponent,
+    LeaveDungeonHandler,
     LoanComponent,
     LoanDefaultedEvent,
     LoanDueConsequence,
     LoanIssuedEvent,
     LoanRepaidEvent,
+    MarkPathHandler,
     MemberOfInstitution,
     OpenBankAccountHandler,
+    OpenSecretDoorHandler,
     PacificationAttemptedEvent,
     PacifiedComponent,
     PayFineHandler,
@@ -83,13 +99,23 @@ from bunnyland.mechanics.daggersim import (
     QuestFailedEvent,
     QuestGeneratedEvent,
     QuestTemplateComponent,
+    RecallAnchorComponent,
+    RecallAnchorSetEvent,
+    RecallUsedEvent,
     RepayLoanHandler,
+    RequestDungeonHandler,
+    RestHandler,
+    RestRiskComponent,
     RumorBecameExpansionEvent,
     RumorComponent,
     RumorHeardEvent,
     RumorReliabilityComponent,
     RumorTargetComponent,
     RumorVerifiedEvent,
+    SearchRoomHandler,
+    SecretDoorComponent,
+    SecretDoorFoundEvent,
+    SetRecallHandler,
     SpellCastEvent,
     SpellCreatedEvent,
     SpellTemplateComponent,
@@ -106,6 +132,8 @@ from bunnyland.mechanics.daggersim import (
     TravelStartedEvent,
     UnrealizedLocationComponent,
     UseInstitutionServiceHandler,
+    UseRecallHandler,
+    ViewMapHandler,
     WereformComponent,
     WithdrawHandler,
     daggersim_fragments,
@@ -137,6 +165,16 @@ def _install(actor):
     actor.register_handler(AttemptPacifyHandler())
     actor.register_handler(ContractAfflictionHandler())
     actor.register_handler(TransformHandler())
+    actor.register_handler(RequestDungeonHandler())
+    actor.register_handler(EnterDungeonHandler())
+    actor.register_handler(SearchRoomHandler())
+    actor.register_handler(OpenSecretDoorHandler())
+    actor.register_handler(MarkPathHandler())
+    actor.register_handler(ViewMapHandler())
+    actor.register_handler(SetRecallHandler())
+    actor.register_handler(UseRecallHandler())
+    actor.register_handler(RestHandler())
+    actor.register_handler(LeaveDungeonHandler())
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
@@ -846,3 +884,274 @@ def test_daggersim_fragments_show_institutions_and_memberships():
 
     assert any("Institution nearby: Burrow Cartographers" in line for line in fragments)
     assert any("Institution membership: Burrow Cartographers" in line for line in fragments)
+
+
+def _dungeon(scenario, *, generated=True):
+    world = scenario.actor.world
+    entry_room = spawn_entity(
+        world,
+        [
+            RoomComponent(title="Vault Antechamber"),
+            DungeonRoomComponent(dungeon_id="carrot-vault", depth=0),
+        ],
+    )
+    dungeon = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Carrot Vault", kind="dungeon"),
+            DungeonComponent(
+                dungeon_id="carrot-vault",
+                theme="ruin",
+                seed="cv-1",
+                entry_room_id=str(entry_room.id),
+                generated=generated,
+            ),
+            ExpansionHookComponent(trigger="quest", generator_plugin_id="worldgen.recursive"),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), dungeon.id
+    )
+    return dungeon.id, entry_room.id
+
+
+def _secret_door(scenario, room_id, target_room_id):
+    world = scenario.actor.world
+    door = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="cracked tiles", kind="secret-door"),
+            SecretDoorComponent(
+                target_room_id=str(target_room_id),
+                direction="down",
+                hint="a draft behind the tiles",
+            ),
+        ],
+    )
+    world.get_entity(room_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), door.id
+    )
+    return door.id
+
+
+async def test_request_dungeon_marks_generated_and_emits_events():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    dungeon_id, _entry = _dungeon(scenario, generated=False)
+    requested: list[DungeonRequestedEvent] = []
+    generated: list[DungeonGeneratedEvent] = []
+    scenario.actor.bus.subscribe(DungeonRequestedEvent, requested.append)
+    scenario.actor.bus.subscribe(DungeonGeneratedEvent, generated.append)
+
+    await scenario.actor.submit(_cmd(scenario, "request-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+
+    dungeon = scenario.actor.world.get_entity(dungeon_id).get_component(DungeonComponent)
+    assert dungeon.generated is True
+    assert requested[0].dungeon_id == "carrot-vault"
+    assert requested[0].generator_plugin_id == "worldgen.recursive"
+    assert generated[0].dungeon_id == "carrot-vault"
+
+
+async def test_enter_dungeon_moves_character_and_discovers_entry():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    dungeon_id, entry_id = _dungeon(scenario)
+    entered: list[DungeonEnteredEvent] = []
+    discovered: list[DungeonRoomDiscoveredEvent] = []
+    scenario.actor.bus.subscribe(DungeonEnteredEvent, entered.append)
+    scenario.actor.bus.subscribe(DungeonRoomDiscoveredEvent, discovered.append)
+
+    await scenario.actor.submit(_cmd(scenario, "enter-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert container_of(character) == entry_id
+    assert entered[0].entry_room_id == str(entry_id)
+    assert discovered[0].dungeon_room_id == str(entry_id)
+    entry_room = scenario.actor.world.get_entity(entry_id)
+    assert entry_room.get_component(DungeonRoomComponent).discovered is True
+    assert str(entry_id) in character.get_component(AutomapComponent).discovered_rooms
+
+
+async def test_enter_dungeon_rejected_until_generated():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    dungeon_id, _entry = _dungeon(scenario, generated=False)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "enter-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "dungeon has not been generated yet" for event in rejects)
+
+
+async def test_search_room_finds_secret_door_and_objective():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    dungeon_id, entry_id = _dungeon(scenario)
+    deeper = spawn_entity(
+        scenario.actor.world,
+        [
+            RoomComponent(title="Inner Vault"),
+            DungeonRoomComponent(dungeon_id="carrot-vault", depth=1),
+        ],
+    )
+    door_id = _secret_door(scenario, entry_id, deeper.id)
+    objective = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="the carrot reliquary", kind="objective"),
+            DungeonObjectiveComponent(objective_kind="relic", description="the lost reliquary"),
+        ],
+    )
+    scenario.actor.world.get_entity(entry_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), objective.id
+    )
+    doors: list[SecretDoorFoundEvent] = []
+    objectives: list[DungeonObjectiveFoundEvent] = []
+    scenario.actor.bus.subscribe(SecretDoorFoundEvent, doors.append)
+    scenario.actor.bus.subscribe(DungeonObjectiveFoundEvent, objectives.append)
+
+    await scenario.actor.submit(_cmd(scenario, "enter-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "search-room"))
+    await scenario.actor.tick(HOUR)
+
+    assert doors[0].door_id == str(door_id)
+    assert objectives[0].objective_kind == "relic"
+    door = scenario.actor.world.get_entity(door_id).get_component(SecretDoorComponent)
+    found_objective = scenario.actor.world.get_entity(objective.id).get_component(
+        DungeonObjectiveComponent
+    )
+    assert door.found
+    assert found_objective.found
+
+
+async def test_open_secret_door_creates_exit_to_target_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    dungeon_id, entry_id = _dungeon(scenario)
+    deeper = spawn_entity(
+        scenario.actor.world,
+        [
+            RoomComponent(title="Inner Vault"),
+            DungeonRoomComponent(dungeon_id="carrot-vault", depth=1),
+        ],
+    )
+    door_id = _secret_door(scenario, entry_id, deeper.id)
+
+    await scenario.actor.submit(_cmd(scenario, "enter-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "search-room"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "open-secret-door", door_id=str(door_id)))
+    await scenario.actor.tick(HOUR)
+
+    door = scenario.actor.world.get_entity(door_id).get_component(SecretDoorComponent)
+    assert door.opened is True
+    entry_room = scenario.actor.world.get_entity(entry_id)
+    targets = [target_id for _edge, target_id in entry_room.get_relationships(ExitTo)]
+    assert deeper.id in targets
+
+
+async def test_recall_anchor_set_and_use_returns_to_anchor():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    anchors: list[RecallAnchorSetEvent] = []
+    used: list[RecallUsedEvent] = []
+    scenario.actor.bus.subscribe(RecallAnchorSetEvent, anchors.append)
+    scenario.actor.bus.subscribe(RecallUsedEvent, used.append)
+
+    await scenario.actor.submit(_cmd(scenario, "set-recall"))
+    await scenario.actor.tick(HOUR)
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(RecallAnchorComponent).room_id == str(scenario.room_a)
+
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, character.id)
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
+    )
+
+    await scenario.actor.submit(_cmd(scenario, "use-recall"))
+    await scenario.actor.tick(HOUR)
+
+    assert container_of(character) == scenario.room_a
+    assert anchors[0].anchor_room_id == str(scenario.room_a)
+    assert used[0].anchor_room_id == str(scenario.room_a)
+
+
+async def test_rest_rejected_in_dangerous_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.world.get_entity(scenario.room_a).add_component(
+        RestRiskComponent(band="high", note="goblins prowl here")
+    )
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "rest"))
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "this area is too dangerous to rest" for event in rejects)
+
+
+async def test_rest_allowed_in_safe_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "rest"))
+    await scenario.actor.tick(HOUR)
+
+    assert rejects == []
+
+
+async def test_mark_path_records_breadcrumb_and_view_map_accepted():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "mark-path"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "view-map"))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    automap = character.get_component(AutomapComponent)
+    assert str(scenario.room_a) in automap.marked_rooms
+    assert rejects == []
+
+
+async def test_leave_dungeon_clears_entered_and_emits_event():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    dungeon_id, _entry = _dungeon(scenario)
+    exited: list[DungeonExitedEvent] = []
+    scenario.actor.bus.subscribe(DungeonExitedEvent, exited.append)
+
+    await scenario.actor.submit(_cmd(scenario, "enter-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "leave-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+
+    assert exited[0].dungeon_id == "carrot-vault"
+    dungeon = scenario.actor.world.get_entity(dungeon_id).get_component(DungeonComponent)
+    assert dungeon.entered is False
+
+
+async def test_dungeon_fragments_describe_location_and_automap():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    dungeon_id, _entry = _dungeon(scenario)
+
+    await scenario.actor.submit(_cmd(scenario, "enter-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    fragments = daggersim_fragments(scenario.actor.world, character)
+    assert any("In dungeon carrot-vault at depth 0" in line for line in fragments)
+    assert any("Automap:" in line for line in fragments)

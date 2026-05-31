@@ -14,8 +14,14 @@ from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import HealthComponent, IdentityComponent
-from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
-from ..core.edges import ContainmentMode, Contains
+from ..core.ecs import (
+    container_of,
+    contents,
+    parse_entity_id,
+    reachable_ids,
+    replace_component,
+)
+from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 
@@ -269,6 +275,61 @@ class WereformComponent(Component):
     transformed_at_epoch: int
 
 
+@dataclass(frozen=True)
+class DungeonComponent(Component):
+    dungeon_id: str
+    theme: str = ""
+    seed: str = ""
+    level_count: int = 1
+    objective_summary: str = ""
+    entry_room_id: str | None = None
+    generated: bool = False
+    entered: bool = False
+
+
+@dataclass(frozen=True)
+class DungeonRoomComponent(Component):
+    dungeon_id: str
+    depth: int = 0
+    discovered: bool = False
+    is_objective: bool = False
+    danger: str = "low"
+
+
+@dataclass(frozen=True)
+class DungeonObjectiveComponent(Component):
+    objective_kind: str
+    description: str = ""
+    found: bool = False
+
+
+@dataclass(frozen=True)
+class SecretDoorComponent(Component):
+    target_room_id: str
+    direction: str = "secret passage"
+    found: bool = False
+    difficulty: int = 1
+    hint: str = ""
+    opened: bool = False
+
+
+@dataclass(frozen=True)
+class AutomapComponent(Component):
+    discovered_rooms: tuple[str, ...] = ()
+    marked_rooms: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RecallAnchorComponent(Component):
+    room_id: str
+
+
+@dataclass(frozen=True)
+class RestRiskComponent(Component):
+    band: str = "low"
+    note: str = ""
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -449,6 +510,49 @@ class FeedingNeedChangedEvent(DomainEvent):
 class TransformationStartedEvent(DomainEvent):
     affliction_type: str
     form_name: str
+
+
+class DungeonRequestedEvent(DomainEvent):
+    dungeon_id: str
+    theme: str
+    generator_plugin_id: str | None = None
+
+
+class DungeonGeneratedEvent(DomainEvent):
+    dungeon_id: str
+
+
+class DungeonEnteredEvent(DomainEvent):
+    dungeon_id: str
+    entry_room_id: str
+
+
+class DungeonRoomDiscoveredEvent(DomainEvent):
+    dungeon_id: str
+    dungeon_room_id: str
+    depth: int
+
+
+class SecretDoorFoundEvent(DomainEvent):
+    door_id: str
+    hint: str
+
+
+class RecallAnchorSetEvent(DomainEvent):
+    anchor_room_id: str
+
+
+class RecallUsedEvent(DomainEvent):
+    anchor_room_id: str
+
+
+class DungeonObjectiveFoundEvent(DomainEvent):
+    objective_id: str
+    objective_kind: str
+
+
+class DungeonExitedEvent(DomainEvent):
+    dungeon_id: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -1800,6 +1904,412 @@ def _selected_rumor_id(
     return None
 
 
+def _move_character(world: World, character: Entity, destination_id: EntityId) -> None:
+    origin_id = container_of(character)
+    if origin_id is not None and world.has_entity(origin_id):
+        world.get_entity(origin_id).remove_relationship(Contains, character.id)
+    world.get_entity(destination_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
+    )
+
+
+def _discover_room(room: Entity) -> bool:
+    """Mark a dungeon room discovered; return True if this changed it."""
+    dungeon_room = room.get_component(DungeonRoomComponent)
+    if dungeon_room.discovered:
+        return False
+    replace_component(room, replace(dungeon_room, discovered=True))
+    return True
+
+
+def _note_on_automap(character: Entity, room_id: str, *, marked: bool = False) -> None:
+    automap = (
+        character.get_component(AutomapComponent)
+        if character.has_component(AutomapComponent)
+        else AutomapComponent()
+    )
+    discovered = automap.discovered_rooms
+    if room_id not in discovered:
+        discovered = (*discovered, room_id)
+    marked_rooms = automap.marked_rooms
+    if marked and room_id not in marked_rooms:
+        marked_rooms = (*marked_rooms, room_id)
+    replace_component(
+        character, replace(automap, discovered_rooms=discovered, marked_rooms=marked_rooms)
+    )
+
+
+class RequestDungeonHandler:
+    command_type = "request-dungeon"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        dungeon_entity_id = parse_entity_id(command.payload.get("dungeon_id"))
+        if character_id is None or dungeon_entity_id is None:
+            return rejected("invalid character or dungeon id")
+        if not ctx.world.has_entity(dungeon_entity_id):
+            return rejected("dungeon does not exist")
+
+        character = ctx.entity(character_id)
+        if dungeon_entity_id not in reachable_ids(ctx.world, character):
+            return rejected("dungeon is not reachable")
+        dungeon_entity = ctx.entity(dungeon_entity_id)
+        if not dungeon_entity.has_component(DungeonComponent):
+            return rejected("target is not a dungeon")
+
+        dungeon = dungeon_entity.get_component(DungeonComponent)
+        if dungeon.generated:
+            return rejected("dungeon is already generated")
+
+        hook = (
+            dungeon_entity.get_component(ExpansionHookComponent)
+            if dungeon_entity.has_component(ExpansionHookComponent)
+            else None
+        )
+        generator_id = (
+            hook.generator_plugin_id if hook is not None else None
+        )
+        replace_component(dungeon_entity, replace(dungeon, generated=True))
+        room_id = _room_id(ctx.world, character_id)
+        return ok(
+            DungeonRequestedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=room_id,
+                    target_ids=(str(dungeon_entity_id),),
+                    dungeon_id=dungeon.dungeon_id,
+                    theme=dungeon.theme,
+                    generator_plugin_id=generator_id,
+                )
+            ),
+            DungeonGeneratedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=room_id,
+                    target_ids=(str(dungeon_entity_id),),
+                    dungeon_id=dungeon.dungeon_id,
+                )
+            ),
+        )
+
+
+class EnterDungeonHandler:
+    command_type = "enter-dungeon"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        dungeon_entity_id = parse_entity_id(command.payload.get("dungeon_id"))
+        if character_id is None or dungeon_entity_id is None:
+            return rejected("invalid character or dungeon id")
+        if not ctx.world.has_entity(dungeon_entity_id):
+            return rejected("dungeon does not exist")
+
+        character = ctx.entity(character_id)
+        if dungeon_entity_id not in reachable_ids(ctx.world, character):
+            return rejected("dungeon is not reachable")
+        dungeon_entity = ctx.entity(dungeon_entity_id)
+        if not dungeon_entity.has_component(DungeonComponent):
+            return rejected("target is not a dungeon")
+        dungeon = dungeon_entity.get_component(DungeonComponent)
+        if not dungeon.generated:
+            return rejected("dungeon has not been generated yet")
+
+        entry_room_id = parse_entity_id(dungeon.entry_room_id)
+        if entry_room_id is None or not ctx.world.has_entity(entry_room_id):
+            return rejected("dungeon has no entry room")
+        entry_room = ctx.entity(entry_room_id)
+        if not entry_room.has_component(DungeonRoomComponent):
+            return rejected("entry is not a dungeon room")
+
+        replace_component(dungeon_entity, replace(dungeon, entered=True))
+        _move_character(ctx.world, character, entry_room_id)
+        _discover_room(entry_room)
+        _note_on_automap(character, str(entry_room_id))
+        depth = entry_room.get_component(DungeonRoomComponent).depth
+        return ok(
+            DungeonEnteredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(entry_room_id),
+                    target_ids=(str(dungeon_entity_id),),
+                    dungeon_id=dungeon.dungeon_id,
+                    entry_room_id=str(entry_room_id),
+                )
+            ),
+            DungeonRoomDiscoveredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(entry_room_id),
+                    dungeon_id=dungeon.dungeon_id,
+                    dungeon_room_id=str(entry_room_id),
+                    depth=depth,
+                )
+            ),
+        )
+
+
+class SearchRoomHandler:
+    command_type = "search-room"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        room_id = container_of(character)
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("character is not in a room")
+        room = ctx.entity(room_id)
+        if not room.has_component(DungeonRoomComponent):
+            return rejected("this room cannot be searched")
+
+        dungeon_id = room.get_component(DungeonRoomComponent).dungeon_id
+        events: list[DomainEvent] = []
+        if _discover_room(room):
+            _note_on_automap(character, str(room_id))
+            events.append(
+                DungeonRoomDiscoveredEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=str(room_id),
+                        dungeon_id=dungeon_id,
+                        dungeon_room_id=str(room_id),
+                        depth=room.get_component(DungeonRoomComponent).depth,
+                    )
+                )
+            )
+
+        for content_id in contents(room):
+            content = ctx.entity(content_id)
+            if content.has_component(SecretDoorComponent):
+                door = content.get_component(SecretDoorComponent)
+                if not door.found:
+                    replace_component(content, replace(door, found=True))
+                    events.append(
+                        SecretDoorFoundEvent(
+                            **ctx.event_base(
+                                visibility=EventVisibility.PRIVATE,
+                                actor_id=str(character_id),
+                                room_id=str(room_id),
+                                target_ids=(str(content_id),),
+                                door_id=str(content_id),
+                                hint=door.hint,
+                            )
+                        )
+                    )
+            if content.has_component(DungeonObjectiveComponent):
+                objective = content.get_component(DungeonObjectiveComponent)
+                if not objective.found:
+                    replace_component(content, replace(objective, found=True))
+                    events.append(
+                        DungeonObjectiveFoundEvent(
+                            **ctx.event_base(
+                                visibility=EventVisibility.PRIVATE,
+                                actor_id=str(character_id),
+                                room_id=str(room_id),
+                                target_ids=(str(content_id),),
+                                objective_id=str(content_id),
+                                objective_kind=objective.objective_kind,
+                            )
+                        )
+                    )
+
+        if not events:
+            return rejected("you find nothing of note")
+        return ok(*events)
+
+
+class OpenSecretDoorHandler:
+    command_type = "open-secret-door"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        door_id = parse_entity_id(command.payload.get("door_id"))
+        if character_id is None or door_id is None:
+            return rejected("invalid character or door id")
+        if not ctx.world.has_entity(door_id):
+            return rejected("door does not exist")
+        character = ctx.entity(character_id)
+        room_id = container_of(character)
+        if room_id is None or door_id not in contents(ctx.entity(room_id)):
+            return rejected("door is not here")
+        door_entity = ctx.entity(door_id)
+        if not door_entity.has_component(SecretDoorComponent):
+            return rejected("target is not a secret door")
+        door = door_entity.get_component(SecretDoorComponent)
+        if not door.found:
+            return rejected("door has not been found yet")
+        if door.opened:
+            return rejected("door is already open")
+        target_room_id = parse_entity_id(door.target_room_id)
+        if target_room_id is None or not ctx.world.has_entity(target_room_id):
+            return rejected("door leads nowhere")
+
+        replace_component(door_entity, replace(door, opened=True))
+        ctx.entity(room_id).add_relationship(
+            ExitTo(direction=door.direction), target_room_id
+        )
+        target_room = ctx.entity(target_room_id)
+        depth = (
+            target_room.get_component(DungeonRoomComponent).depth
+            if target_room.has_component(DungeonRoomComponent)
+            else 0
+        )
+        dungeon_id = (
+            target_room.get_component(DungeonRoomComponent).dungeon_id
+            if target_room.has_component(DungeonRoomComponent)
+            else ""
+        )
+        return ok(
+            DungeonRoomDiscoveredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(room_id),
+                    target_ids=(str(target_room_id),),
+                    dungeon_id=dungeon_id,
+                    dungeon_room_id=str(target_room_id),
+                    depth=depth,
+                )
+            )
+        )
+
+
+class MarkPathHandler:
+    command_type = "mark-path"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        room_id = container_of(character)
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("character is not in a room")
+        _note_on_automap(character, str(room_id), marked=True)
+        return ok()
+
+
+class ViewMapHandler:
+    command_type = "view-map"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(AutomapComponent):
+            return rejected("you have no map to view")
+        return ok()
+
+
+class SetRecallHandler:
+    command_type = "set-recall"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        room_id = container_of(character)
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("character is not in a room")
+        replace_component(character, RecallAnchorComponent(room_id=str(room_id)))
+        return ok(
+            RecallAnchorSetEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(room_id),
+                    anchor_room_id=str(room_id),
+                )
+            )
+        )
+
+
+class UseRecallHandler:
+    command_type = "use-recall"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(RecallAnchorComponent):
+            return rejected("no recall anchor is set")
+        anchor_id = parse_entity_id(character.get_component(RecallAnchorComponent).room_id)
+        if anchor_id is None or not ctx.world.has_entity(anchor_id):
+            return rejected("recall anchor no longer exists")
+        if container_of(character) == anchor_id:
+            return rejected("already at the recall anchor")
+        _move_character(ctx.world, character, anchor_id)
+        return ok(
+            RecallUsedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(anchor_id),
+                    anchor_room_id=str(anchor_id),
+                )
+            )
+        )
+
+
+class RestHandler:
+    command_type = "rest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        room_id = container_of(character)
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("character is not in a room")
+        room = ctx.entity(room_id)
+        if room.has_component(RestRiskComponent):
+            risk = room.get_component(RestRiskComponent)
+            if risk.band in ("high", "ambush"):
+                return rejected("this area is too dangerous to rest")
+        return ok()
+
+
+class LeaveDungeonHandler:
+    command_type = "leave-dungeon"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        dungeon_entity_id = parse_entity_id(command.payload.get("dungeon_id"))
+        if character_id is None or dungeon_entity_id is None:
+            return rejected("invalid character or dungeon id")
+        if not ctx.world.has_entity(dungeon_entity_id):
+            return rejected("dungeon does not exist")
+        dungeon_entity = ctx.entity(dungeon_entity_id)
+        if not dungeon_entity.has_component(DungeonComponent):
+            return rejected("target is not a dungeon")
+        dungeon = dungeon_entity.get_component(DungeonComponent)
+        if not dungeon.entered:
+            return rejected("not currently in this dungeon")
+
+        replace_component(dungeon_entity, replace(dungeon, entered=False))
+        return ok(
+            DungeonExitedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(dungeon_entity_id),),
+                    dungeon_id=dungeon.dungeon_id,
+                )
+            )
+        )
+
+
 def daggersim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for entity_id in reachable_ids(world, character):
@@ -1858,6 +2368,35 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             if entity.has_component(HostilityComponent):
                 state = "hostile" if entity.get_component(HostilityComponent).hostile else "calm"
             lines.append(f"Creature language nearby: {language} ({state}).")
+        if entity.id != character.id and entity.has_component(DungeonComponent):
+            dungeon = entity.get_component(DungeonComponent)
+            state = "explored" if dungeon.entered else "unexplored"
+            lines.append(f"Dungeon nearby: {dungeon.dungeon_id} ({state}).")
+        if entity.has_component(SecretDoorComponent):
+            door = entity.get_component(SecretDoorComponent)
+            if door.found and not door.opened:
+                lines.append(f"Secret door found here: {door.hint or door.direction}.")
+        if entity.has_component(DungeonObjectiveComponent):
+            objective = entity.get_component(DungeonObjectiveComponent)
+            if objective.found:
+                lines.append(f"Dungeon objective found: {objective.objective_kind}.")
+    current_room_id = container_of(character)
+    if current_room_id is not None and world.has_entity(current_room_id):
+        current_room = world.get_entity(current_room_id)
+        if current_room.has_component(DungeonRoomComponent):
+            dungeon_room = current_room.get_component(DungeonRoomComponent)
+            lines.append(
+                f"In dungeon {dungeon_room.dungeon_id} at depth {dungeon_room.depth}."
+            )
+        if current_room.has_component(RestRiskComponent):
+            risk = current_room.get_component(RestRiskComponent)
+            lines.append(f"Rest risk here: {risk.band}.")
+    if character.has_component(AutomapComponent):
+        automap = character.get_component(AutomapComponent)
+        lines.append(f"Automap: {len(automap.discovered_rooms)} room(s) discovered.")
+    if character.has_component(RecallAnchorComponent):
+        anchor_id = character.get_component(RecallAnchorComponent).room_id
+        lines.append(f"Recall anchor set at room {anchor_id}.")
     if character.has_component(CustomClassComponent):
         custom_class = character.get_component(CustomClassComponent)
         lines.append(f"Custom class: {custom_class.class_name}.")
@@ -1984,6 +2523,32 @@ __all__ = [
     "WithdrawalMadeEvent",
     "WithdrawHandler",
     "WereformComponent",
+    "AutomapComponent",
+    "DungeonComponent",
+    "DungeonRoomComponent",
+    "DungeonObjectiveComponent",
+    "SecretDoorComponent",
+    "RecallAnchorComponent",
+    "RestRiskComponent",
+    "DungeonRequestedEvent",
+    "DungeonGeneratedEvent",
+    "DungeonEnteredEvent",
+    "DungeonRoomDiscoveredEvent",
+    "SecretDoorFoundEvent",
+    "RecallAnchorSetEvent",
+    "RecallUsedEvent",
+    "DungeonObjectiveFoundEvent",
+    "DungeonExitedEvent",
+    "RequestDungeonHandler",
+    "EnterDungeonHandler",
+    "SearchRoomHandler",
+    "OpenSecretDoorHandler",
+    "MarkPathHandler",
+    "ViewMapHandler",
+    "SetRecallHandler",
+    "UseRecallHandler",
+    "RestHandler",
+    "LeaveDungeonHandler",
     "daggersim_fragments",
     "install_daggersim",
 ]
