@@ -121,6 +121,8 @@ loop on the same `actor` so ticks process the commands users submit.
 | `!say <text>`      | Speak to everyone in the room.                     |
 | `!claim [name]`    | Claim a suspended character for your Discord user. |
 | `!characters`      | List character names in the current world.         |
+| `!look`            | Show the current room summary and exits.           |
+| `!help`            | List available Discord commands.                   |
 
 ### Names, not ids
 

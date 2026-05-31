@@ -18,6 +18,7 @@ from ..core.world_actor import WorldActor
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call
 from .claim import assign_discord_controller, discord_controlled_character, list_character_names
+from .view import HELP_TEXT, render_look
 
 
 def _require_discord():  # pragma: no cover - exercised only with the extra
@@ -40,7 +41,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         self.token = token
         intents = discord.Intents.default()
         intents.message_content = True  # required to read "!" command text
-        self.client = commands.Bot(command_prefix="!", intents=intents)
+        self.client = commands.Bot(command_prefix="!", intents=intents, help_command=None)
         self._register_commands()
 
     def _character_for_user(self, discord_user_id: int):
@@ -107,6 +108,14 @@ class DiscordBot:  # pragma: no cover - needs network + extra
                 await ctx.send("There are no characters in this world.")
                 return
             await ctx.send("Characters: " + ", ".join(names))
+
+        @self.client.command(name="look")
+        async def look(ctx):
+            await ctx.send(render_look(self.actor, ctx.author.id))
+
+        @self.client.command(name="help")
+        async def help_command(ctx):
+            await ctx.send(HELP_TEXT)
 
         @self.client.event
         async def on_ready():
