@@ -36,6 +36,29 @@ def render_look(actor: WorldActor, discord_user_id: int) -> str:
     return summary.visible_summary
 
 
+def explain_rejection(reason: str) -> str:
+    """Turn a terse gate rejection into player-facing guidance (no trailing period).
+
+    Permission gates (points, consent, adult/world policy) reject with short reasons aimed
+    at the engine; players need to know *what to do next*, so the known gate categories get
+    a helpful suffix. Unrecognized reasons pass through unchanged.
+    """
+
+    lowered = reason.lower()
+    if "insufficient points" in lowered:
+        return (
+            "you don't have enough action points for that right now — they regenerate "
+            "over time, so wait a bit and try again"
+        )
+    if "has not consented to" in lowered:
+        return f"{reason} — they would need to opt in before you can do that"
+    if "is disabled in this world" in lowered:
+        return f"{reason} — an admin has turned that off for this world"
+    if "is not enabled here" in lowered:
+        return f"{reason} — this world only allows it when everyone involved has opted in"
+    return reason
+
+
 def render_move_result(
     actor: WorldActor,
     discord_user_id: int,
@@ -44,8 +67,8 @@ def render_move_result(
     """Render a Discord response for a completed move command."""
 
     if isinstance(event, CommandRejectedEvent):
-        return f"Move failed: {event.reason}."
-    return render_look(actor, discord_user_id)
+        return f"Move failed: {explain_rejection(event.reason)}."
+    return "You are now in " + render_look(actor, discord_user_id)
 
 
 def render_action_result(
@@ -60,8 +83,14 @@ def render_action_result(
         return render_move_result(actor, discord_user_id, event)
     label = tool.replace("_", " ")
     if isinstance(event, CommandRejectedEvent):
-        return f"{label.capitalize()} failed: {event.reason}."
+        return f"{label.capitalize()} failed: {explain_rejection(event.reason)}."
     return f"Done: {label}."
 
 
-__all__ = ["HELP_TEXT", "render_action_result", "render_look", "render_move_result"]
+__all__ = [
+    "HELP_TEXT",
+    "explain_rejection",
+    "render_action_result",
+    "render_look",
+    "render_move_result",
+]

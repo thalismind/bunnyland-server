@@ -14,6 +14,7 @@ from bunnyland.discord import (
     HELP_TEXT,
     assign_discord_controller,
     did_you_mean,
+    explain_rejection,
     render_action_result,
     render_look,
     render_move_result,
@@ -99,7 +100,7 @@ def test_render_move_result_shows_room_after_successful_move(scenario):
 
     text = render_move_result(scenario.actor, 123, event)
 
-    assert text.startswith("North Tunnel")
+    assert text.startswith("You are now in North Tunnel")
     assert "Exits: south." in text
 
 
@@ -134,3 +135,45 @@ def test_render_action_result_reports_non_move_rejection(scenario):
     text = render_action_result(scenario.actor, 123, "take", event)
 
     assert text == "Take failed: item is not reachable."
+
+
+def test_explain_rejection_passes_through_plain_world_reasons():
+    assert explain_rejection("no matching exit") == "no matching exit"
+
+
+def test_explain_rejection_guides_on_insufficient_points():
+    message = explain_rejection("insufficient points")
+    assert "action points" in message
+    assert "regenerate" in message
+
+
+def test_explain_rejection_guides_on_consent_gate():
+    message = explain_rejection("Juniper has not consented to flirting")
+    assert "Juniper has not consented to flirting" in message
+    assert "opt in" in message
+
+
+def test_explain_rejection_guides_on_world_policy_gate():
+    disabled = explain_rejection("adult is disabled in this world")
+    not_enabled = explain_rejection("pvp is not enabled here")
+    assert "admin has turned that off" in disabled
+    assert "everyone involved has opted in" in not_enabled
+
+
+def test_render_action_result_explains_a_gated_rejection(scenario):
+    event = CommandRejectedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-1",
+        command_type="say",
+        reason="insufficient points",
+    )
+
+    text = render_action_result(scenario.actor, 123, "say", event)
+
+    assert text.startswith("Say failed: you don't have enough action points")
+    assert text.endswith(".")
+    assert ".." not in text

@@ -27,6 +27,9 @@ from .view import HELP_TEXT, render_action_result, render_look
 
 MOVE_RESULT_TIMEOUT_SECONDS = 120.0
 
+#: Reaction added to a player's message once their command is accepted and queued.
+QUEUED_REACTION = "\N{HOURGLASS WITH FLOWING SAND}"
+
 
 def _require_discord():  # pragma: no cover - exercised only with the extra
     try:
@@ -86,42 +89,54 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         )
         return command, None
 
-    async def _submit_action(self, discord_user_id: int, tool: str, arguments: dict) -> str:
-        command, error = await self._build_command(discord_user_id, tool, arguments)
+    @staticmethod
+    async def _acknowledge_queued(ctx) -> None:
+        """React to the player's message so they see their command was accepted."""
+        try:
+            await ctx.message.add_reaction(QUEUED_REACTION)
+        except Exception:  # pragma: no cover - reaction is best-effort (e.g. missing perms)
+            pass
+
+    async def _submit_action(self, ctx, tool: str, arguments: dict) -> str:
+        command, error = await self._build_command(ctx.author.id, tool, arguments)
         if error is not None:
             return error
         command = replace(command, on_insufficient_points=OnInsufficientPoints.DENY)
         future = asyncio.get_running_loop().create_future()
         self._pending[command.command_id] = future
         await self.actor.submit(command)
+        await self._acknowledge_queued(ctx)
         try:
             event = await asyncio.wait_for(future, timeout=MOVE_RESULT_TIMEOUT_SECONDS)
         except TimeoutError:
             self._pending.pop(command.command_id, None)
             return f"{tool.replace('_', ' ').capitalize()} queued, but it has not run yet."
-        return render_action_result(self.actor, discord_user_id, tool, event)
+        return render_action_result(self.actor, ctx.author.id, tool, event)
+
+    @staticmethod
+    async def _reply(ctx, body: str) -> None:
+        """Reply to the player and ping them so the result reaches their notifications."""
+        await ctx.send(f"{ctx.author.mention} {body}")
 
     def _register_commands(self) -> None:
         discord, commands = _require_discord()
 
         @self.client.command(name="move")
         async def move(ctx, direction: str):
-            await ctx.send(
-                await self._submit_action(ctx.author.id, "move", {"direction": direction})
-            )
+            await self._reply(ctx, await self._submit_action(ctx, "move", {"direction": direction}))
 
         @self.client.command(name="say")
         async def say(ctx, *, text: str):
-            await ctx.send(await self._submit_action(ctx.author.id, "say", {"text": text}))
+            await self._reply(ctx, await self._submit_action(ctx, "say", {"text": text}))
 
         @self.client.command(name="take")
         async def take(ctx, *, item_id: str):
-            await ctx.send(await self._submit_action(ctx.author.id, "take", {"item_id": item_id}))
+            await self._reply(ctx, await self._submit_action(ctx, "take", {"item_id": item_id}))
 
         @self.client.command(name="claim")
         async def claim(ctx, *, character: str | None = None):
             if self._character_for_user(ctx.author.id) is not None:
-                await ctx.send("You are already controlling a character.")
+                await self._reply(ctx, "You are already controlling a character.")
                 return
             try:
                 claimed = assign_discord_controller(
@@ -132,9 +147,9 @@ class DiscordBot:  # pragma: no cover - needs network + extra
                     allow_child_claims=self.allow_child_claims,
                 )
             except RuntimeError as exc:
-                await ctx.send(str(exc))
+                await self._reply(ctx, str(exc))
                 return
-            await ctx.send(f"You are now controlling {claimed}.")
+            await self._reply(ctx, f"You are now controlling {claimed}.")
 
         @self.client.command(name="characters")
         async def characters(ctx):
