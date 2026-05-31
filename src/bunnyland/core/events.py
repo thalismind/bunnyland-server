@@ -311,6 +311,7 @@ class SpeechSaidEvent(DomainEvent):
     author_intent: str | None = None
     inferred_intent: str | None = None
     final_interpretation: str | None = None
+    approach: str | None = None
 
 
 class SpeechToldEvent(DomainEvent):
@@ -318,6 +319,7 @@ class SpeechToldEvent(DomainEvent):
     author_intent: str | None = None
     inferred_intent: str | None = None
     final_interpretation: str | None = None
+    approach: str | None = None
     overhearer_ids: tuple[str, ...] = ()
 
 

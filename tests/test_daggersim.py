@@ -18,8 +18,9 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
-from bunnyland.core.components import HealthComponent
+from bunnyland.core.components import CharacterComponent, HealthComponent
 from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.handlers import SayHandler, TellHandler
 from bunnyland.mechanics.daggersim import (
     AcceptGeneratedQuestHandler,
     AccountOpenedEvent,
@@ -37,6 +38,7 @@ from bunnyland.mechanics.daggersim import (
     CommitCrimeHandler,
     CompleteGeneratedQuestHandler,
     ContractAfflictionHandler,
+    ConversationToneComponent,
     CreateCustomClassHandler,
     CreateSpellHandler,
     CreatureLanguageComponent,
@@ -49,6 +51,7 @@ from bunnyland.mechanics.daggersim import (
     DaggerQuestRewardComponent,
     DebtComponent,
     DepositHandler,
+    DialogueApproachComponent,
     DungeonComponent,
     DungeonEnteredEvent,
     DungeonExitedEvent,
@@ -59,6 +62,7 @@ from bunnyland.mechanics.daggersim import (
     DungeonRoomComponent,
     DungeonRoomDiscoveredEvent,
     EnterDungeonHandler,
+    EtiquetteSkillComponent,
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
@@ -116,9 +120,12 @@ from bunnyland.mechanics.daggersim import (
     SecretDoorComponent,
     SecretDoorFoundEvent,
     SetRecallHandler,
+    SocialRegisterComponent,
+    SocialRegisterReactor,
     SpellCastEvent,
     SpellCreatedEvent,
     SpellTemplateComponent,
+    StreetwiseSkillComponent,
     SupernaturalAfflictionComponent,
     TakeLoanHandler,
     TransformationStartedEvent,
@@ -1155,3 +1162,122 @@ async def test_dungeon_fragments_describe_location_and_automap():
     fragments = daggersim_fragments(scenario.actor.world, character)
     assert any("In dungeon carrot-vault at depth 0" in line for line in fragments)
     assert any("Automap:" in line for line in fragments)
+
+
+def _install_dialogue(scenario):
+    scenario.actor.register_handler(SayHandler())
+    scenario.actor.register_handler(TellHandler())
+    SocialRegisterReactor(scenario.actor.world).subscribe(scenario.actor.bus)
+
+
+def _listener(scenario, *, register, expected, threshold=3):
+    listener = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Baroness Thistledown", kind="character"),
+            CharacterComponent(species="bunny"),
+            SocialRegisterComponent(
+                register=register, expected_approaches=tuple(expected), skill_threshold=threshold
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), listener.id
+    )
+    return listener.id
+
+
+async def test_say_with_fitting_approach_is_well_received():
+    scenario = build_scenario()
+    _install_dialogue(scenario)
+    listener_id = _listener(scenario, register="court", expected=("courtly", "formal"))
+
+    await scenario.actor.submit(_cmd(scenario, "say", text="My lady.", approach="courtly"))
+    await scenario.actor.tick(HOUR)
+
+    tone = scenario.actor.world.get_entity(listener_id).get_component(ConversationToneComponent)
+    assert tone.last_reaction == "well-received"
+    assert tone.tone == "warm"
+    assert tone.last_approach == "courtly"
+
+
+async def test_say_with_clashing_approach_is_faux_pas():
+    scenario = build_scenario()
+    _install_dialogue(scenario)
+    listener_id = _listener(scenario, register="court", expected=("courtly", "formal"))
+
+    await scenario.actor.submit(_cmd(scenario, "say", text="Oi.", approach="blunt"))
+    await scenario.actor.tick(HOUR)
+
+    tone = scenario.actor.world.get_entity(listener_id).get_component(ConversationToneComponent)
+    assert tone.last_reaction == "faux-pas"
+    assert tone.tone == "cool"
+
+
+async def test_high_etiquette_smooths_over_clashing_approach():
+    scenario = build_scenario()
+    _install_dialogue(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(EtiquetteSkillComponent(level=5))
+    listener_id = _listener(scenario, register="court", expected=("courtly",), threshold=3)
+
+    await scenario.actor.submit(_cmd(scenario, "say", text="Good day.", approach="formal"))
+    await scenario.actor.tick(HOUR)
+
+    tone = scenario.actor.world.get_entity(listener_id).get_component(ConversationToneComponent)
+    assert tone.last_reaction == "smoothed"
+    assert tone.tone == "neutral"
+
+
+async def test_streetwise_smooths_over_underworld_approach():
+    scenario = build_scenario()
+    _install_dialogue(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(StreetwiseSkillComponent(level=4))
+    listener_id = _listener(scenario, register="court", expected=("courtly",), threshold=3)
+
+    await scenario.actor.submit(_cmd(scenario, "say", text="Word is...", approach="underworld"))
+    await scenario.actor.tick(HOUR)
+
+    tone = scenario.actor.world.get_entity(listener_id).get_component(ConversationToneComponent)
+    assert tone.last_reaction == "smoothed"
+
+
+async def test_tell_records_speaker_last_approach():
+    scenario = build_scenario()
+    _install_dialogue(scenario)
+    listener_id = _listener(scenario, register="court", expected=("polite",))
+
+    await scenario.actor.submit(
+        _cmd(scenario, "tell", target_id=str(listener_id), text="Please.", approach="polite")
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(DialogueApproachComponent).last_approach == "polite"
+    tone = scenario.actor.world.get_entity(listener_id).get_component(ConversationToneComponent)
+    assert tone.last_reaction == "well-received"
+
+
+async def test_speech_without_approach_leaves_tone_untouched():
+    scenario = build_scenario()
+    _install_dialogue(scenario)
+    listener_id = _listener(scenario, register="court", expected=("courtly",))
+
+    await scenario.actor.submit(_cmd(scenario, "say", text="Hello there."))
+    await scenario.actor.tick(HOUR)
+
+    listener = scenario.actor.world.get_entity(listener_id)
+    assert not listener.has_component(ConversationToneComponent)
+
+
+def test_dialogue_fragments_surface_register_and_skills():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(EtiquetteSkillComponent(level=2))
+    _listener(scenario, register="court", expected=("courtly",))
+
+    fragments = daggersim_fragments(scenario.actor.world, character)
+
+    assert any("Etiquette skill: 2" in line for line in fragments)
+    assert any("Social register of Baroness Thistledown: court" in line for line in fragments)

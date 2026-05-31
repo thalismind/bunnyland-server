@@ -97,6 +97,7 @@ class SayHandler:
         author = _parse_intent(payload.get("intent"))
         inferred = infer_intent(text)
         final = author or inferred
+        approach = str(payload.get("approach", "")).strip() or None
         hearers = _audience(ctx, room_id, speaker_id)
 
         return ok(
@@ -110,6 +111,7 @@ class SayHandler:
                     author_intent=author.value if author else None,
                     inferred_intent=inferred.value,
                     final_interpretation=final.value,
+                    approach=approach,
                 )
             )
         )
@@ -139,6 +141,7 @@ class TellHandler:
         author = _parse_intent(payload.get("intent"))
         inferred = infer_intent(text)
         final = author or inferred
+        approach = str(payload.get("approach", "")).strip() or None
         overhearers: tuple[str, ...] = ()
         if bool(payload.get("audible", False)):
             overhearers = tuple(
@@ -158,6 +161,7 @@ class TellHandler:
                     author_intent=author.value if author else None,
                     inferred_intent=inferred.value,
                     final_interpretation=final.value,
+                    approach=approach,
                     overhearer_ids=overhearers,
                 )
             )

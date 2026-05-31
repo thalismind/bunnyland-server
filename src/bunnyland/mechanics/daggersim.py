@@ -22,7 +22,7 @@ from ..core.ecs import (
     replace_component,
 )
 from ..core.edges import ContainmentMode, Contains, ExitTo
-from ..core.events import DomainEvent, EventVisibility
+from ..core.events import DomainEvent, EventVisibility, SpeechSaidEvent, SpeechToldEvent
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 
 
@@ -328,6 +328,35 @@ class RecallAnchorComponent(Component):
 class RestRiskComponent(Component):
     band: str = "low"
     note: str = ""
+
+
+@dataclass(frozen=True)
+class DialogueApproachComponent(Component):
+    last_approach: str | None = None
+
+
+@dataclass(frozen=True)
+class EtiquetteSkillComponent(Component):
+    level: int = 0
+
+
+@dataclass(frozen=True)
+class StreetwiseSkillComponent(Component):
+    level: int = 0
+
+
+@dataclass(frozen=True)
+class SocialRegisterComponent(Component):
+    register: str = "common"
+    expected_approaches: tuple[str, ...] = ()
+    skill_threshold: int = 3
+
+
+@dataclass(frozen=True)
+class ConversationToneComponent(Component):
+    tone: str = "neutral"
+    last_reaction: str = ""
+    last_approach: str = ""
 
 
 class ExpansionRequestedEvent(DomainEvent):
@@ -2380,6 +2409,16 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             objective = entity.get_component(DungeonObjectiveComponent)
             if objective.found:
                 lines.append(f"Dungeon objective found: {objective.objective_kind}.")
+        if entity.id != character.id and entity.has_component(SocialRegisterComponent):
+            register = entity.get_component(SocialRegisterComponent).register
+            lines.append(f"Social register of {_name(entity)}: {register}.")
+        if entity.id != character.id and entity.has_component(ConversationToneComponent):
+            tone = entity.get_component(ConversationToneComponent)
+            if tone.last_reaction:
+                lines.append(
+                    f"{_name(entity)} took your last approach {tone.last_reaction} "
+                    f"(tone: {tone.tone})."
+                )
     current_room_id = container_of(character)
     if current_room_id is not None and world.has_entity(current_room_id):
         current_room = world.get_entity(current_room_id)
@@ -2397,6 +2436,14 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(RecallAnchorComponent):
         anchor_id = character.get_component(RecallAnchorComponent).room_id
         lines.append(f"Recall anchor set at room {anchor_id}.")
+    if character.has_component(EtiquetteSkillComponent):
+        lines.append(
+            f"Etiquette skill: {character.get_component(EtiquetteSkillComponent).level}."
+        )
+    if character.has_component(StreetwiseSkillComponent):
+        lines.append(
+            f"Streetwise skill: {character.get_component(StreetwiseSkillComponent).level}."
+        )
     if character.has_component(CustomClassComponent):
         custom_class = character.get_component(CustomClassComponent)
         lines.append(f"Custom class: {custom_class.class_name}.")
@@ -2422,11 +2469,93 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     return sorted(lines)
 
 
+#: Canonical dialogue approaches (catalogue 7.13). Etiquette governs the formal
+#: registers, streetwise the rougher ones; the rest are skill-neutral.
+DIALOGUE_APPROACHES: tuple[str, ...] = (
+    "casual",
+    "polite",
+    "formal",
+    "deferential",
+    "blunt",
+    "threatening",
+    "underworld",
+    "courtly",
+    "commercial",
+)
+_ETIQUETTE_APPROACHES = frozenset({"polite", "formal", "deferential", "courtly"})
+_STREETWISE_APPROACHES = frozenset({"blunt", "threatening", "underworld"})
+
+
+def _approach_skill_level(speaker: Entity, approach: str) -> int:
+    if approach in _ETIQUETTE_APPROACHES and speaker.has_component(EtiquetteSkillComponent):
+        return speaker.get_component(EtiquetteSkillComponent).level
+    if approach in _STREETWISE_APPROACHES and speaker.has_component(StreetwiseSkillComponent):
+        return speaker.get_component(StreetwiseSkillComponent).level
+    return 0
+
+
+class SocialRegisterReactor:
+    """Reacts to the social *approach* of speech (catalogue 7.13).
+
+    Extends say/tell: when a speaker addresses a listener that has an expected social
+    register, the approach is judged against that register. A fitting approach is
+    well-received; a clashing one is a faux-pas unless the speaker's etiquette/streetwise
+    skill is high enough to smooth it over. The outcome is recorded as the listener's
+    ``ConversationToneComponent`` and surfaced in prompts; no new verbs or events.
+    """
+
+    def __init__(self, world: World) -> None:
+        self.world = world
+
+    def subscribe(self, bus) -> None:
+        bus.subscribe(SpeechSaidEvent, self._on_speech)
+        bus.subscribe(SpeechToldEvent, self._on_speech)
+
+    def _on_speech(self, event) -> None:
+        approach = (event.approach or "").strip()
+        if not approach:
+            return
+        speaker_id = parse_entity_id(event.actor_id)
+        speaker = (
+            self.world.get_entity(speaker_id)
+            if speaker_id is not None and self.world.has_entity(speaker_id)
+            else None
+        )
+        if speaker is not None:
+            replace_component(speaker, DialogueApproachComponent(last_approach=approach))
+        skill_level = _approach_skill_level(speaker, approach) if speaker is not None else 0
+        for target in event.target_ids:
+            self._react(target, approach, skill_level)
+
+    def _react(self, listener_id_str: str, approach: str, skill_level: int) -> None:
+        listener_id = parse_entity_id(listener_id_str)
+        if listener_id is None or not self.world.has_entity(listener_id):
+            return
+        listener = self.world.get_entity(listener_id)
+        if not listener.has_component(SocialRegisterComponent):
+            return
+        register = listener.get_component(SocialRegisterComponent)
+        if approach in register.expected_approaches:
+            tone, reaction = "warm", "well-received"
+        elif skill_level >= register.skill_threshold:
+            tone, reaction = "neutral", "smoothed"
+        else:
+            tone, reaction = "cool", "faux-pas"
+        replace_component(
+            listener,
+            ConversationToneComponent(
+                tone=tone, last_reaction=reaction, last_approach=approach
+            ),
+        )
+
+
 def install_daggersim(actor) -> None:
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
     actor.register_consequence(FeedingNeedConsequence())
+    reactor = SocialRegisterReactor(actor.world)
+    reactor.subscribe(actor.bus)
 
 
 __all__ = [
@@ -2549,6 +2678,13 @@ __all__ = [
     "UseRecallHandler",
     "RestHandler",
     "LeaveDungeonHandler",
+    "DialogueApproachComponent",
+    "EtiquetteSkillComponent",
+    "StreetwiseSkillComponent",
+    "SocialRegisterComponent",
+    "ConversationToneComponent",
+    "SocialRegisterReactor",
+    "DIALOGUE_APPROACHES",
     "daggersim_fragments",
     "install_daggersim",
 ]
