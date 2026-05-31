@@ -21,6 +21,7 @@ from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.daggersim import (
     AcceptGeneratedQuestHandler,
     AccountOpenedEvent,
+    AfflictionContractedEvent,
     AskForWorkHandler,
     AskRumorHandler,
     AttemptPacifyHandler,
@@ -32,6 +33,7 @@ from bunnyland.mechanics.daggersim import (
     ClassTemplateComponent,
     CommitCrimeHandler,
     CompleteGeneratedQuestHandler,
+    ContractAfflictionHandler,
     CreateCustomClassHandler,
     CreateSpellHandler,
     CreatureLanguageComponent,
@@ -47,6 +49,9 @@ from bunnyland.mechanics.daggersim import (
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
+    FeedingNeedChangedEvent,
+    FeedingNeedComponent,
+    FeedingNeedConsequence,
     FinePaidEvent,
     GeneratedQuestComponent,
     GeneratedSiteInstantiatedEvent,
@@ -88,7 +93,10 @@ from bunnyland.mechanics.daggersim import (
     SpellCastEvent,
     SpellCreatedEvent,
     SpellTemplateComponent,
+    SupernaturalAfflictionComponent,
     TakeLoanHandler,
+    TransformationStartedEvent,
+    TransformHandler,
     TravelCompletedEvent,
     TravelCompletionConsequence,
     TravelHubComponent,
@@ -98,6 +106,7 @@ from bunnyland.mechanics.daggersim import (
     TravelStartedEvent,
     UnrealizedLocationComponent,
     UseInstitutionServiceHandler,
+    WereformComponent,
     WithdrawHandler,
     daggersim_fragments,
 )
@@ -126,9 +135,12 @@ def _install(actor):
     actor.register_handler(CreateSpellHandler())
     actor.register_handler(CastSpellHandler())
     actor.register_handler(AttemptPacifyHandler())
+    actor.register_handler(ContractAfflictionHandler())
+    actor.register_handler(TransformHandler())
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
+    actor.register_consequence(FeedingNeedConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -751,6 +763,32 @@ async def test_language_skill_pacifies_hostile_creature():
     assert creature.get_component(PacifiedComponent).pacified_by == str(scenario.character)
     assert attempts[0].succeeded is True
     assert pacified[0].target_id == str(creature_id)
+
+
+async def test_supernatural_affliction_transforms_and_grows_feeding_need():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contracted: list[AfflictionContractedEvent] = []
+    transformed: list[TransformationStartedEvent] = []
+    feeding: list[FeedingNeedChangedEvent] = []
+    scenario.actor.bus.subscribe(AfflictionContractedEvent, contracted.append)
+    scenario.actor.bus.subscribe(TransformationStartedEvent, transformed.append)
+    scenario.actor.bus.subscribe(FeedingNeedChangedEvent, feeding.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "contract-affliction", affliction_type="moon-form")
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "transform", form_name="moon hare"))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(SupernaturalAfflictionComponent).stage == "active"
+    assert character.get_component(WereformComponent).form_name == "moon hare"
+    assert character.get_component(FeedingNeedComponent).current > 0
+    assert contracted[0].affliction_type == "moon-form"
+    assert transformed[0].form_name == "moon hare"
+    assert feeding[-1].current > 0
 
 
 def test_daggersim_fragments_show_nearby_unrealized_locations():

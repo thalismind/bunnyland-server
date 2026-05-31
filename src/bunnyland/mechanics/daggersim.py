@@ -248,6 +248,27 @@ class PacifiedComponent(Component):
     pacified_at_epoch: int
 
 
+@dataclass(frozen=True)
+class SupernaturalAfflictionComponent(Component):
+    affliction_type: str
+    contracted_at_epoch: int
+    stage: str = "incubating"
+
+
+@dataclass(frozen=True)
+class FeedingNeedComponent(Component):
+    current: float = 0.0
+    maximum: float = 10.0
+    gain_per_hour: float = 1.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class WereformComponent(Component):
+    form_name: str
+    transformed_at_epoch: int
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -414,6 +435,20 @@ class PacificationAttemptedEvent(DomainEvent):
 class CreaturePacifiedEvent(DomainEvent):
     target_id: str
     language: str
+
+
+class AfflictionContractedEvent(DomainEvent):
+    affliction_type: str
+
+
+class FeedingNeedChangedEvent(DomainEvent):
+    current: float
+    maximum: float
+
+
+class TransformationStartedEvent(DomainEvent):
+    affliction_type: str
+    form_name: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -1585,6 +1620,105 @@ class AttemptPacifyHandler:
         return ok(*events)
 
 
+class ContractAfflictionHandler:
+    command_type = "contract-affliction"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        affliction_type = str(command.payload.get("affliction_type", "")).strip()
+        if character_id is None or not affliction_type:
+            return rejected("invalid character or affliction type")
+        character = ctx.entity(character_id)
+        if character.has_component(SupernaturalAfflictionComponent):
+            return rejected("character already has a supernatural affliction")
+
+        replace_component(
+            character,
+            SupernaturalAfflictionComponent(
+                affliction_type=affliction_type,
+                contracted_at_epoch=ctx.epoch,
+            ),
+        )
+        replace_component(
+            character,
+            FeedingNeedComponent(last_updated_epoch=ctx.epoch),
+        )
+        return ok(
+            AfflictionContractedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    affliction_type=affliction_type,
+                )
+            )
+        )
+
+
+class TransformHandler:
+    command_type = "transform"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(SupernaturalAfflictionComponent):
+            return rejected("character has no supernatural affliction")
+        if character.has_component(WereformComponent):
+            return rejected("character is already transformed")
+
+        affliction = character.get_component(SupernaturalAfflictionComponent)
+        form_name = str(command.payload.get("form_name", affliction.affliction_type)).strip()
+        replace_component(character, replace(affliction, stage="active"))
+        replace_component(
+            character,
+            WereformComponent(
+                form_name=form_name or affliction.affliction_type,
+                transformed_at_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            TransformationStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    affliction_type=affliction.affliction_type,
+                    form_name=form_name or affliction.affliction_type,
+                )
+            )
+        )
+
+
+class FeedingNeedConsequence:
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = world.query().with_all([SupernaturalAfflictionComponent, FeedingNeedComponent])
+        for character in query.execute_entities():
+            need = character.get_component(FeedingNeedComponent)
+            elapsed = max(0, epoch - need.last_updated_epoch)
+            if elapsed <= 0:
+                continue
+            current = min(
+                need.maximum,
+                need.current + need.gain_per_hour * (elapsed / 3600.0),
+            )
+            replace_component(character, replace(need, current=current, last_updated_epoch=epoch))
+            events.append(
+                FeedingNeedChangedEvent(
+                    **_travel_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character.id),
+                        current=current,
+                        maximum=need.maximum,
+                    )
+                )
+            )
+        return events
+
+
 def _string_tuple(raw: object, default: tuple[str, ...]) -> tuple[str, ...]:
     if raw is None:
         return default
@@ -1727,6 +1861,12 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(CustomClassComponent):
         custom_class = character.get_component(CustomClassComponent)
         lines.append(f"Custom class: {custom_class.class_name}.")
+    if character.has_component(SupernaturalAfflictionComponent):
+        affliction = character.get_component(SupernaturalAfflictionComponent)
+        lines.append(f"Affliction: {affliction.affliction_type} ({affliction.stage}).")
+    if character.has_component(FeedingNeedComponent):
+        need = character.get_component(FeedingNeedComponent)
+        lines.append(f"Feeding need: {need.current:.1f}/{need.maximum:.1f}.")
     if character.has_component(TravelPlanComponent):
         plan = character.get_component(TravelPlanComponent)
         lines.append(
@@ -1747,12 +1887,14 @@ def install_daggersim(actor) -> None:
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
+    actor.register_consequence(FeedingNeedConsequence())
 
 
 __all__ = [
     "AskRumorHandler",
     "AcceptGeneratedQuestHandler",
     "AccountOpenedEvent",
+    "AfflictionContractedEvent",
     "AskForWorkHandler",
     "BankAccountComponent",
     "BankComponent",
@@ -1761,6 +1903,7 @@ __all__ = [
     "AttemptPacifyHandler",
     "CompleteGeneratedQuestHandler",
     "CommitCrimeHandler",
+    "ContractAfflictionHandler",
     "CastSpellHandler",
     "ClassTemplateComponent",
     "CreateCustomClassHandler",
@@ -1780,6 +1923,9 @@ __all__ = [
     "ExpansionHookComponent",
     "ExpansionRequestedEvent",
     "FinePaidEvent",
+    "FeedingNeedChangedEvent",
+    "FeedingNeedComponent",
+    "FeedingNeedConsequence",
     "GeneratedSiteInstantiatedEvent",
     "HostilityComponent",
     "InvestigateRumorHandler",
@@ -1822,6 +1968,7 @@ __all__ = [
     "SpellCastEvent",
     "SpellCreatedEvent",
     "SpellTemplateComponent",
+    "SupernaturalAfflictionComponent",
     "TravelCompletedEvent",
     "TravelCompletionConsequence",
     "TravelHubComponent",
@@ -1829,11 +1976,14 @@ __all__ = [
     "TravelPlanComponent",
     "TravelRoute",
     "TravelStartedEvent",
+    "TransformHandler",
+    "TransformationStartedEvent",
     "TakeLoanHandler",
     "UnrealizedLocationComponent",
     "UseInstitutionServiceHandler",
     "WithdrawalMadeEvent",
     "WithdrawHandler",
+    "WereformComponent",
     "daggersim_fragments",
     "install_daggersim",
 ]
