@@ -79,6 +79,11 @@ behaviour is added by **plugins**; the builtins are:
 | `bunnyland.social`      | social bonds that grow through speech (affinity/trust/fear)   |
 | `bunnyland.policy`      | boundary/consent gate (flirting etc.); denied always wins     |
 
+The sim packages (`bunnyland.lifesim`, `colonysim`, `gardensim`, `barbariansim`,
+`dragonsim`, `daggersim`, `voidsim`) add their own components, verbs, and a ready-to-play
+`<sim>-demo` world generator each — e.g. `serve --generator voidsim-demo`. See
+[world creation](world-creation.md) for the full list.
+
 Each mechanic surfaces itself to characters where it can — needs, weather/time, and
 relationships all appear in a "Currently" block in the agent's prompt, and changes (light,
 door state, ...) flow into the room summary an agent perceives.

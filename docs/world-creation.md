@@ -49,10 +49,36 @@ Doors are two-way by default; the DM can mark one-way passages (slides, cliffs, 
 Because the DM is prompted per node, larger worlds stay coherent without the model having to
 hold the whole map in one response. Use `--max-rooms` to bound the size.
 
+### Sim example worlds (`<sim>-demo`)
+
+Every sim package contributes a deterministic, hand-built example world that shows off its
+mechanics — handy for trying a package, demoing it in the web inspector, or seeding a play
+session. They need no `--llm` and run offline:
+
+```bash
+uv run bunnyland serve --generator voidsim-demo --ticks 5
+```
+
+| Generator            | What it sets up |
+|----------------------|-----------------|
+| `lifesim-demo`       | A married couple with careers, skills, money, and aspirations |
+| `gardensim-demo`     | A farm with tilled soil, a half-grown crop, and seeds |
+| `colonysim-demo`     | A camp with a resource node, workstation, recipe, and a job |
+| `barbariansim-demo`  | A frozen ridge and sheltered cave, with gear, stamina, and corruption |
+| `dragonsim-demo`     | A village, an undiscovered barrow, a faction, and a quest |
+| `daggersim-demo`     | A town with a bank, guild, rumor, travel route, and a frontier site to expand |
+| `voidsim-demo`       | A ship of habitat modules with life support, power, a damaged reactor, and a distress beacon |
+
+Each demo builds on the shared life-sim basics (every character has needs), then layers on
+its own package's components. Each is contributed by its sim's plugin, so it only appears
+when that plugin is enabled (the default set enables all of them). They live in
+`src/bunnyland/worldgen/examples.py` and double as worked examples for the section below.
+
 An unknown `--generator` name lists what the enabled plugins actually provide:
 
 ```
-unknown generator 'maze'; available: oneshot, recursive
+unknown generator 'maze'; available: barbariansim-demo, colonysim-demo, daggersim-demo,
+dragonsim-demo, gardensim-demo, lifesim-demo, oneshot, recursive, voidsim-demo
 ```
 
 ## Seeds
