@@ -89,6 +89,7 @@ from ..mechanics.daggersim import (
     ExpansionRequestedEvent,
     GeneratedSiteInstantiatedEvent,
     InvestigateRumorHandler,
+    PlanTravelHandler,
     ProceduralSiteComponent,
     RumorBecameExpansionEvent,
     RumorComponent,
@@ -98,8 +99,15 @@ from ..mechanics.daggersim import (
     RumorSourceComponent,
     RumorTargetComponent,
     RumorVerifiedEvent,
+    TravelCompletedEvent,
+    TravelHubComponent,
+    TravelModeComponent,
+    TravelPlanComponent,
+    TravelRoute,
+    TravelStartedEvent,
     UnrealizedLocationComponent,
     daggersim_fragments,
+    install_daggersim,
 )
 from ..mechanics.dragonsim import (
     AcceptQuestHandler,
@@ -741,10 +749,19 @@ def daggersim_plugin() -> Plugin:
                 RumorSourceComponent,
                 RumorReliabilityComponent,
                 RumorTargetComponent,
+                TravelHubComponent,
+                TravelModeComponent,
+                TravelPlanComponent,
             ),
+            edges=(TravelRoute,),
         ),
         commands=CommandContribution(
-            action_handlers=(ExpandSiteHandler, AskRumorHandler, InvestigateRumorHandler),
+            action_handlers=(
+                ExpandSiteHandler,
+                AskRumorHandler,
+                InvestigateRumorHandler,
+                PlanTravelHandler,
+            ),
             typed_events=(
                 ExpansionRequestedEvent,
                 GeneratedSiteInstantiatedEvent,
@@ -752,8 +769,11 @@ def daggersim_plugin() -> Plugin:
                 RumorVerifiedEvent,
                 RumorDisprovenEvent,
                 RumorBecameExpansionEvent,
+                TravelStartedEvent,
+                TravelCompletedEvent,
             ),
         ),
+        runtime=RuntimeContribution(service_factories=(install_daggersim,)),
         content=ContentContribution(prompt_fragments=(daggersim_fragments,)),
     )
 

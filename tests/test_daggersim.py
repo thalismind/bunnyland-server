@@ -22,6 +22,7 @@ from bunnyland.mechanics.daggersim import (
     ExpansionRequestedEvent,
     GeneratedSiteInstantiatedEvent,
     InvestigateRumorHandler,
+    PlanTravelHandler,
     ProceduralSiteComponent,
     RumorBecameExpansionEvent,
     RumorComponent,
@@ -29,6 +30,13 @@ from bunnyland.mechanics.daggersim import (
     RumorReliabilityComponent,
     RumorTargetComponent,
     RumorVerifiedEvent,
+    TravelCompletedEvent,
+    TravelCompletionConsequence,
+    TravelHubComponent,
+    TravelModeComponent,
+    TravelPlanComponent,
+    TravelRoute,
+    TravelStartedEvent,
     UnrealizedLocationComponent,
     daggersim_fragments,
 )
@@ -40,6 +48,8 @@ def _install(actor):
     actor.register_handler(ExpandSiteHandler())
     actor.register_handler(AskRumorHandler())
     actor.register_handler(InvestigateRumorHandler())
+    actor.register_handler(PlanTravelHandler())
+    actor.register_consequence(TravelCompletionConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -87,6 +97,17 @@ def _rumor(scenario, site_id, *, reliability=1.0):
         Contains(mode=ContainmentMode.ROOM_CONTENT), rumor.id
     )
     return rumor.id
+
+
+def _travel_route(scenario, *, travel_seconds=2 * HOUR):
+    origin = scenario.actor.world.get_entity(scenario.room_a)
+    destination = scenario.actor.world.get_entity(scenario.room_b)
+    origin.add_component(TravelHubComponent(name="Mosslit Burrow", region_id="moss-road"))
+    destination.add_component(TravelHubComponent(name="North Tunnel", region_id="moss-road"))
+    origin.add_relationship(
+        TravelRoute(travel_seconds=travel_seconds, label="moss road"),
+        scenario.room_b,
+    )
 
 
 async def test_expand_site_instantiates_unrealized_location():
@@ -177,6 +198,53 @@ async def test_false_rumor_is_disproven_without_expansion_request():
     assert requested == []
 
 
+async def test_plan_travel_moves_character_after_route_time():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _travel_route(scenario)
+    started: list[TravelStartedEvent] = []
+    completed: list[TravelCompletedEvent] = []
+    scenario.actor.bus.subscribe(TravelStartedEvent, started.append)
+    scenario.actor.bus.subscribe(TravelCompletedEvent, completed.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "plan-travel", destination_id=str(scenario.room_b))
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert scenario.character_room() == scenario.room_a
+    assert character.has_component(TravelPlanComponent)
+    assert started[0].destination_id == str(scenario.room_b)
+
+    await scenario.actor.tick(HOUR)
+    assert scenario.character_room() == scenario.room_a
+
+    await scenario.actor.tick(HOUR)
+    assert scenario.character_room() == scenario.room_b
+    assert not character.has_component(TravelPlanComponent)
+    assert completed[0].destination_id == str(scenario.room_b)
+
+
+async def test_travel_mode_speed_shortens_route_time():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _travel_route(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(TravelModeComponent(mode="cart", speed_multiplier=2.0))
+
+    await scenario.actor.submit(
+        _cmd(scenario, "plan-travel", destination_id=str(scenario.room_b))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert scenario.character_room() == scenario.room_a
+    await scenario.actor.tick(HOUR)
+
+    assert scenario.character_room() == scenario.room_b
+    assert not character.has_component(TravelPlanComponent)
+
+
 def test_daggersim_fragments_show_nearby_unrealized_locations():
     scenario = build_scenario()
     _site(scenario)
@@ -204,3 +272,19 @@ def test_daggersim_fragments_show_heard_rumors():
     )
 
     assert any("Rumor: The old carrot vault" in line for line in fragments)
+
+
+def test_daggersim_fragments_show_travel_plan():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(
+        TravelPlanComponent(
+            destination_id=str(scenario.room_b),
+            started_at_epoch=0,
+            arrive_at_epoch=HOUR,
+        )
+    )
+
+    fragments = daggersim_fragments(scenario.actor.world, character)
+
+    assert any("Traveling by foot" in line for line in fragments)

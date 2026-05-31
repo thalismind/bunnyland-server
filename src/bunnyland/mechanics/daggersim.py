@@ -10,11 +10,12 @@ from __future__ import annotations
 from dataclasses import replace
 
 from pydantic.dataclasses import dataclass
-from relics import Component, Entity, EntityId, World
+from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import IdentityComponent
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
+from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 
@@ -63,6 +64,33 @@ class RumorTargetComponent(Component):
     target_id: str
 
 
+@dataclass(frozen=True)
+class TravelHubComponent(Component):
+    name: str
+    region_id: str = ""
+
+
+@dataclass(frozen=True)
+class TravelModeComponent(Component):
+    mode: str = "foot"
+    speed_multiplier: float = 1.0
+
+
+@dataclass(frozen=True)
+class TravelPlanComponent(Component):
+    destination_id: str
+    started_at_epoch: int
+    arrive_at_epoch: int
+    mode: str = "foot"
+    route_label: str = ""
+
+
+@dataclass(frozen=True)
+class TravelRoute(Edge):
+    travel_seconds: int
+    label: str = ""
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -95,6 +123,17 @@ class RumorDisprovenEvent(DomainEvent):
 class RumorBecameExpansionEvent(DomainEvent):
     rumor_id: str
     site_id: str
+
+
+class TravelStartedEvent(DomainEvent):
+    destination_id: str
+    arrive_at_epoch: int
+    mode: str
+
+
+class TravelCompletedEvent(DomainEvent):
+    destination_id: str
+    mode: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -309,6 +348,114 @@ class InvestigateRumorHandler:
         return ok(*events)
 
 
+class PlanTravelHandler:
+    command_type = "plan-travel"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        destination_id = parse_entity_id(command.payload.get("destination_id"))
+        if character_id is None or destination_id is None:
+            return rejected("invalid character or destination id")
+        if not ctx.world.has_entity(destination_id):
+            return rejected("destination does not exist")
+
+        character = ctx.entity(character_id)
+        if character.has_component(TravelPlanComponent):
+            return rejected("character is already traveling")
+        origin_id = container_of(character)
+        if origin_id is None or not ctx.world.has_entity(origin_id):
+            return rejected("character is not at a travel hub")
+        origin = ctx.entity(origin_id)
+        destination = ctx.entity(destination_id)
+        if not origin.has_component(TravelHubComponent):
+            return rejected("origin is not a travel hub")
+        if not destination.has_component(TravelHubComponent):
+            return rejected("destination is not a travel hub")
+
+        route = _route_between(origin, destination_id)
+        if route is None:
+            return rejected("no travel route to destination")
+        mode = (
+            character.get_component(TravelModeComponent)
+            if character.has_component(TravelModeComponent)
+            else TravelModeComponent()
+        )
+        travel_seconds = max(1, int(route.travel_seconds / max(0.1, mode.speed_multiplier)))
+        arrive_at = ctx.epoch + travel_seconds
+        replace_component(
+            character,
+            TravelPlanComponent(
+                destination_id=str(destination_id),
+                started_at_epoch=ctx.epoch,
+                arrive_at_epoch=arrive_at,
+                mode=mode.mode,
+                route_label=route.label,
+            ),
+        )
+        return ok(
+            TravelStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(origin_id),
+                    target_ids=(str(destination_id),),
+                    destination_id=str(destination_id),
+                    arrive_at_epoch=arrive_at,
+                    mode=mode.mode,
+                )
+            )
+        )
+
+
+class TravelCompletionConsequence:
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for character in world.query().with_all([TravelPlanComponent]).execute_entities():
+            plan = character.get_component(TravelPlanComponent)
+            if epoch < plan.arrive_at_epoch:
+                continue
+            destination_id = parse_entity_id(plan.destination_id)
+            if destination_id is None or not world.has_entity(destination_id):
+                continue
+            origin_id = container_of(character)
+            if origin_id is not None and world.has_entity(origin_id):
+                world.get_entity(origin_id).remove_relationship(Contains, character.id)
+            world.get_entity(destination_id).add_relationship(
+                Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
+            )
+            character.remove_component(TravelPlanComponent)
+            events.append(
+                TravelCompletedEvent(
+                    **_travel_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character.id),
+                        room_id=str(destination_id),
+                        target_ids=(str(destination_id),),
+                        destination_id=str(destination_id),
+                        mode=plan.mode,
+                    )
+                )
+            )
+        return events
+
+
+def _route_between(origin: Entity, destination_id: EntityId) -> TravelRoute | None:
+    for edge, target_id in origin.get_relationships(TravelRoute):
+        if target_id == destination_id:
+            return edge
+    return None
+
+
+def _travel_event_base(epoch: int, **kwargs) -> dict:
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
+    base.update(kwargs)
+    return base
+
+
 def _selected_rumor_id(
     ctx: HandlerContext, character_id: EntityId, requested_id: object
 ) -> EntityId | None:
@@ -345,7 +492,19 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             rumor = entity.get_component(RumorComponent)
             if str(character.id) in rumor.heard_by:
                 lines.append(f"Rumor: {rumor.text} ({rumor.state}).")
+        if entity.id != character.id and entity.has_component(TravelHubComponent):
+            hub = entity.get_component(TravelHubComponent)
+            lines.append(f"Travel destination: {hub.name}.")
+    if character.has_component(TravelPlanComponent):
+        plan = character.get_component(TravelPlanComponent)
+        lines.append(
+            f"Traveling by {plan.mode}; arrival due at epoch {plan.arrive_at_epoch}."
+        )
     return sorted(lines)
+
+
+def install_daggersim(actor) -> None:
+    actor.register_consequence(TravelCompletionConsequence())
 
 
 __all__ = [
@@ -355,6 +514,7 @@ __all__ = [
     "ExpansionRequestedEvent",
     "GeneratedSiteInstantiatedEvent",
     "InvestigateRumorHandler",
+    "PlanTravelHandler",
     "ProceduralSiteComponent",
     "RumorBecameExpansionEvent",
     "RumorComponent",
@@ -364,6 +524,14 @@ __all__ = [
     "RumorSourceComponent",
     "RumorTargetComponent",
     "RumorVerifiedEvent",
+    "TravelCompletedEvent",
+    "TravelCompletionConsequence",
+    "TravelHubComponent",
+    "TravelModeComponent",
+    "TravelPlanComponent",
+    "TravelRoute",
+    "TravelStartedEvent",
     "UnrealizedLocationComponent",
     "daggersim_fragments",
+    "install_daggersim",
 ]
