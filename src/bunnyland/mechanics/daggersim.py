@@ -225,6 +225,29 @@ class CustomSpellComponent(Component):
     creator_id: str | None = None
 
 
+@dataclass(frozen=True)
+class LanguageSkillComponent(Component):
+    languages: dict[str, int]
+
+
+@dataclass(frozen=True)
+class CreatureLanguageComponent(Component):
+    language: str
+    pacification_difficulty: int = 1
+
+
+@dataclass(frozen=True)
+class HostilityComponent(Component):
+    hostile: bool = True
+
+
+@dataclass(frozen=True)
+class PacifiedComponent(Component):
+    pacified_by: str
+    language: str
+    pacified_at_epoch: int
+
+
 class ExpansionRequestedEvent(DomainEvent):
     site_id: str
     site_type: str
@@ -378,6 +401,19 @@ class SpellCastEvent(DomainEvent):
     effect_type: str
     magnitude: float
     target_health: float | None = None
+
+
+class PacificationAttemptedEvent(DomainEvent):
+    target_id: str
+    language: str
+    skill: int
+    difficulty: int
+    succeeded: bool
+
+
+class CreaturePacifiedEvent(DomainEvent):
+    target_id: str
+    language: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -1478,6 +1514,77 @@ def _apply_spell_effect(target: Entity, spell: CustomSpellComponent) -> float | 
     return current
 
 
+class AttemptPacifyHandler:
+    command_type = "attempt-pacify"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if character_id is None or target_id is None:
+            return rejected("invalid character or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+
+        character = ctx.entity(character_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+        target = ctx.entity(target_id)
+        if not target.has_component(CreatureLanguageComponent):
+            return rejected("target has no creature language")
+        if not character.has_component(LanguageSkillComponent):
+            return rejected("character knows no creature languages")
+
+        creature_language = target.get_component(CreatureLanguageComponent)
+        requested = str(command.payload.get("language", creature_language.language))
+        skills = character.get_component(LanguageSkillComponent).languages
+        skill = int(skills.get(requested, 0))
+        succeeded = requested == creature_language.language and (
+            skill >= creature_language.pacification_difficulty
+        )
+        events: list[DomainEvent] = [
+            PacificationAttemptedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    language=requested,
+                    skill=skill,
+                    difficulty=creature_language.pacification_difficulty,
+                    succeeded=succeeded,
+                )
+            )
+        ]
+        if succeeded:
+            if target.has_component(HostilityComponent):
+                replace_component(
+                    target,
+                    replace(target.get_component(HostilityComponent), hostile=False),
+                )
+            replace_component(
+                target,
+                PacifiedComponent(
+                    pacified_by=str(character_id),
+                    language=requested,
+                    pacified_at_epoch=ctx.epoch,
+                ),
+            )
+            events.append(
+                CreaturePacifiedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(target_id),),
+                        target_id=str(target_id),
+                        language=requested,
+                    )
+                )
+            )
+        return ok(*events)
+
+
 def _string_tuple(raw: object, default: tuple[str, ...]) -> tuple[str, ...]:
     if raw is None:
         return default
@@ -1611,6 +1718,12 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(CustomSpellComponent):
             spell = entity.get_component(CustomSpellComponent)
             lines.append(f"Known custom spell: {spell.spell_name} ({spell.effect_type}).")
+        if entity.has_component(CreatureLanguageComponent):
+            language = entity.get_component(CreatureLanguageComponent).language
+            state = "hostile"
+            if entity.has_component(HostilityComponent):
+                state = "hostile" if entity.get_component(HostilityComponent).hostile else "calm"
+            lines.append(f"Creature language nearby: {language} ({state}).")
     if character.has_component(CustomClassComponent):
         custom_class = character.get_component(CustomClassComponent)
         lines.append(f"Custom class: {custom_class.class_name}.")
@@ -1645,12 +1758,15 @@ __all__ = [
     "BankComponent",
     "BountyComponent",
     "BountyPostedEvent",
+    "AttemptPacifyHandler",
     "CompleteGeneratedQuestHandler",
     "CommitCrimeHandler",
     "CastSpellHandler",
     "ClassTemplateComponent",
     "CreateCustomClassHandler",
     "CreateSpellHandler",
+    "CreatureLanguageComponent",
+    "CreaturePacifiedEvent",
     "CrimeCommittedEvent",
     "CrimeRecordComponent",
     "CustomClassComponent",
@@ -1665,6 +1781,7 @@ __all__ = [
     "ExpansionRequestedEvent",
     "FinePaidEvent",
     "GeneratedSiteInstantiatedEvent",
+    "HostilityComponent",
     "InvestigateRumorHandler",
     "InstitutionComponent",
     "InstitutionJoinedEvent",
@@ -1672,6 +1789,7 @@ __all__ = [
     "InstitutionServiceUsedEvent",
     "JoinInstitutionHandler",
     "LawRegionComponent",
+    "LanguageSkillComponent",
     "LoanComponent",
     "LoanDefaultedEvent",
     "LoanDueConsequence",
@@ -1680,6 +1798,8 @@ __all__ = [
     "MemberOfInstitution",
     "OpenBankAccountHandler",
     "PayFineHandler",
+    "PacificationAttemptedEvent",
+    "PacifiedComponent",
     "PlanTravelHandler",
     "ProceduralSiteComponent",
     "GeneratedQuestComponent",

@@ -23,6 +23,7 @@ from bunnyland.mechanics.daggersim import (
     AccountOpenedEvent,
     AskForWorkHandler,
     AskRumorHandler,
+    AttemptPacifyHandler,
     BankAccountComponent,
     BankComponent,
     BountyComponent,
@@ -33,6 +34,8 @@ from bunnyland.mechanics.daggersim import (
     CompleteGeneratedQuestHandler,
     CreateCustomClassHandler,
     CreateSpellHandler,
+    CreatureLanguageComponent,
+    CreaturePacifiedEvent,
     CrimeCommittedEvent,
     CrimeRecordComponent,
     CustomClassComponent,
@@ -47,12 +50,14 @@ from bunnyland.mechanics.daggersim import (
     FinePaidEvent,
     GeneratedQuestComponent,
     GeneratedSiteInstantiatedEvent,
+    HostilityComponent,
     InstitutionComponent,
     InstitutionJoinedEvent,
     InstitutionServiceComponent,
     InstitutionServiceUsedEvent,
     InvestigateRumorHandler,
     JoinInstitutionHandler,
+    LanguageSkillComponent,
     LawRegionComponent,
     LoanComponent,
     LoanDefaultedEvent,
@@ -61,6 +66,8 @@ from bunnyland.mechanics.daggersim import (
     LoanRepaidEvent,
     MemberOfInstitution,
     OpenBankAccountHandler,
+    PacificationAttemptedEvent,
+    PacifiedComponent,
     PayFineHandler,
     PlanTravelHandler,
     ProceduralSiteComponent,
@@ -118,6 +125,7 @@ def _install(actor):
     actor.register_handler(CreateCustomClassHandler())
     actor.register_handler(CreateSpellHandler())
     actor.register_handler(CastSpellHandler())
+    actor.register_handler(AttemptPacifyHandler())
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
@@ -284,6 +292,21 @@ def _spell_template(scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), template.id
     )
     return template.id
+
+
+def _hostile_creature(scenario):
+    creature = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="moon moth", kind="creature"),
+            CreatureLanguageComponent(language="Mothwing", pacification_difficulty=2),
+            HostilityComponent(hostile=True),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), creature.id
+    )
+    return creature.id
 
 
 async def test_expand_site_instantiates_unrealized_location():
@@ -700,6 +723,34 @@ async def test_create_and_cast_custom_spell_heals_target_health():
     assert container_of(spell) == scenario.character
     assert character.get_component(HealthComponent).current == 7.0
     assert cast[0].target_health == 7.0
+
+
+async def test_language_skill_pacifies_hostile_creature():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    creature_id = _hostile_creature(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(LanguageSkillComponent(languages={"Mothwing": 2}))
+    attempts: list[PacificationAttemptedEvent] = []
+    pacified: list[CreaturePacifiedEvent] = []
+    scenario.actor.bus.subscribe(PacificationAttemptedEvent, attempts.append)
+    scenario.actor.bus.subscribe(CreaturePacifiedEvent, pacified.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "attempt-pacify",
+            target_id=str(creature_id),
+            language="Mothwing",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    creature = scenario.actor.world.get_entity(creature_id)
+    assert creature.get_component(HostilityComponent).hostile is False
+    assert creature.get_component(PacifiedComponent).pacified_by == str(scenario.character)
+    assert attempts[0].succeeded is True
+    assert pacified[0].target_id == str(creature_id)
 
 
 def test_daggersim_fragments_show_nearby_unrealized_locations():
