@@ -7,13 +7,18 @@ This guide covers a production-style Bunnyland install on a Linux VPS:
 3. choose plugins and create or resume a world;
 4. connect a browser client;
 5. connect Discord as a bot.
+6. optionally serve a project homepage from `../bunnyland-home`.
 
 The examples assume:
 
 - Debian/Ubuntu paths and service commands;
-- domain `play.example.com`;
+- homepage domain `example.com`;
+- web client domain `sandbox.example.com`;
+- optional homepage redirect domain `home.example.com`;
 - server checkout at `/opt/bunnyland/server`;
 - web checkout at `/opt/bunnyland/web`;
+- homepage checkout at `/opt/bunnyland/home`;
+- public web client config at `/var/www/bunnyland/config.json`;
 - world state at `/var/lib/bunnyland/worlds/main.json`;
 - Bunnyland API bound to `127.0.0.1:8765`.
 
@@ -27,15 +32,17 @@ Create a service account and directories:
 sudo useradd --system --create-home --home-dir /opt/bunnyland --shell /usr/sbin/nologin bunnyland
 sudo install -d -o bunnyland -g bunnyland /opt/bunnyland/server
 sudo install -d -o bunnyland -g bunnyland /opt/bunnyland/web
+sudo install -d -o bunnyland -g bunnyland /opt/bunnyland/home
 sudo install -d -o bunnyland -g bunnyland /var/lib/bunnyland/worlds
 sudo install -d -m 0750 -o bunnyland -g bunnyland /etc/bunnyland
+sudo install -d -o www-data -g www-data /var/www/bunnyland
 ```
 
 Install host packages:
 
 ```bash
 sudo apt update
-sudo apt install -y git curl nginx python3.12 python3.12-venv
+sudo apt install -y git curl nginx ufw certbot python3-certbot-nginx python3.12 python3.12-venv
 curl -LsSf https://astral.sh/uv/install.sh | sudo -u bunnyland sh
 ```
 
@@ -78,12 +85,37 @@ The current web client is a static snapshot/live inspector. It has no build step
 sudo -u bunnyland git clone thalis-github:thalismind/bunnyland-web.git /opt/bunnyland/web
 ```
 
+Deploy-specific web client settings should live outside the web checkout so `git pull` stays
+clean:
+
+```bash
+sudo tee /var/www/bunnyland/config.json >/dev/null <<'JSON'
+{
+  "serverUrl": "https://sandbox.example.com/api/",
+  "autoConnect": true
+}
+JSON
+sudo chown www-data:www-data /var/www/bunnyland/config.json
+sudo chmod 0644 /var/www/bunnyland/config.json
+```
+
 For a local smoke test without nginx:
 
 ```bash
 cd /opt/bunnyland/web
 sudo -u bunnyland ./serve.sh 8080
 ```
+
+## 2.1 Optional homepage install
+
+The project homepage is also static and has no build step:
+
+```bash
+sudo -u bunnyland git clone thalis-github:thalismind/bunnyland-home.git /opt/bunnyland/home
+```
+
+The example nginx config below serves this at `https://example.com/` and redirects
+`https://home.example.com/` to the apex domain.
 
 ## 3. Choose plugins and create a world
 
@@ -208,9 +240,11 @@ curl -fsS http://127.0.0.1:8765/health
 
 ## 5. Configure nginx
 
-Serve the web client at `/` and proxy the Bunnyland API under `/api`.
+Serve the homepage at the apex domain, serve the web client at the sandbox domain, and proxy
+the Bunnyland API under `/api` on the sandbox domain.
 
-Add this `map` once in nginx's `http` block, usually in `/etc/nginx/nginx.conf`:
+Add this `map` once in nginx's `http` block. A clean way on Ubuntu is a file such as
+`/etc/nginx/conf.d/bunnyland-upgrade-map.conf`:
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -224,10 +258,34 @@ Create `/etc/nginx/sites-available/bunnyland`:
 ```nginx
 server {
     listen 80;
-    server_name play.example.com;
+    server_name example.com;
+
+    root /opt/bunnyland/home;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+
+server {
+    listen 80;
+    server_name home.example.com;
+    return 301 https://example.com$request_uri;
+}
+
+server {
+    listen 80;
+    server_name sandbox.example.com;
 
     root /opt/bunnyland/web;
     index index.html;
+
+    location = /config.json {
+        alias /var/www/bunnyland/config.json;
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+    }
 
     location / {
         try_files $uri $uri/ /index.html;
@@ -255,16 +313,28 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Add TLS with certbot or your normal certificate automation. After TLS is enabled, keep the
-same `/api/` proxy block in the HTTPS server.
+Add TLS with certbot or your normal certificate automation:
+
+```bash
+sudo certbot --nginx \
+  -d example.com \
+  -d home.example.com \
+  -d sandbox.example.com \
+  --agree-tos \
+  -m admin@example.com \
+  --redirect
+```
+
+After TLS is enabled, verify that the certbot-managed HTTPS server for
+`sandbox.example.com` still contains the `/api/` proxy block and the `/config.json` alias.
 
 ## 6. Connect through the web client
 
-Open `https://play.example.com`.
+Open `https://sandbox.example.com`.
 
 In the web client's **Server** field:
 
-- use `https://play.example.com/api` when nginx proxies the API under `/api`;
+- use `https://sandbox.example.com/api/` when nginx proxies the API under `/api`;
 - use `http://localhost:8765` when running both pieces locally;
 - use `https://api.example.com` if you expose the API on a separate hostname.
 
@@ -286,8 +356,24 @@ for the initial snapshot and later typed events. If nginx is mounted at `/api`, 
 Useful checks:
 
 ```bash
-curl -fsS https://play.example.com/api/health
-curl -fsS https://play.example.com/api/world/snapshot
+curl -fsS https://example.com/
+curl -fsS -I https://home.example.com/
+curl -fsS https://sandbox.example.com/config.json
+curl -fsS https://sandbox.example.com/api/health
+curl -fsS https://sandbox.example.com/api/world/snapshot
+cd /opt/bunnyland/server
+/opt/bunnyland/.local/bin/uv run --extra server python - <<'PY'
+import asyncio
+import json
+import websockets
+
+async def main():
+    async with websockets.connect("wss://sandbox.example.com/api/world/updates") as ws:
+        message = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+        print(message["type"])
+
+asyncio.run(main())
+PY
 ```
 
 If the page loads but **Connect Live** fails, check:
@@ -297,7 +383,44 @@ If the page loads but **Connect Live** fails, check:
 - `bunnyland.service` is listening on `127.0.0.1:8765`;
 - browser devtools do not show mixed-content errors from using `http://` on an HTTPS page.
 
-## 7. Optional Docker deployment
+## 7. Enable the firewall
+
+Bind Bunnyland to localhost (`--api-host 127.0.0.1`) and expose it only through nginx.
+Then allow SSH, HTTP, and HTTPS before enabling UFW:
+
+```bash
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw deny 8765/tcp
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw --force enable
+sudo ufw status verbose
+```
+
+Expected policy:
+
+```text
+Default: deny (incoming), allow (outgoing)
+22/tcp ALLOW IN
+80/tcp ALLOW IN
+443/tcp ALLOW IN
+8765/tcp DENY IN
+```
+
+Verify that nginx still reaches the app locally, but the app port is not public:
+
+```bash
+curl -fsS http://127.0.0.1:8765/health
+curl -fsS https://sandbox.example.com/api/health
+curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health || true
+```
+
+The last command should time out or fail. The public API should be available only through
+`https://sandbox.example.com/api/`.
+
+## 8. Optional Docker deployment
 
 The repository does not require Docker, but the server can run in a container. One simple
 server image is:
@@ -356,7 +479,7 @@ services:
 You can keep the host nginx config above and change its web `root` to proxy or serve the
 containerized web service, depending on how you prefer to manage static assets.
 
-## 8. Connect Discord as a bot
+## 9. Connect Discord as a bot
 
 The Discord frontend is an embedded MVP: run it from the same `bunnyland serve` process that
 owns the game loop and API by adding `--discord`.
@@ -382,19 +505,28 @@ Player commands currently exposed by the bot:
 
 | Command             | Effect                  |
 |---------------------|-------------------------|
+| `!claim [name]`     | claim a suspended character |
+| `!look`             | describe the current room and exits |
 | `!move <direction>` | queue a move command    |
 | `!take <name>`      | queue a take command    |
 | `!say <text>`       | queue room speech       |
+| `!help`             | list available commands |
 
-## 9. Operating checklist
+## 10. Operating checklist
 
 Before inviting players:
 
 1. `systemctl status bunnyland` is healthy.
 2. `curl -fsS http://127.0.0.1:8765/health` works on the VPS.
-3. `curl -fsS https://play.example.com/api/health` works through nginx.
-4. The web client connects live with `https://play.example.com/api`.
-5. `/var/lib/bunnyland/worlds/main.json` is being autosaved.
-6. Only one server process writes that world file.
-7. If Discord is enabled, the bot responds and its Discord user ids are assigned to
+3. `curl -fsS https://sandbox.example.com/api/health` works through nginx.
+4. The websocket returns an initial `snapshot` from `wss://sandbox.example.com/api/world/updates`.
+5. The web client connects live with `https://sandbox.example.com/api/`.
+6. `curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health` does not connect.
+7. `sudo ufw status verbose` shows SSH, HTTP, HTTPS allowed and the app port denied.
+8. `https://example.com/` serves the homepage, if deployed.
+9. `https://home.example.com/` redirects to `https://example.com/`, if deployed.
+10. `https://sandbox.example.com/config.json` contains the production server URL and `autoConnect`.
+11. `/var/lib/bunnyland/worlds/main.json` is being autosaved.
+12. Only one server process writes that world file.
+13. If Discord is enabled, the bot responds and its Discord user ids are assigned to
    character controllers.
