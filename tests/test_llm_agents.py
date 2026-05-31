@@ -33,7 +33,7 @@ from bunnyland.llm_agents import (
     tool_names,
     tool_schemas,
 )
-from bunnyland.llm_agents.agent import OllamaAgent
+from bunnyland.llm_agents.agent import DEFAULT_MODEL, OllamaAgent, normalize_model
 from bunnyland.prompts.builder import PromptBuilder
 
 
@@ -274,6 +274,18 @@ def test_ollama_agent_can_override_model_per_decision(monkeypatch):
     agent.decide("turn one", None, character_id="hazel", model="controller-model")
 
     assert agent._client.models == ["controller-model"]
+
+
+def test_ollama_agent_maps_legacy_default_model_to_flash(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.Client = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="fallback")
+    agent.decide("turn one", None, character_id="hazel", model="llama3")
+
+    assert normalize_model("llama3") == DEFAULT_MODEL
+    assert agent._client.models == [DEFAULT_MODEL]
 
 
 async def test_dispatch_records_wait_when_agent_passes():

@@ -18,6 +18,15 @@ from .tools import ToolCall, tool_schemas
 
 #: Default Ollama model (https://ollama.com/library/deepseek-v4-flash).
 DEFAULT_MODEL = "deepseek-v4-flash"
+LEGACY_DEFAULT_MODEL = "llama3"
+
+
+def normalize_model(model: str | None) -> str:
+    """Map legacy saved defaults to the current character-controller default."""
+
+    if not model or model == LEGACY_DEFAULT_MODEL:
+        return DEFAULT_MODEL
+    return model
 
 
 class Agent(Protocol):
@@ -87,7 +96,7 @@ class OllamaAgent:
         history.append({"role": "user", "content": prompt})
 
         response = self._client.chat(
-            model=model or self._model,
+            model=normalize_model(model or self._model),
             messages=history,
             tools=tool_schemas(),
         )
@@ -109,4 +118,11 @@ class OllamaAgent:
             del history[: len(history) - limit]
 
 
-__all__ = ["DEFAULT_MODEL", "Agent", "OllamaAgent", "ScriptedAgent"]
+__all__ = [
+    "DEFAULT_MODEL",
+    "LEGACY_DEFAULT_MODEL",
+    "Agent",
+    "OllamaAgent",
+    "ScriptedAgent",
+    "normalize_model",
+]
