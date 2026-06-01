@@ -47,8 +47,9 @@ docker compose up -d
 Open `http://localhost/`. The `frontend` container serves the web client and proxies
 same-origin `/api/` requests to the private `server` container. Server state is bind-mounted
 from `BUNNYLAND_DATA_DIR` into `/data` so admins can inspect saved worlds directly.
-For HTTPS/SNI deployments, set `BUNNYLAND_SERVER_NAME` and `BUNNYLAND_CERT_NAME` in `.env`
-and run `compose.tls.yml` as described in the VPS Docker setup.
+For HTTPS/SNI deployments, use `scripts/vps-docker-setup` as described in the VPS Docker
+setup. It writes `.env`, configures admin auth, obtains a Let's Encrypt certificate with
+certbot, and runs the checked-in Compose files.
 
 For local image development, add the build override:
 

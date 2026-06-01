@@ -558,94 +558,94 @@ config proxies to `http://server:8765/`, which is Docker DNS for the server serv
 container images are `ghcr.io/thalismind/bunnyland-server` and
 `ghcr.io/thalismind/bunnyland-web`.
 
-By default, server data is bind-mounted from `./data` into `/data` in the server container.
-For a VPS, point it at an admin-visible directory such as `/var/lib/bunnyland`:
+For a VPS, use the setup script. It writes `.env`, creates the admin password file,
+requests or reuses a Let's Encrypt certificate with certbot, and starts the checked-in
+Compose files. Fill in only your own domain name, admin username/password, and host data
+folder. Optionally provide a favicon path and an existing world save file.
+
+Copy this block, change the values in the first section, and paste it into the VPS:
 
 ```bash
-sudo install -d -m 0755 /opt/bunnyland
-sudo install -d -m 0755 /var/lib/bunnyland
-cd /opt/bunnyland
-git clone https://github.com/thalismind/bunnyland-server.git server
-cd server
-cat > .env <<'ENV'
-BUNNYLAND_DATA_DIR=/var/lib/bunnyland
-BUNNYLAND_SERVER_TAG=main
-BUNNYLAND_WEB_TAG=main
-BUNNYLAND_WORLD_FILE=/data/worlds/main.json
-BUNNYLAND_HTTP_BIND=0.0.0.0:80
-BUNNYLAND_SERVER_NAME=_
-ENV
-```
-
-Start it:
-
-```bash
-docker compose up -d
-docker compose logs -f server frontend
-```
-
-Then open `http://YOUR_VPS_PUBLIC_IP/`. The frontend image ships a default
-`/config.json` that points the browser at same-origin `/api/`, so the web UI and API proxy
-come up together.
-
-To reload an existing saved world from the bind mount, use the load override:
-
-```bash
-docker compose -f compose.yml -f compose.load.yml up -d
-```
-
-For HTTPS with SNI handled inside the frontend container, issue a Let's Encrypt certificate
-first, then create the editor password file and run the TLS override. The frontend
-container reads certificates from `/etc/letsencrypt` and does not generate self-signed
-certificates.
-
-```bash
-sudo systemctl stop nginx || true
-sudo certbot certonly --standalone \
-  -d sandbox.example.com \
-  --agree-tos \
-  --email admin@example.com \
-  --no-eff-email
-sudo install -d -o root -g root -m 0755 /etc/nginx/bunnyland
-BUNNYLAND_ADMIN_USER=editor
+BUNNYLAND_DOMAIN='sandbox.example.com'
+BUNNYLAND_DATA_DIR='/var/lib/bunnyland'
+BUNNYLAND_ADMIN_USER='editor'
 BUNNYLAND_ADMIN_PASSWORD='change-this'
-printf '%s:%s\n' "$BUNNYLAND_ADMIN_USER" \
-  "$(openssl passwd -apr1 "$BUNNYLAND_ADMIN_PASSWORD")" | \
-  sudo tee /etc/nginx/bunnyland/world-editor.htpasswd >/dev/null
-cat >> .env <<'ENV'
-BUNNYLAND_SERVER_NAME=sandbox.example.com
-BUNNYLAND_CERT_NAME=sandbox.example.com
-BUNNYLAND_HTTPS_BIND=0.0.0.0:443
-ENV
-docker compose -f compose.yml -f compose.tls.yml up -d
+BUNNYLAND_CERT_EMAIL='admin@example.com'
+
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
+sudo install -d -m 0755 /opt/bunnyland "$BUNNYLAND_DATA_DIR"
+cd /opt/bunnyland
+if [ ! -d server ]; then
+  git clone https://github.com/thalismind/bunnyland-server.git server
+fi
+cd server
+git pull --ff-only
+
+BUNNYLAND_DOMAIN="$BUNNYLAND_DOMAIN" \
+BUNNYLAND_DATA_DIR="$BUNNYLAND_DATA_DIR" \
+BUNNYLAND_ADMIN_USER="$BUNNYLAND_ADMIN_USER" \
+BUNNYLAND_ADMIN_PASSWORD="$BUNNYLAND_ADMIN_PASSWORD" \
+BUNNYLAND_CERT_EMAIL="$BUNNYLAND_CERT_EMAIL" \
+  scripts/vps-docker-setup
 ```
 
-Change the public domain by changing `BUNNYLAND_SERVER_NAME`. Set `BUNNYLAND_CERT_NAME` to
-the matching certificate directory under `/etc/letsencrypt/live`. The TLS override mounts
-`${BUNNYLAND_LETSENCRYPT_DIR:-/etc/letsencrypt}` and
-`${BUNNYLAND_NGINX_AUTH_DIR:-/etc/nginx/bunnyland}` read-only, and keeps the `/api/` proxy
-in the frontend nginx container, so the browser always loads the web page and API from the
-same external origin.
-The default HTTP-only Compose stack blocks `/api/admin/`; the TLS override enables it with
-nginx basic auth. Change the admin username and password by recreating
-`world-editor.htpasswd`; no Compose file changes are required.
+Then open `https://sandbox.example.com/`. The frontend image ships a default `/config.json`
+that points the browser at same-origin `/api/`, so the web UI and API proxy come up
+together.
 
-To renew certificates with the same standalone method, stop the frontend while certbot
-binds port `80`, then start it again:
+To start from an existing saved world, add `BUNNYLAND_WORLD_SAVE`. If the file is already
+under `BUNNYLAND_DATA_DIR`, the script loads it in place; otherwise it copies the save into
+`$BUNNYLAND_DATA_DIR/worlds/` first:
 
 ```bash
-docker compose -f compose.yml -f compose.tls.yml stop frontend
+BUNNYLAND_DOMAIN='sandbox.example.com' \
+BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
+BUNNYLAND_ADMIN_USER='editor' \
+BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_CERT_EMAIL='admin@example.com' \
+BUNNYLAND_WORLD_SAVE='/var/lib/bunnyland/worlds/main.json' \
+  scripts/vps-docker-setup
+```
+
+To use a custom favicon, add `BUNNYLAND_FAVICON_FILE`:
+
+```bash
+BUNNYLAND_DOMAIN='sandbox.example.com' \
+BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
+BUNNYLAND_ADMIN_USER='editor' \
+BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_CERT_EMAIL='admin@example.com' \
+BUNNYLAND_FAVICON_FILE='/opt/bunnyland/favicon.png' \
+  scripts/vps-docker-setup
+```
+
+The script uses only Let's Encrypt for public TLS certificate issuance. It never generates
+self-signed certificates for the VPS Docker deployment. If a matching certificate already
+exists under `/etc/letsencrypt/live/$BUNNYLAND_DOMAIN`, the script reuses it; otherwise it
+stops anything binding port `80` and runs certbot's standalone authenticator.
+
+The script starts the checked-in Compose files:
+
+- `compose.yml`;
+- `compose.load.yml` when an existing save is selected or `worlds/main.json` already
+  exists in the data directory;
+- `compose.tls.yml`;
+- `compose.favicon.yml` when `BUNNYLAND_FAVICON_FILE` is provided.
+
+The generated `.env` is intentionally small and contains only deployment knobs: domain,
+certificate name, data directory, image tags, ports, optional world save path, and optional
+favicon path. Change the public domain by rerunning the script with a different
+`BUNNYLAND_DOMAIN`. Change the admin username/password by rerunning it with different
+`BUNNYLAND_ADMIN_USER` and `BUNNYLAND_ADMIN_PASSWORD`.
+
+To renew Let's Encrypt certificates with the same standalone method, stop the frontend
+while certbot binds port `80`, then start it again:
+
+```bash
+sudo nerdctl compose -p bunnyland -f compose.yml -f compose.tls.yml stop frontend
 sudo certbot renew --standalone
-docker compose -f compose.yml -f compose.tls.yml up -d frontend
-```
-
-To use a custom favicon, bind-mount it over the image default with the favicon override:
-
-```bash
-cat >> .env <<'ENV'
-BUNNYLAND_FAVICON_FILE=/opt/bunnyland/favicon.png
-ENV
-docker compose -f compose.yml -f compose.tls.yml -f compose.favicon.yml up -d
+sudo nerdctl compose -p bunnyland -f compose.yml -f compose.tls.yml up -d frontend
 ```
 
 The published containers are tagged by branch. For normal VPS installs, keep
