@@ -16,6 +16,7 @@ from bunnyland.discord import (
     did_you_mean,
     explain_rejection,
     render_action_result,
+    render_help,
     render_look,
     render_move_result,
 )
@@ -34,10 +35,44 @@ def test_did_you_mean_is_the_shared_resolver_helper():
     assert did_you_mean is shared
 
 
-def test_help_lists_available_discord_verbs():
+def test_help_lists_available_discord_verbs(scenario):
     assert "!look" in HELP_TEXT
     assert "!move <direction>" in HELP_TEXT
     assert "!claim [character]" in HELP_TEXT
+    assert render_help() == HELP_TEXT
+    assert render_help("humans") == HELP_TEXT
+    text = render_help("humans", scenario.actor)
+    assert "World verbs available now:" in text
+    assert "move" in text
+    assert "take-control" in text
+
+
+def test_help_agents_describes_llm_agent_rules(scenario):
+    text = render_help("agents", scenario.actor)
+
+    assert "Agent rules:" in text
+    assert "persistent ECS world" in text
+    assert "verb/tool" in text
+    assert "Action points" in text
+    assert "Focus points" in text
+    assert "cannot mutate ECS directly" in text
+    assert "World verbs available now:" in text
+    assert "move" in text
+
+
+def test_help_command_stubs_action_help(scenario):
+    text = render_help("take", scenario.actor)
+
+    assert "Help for `take`" in text
+    assert "item_id" in text
+    assert "Detailed command help is not written yet" in text
+
+
+def test_help_command_handles_unknown_topic():
+    text = render_help("dance")
+
+    assert "No detailed help is available for `dance` yet" in text
+    assert "!help agents" in text
 
 
 def test_render_look_uses_room_summary_projection(scenario):

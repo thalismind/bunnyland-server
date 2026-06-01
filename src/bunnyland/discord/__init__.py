@@ -5,6 +5,7 @@ from .view import (
     HELP_TEXT,
     explain_rejection,
     render_action_result,
+    render_help,
     render_look,
     render_move_result,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "did_you_mean",
     "explain_rejection",
     "render_action_result",
+    "render_help",
     "render_look",
     "render_move_result",
 ]

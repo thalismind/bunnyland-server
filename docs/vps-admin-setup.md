@@ -545,7 +545,7 @@ Player commands currently exposed by the bot:
 | `!move <direction>` | queue a move command    |
 | `!take <name>`      | queue a take command    |
 | `!say <text>`       | queue room speech       |
-| `!help`             | list available commands |
+| `!help [topic]`     | help for humans, agents, or a specific verb |
 
 ## 10. Operating checklist
 

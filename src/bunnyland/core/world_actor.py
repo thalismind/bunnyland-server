@@ -130,6 +130,11 @@ class WorldActor:
         """Run ``hook`` at the end of every tick while the actor owns the world lock."""
         self._after_tick.append(hook)
 
+    def available_command_types(self) -> tuple[str, ...]:
+        """Return command types currently accepted by this actor."""
+
+        return tuple(sorted({*self._handlers.keys(), *CONTROL_COMMANDS}))
+
     # -- clock --------------------------------------------------------------------------
 
     @property
