@@ -50,6 +50,7 @@ Transform tasks into verifiable goals:
 - "Add validation" → "Write tests for invalid inputs, then make them pass"
 - "Fix the bug" → "Write a test that reproduces it, then make it pass"
 - "Refactor X" → "Ensure tests pass before and after"
+- When fixing a bug or regression, add a regression test that fails before the fix and passes after it, unless the change is too trivial or impossible to test directly.
 
 For multi-step tasks, state a brief plan:
 ```
