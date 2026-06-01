@@ -153,9 +153,25 @@ def parse_natural_command(text: str) -> ToolCall | None:
         faction = _rest(words, 2)
         return ToolCall("join_faction", {"faction_id": faction}) if faction else None
 
+    if verb == "join" and len(words) > 1 and words[1].lower() == "household":
+        household = _rest(words, 2)
+        return (
+            ToolCall("join_household", {"household_id": household, "name": household})
+            if household
+            else None
+        )
+
     if verb == "leave" and len(words) > 1 and words[1].lower() == "faction":
         faction = _rest(words, 2)
         return ToolCall("leave_faction", {"faction_id": faction}) if faction else None
+
+    if verb == "claim" and len(words) > 1 and words[1].lower() == "home":
+        room = _rest(words, 2)
+        return ToolCall("claim_home", {"room_id": room} if room else {})
+
+    if verb == "claim" and len(words) > 1 and words[1].lower() == "room":
+        room = _rest(words, 2)
+        return ToolCall("claim_room", {"room_id": room} if room else {})
 
     if verb == "claim":
         target = _rest(words, 1)
@@ -197,6 +213,16 @@ def parse_natural_command(text: str) -> ToolCall | None:
             customer = _rest(words, index + 1)
             if item and customer:
                 return ToolCall("sell_item", {"item_id": item, "customer_id": customer})
+
+    if verb == "charge" and len(words) >= 4 and words[1].lower() == "rent":
+        amount = words[-1]
+        tenant = _rest(words[2:-1], 0)
+        if tenant and amount.isdigit():
+            return ToolCall("charge_rent", {"tenant_id": tenant, "amount": amount})
+
+    if verb == "pay" and len(words) > 1 and words[1].lower() == "bill":
+        bill = _rest(words, 2)
+        return ToolCall("pay_bill", {"bill_id": bill} if bill else {})
 
     if verb == "open" and len(words) > 1 and words[1].lower() == "business":
         name = _rest(words, 2)

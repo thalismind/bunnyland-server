@@ -59,18 +59,23 @@ def test_tool_schemas_cover_every_verb():
         "adopt_child",
         "accept_quest",
         "buy_item",
+        "charge_rent",
+        "claim_home",
         "claim_ownership",
+        "claim_room",
         "complete_objective",
         "discover_location",
         "drop",
         "fertilize",
         "harvest_crop",
+        "join_household",
         "plant",
         "pickpocket",
         "join_faction",
         "leave_faction",
         "release_ownership",
         "open_business",
+        "pay_bill",
         "sell_item",
         "take_note",
         "till",
@@ -169,11 +174,27 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     assert parse_natural_command("join faction Moss Wardens") == ToolCall(
         "join_faction", {"faction_id": "Moss Wardens"}
     )
+    assert parse_natural_command("join household moss-burrow") == ToolCall(
+        "join_household", {"household_id": "moss-burrow", "name": "moss-burrow"}
+    )
     assert parse_natural_command("leave faction Moss Wardens") == ToolCall(
         "leave_faction", {"faction_id": "Moss Wardens"}
     )
+    assert parse_natural_command("claim home North Tunnel") == ToolCall(
+        "claim_home", {"room_id": "North Tunnel"}
+    )
+    assert parse_natural_command("claim room North Tunnel") == ToolCall(
+        "claim_room", {"room_id": "North Tunnel"}
+    )
     assert parse_natural_command("release ownership oak chest") == ToolCall(
         "release_ownership", {"target_id": "oak chest"}
+    )
+    assert parse_natural_command("charge rent Hazel 12") == ToolCall(
+        "charge_rent", {"tenant_id": "Hazel", "amount": "12"}
+    )
+    assert parse_natural_command("pay bill") == ToolCall("pay_bill", {})
+    assert parse_natural_command("pay bill bill-123") == ToolCall(
+        "pay_bill", {"bill_id": "bill-123"}
     )
     assert parse_natural_command("take note the basin is cold") == ToolCall(
         "take_note", {"text": "the basin is cold"}

@@ -85,6 +85,17 @@ branch tags and `latest` for the default branch. The web repo publishes
 
 ## Documentation
 
+### Player guides
+
+- **[Getting started](docs/getting-started.md)** — looking around, moving, inventory,
+  and talking to other characters.
+- **[Gardening and farming](docs/gardening.md)** — finding soil, planting seeds,
+  watering crops, harvesting produce, and selling it.
+- **[Life-sim homes and rent](docs/lifesim.md)** — finding or claiming a home,
+  joining a household, charging rent, and paying bills.
+
+### Technical docs
+
 - **[The Vision](docs/vision.md)** — what bunnyland is trying to be, and what belongs in
   core, plugins, clients, scripts, and content libraries.
 - **[Running a server](docs/running-a-server.md)** — install, the `serve` loop, the time
@@ -96,8 +107,6 @@ branch tags and `latest` for the default branch. The web repo publishes
   development and debugging.
 - **[World creation](docs/world-creation.md)** — generators (`oneshot` vs `recursive`),
   seeds, how generation stays inside the rules, and adding your own generator.
-- **[Gardening and farming](docs/gardening.md)** — finding soil, planting seeds,
-  watering crops, harvesting produce, and selling it.
 - **[Discord bot](docs/discord-bot.md)** — creating the bot, the token, inviting it,
   wiring a user to a character, and the player commands.
 - **[Admin & controllers](docs/admin.md)** — claiming, suspending, and handing off

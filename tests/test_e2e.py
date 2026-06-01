@@ -46,7 +46,12 @@ from bunnyland.core.events import (
     SpeechSaidEvent,
 )
 from bunnyland.engine import GameLoop
-from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
+from bunnyland.llm_agents import (
+    ControllerDispatch,
+    ScriptedAgent,
+    ToolCall,
+    command_from_tool_call,
+)
 from bunnyland.mechanics.colonysim import Owns
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
 from bunnyland.mechanics.gardensim import (
@@ -58,12 +63,20 @@ from bunnyland.mechanics.gardensim import (
     SoilComponent,
 )
 from bunnyland.mechanics.lifesim import (
+    BillComponent,
+    BillPaidEvent,
     BusinessOwnerComponent,
     BusinessPurchaseEvent,
     BusinessSaleEvent,
     CustomerComponent,
+    HasBill,
+    HomeComponent,
+    HouseholdComponent,
     HouseholdFundsComponent,
     OwnsBusiness,
+    RentChargedEvent,
+    RoomClaimComponent,
+    lifesim_fragments,
 )
 from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
 from bunnyland.memory import install_memory
@@ -143,6 +156,13 @@ async def _new_world():
     proposal = StubWorldBuilder().propose("a quiet marsh")
     result = await instantiate(actor, proposal)
     return actor, proposal, result
+
+
+def _controller_generation(character):
+    controller_edges = character.get_relationships(ControlledBy)
+    assert controller_edges
+    edge, controller_id = controller_edges[0]
+    return controller_id, edge.generation
 
 
 # -- the world fits the proposal --------------------------------------------------------
@@ -367,6 +387,113 @@ async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
     assert character.get_component(HouseholdFundsComponent).balance == 15
     assert merchant.get_component(HouseholdFundsComponent).balance == 3
     assert merchant.get_component(CustomerComponent).budget == 12
+
+
+async def test_scripted_agent_claims_home_and_pays_rent_bill():
+    actor, _proposal, result = await _new_world()
+    hazel = result.characters["hazel"]
+    character = actor.world.get_entity(hazel)
+    replace_component(
+        character,
+        ActionPointsComponent(current=8.0, maximum=8.0, regen_per_hour=0.0),
+    )
+    character.add_component(HouseholdFundsComponent(balance=40))
+
+    rent_charged: list[RentChargedEvent] = []
+    bills_paid: list[BillPaidEvent] = []
+    rejected: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(RentChargedEvent, rent_charged.append)
+    actor.bus.subscribe(BillPaidEvent, bills_paid.append)
+    actor.bus.subscribe(CommandRejectedEvent, rejected.append)
+
+    agent = ScriptedAgent(
+        [
+            ToolCall("move", {"direction": "north"}),
+            ToolCall(
+                "join_household",
+                {"household_id": "moss-burrow", "name": "Moss Burrow"},
+            ),
+            ToolCall("claim_home", {"room_id": "North Tunnel"}),
+            ToolCall("claim_room", {"room_id": "North Tunnel"}),
+        ]
+    )
+    builder = PromptBuilder(
+        actor.world,
+        fragment_providers=collect_prompt_fragments(bunnyland_plugins()),
+    )
+    loop = GameLoop(
+        actor,
+        ControllerDispatch(actor, builder, agent),
+        tick_seconds=1.0,
+        time_scale=60 * 60,
+    )
+
+    await loop.run(max_ticks=5)
+
+    assert rejected == []
+    north_tunnel = actor.world.get_entity(result.rooms["tunnel"])
+    home = north_tunnel.get_component(HomeComponent)
+    room_claim = north_tunnel.get_component(RoomClaimComponent)
+    household = character.get_component(HouseholdComponent)
+    assert home.owner_id == str(hazel)
+    assert home.household_id == "moss-burrow"
+    assert room_claim.claimed_by_id == str(hazel)
+    assert household.name == "Moss Burrow"
+    fragments = lifesim_fragments(actor.world, character)
+    assert "Your household is Moss Burrow." in fragments
+    assert "Your home is North Tunnel." in fragments
+    assert "Rooms you claim: North Tunnel." in fragments
+
+    landlord = spawn_entity(
+        actor.world,
+        [
+            ActionPointsComponent(current=2.0, maximum=2.0),
+            IdentityComponent(name="Marigold", kind="character"),
+            CharacterComponent(),
+            HouseholdFundsComponent(balance=0),
+        ],
+    )
+    north_tunnel.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), landlord.id)
+    landlord_controller = spawn_entity(actor.world)
+    landlord_generation = actor.assign_controller(landlord.id, landlord_controller.id)
+    await actor.submit(
+        command_from_tool_call(
+            ToolCall(
+                "charge_rent",
+                {"tenant_id": str(hazel), "amount": "12", "reason": "burrow rent"},
+            ),
+            character_id=str(landlord.id),
+            controller_id=str(landlord_controller.id),
+            controller_generation=landlord_generation,
+        )
+    )
+    await actor.tick(60 * 60)
+
+    assert rejected == []
+    assert len(rent_charged) == 1
+    bill_id = character.get_relationships(HasBill)[0][1]
+    bill = actor.world.get_entity(bill_id).get_component(BillComponent)
+    assert bill.reason == "burrow rent"
+    assert bill.creditor_id == str(landlord.id)
+    assert "Unpaid bills: burrow rent (12)." in lifesim_fragments(actor.world, character)
+
+    hazel_controller, hazel_generation = _controller_generation(character)
+    await actor.submit(
+        command_from_tool_call(
+            ToolCall("pay_bill", {}),
+            character_id=str(hazel),
+            controller_id=str(hazel_controller),
+            controller_generation=hazel_generation,
+        )
+    )
+    await actor.tick(60 * 60)
+
+    assert rejected == []
+    assert len(bills_paid) == 1
+    assert actor.world.get_entity(bill_id).get_component(BillComponent).paid_at_epoch == actor.epoch
+    assert character.get_component(HouseholdFundsComponent).balance == 28
+    assert landlord.get_component(HouseholdFundsComponent).balance == 12
+    assert not any("Unpaid bills" in line for line in lifesim_fragments(actor.world, character))
 
 
 async def test_llm_agent_notes_can_be_found_by_chroma_vector_synonyms():

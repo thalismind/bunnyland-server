@@ -38,6 +38,7 @@ _FREE = CommandCost()
 REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
     {
         "child_id",
+        "bill_id",
         "business_id",
         "customer_id",
         "exit_id",
@@ -47,6 +48,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "location_id",
         "objective_id",
         "quest_id",
+        "room_id",
         "seed_id",
         "seller_id",
         "soil_id",
@@ -54,6 +56,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "target_id",
         "tool_id",
         "source_id",
+        "tenant_id",
     }
 )
 
@@ -83,6 +86,13 @@ _VERBS: dict[str, _Verb] = {
     "tell": _Verb("tell", Lane.WORLD, _SPEECH, ("target_id", "text", "intent")),
     "pickpocket": _Verb("pickpocket", Lane.WORLD, _ACTION, ("target_id", "item_id")),
     "open_business": _Verb("open-business", Lane.WORLD, _ACTION, ("name", "default_price")),
+    "join_household": _Verb("join-household", Lane.WORLD, _ACTION, ("household_id", "name")),
+    "claim_home": _Verb("claim-home", Lane.WORLD, _ACTION, ("room_id",)),
+    "claim_room": _Verb("claim-room", Lane.WORLD, _ACTION, ("room_id",)),
+    "charge_rent": _Verb(
+        "charge-rent", Lane.WORLD, _ACTION, ("tenant_id", "amount", "reason", "due_epoch")
+    ),
+    "pay_bill": _Verb("pay-bill", Lane.WORLD, _ACTION, ("bill_id",)),
     "buy_item": _Verb(
         "buy-item", Lane.WORLD, _ACTION, ("seller_id", "item_id", "business_id", "price")
     ),

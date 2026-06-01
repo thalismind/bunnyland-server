@@ -22,6 +22,7 @@ from ..core.components import (
     DeadComponent,
     DownedComponent,
     IdentityComponent,
+    RoomComponent,
     SuspendedComponent,
 )
 from ..core.controllers import LLMControllerComponent
@@ -1028,11 +1029,23 @@ class PayBillHandler:
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         actor_id = parse_entity_id(command.character_id)
         bill_id = parse_entity_id(command.payload.get("bill_id"))
-        if actor_id is None or bill_id is None:
-            return rejected("invalid character or bill id")
+        if actor_id is None:
+            return rejected("invalid character id")
+        actor = ctx.entity(actor_id)
+        if bill_id is None:
+            for _edge, candidate_id in actor.get_relationships(HasBill):
+                if not ctx.world.has_entity(candidate_id):
+                    continue
+                candidate = ctx.entity(candidate_id)
+                if not candidate.has_component(BillComponent):
+                    continue
+                if candidate.get_component(BillComponent).paid_at_epoch is None:
+                    bill_id = candidate_id
+                    break
+            if bill_id is None:
+                return rejected("no unpaid bills")
         if not ctx.world.has_entity(bill_id):
             return rejected("bill does not exist")
-        actor = ctx.entity(actor_id)
         if not actor.has_relationship(HasBill, bill_id):
             return rejected("bill does not belong to character")
         bill_entity = ctx.entity(bill_id)
@@ -1832,6 +1845,18 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         household = character.get_component(HouseholdComponent)
         label = household.name or household.household_id
         lines.append(f"Your household is {label}.")
+    for room in world.query().with_all([HomeComponent, RoomComponent]).execute_entities():
+        home = room.get_component(HomeComponent)
+        if home.owner_id == str(character.id):
+            title = room.get_component(RoomComponent).title
+            lines.append(f"Your home is {title}.")
+    claimed_rooms = []
+    for room in world.query().with_all([RoomClaimComponent, RoomComponent]).execute_entities():
+        claim = room.get_component(RoomClaimComponent)
+        if claim.claimed_by_id == str(character.id):
+            claimed_rooms.append(room.get_component(RoomComponent).title)
+    if claimed_rooms:
+        lines.append("Rooms you claim: " + ", ".join(sorted(claimed_rooms)) + ".")
     for _edge, routine_id in character.get_relationships(HasRoutine):
         if not world.has_entity(routine_id):
             continue
