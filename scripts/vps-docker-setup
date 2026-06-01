@@ -70,6 +70,21 @@ container_world_file="/data/worlds/main.json"
 host_world_file="$BUNNYLAND_DATA_DIR/worlds/main.json"
 compose_files=(-f compose.yml)
 
+run_compose_quiet() {
+  local log_file
+  log_file="$(mktemp)"
+  chmod 0600 "$log_file"
+  if sudo nerdctl compose -p bunnyland "${compose_files[@]}" "$@" >"$log_file" 2>&1; then
+    rm -f "$log_file"
+    return
+  fi
+
+  rm -f "$log_file"
+  printf 'error: nerdctl compose failed while running: %s\n' "$*" >&2
+  printf 'rerun the command manually if you need full container runtime diagnostics.\n' >&2
+  return 1
+}
+
 sudo install -d -m 0755 "$BUNNYLAND_DATA_DIR"
 sudo install -d -m 0755 "$BUNNYLAND_DATA_DIR/worlds"
 
@@ -141,7 +156,7 @@ ensure_letsencrypt_cert() {
 
   printf 'Requesting a Let'\''s Encrypt certificate for %s with certbot.\n' "$domain"
   sudo systemctl stop nginx 2>/dev/null || true
-  sudo nerdctl compose -p bunnyland "${compose_files[@]}" stop frontend 2>/dev/null || true
+  run_compose_quiet stop frontend 2>/dev/null || true
   certbot_args=(certonly --standalone --cert-name "$name" -d "$domain" --agree-tos --non-interactive)
   if [[ -n "${BUNNYLAND_CERT_EMAIL:-}" ]]; then
     certbot_args+=(--email "$BUNNYLAND_CERT_EMAIL" --no-eff-email)
@@ -205,7 +220,7 @@ chmod 0640 .env
 
 sudo systemctl stop bunnyland 2>/dev/null || true
 sudo systemctl stop nginx 2>/dev/null || true
-sudo nerdctl compose -p bunnyland "${compose_files[@]}" up -d
+run_compose_quiet up -d
 
 printf '\nBunnyland is starting at https://%s/\n' "$BUNNYLAND_DOMAIN"
 printf 'World data is mounted from %s.\n' "$BUNNYLAND_DATA_DIR"
