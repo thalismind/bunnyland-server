@@ -26,6 +26,25 @@ Adjust names and paths for your host.
 
 ## 1. Server install
 
+Install host packages. Use Python 3.12 on Ubuntu 24.04 and older:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  git curl nginx apache2-utils ufw certbot python3-certbot-nginx \
+  python3.12 python3.12-venv
+```
+
+On Ubuntu 26.04 and newer, the Python 3.12 packages are no longer present, so use
+Python 3.14 instead:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  git curl nginx apache2-utils ufw certbot python3-certbot-nginx \
+  python3.14 python3.14-venv
+```
+
 Create a service account and directories:
 
 ```bash
@@ -38,24 +57,27 @@ sudo install -d -m 0750 -o bunnyland -g bunnyland /etc/bunnyland
 sudo install -d -o www-data -g www-data /var/www/bunnyland
 ```
 
-Install host packages:
+Install `uv` for the service account:
 
 ```bash
-sudo apt update
-sudo apt install -y git curl nginx ufw certbot python3-certbot-nginx python3.12 python3.12-venv
 curl -LsSf https://astral.sh/uv/install.sh | sudo -u bunnyland sh
 ```
 
 Clone and install the server:
 
 ```bash
-sudo -u bunnyland git clone thalis-github:thalismind/bunnyland-server.git /opt/bunnyland/server
+sudo -u bunnyland git clone https://github.com/thalismind/bunnyland-server.git /opt/bunnyland/server
 cd /opt/bunnyland/server
-sudo -u bunnyland /opt/bunnyland/.local/bin/uv sync --extra server --extra llm --extra discord
+sudo -u bunnyland /opt/bunnyland/.local/bin/uv sync --python 3.12 --extra server --extra llm --extra discord
 ```
 
-Use the HTTPS or SSH deployment remote your VPS can access if it does not have the
-`thalis-github` SSH host alias configured.
+On Ubuntu 26.04 and newer, use Python 3.14 for the virtual environment:
+
+```bash
+sudo -u bunnyland /opt/bunnyland/.local/bin/uv sync --python 3.14 --extra server --extra llm --extra discord
+```
+
+Use the SSH deployment remote instead if your VPS needs deploy-key access.
 
 Create `/etc/bunnyland/server.env`:
 
@@ -82,7 +104,7 @@ sudo chmod 0640 /etc/bunnyland/server.env
 The current web client is a static snapshot/live inspector. It has no build step.
 
 ```bash
-sudo -u bunnyland git clone thalis-github:thalismind/bunnyland-web.git /opt/bunnyland/web
+sudo -u bunnyland git clone https://github.com/thalismind/bunnyland-web.git /opt/bunnyland/web
 ```
 
 Deploy-specific web client settings should live outside the web checkout so `git pull` stays
@@ -111,7 +133,7 @@ sudo -u bunnyland ./serve.sh 8080
 The project homepage is also static and has no build step:
 
 ```bash
-sudo -u bunnyland git clone thalis-github:thalismind/bunnyland-home.git /opt/bunnyland/home
+sudo -u bunnyland git clone https://github.com/thalismind/bunnyland-home.git /opt/bunnyland/home
 ```
 
 The example nginx config below serves this at `https://example.com/` and redirects
@@ -243,11 +265,9 @@ curl -fsS http://127.0.0.1:8765/health
 Serve the homepage at the apex domain, serve the web client at the sandbox domain, and proxy
 the Bunnyland API under `/api` on the sandbox domain.
 
-Install `apache2-utils` if you do not already have `htpasswd`, then create the editor
-password file:
+Create the editor password file:
 
 ```bash
-sudo apt install -y apache2-utils
 sudo install -d -o root -g www-data -m 0750 /etc/nginx/bunnyland
 sudo htpasswd -c /etc/nginx/bunnyland/world-editor.htpasswd editor
 sudo chown root:www-data /etc/nginx/bunnyland/world-editor.htpasswd
