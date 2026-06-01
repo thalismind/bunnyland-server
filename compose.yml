@@ -2,7 +2,7 @@ name: bunnyland
 
 services:
   server:
-    image: ghcr.io/thalismind/bunnyland-server:${BUNNYLAND_SERVER_TAG:-latest}
+    image: ghcr.io/thalismind/bunnyland-server:${BUNNYLAND_SERVER_TAG:-main}
     command:
       - bunnyland
       - serve
@@ -29,7 +29,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: ghcr.io/thalismind/bunnyland-web:${BUNNYLAND_WEB_TAG:-latest}
+    image: ghcr.io/thalismind/bunnyland-web:${BUNNYLAND_WEB_TAG:-main}
     depends_on:
       - server
     environment:

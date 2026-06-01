@@ -569,6 +569,8 @@ git clone https://github.com/thalismind/bunnyland-server.git server
 cd server
 cat > .env <<'ENV'
 BUNNYLAND_DATA_DIR=/var/lib/bunnyland
+BUNNYLAND_SERVER_TAG=main
+BUNNYLAND_WEB_TAG=main
 BUNNYLAND_WORLD_FILE=/data/worlds/main.json
 BUNNYLAND_HTTP_BIND=0.0.0.0:80
 BUNNYLAND_SERVER_NAME=_
@@ -592,10 +594,18 @@ To reload an existing saved world from the bind mount, use the load override:
 docker compose -f compose.yml -f compose.load.yml up -d
 ```
 
-For HTTPS with SNI handled inside the frontend container, issue a certificate first, then
-create the editor password file and run the TLS override:
+For HTTPS with SNI handled inside the frontend container, issue a Let's Encrypt certificate
+first, then create the editor password file and run the TLS override. The frontend
+container reads certificates from `/etc/letsencrypt` and does not generate self-signed
+certificates.
 
 ```bash
+sudo systemctl stop nginx || true
+sudo certbot certonly --standalone \
+  -d sandbox.example.com \
+  --agree-tos \
+  --email admin@example.com \
+  --no-eff-email
 sudo install -d -o root -g root -m 0755 /etc/nginx/bunnyland
 BUNNYLAND_ADMIN_USER=editor
 BUNNYLAND_ADMIN_PASSWORD='change-this'
@@ -619,6 +629,28 @@ same external origin.
 The default HTTP-only Compose stack blocks `/api/admin/`; the TLS override enables it with
 nginx basic auth. Change the admin username and password by recreating
 `world-editor.htpasswd`; no Compose file changes are required.
+
+To renew certificates with the same standalone method, stop the frontend while certbot
+binds port `80`, then start it again:
+
+```bash
+docker compose -f compose.yml -f compose.tls.yml stop frontend
+sudo certbot renew --standalone
+docker compose -f compose.yml -f compose.tls.yml up -d frontend
+```
+
+To use a custom favicon, bind-mount it over the image default with the favicon override:
+
+```bash
+cat >> .env <<'ENV'
+BUNNYLAND_FAVICON_FILE=/opt/bunnyland/favicon.png
+ENV
+docker compose -f compose.yml -f compose.tls.yml -f compose.favicon.yml up -d
+```
+
+The published containers are tagged by branch. For normal VPS installs, keep
+`BUNNYLAND_SERVER_TAG=main` and `BUNNYLAND_WEB_TAG=main`; use another branch name only when
+testing a branch-specific deployment.
 
 If TLS terminates somewhere else, remove the `443` listener/cert mounts, publish only
 `127.0.0.1:8080:80`, and point the outer proxy at the frontend container. Keep the `/api/`

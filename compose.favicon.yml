@@ -1,0 +1,4 @@
+services:
+  frontend:
+    volumes:
+      - ${BUNNYLAND_FAVICON_FILE:?set BUNNYLAND_FAVICON_FILE to a local favicon file}:/usr/share/nginx/html/favicon.png:ro

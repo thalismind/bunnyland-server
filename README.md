@@ -62,8 +62,16 @@ To reload an existing bind-mounted world instead of generating one, add `compose
 docker compose -f compose.yml -f compose.load.yml up -d
 ```
 
+To override the browser favicon, add `compose.favicon.yml` and point
+`BUNNYLAND_FAVICON_FILE` at a local PNG:
+
+```bash
+BUNNYLAND_FAVICON_FILE=/opt/bunnyland/favicon.png \
+  docker compose -f compose.yml -f compose.favicon.yml up -d
+```
+
 CI builds and publishes `ghcr.io/thalismind/bunnyland-server` on pushes to `main`, with
-`latest`, branch, and commit-SHA tags. The web repo publishes
+branch tags and `latest` for the default branch. The web repo publishes
 `ghcr.io/thalismind/bunnyland-web` with the same tag scheme.
 
 ## Documentation
