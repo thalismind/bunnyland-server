@@ -37,7 +37,7 @@ before starting containers.
 ```bash
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
-sudo install -d -m 0755 /opt/bunnyland
+sudo install -d -m 0755 -o "$USER" -g "$USER" /opt/bunnyland
 cd /opt/bunnyland
 if [ ! -d server ]; then
   git clone https://github.com/thalismind/bunnyland-server.git server
@@ -70,7 +70,8 @@ BUNNYLAND_CERT_EMAIL='admin@example.com'
 
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
-sudo install -d -m 0755 /opt/bunnyland "$BUNNYLAND_DATA_DIR"
+sudo install -d -m 0755 -o "$USER" -g "$USER" /opt/bunnyland
+sudo install -d -m 0755 "$BUNNYLAND_DATA_DIR"
 cd /opt/bunnyland
 if [ ! -d server ]; then
   git clone https://github.com/thalismind/bunnyland-server.git server
