@@ -7,7 +7,7 @@ from types import ModuleType
 
 import pytest
 
-from bunnyland.cli import assign_discord_controller, main, select_plugins
+from bunnyland.cli import assign_discord_controller, configure_memory_backend, main, select_plugins
 from bunnyland.core import (
     CharacterComponent,
     ControlledBy,
@@ -185,6 +185,25 @@ def test_world_meta_can_record_loaded_plugin_ids():
     meta = WorldMeta(plugins=(CORE_VERBS, "module_foo.bar"))
 
     assert meta.plugins == (CORE_VERBS, "module_foo.bar")
+
+
+def test_configure_memory_backend_can_install_chroma(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeChroma:
+        @staticmethod
+        def PersistentClient(path: str):
+            calls.append(path)
+            return object()
+
+    monkeypatch.setitem(sys.modules, "chromadb", FakeChroma)
+    actor = WorldActor()
+
+    configure_memory_backend(actor, "chroma", str(tmp_path / "memory"))
+
+    assert calls == [str(tmp_path / "memory")]
+    assert "take-note" in actor.available_command_types()
+    assert "remember" in actor.available_command_types()
 
 
 def test_cli_save_records_namespaced_imported_plugin(monkeypatch, tmp_path):

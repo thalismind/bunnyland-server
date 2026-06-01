@@ -7,6 +7,7 @@ inserted sequence number in the metadata.
 
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 from .store import MemoryEntry
@@ -15,7 +16,12 @@ from .store import MemoryEntry
 class ChromaMemoryStore:
     """Vector-backed store. ``chromadb`` is imported lazily so core stays light."""
 
-    def __init__(self, client=None, embedding_function=None) -> None:
+    def __init__(
+        self,
+        client=None,
+        embedding_function=None,
+        persist_path: str | Path | None = None,
+    ) -> None:
         if client is None:
             try:
                 import chromadb
@@ -23,7 +29,11 @@ class ChromaMemoryStore:
                 raise RuntimeError(
                     "ChromaMemoryStore requires the 'chroma' extra: pip install bunnyland[chroma]"
                 ) from exc
-            client = chromadb.EphemeralClient()
+            client = (
+                chromadb.PersistentClient(path=str(persist_path))
+                if persist_path is not None
+                else chromadb.EphemeralClient()
+            )
         self._client = client
         self._embedding_function = embedding_function
         self._counter = 0

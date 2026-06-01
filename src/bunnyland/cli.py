@@ -20,6 +20,7 @@ from .core.world_actor import WorldActor
 from .discord.claim import assign_discord_controller
 from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
+from .memory import install_memory
 from .persistence import WorldMeta, load_world, save_world
 from .plugins import (
     PluginError,
@@ -64,6 +65,16 @@ def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[Worl
     actor = WorldActor()
     applied = apply_plugins(chosen, actor)
     return actor, applied
+
+
+def configure_memory_backend(actor: WorldActor, backend: str, path: str | None = None) -> None:
+    if backend == "in-memory":
+        return
+    if backend != "chroma":
+        raise ValueError(f"unknown memory backend {backend!r}")
+    from .memory.chroma import ChromaMemoryStore
+
+    install_memory(actor, ChromaMemoryStore(persist_path=path))
 
 
 def _env_int(name: str) -> int | None:
@@ -163,6 +174,16 @@ async def _serve(args) -> None:
         )
         print(f"Generated world {args.seed!r} via {generator.name!r}: "
               f"{len(result.rooms)} rooms, {len(result.characters)} characters.")
+
+    try:
+        configure_memory_backend(actor, args.memory_backend, args.memory_path)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.memory_backend != "in-memory":
+        print(
+            f"Using {args.memory_backend!r} memory backend"
+            f"{f' at {args.memory_path}' if args.memory_path else ''}."
+        )
 
     if args.llm:
         from .llm_agents import OllamaAgent
@@ -295,6 +316,17 @@ def main(argv: list[str] | None = None) -> int:
         "--load-paused",
         action="store_true",
         help="start the tick cycle paused when reloading with --load",
+    )
+    serve.add_argument(
+        "--memory-backend",
+        choices=("in-memory", "chroma"),
+        default="in-memory",
+        help="memory store backend for notes and remember/search",
+    )
+    serve.add_argument(
+        "--memory-path",
+        default=None,
+        help="persistent Chroma directory when --memory-backend=chroma",
     )
     serve.add_argument("--save", default=None, help="save the world to this path on exit")
     serve.add_argument(
