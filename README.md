@@ -35,6 +35,31 @@ echo 'OLLAMA_CLOUD_API_KEY=sk-...' > .env
 uv run bunnyland serve --llm --generator recursive --ticks 20
 ```
 
+## Docker Compose
+
+The server repo includes a ready-to-run Compose stack using published containers:
+
+```bash
+cp .env.example .env
+docker compose up -d
+```
+
+Open `http://localhost/`. The `frontend` container serves the web client and proxies
+same-origin `/api/` requests to the private `server` container. Server state is bind-mounted
+from `BUNNYLAND_DATA_DIR` into `/data` so admins can inspect saved worlds directly.
+For HTTPS/SNI deployments, set `BUNNYLAND_SERVER_NAME` and `BUNNYLAND_CERT_NAME` in `.env`
+and run `compose.tls.yml` as described in the VPS Docker setup.
+
+For local image development, add the build override:
+
+```bash
+docker compose -f compose.yml -f compose.build.yml up -d --build
+```
+
+CI builds and publishes `ghcr.io/thalismind/bunnyland-server` on pushes to `main`, with
+`latest`, branch, and commit-SHA tags. The web repo publishes
+`ghcr.io/thalismind/bunnyland-web` with the same tag scheme.
+
 ## Documentation
 
 - **[The Vision](docs/vision.md)** — what bunnyland is trying to be, and what belongs in

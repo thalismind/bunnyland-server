@@ -108,6 +108,31 @@ The `bunnyland` account is created with `/usr/sbin/nologin` for security. That m
 `sudo su - bunnyland` is expected to fail with `This account is currently not available`.
 Use `sudo -u bunnyland <command>` instead.
 
+The account may also have a locked password because it was created as a system user. That
+does not stop systemd or `sudo -u bunnyland ...` from working. Check both the shell and
+password state with:
+
+```bash
+getent passwd bunnyland
+sudo passwd -S bunnyland
+```
+
+For temporary interactive maintenance, give the account a real shell and unlock it:
+
+```bash
+sudo usermod --shell /bin/bash bunnyland
+sudo passwd bunnyland
+sudo passwd -u bunnyland
+sudo su - bunnyland
+```
+
+When you are done, restore the service-account posture:
+
+```bash
+sudo usermod --shell /usr/sbin/nologin bunnyland
+sudo passwd -l bunnyland
+```
+
 ## 2. Web client install
 
 The current web client is a static snapshot/live inspector. It has no build step.
@@ -430,6 +455,7 @@ Useful checks:
 ```bash
 curl -fsS https://example.com/
 curl -fsS -I https://home.example.com/
+curl -fsS https://sandbox.example.com/
 curl -fsS https://sandbox.example.com/config.json
 curl -fsS https://sandbox.example.com/api/health
 curl -fsS https://sandbox.example.com/api/world/snapshot
@@ -463,6 +489,7 @@ authenticated save should include the server-side save path.
 If the page loads but **Connect Live** fails, check:
 
 - the Server field includes `/api` when using the nginx config above;
+- `https://sandbox.example.com/` serves the web checkout rather than the homepage or a 404;
 - nginx has the websocket `Upgrade` and `Connection` headers;
 - `/etc/nginx/conf.d/bunnyland-upgrade-map.conf` exists before running `nginx -t`;
 - `bunnyland.service` is listening on `127.0.0.1:8765`;
@@ -505,64 +532,88 @@ curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health || true
 The last command should time out or fail. The public API should be available only through
 `https://sandbox.example.com/api/`.
 
-## 8. Optional Docker deployment
+## 8. VPS Docker setup
 
-The repository does not require Docker, but the server can run in a container. One simple
-server image is:
+For a ready-to-run container deployment, keep the public edge in one frontend container and
+keep the Bunnyland API private on the Compose network:
 
-```dockerfile
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm
+- `server`: runs `bunnyland serve` on `0.0.0.0:8765`, with no host port published;
+- `frontend`: runs nginx, serves the static web checkout, and proxies `/api/` to
+  `http://server:8765/`.
 
-WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
-COPY src ./src
-RUN uv sync --frozen --extra server --extra llm --extra discord
+This avoids SNI/hostname ambiguity because only nginx binds public `80`/`443`. TLS SNI and
+HTTP `Host` routing both happen in that frontend container. The server container only sees
+plain HTTP from nginx over Docker DNS (`server:8765`).
 
-CMD ["uv", "run", "bunnyland", "serve", "--ticks", "0", "--api-host", "0.0.0.0", "--api-port", "8765", "--save", "/data/worlds/main.json", "--autosave-every", "20"]
+The server repo owns the Compose files:
+
+- `compose.yml` runs `ghcr.io/thalismind/bunnyland-server` and
+  `ghcr.io/thalismind/bunnyland-web`;
+- `compose.tls.yml` swaps the frontend nginx template to terminate HTTPS;
+- `deploy/nginx/frontend-tls.conf` is the TLS nginx template used by the frontend image.
+
+The Compose service names are deliberately `server` and `frontend`. The frontend nginx
+config proxies to `http://server:8765/`, which is Docker DNS for the server service. The
+container images are `ghcr.io/thalismind/bunnyland-server` and
+`ghcr.io/thalismind/bunnyland-web`.
+
+By default, server data is bind-mounted from `./data` into `/data` in the server container.
+For a VPS, point it at an admin-visible directory such as `/var/lib/bunnyland`:
+
+```bash
+sudo install -d -m 0755 /opt/bunnyland
+sudo install -d -m 0755 /var/lib/bunnyland
+cd /opt/bunnyland
+git clone https://github.com/thalismind/bunnyland-server.git server
+cd server
+cat > .env <<'ENV'
+BUNNYLAND_DATA_DIR=/var/lib/bunnyland
+BUNNYLAND_HTTP_BIND=0.0.0.0:80
+BUNNYLAND_SERVER_NAME=_
+ENV
 ```
 
-Example compose file:
+Start it:
 
-```yaml
-services:
-  server:
-    build: /opt/bunnyland/server
-    env_file: /etc/bunnyland/server.env
-    command:
-      - uv
-      - run
-      - bunnyland
-      - serve
-      - --llm
-      - --generator
-      - recursive
-      - --ticks
-      - "0"
-      - --api-host
-      - 0.0.0.0
-      - --api-port
-      - "8765"
-      - --save
-      - /data/worlds/main.json
-      - --autosave-every
-      - "20"
-    volumes:
-      - /var/lib/bunnyland:/data
-    ports:
-      - "127.0.0.1:8765:8765"
-    restart: unless-stopped
-
-  web:
-    image: nginx:alpine
-    volumes:
-      - /opt/bunnyland/web:/usr/share/nginx/html:ro
-    ports:
-      - "127.0.0.1:8080:80"
-    restart: unless-stopped
+```bash
+docker compose up -d
+docker compose logs -f server frontend
 ```
 
-You can keep the host nginx config above and change its web `root` to proxy or serve the
-containerized web service, depending on how you prefer to manage static assets.
+Then open `http://YOUR_VPS_PUBLIC_IP/`. The frontend image ships a default
+`/config.json` that points the browser at same-origin `/api/`, so the web UI and API proxy
+come up together.
+
+For HTTPS with SNI handled inside the frontend container, issue a certificate first, then
+create the editor password file and run the TLS override:
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/nginx/bunnyland
+sudo htpasswd -c /etc/nginx/bunnyland/world-editor.htpasswd editor
+cat >> .env <<'ENV'
+BUNNYLAND_SERVER_NAME=sandbox.example.com
+BUNNYLAND_CERT_NAME=sandbox.example.com
+BUNNYLAND_HTTPS_BIND=0.0.0.0:443
+ENV
+docker compose -f compose.yml -f compose.tls.yml up -d
+```
+
+Change the public domain by changing `BUNNYLAND_SERVER_NAME`. Set `BUNNYLAND_CERT_NAME` to
+the matching certificate directory under `/etc/letsencrypt/live`. The TLS override mounts
+`${BUNNYLAND_LETSENCRYPT_DIR:-/etc/letsencrypt}` and
+`${BUNNYLAND_NGINX_AUTH_DIR:-/etc/nginx/bunnyland}` read-only, and keeps the `/api/` proxy
+in the frontend nginx container, so the browser always loads the web page and API from the
+same external origin.
+The default HTTP-only Compose stack blocks `/api/admin/`; the TLS override enables it with
+nginx basic auth.
+
+If TLS terminates somewhere else, remove the `443` listener/cert mounts, publish only
+`127.0.0.1:8080:80`, and point the outer proxy at the frontend container. Keep the `/api/`
+proxy in the frontend nginx config so the browser always loads the web page and API from
+the same external origin.
+
+The systemd setup above and the Docker setup are alternatives. Do not run both against the
+same world save path at the same time.
 
 ## 9. Connect Discord as a bot
 

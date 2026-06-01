@@ -1,0 +1,40 @@
+name: bunnyland
+
+services:
+  server:
+    image: ghcr.io/thalismind/bunnyland-server:${BUNNYLAND_SERVER_TAG:-latest}
+    command:
+      - bunnyland
+      - serve
+      - --generator
+      - ${BUNNYLAND_GENERATOR:-lifesim-demo}
+      - --ticks
+      - "0"
+      - --tick-seconds
+      - ${BUNNYLAND_TICK_SECONDS:-30}
+      - --time-scale
+      - ${BUNNYLAND_TIME_SCALE:-1800}
+      - --api-host
+      - 0.0.0.0
+      - --api-port
+      - "8765"
+      - --save
+      - /data/worlds/main.json
+      - --autosave-every
+      - ${BUNNYLAND_AUTOSAVE_EVERY:-20}
+    volumes:
+      - ${BUNNYLAND_DATA_DIR:-./data}:/data
+    expose:
+      - "8765"
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/thalismind/bunnyland-web:${BUNNYLAND_WEB_TAG:-latest}
+    depends_on:
+      - server
+    environment:
+      BUNNYLAND_API_UPSTREAM: http://server:8765
+      BUNNYLAND_SERVER_NAME: ${BUNNYLAND_SERVER_NAME:-_}
+    ports:
+      - "${BUNNYLAND_HTTP_BIND:-0.0.0.0:80}:80"
+    restart: unless-stopped
