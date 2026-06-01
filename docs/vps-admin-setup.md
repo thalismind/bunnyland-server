@@ -558,10 +558,12 @@ config proxies to `http://server:8765/`, which is Docker DNS for the server serv
 container images are `ghcr.io/thalismind/bunnyland-server` and
 `ghcr.io/thalismind/bunnyland-web`.
 
-For a VPS, use the setup script. It writes `.env`, creates the admin password file,
-requests or reuses a Let's Encrypt certificate with certbot, and starts the checked-in
-Compose files. Fill in only your own domain name, admin username/password, and host data
-folder. Optionally provide a favicon path and an existing world save file.
+For a VPS, use the setup script. It installs the container runtime if needed, writes
+`.env`, creates the admin password file, requests or reuses a Let's Encrypt certificate
+with certbot, stops the old `bunnyland` and `nginx` services if they exist, and starts the
+checked-in Compose files with `sudo nerdctl compose`. Fill in only your own domain name,
+admin username/password, and host data folder. Optionally provide a favicon path and an
+existing world save file.
 
 Copy this block, change the values in the first section, and paste it into the VPS:
 
@@ -596,7 +598,8 @@ together.
 
 To start from an existing saved world, add `BUNNYLAND_WORLD_SAVE`. If the file is already
 under `BUNNYLAND_DATA_DIR`, the script loads it in place; otherwise it copies the save into
-`$BUNNYLAND_DATA_DIR/worlds/` first:
+`$BUNNYLAND_DATA_DIR/worlds/` first. Before starting containers, the script creates a
+timestamped backup next to the selected save file.
 
 ```bash
 BUNNYLAND_DOMAIN='sandbox.example.com' \
@@ -632,6 +635,12 @@ The script starts the checked-in Compose files:
   exists in the data directory;
 - `compose.tls.yml`;
 - `compose.favicon.yml` when `BUNNYLAND_FAVICON_FILE` is provided.
+
+The checked-in Docker Compose path is intentionally the simple web/API deployment. It loads
+and saves the selected world, serves the web client, proxies `/api/`, enables websocket
+upgrades, and protects `/api/admin/` with nginx basic auth. It does not currently reproduce
+systemd-only flags such as `--llm`, `--discord`, or `--memory-backend chroma`; keep the
+systemd setup if those are required until they are added as first-class Docker settings.
 
 The generated `.env` is intentionally small and contains only deployment knobs: domain,
 certificate name, data directory, image tags, ports, optional world save path, and optional

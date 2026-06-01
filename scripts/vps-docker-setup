@@ -62,6 +62,7 @@ install_nerdctl() {
 }
 
 container_world_file="/data/worlds/main.json"
+host_world_file="$BUNNYLAND_DATA_DIR/worlds/main.json"
 compose_files=(-f compose.yml)
 
 sudo install -d -m 0755 "$BUNNYLAND_DATA_DIR"
@@ -73,9 +74,11 @@ if [[ -n "$world_save" ]]; then
   data_dir_real="$(readlink -f "$BUNNYLAND_DATA_DIR")"
   if [[ "$world_save" == "$data_dir_real/"* ]]; then
     container_world_file="/data/${world_save#"$data_dir_real/"}"
+    host_world_file="$world_save"
   else
-    sudo cp "$world_save" "$BUNNYLAND_DATA_DIR/worlds/$(basename "$world_save")"
-    container_world_file="/data/worlds/$(basename "$world_save")"
+    host_world_file="$BUNNYLAND_DATA_DIR/worlds/$(basename "$world_save")"
+    sudo cp "$world_save" "$host_world_file"
+    container_world_file="/data/worlds/$(basename "$host_world_file")"
   fi
   compose_files+=(-f compose.load.yml)
 elif [[ -f "$BUNNYLAND_DATA_DIR/worlds/main.json" ]]; then
@@ -87,6 +90,12 @@ compose_files+=(-f compose.tls.yml)
 if [[ -n "$favicon_file" ]]; then
   [[ -f "$favicon_file" ]] || die "BUNNYLAND_FAVICON_FILE does not exist: $favicon_file"
   compose_files+=(-f compose.favicon.yml)
+fi
+
+if [[ -f "$host_world_file" ]]; then
+  backup_file="${host_world_file}.bak-$(date -u +%Y%m%d%H%M%S)"
+  sudo cp -a "$host_world_file" "$backup_file"
+  printf 'Backed up existing world save to %s.\n' "$backup_file"
 fi
 
 install_nerdctl
