@@ -400,6 +400,9 @@ class WaterCropHandler:
             soil,
             WateredComponent(watered_at_epoch=ctx.epoch, expires_at_epoch=expires_at),
         )
+        if soil.has_component(CropGrowthComponent):
+            growth = soil.get_component(CropGrowthComponent)
+            replace_component(soil, replace(growth, last_updated_epoch=ctx.epoch))
         return ok(
             CropWateredEvent(
                 **ctx.event_base(

@@ -174,6 +174,30 @@ async def test_fertilizer_speeds_crop_growth():
     assert container_of(scenario.actor.world.get_entity(fertilizer)) is None
 
 
+async def test_watering_starts_growth_from_watered_epoch():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    soil = _soil(scenario)
+    seed = _seed(scenario, growth_days=1.0)
+
+    await scenario.actor.submit(_cmd(scenario, "till", soil_id=str(soil)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "plant", soil_id=str(soil), seed_id=str(seed)))
+    await scenario.actor.tick(0.0)
+
+    await scenario.actor.submit(_cmd(scenario, "water-crop", soil_id=str(soil)))
+    await scenario.actor.tick(DAY)
+
+    soil_entity = scenario.actor.world.get_entity(soil)
+    assert soil_entity.get_component(CropGrowthComponent).progress_days == 0.0
+    assert soil_entity.get_component(CropComponent).ready is False
+
+    await scenario.actor.tick(DAY)
+
+    assert soil_entity.get_component(CropGrowthComponent).progress_days == 1.0
+    assert soil_entity.get_component(CropComponent).ready is True
+
+
 async def test_harvest_rejects_before_crop_is_ready():
     scenario = build_scenario()
     _install(scenario.actor)

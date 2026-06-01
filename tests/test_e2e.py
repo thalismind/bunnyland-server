@@ -18,16 +18,23 @@ import re
 import pytest
 
 from bunnyland.core import (
+    ActionPointsComponent,
     CharacterComponent,
     ContainerComponent,
+    ContainmentMode,
+    Contains,
     ControlledBy,
     FocusPointsComponent,
+    IdentityComponent,
     LLMControllerComponent,
     MemoryProfileComponent,
+    PortableComponent,
     SuspendedComponent,
     WorldActor,
     container_of,
+    parse_entity_id,
     replace_component,
+    spawn_entity,
 )
 from bunnyland.core.components import RoomComponent, WritableComponent
 from bunnyland.core.edges import ExitTo
@@ -41,10 +48,18 @@ from bunnyland.core.events import (
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
+from bunnyland.mechanics.gardensim import (
+    CropComponent,
+    CropHarvestedEvent,
+    CropReadyEvent,
+    HarvestableComponent,
+    SeedComponent,
+    SoilComponent,
+)
 from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
 from bunnyland.memory import install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
-from bunnyland.plugins import apply_plugins, bunnyland_plugins
+from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_prompt_fragments
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.worldgen import StubWorldBuilder, instantiate
 
@@ -242,6 +257,77 @@ async def test_scripted_playthrough_processes_actions_each_round():
     world = actor.world
     assert container_of(world.get_entity(result.objects["paper"])) == hazel
     assert container_of(world.get_entity(hazel)) == result.rooms["tunnel"]
+
+
+async def test_scripted_agent_grows_and_harvests_garden_crop():
+    actor, _proposal, result = await _new_world()
+    hazel = result.characters["hazel"]
+    character = actor.world.get_entity(hazel)
+    replace_component(
+        character,
+        ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=0.0),
+    )
+    room_id = container_of(character)
+    assert room_id is not None
+    room = actor.world.get_entity(room_id)
+    soil = spawn_entity(
+        actor.world,
+        [IdentityComponent(name="garden bed", kind="soil"), SoilComponent()],
+    )
+    seeds = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="radish seeds", kind="seed"),
+            PortableComponent(can_pick_up=True),
+            SeedComponent(
+                crop_type="radish",
+                growth_days=1.0,
+                yield_item="radish",
+                yield_quantity=2,
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), seeds.id)
+
+    ready: list[CropReadyEvent] = []
+    harvested: list[CropHarvestedEvent] = []
+    rejected: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(CropReadyEvent, ready.append)
+    actor.bus.subscribe(CropHarvestedEvent, harvested.append)
+    actor.bus.subscribe(CommandRejectedEvent, rejected.append)
+
+    agent = ScriptedAgent(
+        [
+            ToolCall("till", {"soil_id": "garden bed"}),
+            ToolCall("plant", {"soil_id": "garden bed", "seed_id": "radish seeds"}),
+            ToolCall("water_crop", {"soil_id": "garden bed"}),
+            ToolCall("wait", {}),
+            ToolCall("harvest_crop", {"soil_id": "garden bed"}),
+        ]
+    )
+    builder = PromptBuilder(
+        actor.world,
+        fragment_providers=collect_prompt_fragments(bunnyland_plugins()),
+    )
+    loop = GameLoop(
+        actor,
+        ControllerDispatch(actor, builder, agent),
+        tick_seconds=1.0,
+        time_scale=24 * 60 * 60,
+    )
+
+    await loop.run(max_ticks=6)
+
+    assert rejected == []
+    assert len(ready) == 1
+    assert len(harvested) == 1
+    soil_entity = actor.world.get_entity(soil.id)
+    assert not soil_entity.has_component(CropComponent)
+    assert not soil_entity.has_component(HarvestableComponent)
+    harvested_item = actor.world.get_entity(parse_entity_id(harvested[0].item_id))
+    assert harvested_item.get_component(IdentityComponent).name == "radish x2"
+    assert container_of(harvested_item) == hazel
 
 
 async def test_llm_agent_notes_can_be_found_by_chroma_vector_synonyms():
