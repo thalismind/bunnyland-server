@@ -6,17 +6,19 @@ die() {
   exit 1
 }
 
-need() {
-  command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
-}
-
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 
 : "${BUNNYLAND_DOMAIN:?set BUNNYLAND_DOMAIN to your public domain, for example sandbox.example.com}"
 : "${BUNNYLAND_DATA_DIR:?set BUNNYLAND_DATA_DIR to the host data directory, for example /var/lib/bunnyland}"
-: "${BUNNYLAND_ADMIN_USER:?set BUNNYLAND_ADMIN_USER to the admin username}"
-: "${BUNNYLAND_ADMIN_PASSWORD:?set BUNNYLAND_ADMIN_PASSWORD to the admin password}"
+
+# Admin credentials are required to (re)generate the world-editor htpasswd, but a rerun may
+# reuse the existing htpasswd instead (see the credentials block below).
+admin_user="${BUNNYLAND_ADMIN_USER:-}"
+admin_password="${BUNNYLAND_ADMIN_PASSWORD:-}"
+if [[ -n "$admin_user" && -z "$admin_password" ]] || [[ -z "$admin_user" && -n "$admin_password" ]]; then
+  die "set both BUNNYLAND_ADMIN_USER and BUNNYLAND_ADMIN_PASSWORD, or neither to reuse existing credentials"
+fi
 
 world_save="${BUNNYLAND_WORLD_SAVE:-}"
 favicon_file="${BUNNYLAND_FAVICON_FILE:-}"
@@ -39,11 +41,13 @@ tick_seconds="${BUNNYLAND_TICK_SECONDS:-30}"
 time_scale="${BUNNYLAND_TIME_SCALE:-1800}"
 autosave_every="${BUNNYLAND_AUTOSAVE_EVERY:-20}"
 
+# Explicit BUNNYLAND_ENABLE_LLM=0 and BUNNYLAND_ENABLE_DISCORD=0 force the offline smoke
+# test even if Ollama/Discord secrets are present in the environment.
 full_deployment=0
-if [[ "$enable_llm" == "0" && "$enable_discord" == "0" ]]; then
-  full_deployment=0
-elif [[ "$enable_llm" == "1" || "$enable_discord" == "1" || -n "${OLLAMA_CLOUD_API_KEY:-}" || -n "${DISCORD_TOKEN:-}" ]]; then
-  full_deployment=1
+if [[ "$enable_llm" != "0" || "$enable_discord" != "0" ]]; then
+  if [[ "$enable_llm" == "1" || "$enable_discord" == "1" || -n "${OLLAMA_CLOUD_API_KEY:-}" || -n "${DISCORD_TOKEN:-}" ]]; then
+    full_deployment=1
+  fi
 fi
 
 if [[ "$full_deployment" == "1" ]]; then
@@ -196,17 +200,14 @@ if [[ -f "$host_world_file" ]]; then
 fi
 
 select_container_runtime
-if [[ "$enable_tls" == "1" || "$configure_ufw" == "1" ]]; then
-  packages=()
-  if [[ "$enable_tls" == "1" ]]; then
-    packages+=(certbot)
-  fi
-  if [[ "$configure_ufw" == "1" ]]; then
-    packages+=(ufw)
-  fi
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+packages=(openssl)
+if [[ "$enable_tls" == "1" ]]; then
+  packages+=(certbot)
 fi
-need openssl
+if [[ "$configure_ufw" == "1" ]]; then
+  packages+=(ufw)
+fi
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
 
 yaml_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
@@ -217,13 +218,7 @@ shell_quote() {
 }
 
 port_spec() {
-  local bind="$1"
-  local target="$2"
-  if [[ "$bind" == *:* ]]; then
-    printf '%s:%s' "$bind" "$target"
-  else
-    printf '%s:%s' "$bind" "$target"
-  fi
+  printf '%s:%s' "$1" "$2"
 }
 
 render_server_service() {
@@ -371,12 +366,37 @@ configure_firewall() {
   sudo ufw --force enable
 }
 
+htpasswd_file="$auth_dir/world-editor.htpasswd"
 sudo install -d -o root -g root -m 0755 "$auth_dir"
-printf '%s:%s\n' "$BUNNYLAND_ADMIN_USER" "$(openssl passwd -apr1 "$BUNNYLAND_ADMIN_PASSWORD")" \
-  | sudo tee "$auth_dir/world-editor.htpasswd" >/dev/null
-sudo chmod 0644 "$auth_dir/world-editor.htpasswd"
+if [[ -n "$admin_user" && -n "$admin_password" ]]; then
+  printf '%s:%s\n' "$admin_user" "$(openssl passwd -apr1 "$admin_password")" \
+    | sudo tee "$htpasswd_file" >/dev/null
+  sudo chmod 0644 "$htpasswd_file"
+elif sudo test -f "$htpasswd_file"; then
+  printf 'Reusing existing world-editor credentials at %s.\n' "$htpasswd_file"
+  admin_user="$(sudo head -n1 "$htpasswd_file" | cut -d: -f1)"
+else
+  die "set BUNNYLAND_ADMIN_USER and BUNNYLAND_ADMIN_PASSWORD (no existing $htpasswd_file to reuse)"
+fi
 
 render_user_compose
+
+warn_if_dns_mismatch() {
+  local domain="$1"
+  local resolved public
+  resolved="$(getent ahosts "$domain" 2>/dev/null | awk '{print $1}' | sort -u)"
+  if [[ -z "$resolved" ]]; then
+    printf 'warning: %s does not resolve to any IP yet. certbot needs a DNS A record\n' "$domain" >&2
+    printf '         pointing at this server before it can issue a certificate.\n' >&2
+    return
+  fi
+  public="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  if [[ -n "$public" ]] && ! grep -qxF "$public" <<<"$resolved"; then
+    printf 'warning: %s resolves to %s but this server'\''s public IP looks like %s.\n' \
+      "$domain" "$(printf '%s' "$resolved" | paste -sd, -)" "$public" >&2
+    printf '         If that is wrong, certbot will fail. Fix the DNS A record and wait for propagation.\n' >&2
+  fi
+}
 
 ensure_letsencrypt_cert() {
   local domain="$1"
@@ -387,6 +407,7 @@ ensure_letsencrypt_cert() {
     return
   fi
 
+  warn_if_dns_mismatch "$domain"
   printf 'Requesting a Let'\''s Encrypt certificate for %s with certbot.\n' "$domain"
   run_compose_quiet stop frontend 2>/dev/null || true
   certbot_args=(certonly --standalone --cert-name "$name" -d "$domain" --agree-tos --non-interactive)
@@ -420,5 +441,5 @@ fi
 
 printf '\nBunnyland is starting at %s://%s/\n' "$public_scheme" "$BUNNYLAND_DOMAIN"
 printf 'World data is mounted from %s.\n' "$BUNNYLAND_DATA_DIR"
-printf 'Admin username is %s. The password is the BUNNYLAND_ADMIN_PASSWORD you supplied.\n' "$BUNNYLAND_ADMIN_USER"
+printf 'Admin username is %s (world-editor login).\n' "$admin_user"
 printf 'Deployment settings were written to compose.user.yml.\n'
