@@ -23,7 +23,7 @@ from ..core.world_actor import WorldActor
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call
 from .claim import assign_discord_controller, discord_controlled_character, list_character_names
-from .view import render_action_result, render_help, render_look
+from .view import render_action_result, render_help, render_look, split_discord_text
 
 MOVE_RESULT_TIMEOUT_SECONDS = 120.0
 
@@ -165,7 +165,8 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
         @self.client.command(name="help")
         async def help_command(ctx, *, topic: str | None = None):
-            await ctx.send(render_help(topic, self.actor))
+            for chunk in split_discord_text(render_help(topic, self.actor)):
+                await ctx.send(chunk)
 
         @self.client.event
         async def on_ready():

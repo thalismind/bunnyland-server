@@ -19,6 +19,7 @@ from bunnyland.discord import (
     render_help,
     render_look,
     render_move_result,
+    split_discord_text,
 )
 
 
@@ -45,19 +46,36 @@ def test_help_lists_available_discord_verbs(scenario):
     assert "World verbs available now:" in text
     assert "move" in text
     assert "take-control" in text
+    assert "move:" not in text
 
 
 def test_help_agents_describes_llm_agent_rules(scenario):
     text = render_help("agents", scenario.actor)
 
-    assert "Agent rules:" in text
+    assert "Agent help:" in text
     assert "persistent ECS world" in text
     assert "verb/tool" in text
     assert "Action points" in text
     assert "Focus points" in text
     assert "cannot mutate ECS directly" in text
+    assert "!help verbs" in text
+    assert "World verbs available now:" not in text
+
+
+def test_help_verbs_lists_available_discord_verbs_with_arguments(scenario):
+    text = render_help("verbs", scenario.actor)
+
     assert "World verbs available now:" in text
-    assert "move" in text
+    assert "move: direction, exit_id" in text
+    assert "take-control: no documented arguments" in text
+
+
+def test_split_discord_text_keeps_chunks_below_the_api_limit():
+    text = "x" * 2100
+    chunks = split_discord_text(text, limit=1000)
+
+    assert all(len(chunk) <= 1000 for chunk in chunks)
+    assert "".join(chunks) == text
 
 
 def test_help_command_stubs_action_help(scenario):

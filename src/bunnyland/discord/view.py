@@ -9,6 +9,9 @@ from ..llm_agents.tools import tool_schemas
 from ..projections import RoomSummaryProjection
 from .claim import discord_controlled_character
 
+DISCORD_MESSAGE_LIMIT = 2000
+HELP_MESSAGE_LIMIT = 1900
+
 HUMAN_HELP_TEXT = "\n".join(
     [
         "Available commands:",
@@ -24,37 +27,39 @@ HUMAN_HELP_TEXT = "\n".join(
 HELP_TEXT = HUMAN_HELP_TEXT
 
 AGENT_HELP_LINES = [
-    "Agent rules:",
-    "You are a character inside a persistent ECS world, not an omniscient narrator.",
+    "Agent help:",
+    "You are a character in a persistent ECS world, not an omniscient narrator.",
     (
-        "Your prompt is your character's perspective: current room, visible entities, "
-        "memories, needs, and mechanic-specific context."
+        "Your prompt is your perspective: room, visible entities, memories, needs, "
+        "and loaded mechanic context."
     ),
     (
-        "Act by choosing one available verb/tool with explicit arguments; the engine "
+        "Act by choosing one available verb/tool with explicit arguments. The engine "
         "validates cost, reachability, controller generation, policy, and state."
     ),
     (
-        "Action points pay for physical/world actions and usually regenerate over time. "
+        "Action points pay for physical/world actions and usually regenerate over time."
+    ),
+    (
         "Focus points pay for private mental actions like notes, memory, and reflection."
     ),
     (
         "Inputs are names, directions, free text, and other prompt-visible references. "
-        "Entity names are resolved by the server before commands run."
+        "The server resolves entity names before commands run."
     ),
     (
-        "Outputs are queued command results, domain events, updated prompts, memories, "
-        "and world state changes visible to your character."
+        "Outputs are command results, events, updated prompts, memories, and visible "
+        "world changes."
     ),
     (
         "You cannot mutate ECS directly, inspect hidden state, bypass consent/policy, "
-        "or do anything a human controller could not do through the same verbs."
+        "or do anything a human could not do through the same verbs."
     ),
     (
-        "Prefer concrete, small actions. If a reference is ambiguous or missing, use "
-        "look, say, remember, or another in-world action to gather context."
+        "Prefer concrete, small actions. If context is missing, use look, say, remember, "
+        "or another in-world action."
     ),
-    "Use !help <verb> for a short summary of a specific action surface.",
+    "Use !help verbs for the full current verb list, or !help <verb> for one action.",
 ]
 AGENT_HELP_TEXT = "\n".join(AGENT_HELP_LINES)
 
@@ -65,11 +70,77 @@ def _available_verbs(actor: WorldActor | None) -> tuple[str, ...]:
     return actor.available_command_types()
 
 
-def _verb_lines(actor: WorldActor | None) -> list[str]:
+def _wrapped_inline_lines(header: str, items: tuple[str, ...]) -> list[str]:
+    lines = ["", header]
+    current = ""
+    for item in items:
+        piece = item if not current else f", {item}"
+        if current and len(current) + len(piece) > 900:
+            lines.append(current)
+            current = item
+        else:
+            current += piece
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _verb_name_lines(actor: WorldActor | None) -> list[str]:
     verbs = _available_verbs(actor)
     if not verbs:
         return []
-    return ["", "World verbs available now:", ", ".join(verbs)]
+    return _wrapped_inline_lines("World verbs available now:", verbs)
+
+
+def _tool_argument_index() -> dict[str, str]:
+    by_verb: dict[str, str] = {}
+    for schema in tool_schemas():
+        function = schema.get("function", {})
+        name = str(function.get("name") or "")
+        properties = function.get("parameters", {}).get("properties", {})
+        args = ", ".join(properties) if isinstance(properties, dict) else ""
+        summary = args or "no arguments"
+        by_verb[name] = summary
+        by_verb[name.replace("_", "-")] = summary
+    return by_verb
+
+
+def _verb_detail_lines(actor: WorldActor | None) -> list[str]:
+    verbs = _available_verbs(actor)
+    if not verbs:
+        return []
+    args_by_verb = _tool_argument_index()
+    lines = ["World verbs available now:"]
+    for verb in verbs:
+        args = args_by_verb.get(verb, "no documented arguments")
+        lines.append(f"{verb}: {args}")
+    return lines
+
+
+def split_discord_text(text: str, *, limit: int = HELP_MESSAGE_LIMIT) -> tuple[str, ...]:
+    """Split a Discord message into chunks safely below the API content limit."""
+
+    if limit <= 0 or limit > DISCORD_MESSAGE_LIMIT:
+        raise ValueError("limit must be between 1 and Discord's message limit")
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines():
+        pending = line
+        while len(pending) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(pending[:limit])
+            pending = pending[limit:]
+        candidate = pending if not current else f"{current}\n{pending}"
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = pending
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return tuple(chunks or ("",))
 
 
 def _command_help(topic: str, actor: WorldActor | None = None) -> str:
@@ -111,9 +182,14 @@ def render_help(topic: str | None = None, actor: WorldActor | None = None) -> st
 
     normalized = (topic or "humans").strip().lower()
     if normalized in {"", "human", "humans"}:
-        return "\n".join([HUMAN_HELP_TEXT, *_verb_lines(actor)])
+        return "\n".join([HUMAN_HELP_TEXT, *_verb_name_lines(actor)])
     if normalized in {"agent", "agents", "llm", "llms"}:
-        return "\n".join([AGENT_HELP_TEXT, *_verb_lines(actor)])
+        return AGENT_HELP_TEXT
+    if normalized in {"verb", "verbs", "commands", "actions"}:
+        lines = _verb_detail_lines(actor)
+        if not lines:
+            return "No world verbs are available."
+        return "\n".join(lines).strip()
     return _command_help(normalized, actor)
 
 
@@ -184,11 +260,14 @@ def render_action_result(
 
 __all__ = [
     "AGENT_HELP_TEXT",
+    "DISCORD_MESSAGE_LIMIT",
     "HELP_TEXT",
+    "HELP_MESSAGE_LIMIT",
     "HUMAN_HELP_TEXT",
     "explain_rejection",
     "render_action_result",
     "render_help",
     "render_look",
     "render_move_result",
+    "split_discord_text",
 ]
