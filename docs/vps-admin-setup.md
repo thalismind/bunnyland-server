@@ -158,7 +158,8 @@ them, `ufw status` can show `443/tcp ALLOW IN` while public HTTPS still times ou
 The script does **not** enable UFW itself. If UFW is already active the new rules apply
 immediately; otherwise they are staged and you turn the firewall on when ready with
 `sudo ufw enable`. SSH on port `22` is allowed first, so enabling will not drop your
-session.
+session. To skip the UFW step entirely (for example when the host firewall is managed
+elsewhere), rerun setup with `BUNNYLAND_CONFIGURE_FIREWALL=0`.
 
 After the smoke test, open `https://sandbox.example.com/`. The frontend image ships a
 default `/config.json` that points the browser at same-origin `/api/`, so the web UI and
@@ -301,10 +302,11 @@ The published containers are tagged by branch. For normal VPS installs, keep
 `BUNNYLAND_SERVER_TAG=main` and `BUNNYLAND_WEB_TAG=main`; use another branch name only when
 testing a branch-specific deployment.
 
-If TLS terminates somewhere else, remove the `443` listener/cert mounts, publish only
-`127.0.0.1:8080:80`, and point the outer proxy at the frontend container. Keep the `/api/`
-proxy in the frontend nginx config so the browser always loads the web page and API from
-the same external origin.
+If TLS terminates somewhere else, rerun setup with `BUNNYLAND_TLS=0` and
+`BUNNYLAND_HTTP_BIND=127.0.0.1:8080`. Setup then skips certbot, omits the `443`
+listener and cert mounts, publishes only `127.0.0.1:8080:80`, and you point the outer proxy
+at the frontend container. Keep the `/api/` proxy in the frontend nginx config so the
+browser always loads the web page and API from the same external origin.
 
 ## Operating checklist
 

@@ -56,9 +56,13 @@ BUNNYLAND_ENABLE_DISCORD=0 \
 Open `http://localhost:8080/`. The `frontend` container serves the web client and proxies
 same-origin `/api/` requests to the private `server` container. Server state is bind-mounted
 from `BUNNYLAND_DATA_DIR` into `/data` so admins can inspect saved worlds directly.
-For HTTPS/SNI deployments, use `scripts/vps-docker-setup` as described in the VPS Docker
-setup. It writes `compose.user.yml`, configures admin auth, obtains a Let's Encrypt certificate with
-certbot, and runs the checked-in Compose files.
+For a real VPS deployment over HTTPS, the fastest path is the interactive
+`scripts/vps-docker-wizard`: it prompts for the required values and then runs
+`scripts/vps-docker-setup` for you. You can also run `scripts/vps-docker-setup` directly with
+the `BUNNYLAND_*` variables, as in the block above. Either way the setup script writes
+`compose.user.yml`, configures admin auth, obtains a Let's Encrypt certificate with certbot,
+and runs the checked-in Compose files. See the
+[VPS Docker setup guide](docs/vps-admin-setup.md) for the full walkthrough.
 
 For local image development, add the build override:
 
