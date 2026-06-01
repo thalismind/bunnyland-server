@@ -103,6 +103,10 @@ def _object_components(spec: ObjectSpec) -> list:
     return components
 
 
+def _memory_collection_name(key: str) -> str:
+    return f"mem-{key}"
+
+
 def _character_components(spec: CharacterSpec) -> list:
     components = [
         IdentityComponent(name=spec.name, kind="character"),
@@ -117,7 +121,9 @@ def _character_components(spec: CharacterSpec) -> list:
         components.append(HungerComponent(meter=Meter()))
         components.append(ThirstComponent(meter=Meter()))
     if spec.with_memory:
-        components.append(MemoryProfileComponent(vector_collection=f"mem:{spec.key}"))
+        components.append(
+            MemoryProfileComponent(vector_collection=_memory_collection_name(spec.key))
+        )
     if spec.traits:
         components.append(TraitSetComponent(traits=tuple(spec.traits)))
     if spec.goals:

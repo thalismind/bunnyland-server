@@ -10,6 +10,7 @@ from bunnyland.core import (
     ContainerComponent,
     ControlledBy,
     Lane,
+    MemoryProfileComponent,
     RoomComponent,
     SuspendedComponent,
     WorldActor,
@@ -104,6 +105,7 @@ async def test_instantiate_builds_the_mvp_checklist():
     assert juniper.has_component(CharacterComponent)
     assert not hazel.has_component(SuspendedComponent)
     assert hazel.get_relationships(ControlledBy)  # has an (LLM) controller
+    assert hazel.get_component(MemoryProfileComponent).vector_collection == "mem-hazel"
 
     # both characters are in the burrow (so speech has an audience)
     assert container_of(juniper) == result.rooms["burrow"]
