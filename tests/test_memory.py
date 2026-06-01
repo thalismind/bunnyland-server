@@ -16,11 +16,13 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import (
     CommandRejectedEvent,
+    NoteForgottenEvent,
     NotesSearchedEvent,
     NoteTakenEvent,
     ReflectionCreatedEvent,
 )
 from bunnyland.memory import InMemoryStore, install_memory
+from bunnyland.memory.chroma import ChromaMemoryStore
 
 HOUR = 3600.0
 
@@ -54,6 +56,18 @@ def remember_cmd(scenario, query=None, mode="recent", limit=5):
         cost=CommandCost(focus=1),
         lane=Lane.FOCUS,
         payload={"query": query, "mode": mode, "limit": limit},
+    )
+
+
+def forget_cmd(scenario, note_id):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="forget",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload={"note_id": note_id},
     )
 
 
@@ -138,6 +152,7 @@ async def test_remember_returns_recent_notes_privately():
     assert searched[-1].visibility == "private"
     assert "Berries grow by the north tunnel." in searched[-1].results
     assert "Hazel distrusts the basin." in searched[-1].results
+    assert len(searched[-1].note_ids) == 2
 
 
 async def test_remember_keyword_filters_results():
@@ -154,6 +169,32 @@ async def test_remember_keyword_filters_results():
     results = searched[-1].results
     assert any("basin" in r for r in results)
     assert all("tunnel" not in r for r in results)
+
+
+async def test_forget_removes_note_by_id():
+    scenario, store = memory_scenario()
+    taken = collect(scenario.actor, NoteTakenEvent)
+    forgotten = collect(scenario.actor, NoteForgottenEvent)
+
+    await scenario.actor.submit(note_cmd(scenario, "The key is under the flowerpot."))
+    await scenario.actor.tick(0.0)
+    note_id = taken[-1].note_id
+
+    await scenario.actor.submit(forget_cmd(scenario, note_id))
+    await scenario.actor.tick(0.0)
+
+    assert forgotten[-1].note_id == note_id
+    assert store.search("juniper", mode="recent") == []
+
+
+async def test_forget_rejects_unknown_note_id():
+    scenario, _store = memory_scenario()
+    rejects = collect(scenario.actor, CommandRejectedEvent)
+
+    await scenario.actor.submit(forget_cmd(scenario, "missing-note"))
+    await scenario.actor.tick(0.0)
+
+    assert any(r.reason == "note not found" for r in rejects)
 
 
 async def test_shared_notes_use_authorized_shared_collection():
@@ -273,3 +314,60 @@ def test_inmemory_store_vector_falls_back_to_keyword():
     results = store.search("c", query="water", mode="vector", limit=5)
     assert len(results) == 1
     assert "basin" in results[0].text
+
+
+def test_chroma_store_delete_removes_existing_note():
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.ids: list[str] = []
+            self.documents: list[str] = []
+            self.metadatas: list[dict] = []
+
+        def add(self, *, ids, documents, metadatas):
+            self.ids.extend(ids)
+            self.documents.extend(documents)
+            self.metadatas.extend(metadatas)
+
+        def get(self, ids=None, include=None):
+            del include
+            selected = set(ids or self.ids)
+            rows = [
+                (id_, doc, meta)
+                for id_, doc, meta in zip(
+                    self.ids, self.documents, self.metadatas, strict=False
+                )
+                if id_ in selected
+            ]
+            return {
+                "ids": [row[0] for row in rows],
+                "documents": [row[1] for row in rows],
+                "metadatas": [row[2] for row in rows],
+            }
+
+        def delete(self, *, ids):
+            selected = set(ids)
+            rows = [
+                (id_, doc, meta)
+                for id_, doc, meta in zip(
+                    self.ids, self.documents, self.metadatas, strict=False
+                )
+                if id_ not in selected
+            ]
+            self.ids = [row[0] for row in rows]
+            self.documents = [row[1] for row in rows]
+            self.metadatas = [row[2] for row in rows]
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.collection = FakeCollection()
+
+        def get_or_create_collection(self, *, name, **kwargs):
+            del name, kwargs
+            return self.collection
+
+    store = ChromaMemoryStore(client=FakeClient())
+    entry = store.add("c", text="the basin water is unsafe", created_at_epoch=1)
+
+    assert store.delete("c", entry.id) is True
+    assert store.search("c", mode="recent") == []
+    assert store.delete("c", entry.id) is False

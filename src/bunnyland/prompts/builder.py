@@ -236,6 +236,7 @@ class PromptBuilder:
             commands.append("tell someone something privately")
         commands.append("take note")
         commands.append("remember/search notes")
+        commands.append("forget note by id")
         return tuple(commands)
 
 

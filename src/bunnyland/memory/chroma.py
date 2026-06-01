@@ -96,6 +96,15 @@ class ChromaMemoryStore:
             entries = [e for e in entries if tokens & set(e.text.lower().split())]
         return entries[:limit]
 
+    def delete(self, collection: str, note_id: str) -> bool:
+        col = self._collection(collection)
+        got = col.get(ids=[note_id])
+        ids = got.get("ids", []) or []
+        if note_id not in ids:
+            return False
+        col.delete(ids=[note_id])
+        return True
+
     @staticmethod
     def _entries_from_get(got: dict) -> list[MemoryEntry]:
         ids = got.get("ids", []) or []

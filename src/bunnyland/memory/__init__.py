@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .handlers import ReflectHandler, RememberHandler, TakeNoteHandler
+from .handlers import ForgetHandler, ReflectHandler, RememberHandler, TakeNoteHandler
 from .store import InMemoryStore, MemoryEntry, MemoryStore
 
 if TYPE_CHECKING:
@@ -19,11 +19,13 @@ def install_memory(actor: WorldActor, store: MemoryStore | None = None) -> Memor
     store = store or InMemoryStore()
     actor.register_handler(TakeNoteHandler(store))
     actor.register_handler(RememberHandler(store))
+    actor.register_handler(ForgetHandler(store))
     actor.register_handler(ReflectHandler(store))
     return store
 
 
 __all__ = [
+    "ForgetHandler",
     "InMemoryStore",
     "MemoryEntry",
     "MemoryStore",

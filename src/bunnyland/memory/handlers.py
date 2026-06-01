@@ -14,7 +14,12 @@ from typing import Any
 from ..core.commands import SubmittedCommand
 from ..core.components import MemoryProfileComponent
 from ..core.ecs import parse_entity_id, replace_component
-from ..core.events import NotesSearchedEvent, NoteTakenEvent, ReflectionCreatedEvent
+from ..core.events import (
+    NoteForgottenEvent,
+    NotesSearchedEvent,
+    NoteTakenEvent,
+    ReflectionCreatedEvent,
+)
 from ..core.handlers.base import HandlerContext, HandlerResult, ok, rejected
 from .store import MemoryStore
 
@@ -105,6 +110,40 @@ class RememberHandler:
                     query=query,
                     mode=mode,
                     results=tuple(entry.text for entry in results),
+                    note_ids=tuple(entry.id for entry in results),
+                    scope=scope,
+                    collection=collection,
+                )
+            )
+        )
+
+
+class ForgetHandler:
+    command_type = "forget"
+
+    def __init__(self, store: MemoryStore) -> None:
+        self.store = store
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        payload: Mapping[str, Any] = command.payload
+        character_id = parse_entity_id(command.character_id)
+        note_id = str(payload.get("note_id", "")).strip()
+        if character_id is None:
+            return rejected("invalid character id")
+        if not note_id:
+            return rejected("note id is required")
+        try:
+            collection, scope = _collection(ctx, character_id, payload)
+        except ValueError as exc:
+            return rejected(str(exc))
+        if not self.store.delete(collection, note_id):
+            return rejected("note not found")
+        return ok(
+            NoteForgottenEvent(
+                **ctx.event_base(
+                    visibility="private",
+                    actor_id=command.character_id,
+                    note_id=note_id,
                     scope=scope,
                     collection=collection,
                 )
@@ -174,4 +213,4 @@ class ReflectHandler:
         )
 
 
-__all__ = ["ReflectHandler", "RememberHandler", "TakeNoteHandler"]
+__all__ = ["ForgetHandler", "ReflectHandler", "RememberHandler", "TakeNoteHandler"]

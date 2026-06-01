@@ -43,6 +43,8 @@ class MemoryStore(Protocol):
         limit: int = 5,
     ) -> list[MemoryEntry]: ...
 
+    def delete(self, collection: str, note_id: str) -> bool: ...
+
 
 def _tokens(text: str) -> set[str]:
     return {token for token in text.lower().replace(",", " ").split() if token}
@@ -104,6 +106,14 @@ class InMemoryStore:
                 )
         scored.sort(key=lambda e: (e.score or 0.0, e.created_at_epoch), reverse=True)
         return scored[:limit]
+
+    def delete(self, collection: str, note_id: str) -> bool:
+        entries = self._collections.get(collection, [])
+        for index, entry in enumerate(entries):
+            if entry.id == note_id:
+                del entries[index]
+                return True
+        return False
 
 
 __all__ = ["InMemoryStore", "MemoryEntry", "MemoryStore"]

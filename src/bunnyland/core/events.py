@@ -339,6 +339,13 @@ class NotesSearchedEvent(DomainEvent):
     query: str | None
     mode: str
     results: tuple[str, ...] = ()
+    note_ids: tuple[str, ...] = ()
+    scope: str = "private"
+    collection: str | None = None
+
+
+class NoteForgottenEvent(DomainEvent):
+    note_id: str
     scope: str = "private"
     collection: str | None = None
 

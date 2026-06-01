@@ -9,6 +9,7 @@ from .view import (
     render_help,
     render_look,
     render_move_result,
+    render_notes_search_result,
     split_discord_text,
 )
 
@@ -24,6 +25,7 @@ __all__ = [
     "render_help",
     "render_look",
     "render_move_result",
+    "render_notes_search_result",
     "split_discord_text",
 ]
 

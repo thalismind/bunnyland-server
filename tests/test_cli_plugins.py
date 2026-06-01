@@ -204,6 +204,7 @@ def test_configure_memory_backend_can_install_chroma(monkeypatch, tmp_path):
     assert calls == [str(tmp_path / "memory")]
     assert "take-note" in actor.available_command_types()
     assert "remember" in actor.available_command_types()
+    assert "forget" in actor.available_command_types()
 
 
 def test_cli_save_records_namespaced_imported_plugin(monkeypatch, tmp_path):

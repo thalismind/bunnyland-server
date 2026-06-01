@@ -16,7 +16,12 @@ from bunnyland.core import (
     LLMControllerComponent,
     spawn_entity,
 )
-from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent, EventVisibility
+from bunnyland.core.events import (
+    CommandExecutedEvent,
+    CommandRejectedEvent,
+    EventVisibility,
+    NotesSearchedEvent,
+)
 from bunnyland.discord import (
     HELP_TEXT,
     assign_discord_controller,
@@ -28,6 +33,7 @@ from bunnyland.discord import (
     render_help,
     render_look,
     render_move_result,
+    render_notes_search_result,
     split_discord_text,
 )
 from bunnyland.memory import InMemoryStore, install_memory
@@ -107,6 +113,11 @@ def test_discord_action_parser_uses_live_world_verbs(scenario):
     assert remember.tool == "remember"
     assert remember.payload == {"query": "trust", "mode": "vector"}
 
+    forget = parse_discord_action("forget note-123", verbs)
+    assert forget.command_type == "forget"
+    assert forget.tool == "forget"
+    assert forget.payload == {"note_id": "note-123"}
+
     structured = parse_discord_action("remember query=trust mode=keyword limit=2", verbs)
     assert structured.payload == {"query": "trust", "mode": "keyword", "limit": 2}
 
@@ -165,6 +176,23 @@ def test_help_verbs_lists_available_discord_verbs_with_arguments(scenario):
     assert "World verbs available now (page 1/1):" in text
     assert "move: direction, exit_id" in text
     assert "take-control: no documented arguments" in text
+
+
+def test_render_notes_search_result_includes_note_ids():
+    event = NotesSearchedEvent(
+        event_id="event-1",
+        world_epoch=1,
+        created_at=datetime.now(UTC),
+        query="basin",
+        mode="keyword",
+        results=("The basin water is unsafe.",),
+        note_ids=("note-123",),
+    )
+
+    text = render_notes_search_result(event)
+
+    assert "`note-123`" in text
+    assert "The basin water is unsafe." in text
 
 
 def test_help_verbs_is_paginated(scenario):

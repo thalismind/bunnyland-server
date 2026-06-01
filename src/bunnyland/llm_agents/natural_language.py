@@ -40,7 +40,8 @@ def parse_natural_command(text: str) -> ToolCall | None:
     """Parse a concise player command into a ``ToolCall``.
 
     Supported forms include ``go north``, ``take basket``, ``say hello``,
-    ``tell Hazel hello``, ``note ...``, ``remember basin``, ``reflect ...``, and
+    ``tell Hazel hello``, ``note ...``, ``remember basin``, ``forget <note id>``,
+    ``reflect ...``, and
     ``wait``. Unknown or ambiguous text returns ``None`` so a caller can clarify.
     """
     stripped = text.strip()
@@ -183,10 +184,15 @@ def parse_natural_command(text: str) -> ToolCall | None:
         child = _rest(words, 1)
         return ToolCall("adopt_child", {"child_id": child}) if child else None
 
-    if verb in {"note", "remember", "reflect"}:
+    if verb in {"note", "remember", "forget", "reflect"}:
         body = _rest(words, 1)
         name = "take_note" if verb == "note" else verb
-        key = "text" if verb in {"note", "reflect"} else "query"
+        if verb in {"note", "reflect"}:
+            key = "text"
+        elif verb == "forget":
+            key = "note_id"
+        else:
+            key = "query"
         return ToolCall(name, {key: body}) if body else None
 
     if verb == "write":

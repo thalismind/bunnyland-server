@@ -73,6 +73,7 @@ def test_tool_schemas_cover_every_verb():
         "till",
         "water_crop",
         "remember",
+        "forget",
         "reflect",
         "wait",
     } <= names
@@ -167,6 +168,9 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     )
     assert parse_natural_command("reflect on the basin") == ToolCall(
         "reflect", {"text": "on the basin"}
+    )
+    assert parse_natural_command("forget note-123") == ToolCall(
+        "forget", {"note_id": "note-123"}
     )
     assert parse_natural_command("wait") == ToolCall("wait", {})
 

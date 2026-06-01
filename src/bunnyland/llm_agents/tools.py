@@ -85,6 +85,7 @@ _VERBS: dict[str, _Verb] = {
     "remember": _Verb(
         "remember", Lane.FOCUS, _FOCUS, ("query", "mode", "limit", "scope", "collection")
     ),
+    "forget": _Verb("forget", Lane.FOCUS, _FOCUS, ("note_id", "scope", "collection")),
     "reflect": _Verb("reflect", Lane.FOCUS, _FOCUS, ("text", "query", "mode", "limit")),
     "write": _Verb("write", Lane.WORLD, _SPEECH, ("target_id", "text")),
     "wait": _Verb("wait", Lane.WORLD, _FREE, ()),

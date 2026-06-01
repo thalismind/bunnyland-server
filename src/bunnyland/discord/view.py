@@ -271,7 +271,10 @@ def render_notes_search_result(event: NotesSearchedEvent) -> str:
     if not event.results:
         return "No matching notes."
     lines = [f"Notes for {event.query!r}:" if event.query else "Recent notes:"]
-    lines.extend(f"- {result}" for result in event.results)
+    for index, result in enumerate(event.results):
+        note_id = event.note_ids[index] if index < len(event.note_ids) else ""
+        prefix = f"- `{note_id}` " if note_id else "- "
+        lines.append(f"{prefix}{result}")
     return "\n".join(lines)
 
 
