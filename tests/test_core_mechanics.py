@@ -217,6 +217,11 @@ async def test_listener_hears_character_move_when_noise_meets_sensitivity():
     assert noise.get_component(NoiseComponent).source_entity_id == str(scenario.character)
     assert any(event.noise_id == noise_id and event.actor_id == str(listener.id) for event in heard)
 
+    await scenario.actor.tick(61)
+
+    assert not scenario.actor.world.has_entity(parsed_noise_id)
+    assert listener.get_component(PerceptionComponent).audible_entities == frozenset()
+
 
 async def test_stimulus_shifts_attention_then_decays_after_expiration():
     scenario = build_scenario()

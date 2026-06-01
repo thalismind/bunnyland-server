@@ -335,11 +335,12 @@ class HearingConsequence:
 
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
         events: list[DomainEvent] = []
-        noises = [
-            noise
-            for noise in world.query().with_all([NoiseComponent]).execute_entities()
-            if _noise_active(noise.get_component(NoiseComponent), epoch)
-        ]
+        noises = []
+        for noise in list(world.query().with_all([NoiseComponent]).execute_entities()):
+            if _noise_active(noise.get_component(NoiseComponent), epoch):
+                noises.append(noise)
+            else:
+                world.remove(noise.id)
         for character in world.query().with_all([CharacterComponent]).execute_entities():
             existing = (
                 character.get_component(PerceptionComponent)
