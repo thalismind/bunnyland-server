@@ -17,8 +17,6 @@ cd "$repo_dir"
 : "${BUNNYLAND_DATA_DIR:?set BUNNYLAND_DATA_DIR to the host data directory, for example /var/lib/bunnyland}"
 : "${BUNNYLAND_ADMIN_USER:?set BUNNYLAND_ADMIN_USER to the admin username}"
 : "${BUNNYLAND_ADMIN_PASSWORD:?set BUNNYLAND_ADMIN_PASSWORD to the admin password}"
-: "${OLLAMA_CLOUD_API_KEY:?set OLLAMA_CLOUD_API_KEY for world generation and LLM characters}"
-: "${DISCORD_TOKEN:?set DISCORD_TOKEN for the Discord bot}"
 
 world_save="${BUNNYLAND_WORLD_SAVE:-}"
 favicon_file="${BUNNYLAND_FAVICON_FILE:-}"
@@ -32,6 +30,37 @@ http_bind="${BUNNYLAND_HTTP_BIND:-0.0.0.0:80}"
 https_bind="${BUNNYLAND_HTTPS_BIND:-0.0.0.0:443}"
 server_tag="${BUNNYLAND_SERVER_TAG:-main}"
 web_tag="${BUNNYLAND_WEB_TAG:-main}"
+enable_llm="${BUNNYLAND_ENABLE_LLM:-}"
+enable_discord="${BUNNYLAND_ENABLE_DISCORD:-}"
+enable_tls="${BUNNYLAND_TLS:-1}"
+configure_ufw="${BUNNYLAND_CONFIGURE_FIREWALL:-1}"
+generator="${BUNNYLAND_GENERATOR:-lifesim-demo}"
+tick_seconds="${BUNNYLAND_TICK_SECONDS:-30}"
+time_scale="${BUNNYLAND_TIME_SCALE:-1800}"
+autosave_every="${BUNNYLAND_AUTOSAVE_EVERY:-20}"
+
+full_deployment=0
+if [[ "$enable_llm" == "0" && "$enable_discord" == "0" ]]; then
+  full_deployment=0
+elif [[ "$enable_llm" == "1" || "$enable_discord" == "1" || -n "${OLLAMA_CLOUD_API_KEY:-}" || -n "${DISCORD_TOKEN:-}" ]]; then
+  full_deployment=1
+fi
+
+if [[ "$full_deployment" == "1" ]]; then
+  enable_llm=1
+  enable_discord=1
+else
+  enable_llm=0
+  enable_discord=0
+fi
+
+if [[ "$full_deployment" == "1" && -z "${OLLAMA_CLOUD_API_KEY:-}" ]]; then
+  die "set OLLAMA_CLOUD_API_KEY for the full Bunnyland deployment"
+fi
+
+if [[ "$full_deployment" == "1" && -z "${DISCORD_TOKEN:-}" ]]; then
+  die "set DISCORD_TOKEN for the full Bunnyland deployment"
+fi
 
 install_nerdctl() {
   if command -v nerdctl >/dev/null 2>&1 && sudo nerdctl compose version >/dev/null 2>&1; then
@@ -66,21 +95,67 @@ install_nerdctl() {
   sudo systemctl enable --now containerd
 }
 
+compose_cmd=()
+selected_runtime=""
+
+runtime_compose_available() {
+  case "$1" in
+    docker) command -v docker >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1 ;;
+    nerdctl) command -v nerdctl >/dev/null 2>&1 && sudo nerdctl compose version >/dev/null 2>&1 ;;
+    podman) command -v podman >/dev/null 2>&1 && sudo podman compose version >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+set_compose_cmd() {
+  case "$1" in
+    docker) compose_cmd=(sudo docker compose --env-file /dev/null) ;;
+    nerdctl) compose_cmd=(sudo nerdctl compose --env-file /dev/null) ;;
+    podman) compose_cmd=(sudo podman compose --env-file /dev/null) ;;
+    *) die "unsupported BUNNYLAND_CONTAINER_RUNTIME: $1" ;;
+  esac
+  selected_runtime="$1"
+}
+
+select_container_runtime() {
+  local requested="${BUNNYLAND_CONTAINER_RUNTIME:-}"
+  if [[ -n "$requested" ]]; then
+    if [[ "$requested" == "nerdctl" ]] && ! runtime_compose_available nerdctl; then
+      install_nerdctl
+    fi
+    runtime_compose_available "$requested" || die "$requested compose support is not available"
+    set_compose_cmd "$requested"
+    return
+  fi
+
+  for runtime in docker nerdctl podman; do
+    if runtime_compose_available "$runtime"; then
+      set_compose_cmd "$runtime"
+      return
+    fi
+  done
+
+  install_nerdctl
+  runtime_compose_available nerdctl || die "nerdctl compose support is not available after install"
+  set_compose_cmd nerdctl
+}
+
 container_world_file="/data/worlds/main.json"
 host_world_file="$BUNNYLAND_DATA_DIR/worlds/main.json"
-compose_files=(-f compose.yml)
+load_existing_world=0
+compose_files=(-f compose.yml -f compose.user.yml)
 
 run_compose_quiet() {
   local log_file
   log_file="$(mktemp)"
   chmod 0600 "$log_file"
-  if sudo nerdctl compose -p bunnyland "${compose_files[@]}" "$@" >"$log_file" 2>&1; then
+  if "${compose_cmd[@]}" -p bunnyland "${compose_files[@]}" "$@" >"$log_file" 2>&1; then
     rm -f "$log_file"
     return
   fi
 
   rm -f "$log_file"
-  printf 'error: nerdctl compose failed while running: %s\n' "$*" >&2
+  printf 'error: %s compose failed while running: %s\n' "$selected_runtime" "$*" >&2
   printf 'rerun the command manually if you need full container runtime diagnostics.\n' >&2
   return 1
 }
@@ -100,22 +175,18 @@ if [[ -n "$world_save" ]]; then
     sudo cp "$world_save" "$host_world_file"
     container_world_file="/data/worlds/$(basename "$host_world_file")"
   fi
-  compose_files+=(-f compose.load.yml)
+  load_existing_world=1
 elif [[ -f "$BUNNYLAND_DATA_DIR/worlds/main.json" ]]; then
-  compose_files+=(-f compose.load.yml)
+  load_existing_world=1
 fi
 
-if [[ -n "$home_domain" ]]; then
+if [[ "$enable_tls" == "1" && -n "$home_domain" ]]; then
   [[ -n "$home_dir" ]] || die "set BUNNYLAND_HOME_DIR when BUNNYLAND_HOME_DOMAIN is set"
   [[ -d "$home_dir" ]] || die "BUNNYLAND_HOME_DIR does not exist: $home_dir"
-  compose_files+=(-f compose.tls-home.yml)
-else
-  compose_files+=(-f compose.tls.yml)
 fi
 
 if [[ -n "$favicon_file" ]]; then
   [[ -f "$favicon_file" ]] || die "BUNNYLAND_FAVICON_FILE does not exist: $favicon_file"
-  compose_files+=(-f compose.favicon.yml)
 fi
 
 if [[ -f "$host_world_file" ]]; then
@@ -124,9 +195,169 @@ if [[ -f "$host_world_file" ]]; then
   printf 'Backed up existing world save to %s.\n' "$backup_file"
 fi
 
-install_nerdctl
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y certbot ufw
+select_container_runtime
+if [[ "$enable_tls" == "1" || "$configure_ufw" == "1" ]]; then
+  packages=()
+  if [[ "$enable_tls" == "1" ]]; then
+    packages+=(certbot)
+  fi
+  if [[ "$configure_ufw" == "1" ]]; then
+    packages+=(ufw)
+  fi
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+fi
 need openssl
+
+yaml_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+port_spec() {
+  local bind="$1"
+  local target="$2"
+  if [[ "$bind" == *:* ]]; then
+    printf '%s:%s' "$bind" "$target"
+  else
+    printf '%s:%s' "$bind" "$target"
+  fi
+}
+
+render_server_service() {
+  local worldgen_model="${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}"
+  local character_model="${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
+
+  printf '  server:\n'
+  printf '    image: %s\n' "$(yaml_quote "ghcr.io/thalismind/bunnyland-server:$server_tag")"
+  printf '    command:\n'
+  printf '      - /bin/sh\n'
+  printf '      - -ec\n'
+  printf '      - |\n'
+  printf '        exec bunnyland serve \\\n'
+  if [[ "$enable_llm" == "1" ]]; then
+    printf '          --llm \\\n'
+    printf '          --worldgen-model %s \\\n' "$(shell_quote "$worldgen_model")"
+    printf '          --character-model %s \\\n' "$(shell_quote "$character_model")"
+  fi
+  if [[ "$enable_discord" == "1" ]]; then
+    printf '          --discord \\\n'
+  fi
+  if [[ "$load_existing_world" == "1" ]]; then
+    printf '          --load %s \\\n' "$(shell_quote "$container_world_file")"
+  else
+    printf '          --generator %s \\\n' "$(shell_quote "$generator")"
+  fi
+  printf '          --ticks 0 \\\n'
+  printf '          --tick-seconds %s \\\n' "$(shell_quote "$tick_seconds")"
+  printf '          --time-scale %s \\\n' "$(shell_quote "$time_scale")"
+  printf '          --api-host 0.0.0.0 \\\n'
+  printf '          --api-port 8765 \\\n'
+  printf '          --save %s \\\n' "$(shell_quote "$container_world_file")"
+  printf '          --autosave-every %s\n' "$(shell_quote "$autosave_every")"
+  printf '    volumes:\n'
+  printf '      - type: bind\n'
+  printf '        source: %s\n' "$(yaml_quote "$BUNNYLAND_DATA_DIR")"
+  printf '        target: /data\n'
+  printf '    environment:\n'
+  printf '      BUNNYLAND_GENERATOR: %s\n' "$(yaml_quote "$generator")"
+  printf '      BUNNYLAND_WORLD_FILE: %s\n' "$(yaml_quote "$container_world_file")"
+  printf '      BUNNYLAND_TICK_SECONDS: %s\n' "$(yaml_quote "$tick_seconds")"
+  printf '      BUNNYLAND_TIME_SCALE: %s\n' "$(yaml_quote "$time_scale")"
+  printf '      BUNNYLAND_AUTOSAVE_EVERY: %s\n' "$(yaml_quote "$autosave_every")"
+  printf '      BUNNYLAND_ENABLE_LLM: %s\n' "$(yaml_quote "$enable_llm")"
+  printf '      BUNNYLAND_ENABLE_DISCORD: %s\n' "$(yaml_quote "$enable_discord")"
+  if [[ "$enable_llm" == "1" ]]; then
+    printf '      OLLAMA_CLOUD_API_KEY: %s\n' "$(yaml_quote "$OLLAMA_CLOUD_API_KEY")"
+    printf '      OLLAMA_HOST: %s\n' "$(yaml_quote "${OLLAMA_HOST:-https://ollama.com}")"
+    printf '      BUNNYLAND_WORLDGEN_MODEL: %s\n' "$(yaml_quote "$worldgen_model")"
+    printf '      BUNNYLAND_CHARACTER_MODEL: %s\n' "$(yaml_quote "$character_model")"
+  fi
+  if [[ "$enable_discord" == "1" ]]; then
+    printf '      DISCORD_TOKEN: %s\n' "$(yaml_quote "$DISCORD_TOKEN")"
+    printf '      BUNNYLAND_DISCORD_USER_ID: %s\n' "$(yaml_quote "${BUNNYLAND_DISCORD_USER_ID:-}")"
+    printf '      BUNNYLAND_DISCORD_CHANNEL_ID: %s\n' "$(yaml_quote "${BUNNYLAND_DISCORD_CHANNEL_ID:-}")"
+    printf '      BUNNYLAND_DISCORD_CHARACTER: %s\n' "$(yaml_quote "${BUNNYLAND_DISCORD_CHARACTER:-}")"
+  fi
+  printf '    expose:\n'
+  printf '      - "8765"\n'
+  printf '    restart: unless-stopped\n'
+}
+
+render_frontend_service() {
+  local nginx_template="./deploy/nginx/frontend-tls.conf"
+
+  if [[ "$enable_tls" == "1" && -n "$home_domain" ]]; then
+    nginx_template="./deploy/nginx/frontend-tls-home.conf"
+  fi
+
+  printf '  frontend:\n'
+  printf '    image: %s\n' "$(yaml_quote "ghcr.io/thalismind/bunnyland-web:$web_tag")"
+  printf '    depends_on:\n'
+  printf '      - server\n'
+  printf '    environment:\n'
+  printf '      BUNNYLAND_API_UPSTREAM: %s\n' "$(yaml_quote "http://server:8765")"
+  printf '      BUNNYLAND_SERVER_NAME: %s\n' "$(yaml_quote "$BUNNYLAND_DOMAIN")"
+  if [[ "$enable_tls" == "1" ]]; then
+    printf '      BUNNYLAND_CERT_NAME: %s\n' "$(yaml_quote "$cert_name")"
+  fi
+  if [[ "$enable_tls" == "1" && -n "$home_domain" ]]; then
+    printf '      BUNNYLAND_HOME_NAME: %s\n' "$(yaml_quote "$home_domain")"
+    printf '      BUNNYLAND_HOME_CERT_NAME: %s\n' "$(yaml_quote "$home_cert_name")"
+  fi
+  if [[ "$enable_tls" == "1" || -n "$favicon_file" ]]; then
+    printf '    volumes:\n'
+  fi
+  if [[ "$enable_tls" == "1" ]]; then
+    printf '      - type: bind\n'
+    printf '        source: %s\n' "$(yaml_quote "$nginx_template")"
+    printf '        target: /etc/nginx/templates/default.conf.template\n'
+    printf '        read_only: true\n'
+    printf '      - type: bind\n'
+    printf '        source: %s\n' "$(yaml_quote "$letsencrypt_dir")"
+    printf '        target: /etc/letsencrypt\n'
+    printf '        read_only: true\n'
+    printf '      - type: bind\n'
+    printf '        source: %s\n' "$(yaml_quote "$auth_dir")"
+    printf '        target: /etc/nginx/bunnyland\n'
+    printf '        read_only: true\n'
+  fi
+  if [[ "$enable_tls" == "1" && -n "$home_domain" ]]; then
+    printf '      - type: bind\n'
+    printf '        source: %s\n' "$(yaml_quote "$home_dir")"
+    printf '        target: /usr/share/nginx/home\n'
+    printf '        read_only: true\n'
+  fi
+  if [[ -n "$favicon_file" ]]; then
+    printf '      - type: bind\n'
+    printf '        source: %s\n' "$(yaml_quote "$favicon_file")"
+    printf '        target: /usr/share/nginx/html/favicon.png\n'
+    printf '        read_only: true\n'
+  fi
+  printf '    ports:\n'
+  printf '      - %s\n' "$(yaml_quote "$(port_spec "$http_bind" 80)")"
+  if [[ "$enable_tls" == "1" ]]; then
+    printf '      - %s\n' "$(yaml_quote "$(port_spec "$https_bind" 443)")"
+  fi
+  printf '    restart: unless-stopped\n'
+}
+
+render_user_compose() {
+  local tmp
+  tmp="$(mktemp)"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      __SERVER_SERVICE__) render_server_service ;;
+      __FRONTEND_SERVICE__) render_frontend_service ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done < compose.user.yml.template > "$tmp"
+  chmod 0600 "$tmp"
+  mv "$tmp" compose.user.yml
+  chmod 0600 compose.user.yml
+}
 
 configure_firewall() {
   sudo ufw allow 22/tcp
@@ -145,6 +376,8 @@ printf '%s:%s\n' "$BUNNYLAND_ADMIN_USER" "$(openssl passwd -apr1 "$BUNNYLAND_ADM
   | sudo tee "$auth_dir/world-editor.htpasswd" >/dev/null
 sudo chmod 0644 "$auth_dir/world-editor.htpasswd"
 
+render_user_compose
+
 ensure_letsencrypt_cert() {
   local domain="$1"
   local name="$2"
@@ -155,7 +388,6 @@ ensure_letsencrypt_cert() {
   fi
 
   printf 'Requesting a Let'\''s Encrypt certificate for %s with certbot.\n' "$domain"
-  sudo systemctl stop nginx 2>/dev/null || true
   run_compose_quiet stop frontend 2>/dev/null || true
   certbot_args=(certonly --standalone --cert-name "$name" -d "$domain" --agree-tos --non-interactive)
   if [[ -n "${BUNNYLAND_CERT_EMAIL:-}" ]]; then
@@ -166,63 +398,27 @@ ensure_letsencrypt_cert() {
   sudo certbot "${certbot_args[@]}"
 }
 
-ensure_letsencrypt_cert "$BUNNYLAND_DOMAIN" "$cert_name"
-if [[ -n "$home_domain" ]]; then
-  ensure_letsencrypt_cert "$home_domain" "$home_cert_name"
+if [[ "$enable_tls" == "1" ]]; then
+  ensure_letsencrypt_cert "$BUNNYLAND_DOMAIN" "$cert_name"
+  if [[ -n "$home_domain" ]]; then
+    ensure_letsencrypt_cert "$home_domain" "$home_cert_name"
+  fi
 fi
 
-configure_firewall
-
-cat > .env <<ENV
-BUNNYLAND_DATA_DIR=$BUNNYLAND_DATA_DIR
-BUNNYLAND_SERVER_TAG=$server_tag
-BUNNYLAND_WEB_TAG=$web_tag
-BUNNYLAND_WORLD_FILE=$container_world_file
-BUNNYLAND_HTTP_BIND=$http_bind
-BUNNYLAND_HTTPS_BIND=$https_bind
-BUNNYLAND_SERVER_NAME=$BUNNYLAND_DOMAIN
-BUNNYLAND_CERT_NAME=$cert_name
-BUNNYLAND_LETSENCRYPT_DIR=$letsencrypt_dir
-BUNNYLAND_NGINX_AUTH_DIR=$auth_dir
-BUNNYLAND_AUTOSAVE_EVERY=${BUNNYLAND_AUTOSAVE_EVERY:-120}
-OLLAMA_CLOUD_API_KEY=$OLLAMA_CLOUD_API_KEY
-OLLAMA_HOST=${OLLAMA_HOST:-https://ollama.com}
-DISCORD_TOKEN=$DISCORD_TOKEN
-BUNNYLAND_WORLDGEN_MODEL=${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}
-BUNNYLAND_CHARACTER_MODEL=${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}
-ENV
-
-if [[ -n "${BUNNYLAND_DISCORD_USER_ID:-}" ]]; then
-  printf 'BUNNYLAND_DISCORD_USER_ID=%s\n' "$BUNNYLAND_DISCORD_USER_ID" >> .env
+if [[ "$configure_ufw" == "1" ]]; then
+  configure_firewall
 fi
 
-if [[ -n "${BUNNYLAND_DISCORD_CHANNEL_ID:-}" ]]; then
-  printf 'BUNNYLAND_DISCORD_CHANNEL_ID=%s\n' "$BUNNYLAND_DISCORD_CHANNEL_ID" >> .env
-fi
-
-if [[ -n "${BUNNYLAND_DISCORD_CHARACTER:-}" ]]; then
-  printf 'BUNNYLAND_DISCORD_CHARACTER=%s\n' "$BUNNYLAND_DISCORD_CHARACTER" >> .env
-fi
-
-if [[ -n "$home_domain" ]]; then
-  {
-    printf 'BUNNYLAND_HOME_DOMAIN=%s\n' "$home_domain"
-    printf 'BUNNYLAND_HOME_CERT_NAME=%s\n' "$home_cert_name"
-    printf 'BUNNYLAND_HOME_DIR=%s\n' "$home_dir"
-  } >> .env
-fi
-
-if [[ -n "$favicon_file" ]]; then
-  printf 'BUNNYLAND_FAVICON_FILE=%s\n' "$favicon_file" >> .env
-fi
-
-chmod 0640 .env
-
-sudo systemctl stop bunnyland 2>/dev/null || true
-sudo systemctl stop nginx 2>/dev/null || true
 run_compose_quiet up -d
 run_compose_quiet restart frontend
 
-printf '\nBunnyland is starting at https://%s/\n' "$BUNNYLAND_DOMAIN"
+if [[ "$enable_tls" == "1" ]]; then
+  public_scheme=https
+else
+  public_scheme=http
+fi
+
+printf '\nBunnyland is starting at %s://%s/\n' "$public_scheme" "$BUNNYLAND_DOMAIN"
 printf 'World data is mounted from %s.\n' "$BUNNYLAND_DATA_DIR"
 printf 'Admin username is %s. The password is the BUNNYLAND_ADMIN_PASSWORD you supplied.\n' "$BUNNYLAND_ADMIN_USER"
+printf 'Deployment settings were written to compose.user.yml.\n'

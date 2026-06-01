@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_dir"
+
+if [[ -f /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  case " ${ID:-} ${ID_LIKE:-} " in
+    *" debian "* | *" ubuntu "*) ;;
+    *) die "this wizard supports Debian and Ubuntu hosts" ;;
+  esac
+fi
+
+prompt() {
+  local label="$1"
+  local default="${2:-}"
+  local value
+  if [[ -n "$default" ]]; then
+    read -r -p "$label [$default]: " value
+    printf '%s\n' "${value:-$default}"
+  else
+    read -r -p "$label: " value
+    printf '%s\n' "$value"
+  fi
+}
+
+prompt_required() {
+  local label="$1"
+  local default="${2:-}"
+  local value
+  while true; do
+    value="$(prompt "$label" "$default")"
+    if [[ -n "$value" ]]; then
+      printf '%s\n' "$value"
+      return
+    fi
+    printf 'Please enter a value.\n' >&2
+  done
+}
+
+prompt_secret() {
+  local label="$1"
+  local value
+  while true; do
+    read -r -s -p "$label: " value
+    printf '\n' >&2
+    if [[ -n "$value" ]]; then
+      printf '%s\n' "$value"
+      return
+    fi
+    printf 'Please enter a value.\n' >&2
+  done
+}
+
+confirm() {
+  local label="$1"
+  local default="${2:-n}"
+  local suffix="[y/N]"
+  local value
+  if [[ "$default" == "y" ]]; then
+    suffix="[Y/n]"
+  fi
+  read -r -p "$label $suffix: " value
+  value="${value:-$default}"
+  case "$value" in
+    y | Y | yes | YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+write_env() {
+  local key="$1"
+  local value="$2"
+  printf '%s=%s\n' "$key" "$(shell_quote "$value")" >> "$env_file"
+}
+
+runtime_available() {
+  case "$1" in
+    docker) command -v docker >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1 ;;
+    nerdctl) command -v nerdctl >/dev/null 2>&1 && sudo nerdctl compose version >/dev/null 2>&1 ;;
+    podman) command -v podman >/dev/null 2>&1 && sudo podman compose version >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_names() {
+  case "$1" in
+    docker) sudo docker ps -a --format '{{.Names}}' ;;
+    nerdctl) sudo nerdctl ps -a --format '{{.Names}}' ;;
+    podman) sudo podman ps -a --format '{{.Names}}' ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_remove() {
+  local runtime="$1"
+  shift
+  case "$runtime" in
+    docker) sudo docker rm -f "$@" ;;
+    nerdctl) sudo nerdctl rm -f "$@" ;;
+    podman) sudo podman rm -f "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+printf 'Bunnyland VPS Docker setup wizard\n'
+printf 'This writes compose.user.yml through scripts/vps-docker-setup and starts the containers.\n\n'
+
+available=()
+for runtime in docker nerdctl podman; do
+  if runtime_available "$runtime"; then
+    available+=("$runtime")
+  fi
+done
+
+if [[ ${#available[@]} -eq 0 ]]; then
+  runtime="nerdctl"
+  printf 'No supported Compose runtime was found. The setup script will install nerdctl.\n'
+else
+  printf 'Available container runtimes: %s\n' "${available[*]}"
+  runtime="$(prompt "Container runtime" "${available[0]}")"
+  case " ${available[*]} " in
+    *" $runtime "*) ;;
+    *) die "$runtime is not available with compose support" ;;
+  esac
+fi
+
+if runtime_available "$runtime"; then
+  mapfile -t existing < <(runtime_names "$runtime" | grep -E '^bunnyland-(server|frontend)-1$' || true)
+  if [[ ${#existing[@]} -gt 0 ]]; then
+    printf '\nExisting Bunnyland containers were found:\n'
+    printf '  %s\n' "${existing[@]}"
+    printf 'Removing these containers does not delete bind-mounted data or named volumes.\n'
+    printf 'The setup script also backs up the selected world save before starting.\n'
+    if confirm "Remove existing Bunnyland containers before setup?" "n"; then
+      runtime_remove "$runtime" "${existing[@]}"
+    else
+      die "leaving existing containers in place; stop or remove them before rerunning setup"
+    fi
+  fi
+fi
+
+domain="$(prompt_required "Sandbox domain" "sandbox.example.com")"
+data_dir="$(prompt_required "Host data directory" "/var/lib/bunnyland")"
+admin_user="$(prompt_required "Admin username" "editor")"
+admin_password="$(prompt_secret "Admin password")"
+cert_email="$(prompt "Let's Encrypt email (blank is allowed)")"
+world_save="$(prompt "Existing world save path (blank to generate/use data-dir default)")"
+favicon_file="$(prompt "Custom favicon path (blank for default)")"
+home_domain="$(prompt "Homepage domain served by this frontend container (blank to skip)")"
+home_dir=""
+home_cert_name=""
+if [[ -n "$home_domain" ]]; then
+  home_dir="$(prompt_required "Homepage files directory" "/opt/bunnyland/home")"
+  home_cert_name="$(prompt "Homepage certificate name" "$home_domain")"
+fi
+
+full_deployment=0
+if confirm "Set up the full Bunnyland deployment with Ollama and Discord now?" "y"; then
+  full_deployment=1
+else
+  printf 'Continuing with a container/routing smoke test only. This is not a full Bunnyland deployment.\n'
+fi
+
+enable_llm=0
+ollama_key=""
+ollama_host="https://ollama.com"
+worldgen_model="deepseek-v4-pro"
+character_model="deepseek-v4-flash"
+if [[ "$full_deployment" == "1" ]]; then
+  enable_llm=1
+  ollama_key="$(prompt_secret "OLLAMA_CLOUD_API_KEY")"
+  ollama_host="$(prompt "Ollama host" "$ollama_host")"
+  worldgen_model="$(prompt "Worldgen model" "$worldgen_model")"
+  character_model="$(prompt "Character model" "$character_model")"
+fi
+
+enable_discord=0
+discord_token=""
+discord_user_id=""
+discord_channel_id=""
+discord_character=""
+if [[ "$full_deployment" == "1" ]]; then
+  enable_discord=1
+  discord_token="$(prompt_secret "DISCORD_TOKEN")"
+  discord_user_id="$(prompt "Startup Discord user id (blank to use !claim)")"
+  discord_channel_id="$(prompt "Startup Discord channel id (blank if not assigning a user)")"
+  discord_character="$(prompt "Startup character name (blank for first claimable character)")"
+fi
+
+env_file="$(mktemp)"
+chmod 0600 "$env_file"
+trap 'rm -f "$env_file"' EXIT
+
+write_env BUNNYLAND_CONTAINER_RUNTIME "$runtime"
+write_env BUNNYLAND_DOMAIN "$domain"
+write_env BUNNYLAND_DATA_DIR "$data_dir"
+write_env BUNNYLAND_ADMIN_USER "$admin_user"
+write_env BUNNYLAND_ADMIN_PASSWORD "$admin_password"
+write_env BUNNYLAND_ENABLE_LLM "$enable_llm"
+write_env BUNNYLAND_ENABLE_DISCORD "$enable_discord"
+if [[ -n "$cert_email" ]]; then write_env BUNNYLAND_CERT_EMAIL "$cert_email"; fi
+if [[ -n "$world_save" ]]; then write_env BUNNYLAND_WORLD_SAVE "$world_save"; fi
+if [[ -n "$favicon_file" ]]; then write_env BUNNYLAND_FAVICON_FILE "$favicon_file"; fi
+if [[ -n "$home_domain" ]]; then
+  write_env BUNNYLAND_HOME_DOMAIN "$home_domain"
+  write_env BUNNYLAND_HOME_CERT_NAME "$home_cert_name"
+  write_env BUNNYLAND_HOME_DIR "$home_dir"
+fi
+if [[ "$enable_llm" == "1" ]]; then
+  write_env OLLAMA_CLOUD_API_KEY "$ollama_key"
+  write_env OLLAMA_HOST "$ollama_host"
+  write_env BUNNYLAND_WORLDGEN_MODEL "$worldgen_model"
+  write_env BUNNYLAND_CHARACTER_MODEL "$character_model"
+fi
+if [[ "$enable_discord" == "1" ]]; then
+  write_env DISCORD_TOKEN "$discord_token"
+  if [[ -n "$discord_user_id" ]]; then write_env BUNNYLAND_DISCORD_USER_ID "$discord_user_id"; fi
+  if [[ -n "$discord_channel_id" ]]; then write_env BUNNYLAND_DISCORD_CHANNEL_ID "$discord_channel_id"; fi
+  if [[ -n "$discord_character" ]]; then write_env BUNNYLAND_DISCORD_CHARACTER "$discord_character"; fi
+fi
+
+printf '\nStarting setup with %s. Public TLS will use Let'\''s Encrypt.\n' "$runtime"
+set -a
+# shellcheck disable=SC1090
+. "$env_file"
+set +a
+scripts/vps-docker-setup
+
+printf '\nRun this verifier after DNS points at the VPS:\n'
+printf '  BUNNYLAND_DOMAIN=%s BUNNYLAND_ADMIN_USER=%s BUNNYLAND_ADMIN_PASSWORD=<password> scripts/vps-docker-verify\n' "$domain" "$admin_user"

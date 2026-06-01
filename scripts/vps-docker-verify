@@ -10,6 +10,9 @@ export BUNNYLAND_ADMIN_USER
 export BUNNYLAND_ADMIN_PASSWORD
 export BUNNYLAND_VERIFY_CONNECT_HOST="${BUNNYLAND_VERIFY_CONNECT_HOST:-$BUNNYLAND_DOMAIN}"
 export BUNNYLAND_VERIFY_PORT="${BUNNYLAND_VERIFY_PORT:-443}"
+export BUNNYLAND_VERIFY_SCHEME="${BUNNYLAND_VERIFY_SCHEME:-https}"
+export BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS="${BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS:-401}"
+export BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS="${BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS:-200}"
 export BUNNYLAND_HOME_DOMAIN="${BUNNYLAND_HOME_DOMAIN:-}"
 export BUNNYLAND_HOME_EXPECT_TEXT="${BUNNYLAND_HOME_EXPECT_TEXT:-}"
 
@@ -21,15 +24,19 @@ import socket
 import ssl
 import struct
 import sys
+from contextlib import nullcontext
 
 domain = os.environ["BUNNYLAND_DOMAIN"]
 connect_host = os.environ["BUNNYLAND_VERIFY_CONNECT_HOST"]
 port = int(os.environ["BUNNYLAND_VERIFY_PORT"])
+scheme = os.environ["BUNNYLAND_VERIFY_SCHEME"]
+admin_unauth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS"])
+admin_auth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS"])
 admin_user = os.environ["BUNNYLAND_ADMIN_USER"]
 admin_password = os.environ["BUNNYLAND_ADMIN_PASSWORD"]
 home_domain = os.environ["BUNNYLAND_HOME_DOMAIN"]
 home_expect_text = os.environ["BUNNYLAND_HOME_EXPECT_TEXT"]
-base_url = f"https://{domain}"
+base_url = f"{scheme}://{domain}"
 
 
 def fail(message: str) -> None:
@@ -39,6 +46,10 @@ def fail(message: str) -> None:
 
 def ok(message: str) -> None:
     print(f"OK   {message}")
+
+
+if scheme not in {"http", "https"}:
+    fail(f"BUNNYLAND_VERIFY_SCHEME must be http or https, got {scheme!r}")
 
 
 def decode_chunked(body: bytes) -> bytes:
@@ -67,9 +78,10 @@ def request(method: str, path: str, *, auth: str | None = None, target_domain: s
     raw_request = f"{method} {path} HTTP/1.1\r\n" + "".join(
         f"{key}: {value}\r\n" for key, value in headers.items()
     ) + "\r\n"
-    ctx = ssl.create_default_context()
     with socket.create_connection((connect_host, port), timeout=15) as raw:
-        with ctx.wrap_socket(raw, server_hostname=request_domain) as sock:
+        ctx = ssl.create_default_context() if scheme == "https" else None
+        stream = ctx.wrap_socket(raw, server_hostname=request_domain) if ctx else nullcontext(raw)
+        with stream as sock:
             sock.sendall(raw_request.encode("ascii"))
             data = b""
             while True:
@@ -140,21 +152,44 @@ ok(
 )
 
 bad_auth = f"{admin_user}:definitely-not-the-right-password"
-expect_status("admin rejects bad credentials", "POST", "/api/admin/pause", 401, auth=bad_auth)
+expect_status(
+    "admin rejects bad credentials",
+    "POST",
+    "/api/admin/pause",
+    admin_unauth_status,
+    auth=bad_auth,
+)
 
 good_auth = f"{admin_user}:{admin_password}"
-pause = json.loads(expect_status("admin accepts good credentials", "POST", "/api/admin/pause", 200, auth=good_auth).decode())
-if pause.get("ok") is not True or pause.get("paused") is not True:
-    fail(f"admin pause: unexpected response {pause!r}")
+pause_body = expect_status(
+    "admin accepts good credentials",
+    "POST",
+    "/api/admin/pause",
+    admin_auth_status,
+    auth=good_auth,
+)
+if admin_auth_status == 200:
+    pause = json.loads(pause_body.decode())
+    if pause.get("ok") is not True or pause.get("paused") is not True:
+        fail(f"admin pause: unexpected response {pause!r}")
 
-resume = json.loads(expect_status("admin resume", "POST", "/api/admin/resume", 200, auth=good_auth).decode())
-if resume.get("ok") is not True or resume.get("paused") is not False:
-    fail(f"admin resume: unexpected response {resume!r}")
+resume_body = expect_status(
+    "admin resume",
+    "POST",
+    "/api/admin/resume",
+    admin_auth_status,
+    auth=good_auth,
+)
+if admin_auth_status == 200:
+    resume = json.loads(resume_body.decode())
+    if resume.get("ok") is not True or resume.get("paused") is not False:
+        fail(f"admin resume: unexpected response {resume!r}")
 
 key = base64.b64encode(os.urandom(16)).decode()
-ctx = ssl.create_default_context()
 with socket.create_connection((connect_host, port), timeout=15) as raw:
-    with ctx.wrap_socket(raw, server_hostname=domain) as sock:
+    ctx = ssl.create_default_context() if scheme == "https" else None
+    stream = ctx.wrap_socket(raw, server_hostname=domain) if ctx else nullcontext(raw)
+    with stream as sock:
         sock.sendall(
             (
                 "GET /api/world/updates HTTP/1.1\r\n"

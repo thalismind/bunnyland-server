@@ -4,39 +4,33 @@ services:
   server:
     image: ghcr.io/thalismind/bunnyland-server:${BUNNYLAND_SERVER_TAG:-main}
     command:
-      - bunnyland
-      - serve
-      - --llm
-      - --discord
-      - --generator
-      - ${BUNNYLAND_GENERATOR:-lifesim-demo}
-      - --worldgen-model
-      - ${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}
-      - --character-model
-      - ${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}
-      - --ticks
-      - "0"
-      - --tick-seconds
-      - ${BUNNYLAND_TICK_SECONDS:-30}
-      - --time-scale
-      - ${BUNNYLAND_TIME_SCALE:-1800}
-      - --api-host
-      - 0.0.0.0
-      - --api-port
-      - "8765"
-      - --save
-      - /data/worlds/main.json
-      - --autosave-every
-      - ${BUNNYLAND_AUTOSAVE_EVERY:-20}
+      - /bin/sh
+      - -ec
+      - |
+        set -- bunnyland serve
+        if [ "$${BUNNYLAND_ENABLE_LLM:-0}" = "1" ]; then
+          set -- "$$@" --llm --worldgen-model "$${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
+        fi
+        if [ "$${BUNNYLAND_ENABLE_DISCORD:-0}" = "1" ]; then
+          set -- "$$@" --discord
+        fi
+        exec "$$@" \
+          --generator "$${BUNNYLAND_GENERATOR:-lifesim-demo}" \
+          --ticks 0 \
+          --tick-seconds "$${BUNNYLAND_TICK_SECONDS:-30}" \
+          --time-scale "$${BUNNYLAND_TIME_SCALE:-1800}" \
+          --api-host 0.0.0.0 \
+          --api-port 8765 \
+          --save /data/worlds/main.json \
+          --autosave-every "$${BUNNYLAND_AUTOSAVE_EVERY:-20}"
     volumes:
       - ${BUNNYLAND_DATA_DIR:-./data}:/data
     environment:
-      OLLAMA_CLOUD_API_KEY: ${OLLAMA_CLOUD_API_KEY:?set OLLAMA_CLOUD_API_KEY}
-      OLLAMA_HOST: ${OLLAMA_HOST:-https://ollama.com}
-      DISCORD_TOKEN: ${DISCORD_TOKEN:?set DISCORD_TOKEN}
-      BUNNYLAND_DISCORD_USER_ID: ${BUNNYLAND_DISCORD_USER_ID:-}
-      BUNNYLAND_DISCORD_CHANNEL_ID: ${BUNNYLAND_DISCORD_CHANNEL_ID:-}
-      BUNNYLAND_DISCORD_CHARACTER: ${BUNNYLAND_DISCORD_CHARACTER:-}
+      BUNNYLAND_GENERATOR: ${BUNNYLAND_GENERATOR:-lifesim-demo}
+      BUNNYLAND_WORLD_FILE: ${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}
+      BUNNYLAND_TICK_SECONDS: ${BUNNYLAND_TICK_SECONDS:-30}
+      BUNNYLAND_TIME_SCALE: ${BUNNYLAND_TIME_SCALE:-1800}
+      BUNNYLAND_AUTOSAVE_EVERY: ${BUNNYLAND_AUTOSAVE_EVERY:-20}
     expose:
       - "8765"
     restart: unless-stopped
@@ -48,6 +42,6 @@ services:
     environment:
       BUNNYLAND_API_UPSTREAM: http://server:8765
       BUNNYLAND_SERVER_NAME: ${BUNNYLAND_SERVER_NAME:-_}
-    ports:
-      - "${BUNNYLAND_HTTP_BIND:-0.0.0.0:80}:80"
+    expose:
+      - "80"
     restart: unless-stopped

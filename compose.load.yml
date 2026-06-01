@@ -1,27 +1,22 @@
 services:
   server:
     command:
-      - bunnyland
-      - serve
-      - --llm
-      - --discord
-      - --load
-      - ${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}
-      - --worldgen-model
-      - ${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}
-      - --character-model
-      - ${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}
-      - --ticks
-      - "0"
-      - --tick-seconds
-      - ${BUNNYLAND_TICK_SECONDS:-30}
-      - --time-scale
-      - ${BUNNYLAND_TIME_SCALE:-1800}
-      - --api-host
-      - 0.0.0.0
-      - --api-port
-      - "8765"
-      - --save
-      - ${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}
-      - --autosave-every
-      - ${BUNNYLAND_AUTOSAVE_EVERY:-20}
+      - /bin/sh
+      - -ec
+      - |
+        set -- bunnyland serve
+        if [ "$${BUNNYLAND_ENABLE_LLM:-0}" = "1" ]; then
+          set -- "$$@" --llm --worldgen-model "$${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
+        fi
+        if [ "$${BUNNYLAND_ENABLE_DISCORD:-0}" = "1" ]; then
+          set -- "$$@" --discord
+        fi
+        exec "$$@" \
+          --load "$${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}" \
+          --ticks 0 \
+          --tick-seconds "$${BUNNYLAND_TICK_SECONDS:-30}" \
+          --time-scale "$${BUNNYLAND_TIME_SCALE:-1800}" \
+          --api-host 0.0.0.0 \
+          --api-port 8765 \
+          --save "$${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}" \
+          --autosave-every "$${BUNNYLAND_AUTOSAVE_EVERY:-20}"

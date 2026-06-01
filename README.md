@@ -40,35 +40,43 @@ uv run bunnyland serve --llm --generator recursive --ticks 20
 The server repo includes a ready-to-run Compose stack using published containers:
 
 ```bash
-cp .env.example .env
-docker compose up -d
+BUNNYLAND_CONTAINER_RUNTIME=docker \
+BUNNYLAND_TLS=0 \
+BUNNYLAND_CONFIGURE_FIREWALL=0 \
+BUNNYLAND_HTTP_BIND=127.0.0.1:8080 \
+BUNNYLAND_DOMAIN=localhost \
+BUNNYLAND_DATA_DIR=/tmp/bunnyland-data \
+BUNNYLAND_ADMIN_USER=editor \
+BUNNYLAND_ADMIN_PASSWORD=local \
+BUNNYLAND_ENABLE_LLM=0 \
+BUNNYLAND_ENABLE_DISCORD=0 \
+  scripts/vps-docker-setup
 ```
 
-Open `http://localhost/`. The `frontend` container serves the web client and proxies
+Open `http://localhost:8080/`. The `frontend` container serves the web client and proxies
 same-origin `/api/` requests to the private `server` container. Server state is bind-mounted
 from `BUNNYLAND_DATA_DIR` into `/data` so admins can inspect saved worlds directly.
 For HTTPS/SNI deployments, use `scripts/vps-docker-setup` as described in the VPS Docker
-setup. It writes `.env`, configures admin auth, obtains a Let's Encrypt certificate with
+setup. It writes `compose.user.yml`, configures admin auth, obtains a Let's Encrypt certificate with
 certbot, and runs the checked-in Compose files.
 
 For local image development, add the build override:
 
 ```bash
-docker compose -f compose.yml -f compose.build.yml up -d --build
+docker compose --env-file /dev/null -f compose.yml -f compose.user.yml -f compose.build.yml up -d --build
 ```
 
-To reload an existing bind-mounted world instead of generating one, add `compose.load.yml`:
+To reload an existing bind-mounted world instead of generating one, add
+`BUNNYLAND_WORLD_SAVE` to the setup command:
 
 ```bash
-docker compose -f compose.yml -f compose.load.yml up -d
+BUNNYLAND_WORLD_SAVE=/tmp/bunnyland-data/worlds/main.json
 ```
 
-To override the browser favicon, add `compose.favicon.yml` and point
-`BUNNYLAND_FAVICON_FILE` at a local PNG:
+To override the browser favicon, set `BUNNYLAND_FAVICON_FILE` during setup:
 
 ```bash
-BUNNYLAND_FAVICON_FILE=/opt/bunnyland/favicon.png \
-  docker compose -f compose.yml -f compose.favicon.yml up -d
+BUNNYLAND_FAVICON_FILE=/opt/bunnyland/favicon.png
 ```
 
 CI builds and publishes `ghcr.io/thalismind/bunnyland-server` on pushes to `main`, with
@@ -81,8 +89,11 @@ branch tags and `latest` for the default branch. The web repo publishes
   core, plugins, clients, scripts, and content libraries.
 - **[Running a server](docs/running-a-server.md)** — install, the `serve` loop, the time
   model, and connecting an LLM.
-- **[VPS admin setup](docs/vps-admin-setup.md)** — Linux VPS deployment with nginx,
-  optional Docker, plugin/world setup, web client connection, and Discord bot wiring.
+- **[VPS Docker setup](docs/vps-admin-setup.md)** — Linux VPS deployment with the
+  containerized server/frontend stack, Let's Encrypt, admin auth, Ollama, and Discord bot
+  wiring.
+- **[Host dev setup](docs/host-dev-setup.md)** — older non-container host setup for
+  development and debugging.
 - **[World creation](docs/world-creation.md)** — generators (`oneshot` vs `recursive`),
   seeds, how generation stays inside the rules, and adding your own generator.
 - **[Discord bot](docs/discord-bot.md)** — creating the bot, the token, inviting it,

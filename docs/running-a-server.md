@@ -53,8 +53,9 @@ The API exposes:
 - `GET /admin/runtime`, `POST /admin/pause`, and `POST /admin/resume` for
   server-level tick control; protect `/admin/*` at your reverse proxy.
 
-For a step-by-step Linux VPS deployment with nginx and the web client, see the
-[VPS admin setup guide](vps-admin-setup.md).
+For a step-by-step Linux VPS deployment, use the containerized
+[VPS Docker setup guide](vps-admin-setup.md). The older host-level setup is kept in
+[host dev setup](host-dev-setup.md) for development and debugging.
 
 ## Connecting an LLM
 

@@ -1,538 +1,4 @@
-# VPS admin setup guide
-
-This guide covers a production-style Bunnyland install on a Linux VPS:
-
-1. run the server API;
-2. serve the web client from `../bunnyland-web`;
-3. choose plugins and create or resume a world;
-4. connect a browser client;
-5. connect Discord as a bot.
-6. optionally serve a project homepage from `../bunnyland-home`.
-
-The examples assume:
-
-- Debian/Ubuntu paths and service commands;
-- homepage domain `example.com`;
-- web client domain `sandbox.example.com`;
-- optional homepage redirect domain `home.example.com`;
-- server checkout at `/opt/bunnyland/server`;
-- web checkout at `/opt/bunnyland/web`;
-- homepage checkout at `/opt/bunnyland/home`;
-- public web client config at `/var/www/bunnyland/config.json`;
-- world state at `/var/lib/bunnyland/worlds/main.json`;
-- Bunnyland API bound to `127.0.0.1:8765`.
-
-Adjust names and paths for your host.
-
-## 1. Server install
-
-Install host packages. Use Python 3.12 on Ubuntu 24.04 and older:
-
-```bash
-sudo apt update
-sudo apt install -y \
-  git curl nginx apache2-utils ufw certbot python3-certbot-nginx \
-  python3.12 python3.12-venv
-```
-
-On Ubuntu 26.04 and newer, the Python 3.12 packages are no longer present, so use
-Python 3.14 instead:
-
-```bash
-sudo apt update
-sudo apt install -y \
-  git curl nginx apache2-utils ufw certbot python3-certbot-nginx \
-  python3.14 python3.14-venv
-```
-
-Create a service account and directories:
-
-```bash
-sudo useradd --system --create-home --home-dir /opt/bunnyland --shell /usr/sbin/nologin bunnyland
-sudo install -d -o bunnyland -g bunnyland /opt/bunnyland/server
-sudo install -d -o bunnyland -g bunnyland /opt/bunnyland/web
-sudo install -d -o bunnyland -g bunnyland /opt/bunnyland/home
-sudo install -d -o bunnyland -g bunnyland /var/lib/bunnyland/worlds
-sudo install -d -m 0750 -o bunnyland -g bunnyland /etc/bunnyland
-sudo install -d -o www-data -g www-data /var/www/bunnyland
-```
-
-Install `uv` for the service account:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sudo -u bunnyland sh
-```
-
-Clone and install the server:
-
-```bash
-sudo -u bunnyland git clone https://github.com/thalismind/bunnyland-server.git /opt/bunnyland/server
-cd /opt/bunnyland/server
-sudo -u bunnyland /opt/bunnyland/.local/bin/uv sync --python 3.12 --extra server --extra llm --extra discord
-```
-
-On Ubuntu 26.04 and newer, use Python 3.14 for the virtual environment:
-
-```bash
-sudo -u bunnyland /opt/bunnyland/.local/bin/uv sync --python 3.14 --extra server --extra llm --extra discord
-```
-
-Use the SSH deployment remote instead if your VPS needs deploy-key access.
-
-Create `/etc/bunnyland/server.env`:
-
-```dotenv
-# Required only when using --llm.
-OLLAMA_CLOUD_API_KEY=sk-...
-
-# Optional for local Ollama.
-# OLLAMA_HOST=http://127.0.0.1:11434
-
-# Required only for the Discord bot.
-# DISCORD_TOKEN=...
-```
-
-Keep this file readable only by root and the service user:
-
-```bash
-sudo chown root:bunnyland /etc/bunnyland/server.env
-sudo chmod 0640 /etc/bunnyland/server.env
-```
-
-The systemd service below loads this file with `EnvironmentFile=...`; ad hoc shell
-commands do not. If you run `bunnyland serve --llm` manually, source the file in that
-command before starting the process. Keep the file to simple `KEY=value` lines so it works
-for both systemd and shell sourcing.
-
-The `bunnyland` account is created with `/usr/sbin/nologin` for security. That means
-`sudo su - bunnyland` is expected to fail with `This account is currently not available`.
-Use `sudo -u bunnyland <command>` instead.
-
-The account may also have a locked password because it was created as a system user. That
-does not stop systemd or `sudo -u bunnyland ...` from working. Check both the shell and
-password state with:
-
-```bash
-getent passwd bunnyland
-sudo passwd -S bunnyland
-```
-
-For temporary interactive maintenance, give the account a real shell and unlock it:
-
-```bash
-sudo usermod --shell /bin/bash bunnyland
-sudo passwd bunnyland
-sudo passwd -u bunnyland
-sudo su - bunnyland
-```
-
-When you are done, restore the service-account posture:
-
-```bash
-sudo usermod --shell /usr/sbin/nologin bunnyland
-sudo passwd -l bunnyland
-```
-
-## 2. Web client install
-
-The current web client is a static snapshot/live inspector. It has no build step.
-
-```bash
-sudo -u bunnyland git clone https://github.com/thalismind/bunnyland-web.git /opt/bunnyland/web
-```
-
-Deploy-specific web client settings should live outside the web checkout so `git pull` stays
-clean:
-
-```bash
-sudo tee /var/www/bunnyland/config.json >/dev/null <<'JSON'
-{
-  "serverUrl": "https://sandbox.example.com/api/",
-  "autoConnect": true
-}
-JSON
-sudo chown www-data:www-data /var/www/bunnyland/config.json
-sudo chmod 0644 /var/www/bunnyland/config.json
-```
-
-For a local smoke test without nginx:
-
-```bash
-cd /opt/bunnyland/web
-sudo -u bunnyland ./serve.sh 8080
-```
-
-## 2.1 Optional homepage install
-
-The project homepage is also static and has no build step:
-
-```bash
-sudo -u bunnyland git clone https://github.com/thalismind/bunnyland-home.git /opt/bunnyland/home
-```
-
-The example nginx config below serves this at `https://example.com/` and redirects
-`https://home.example.com/` to the apex domain.
-
-## 3. Choose plugins and create a world
-
-By default, `bunnyland serve` loads every builtin plugin whose `default_enabled` flag is
-set. To restrict the surface, pass every plugin you want with repeated `--plugin` flags.
-Required dependencies are checked and ordered, but they are not auto-loaded yet.
-
-Common builtin plugin ids:
-
-| Plugin id               | Use it for                                      |
-|-------------------------|-------------------------------------------------|
-| `bunnyland.core_verbs`  | movement, items, speech, sleeping, writing      |
-| `bunnyland.worldgen`    | `oneshot` and `recursive` world generators      |
-| `bunnyland.lifesim`     | hunger, thirst, relationships, pregnancy, birth |
-| `bunnyland.memory`      | private notes and recall                        |
-| `bunnyland.environment` | calendar, time of day, weather                  |
-| `bunnyland.social`      | social bond updates from speech                 |
-| `bunnyland.policy`      | boundaries and consent checks                   |
-| `bunnyland.persona`     | traits, preferences, goals                      |
-| `bunnyland.colonysim`   | jobs, reservations, ownership, crafting         |
-| `bunnyland.barbariansim` | combat and fortification                       |
-| `bunnyland.gardensim`   | crops, watering, fertilizer, harvesting         |
-| `bunnyland.dragonsim`   | quests, factions, discovery                     |
-
-Create a new long-running world with the defaults:
-
-```bash
-sudo -u bunnyland bash -lc '
-cd /opt/bunnyland/server
-set -a
-. /etc/bunnyland/server.env
-set +a
-exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
-  --llm \
-  --generator recursive \
-  --seed "a mossy rabbit village under an old observatory" \
-  --max-rooms 8 \
-  --ticks 0 \
-  --tick-seconds 30 \
-  --time-scale 1800 \
-  --api-host 127.0.0.1 \
-  --api-port 8765 \
-  --save /var/lib/bunnyland/worlds/main.json \
-  --autosave-every 20
-'
-```
-
-Create a smaller curated server surface:
-
-```bash
-sudo -u bunnyland bash -lc '
-cd /opt/bunnyland/server
-set -a
-. /etc/bunnyland/server.env
-set +a
-exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
-  --plugin bunnyland.core_verbs \
-  --plugin bunnyland.worldgen \
-  --plugin bunnyland.lifesim \
-  --plugin bunnyland.memory \
-  --plugin bunnyland.social \
-  --plugin bunnyland.policy \
-  --llm \
-  --generator recursive \
-  --seed "a quiet burrow commons" \
-  --ticks 0 \
-  --api-host 127.0.0.1 \
-  --api-port 8765 \
-  --save /var/lib/bunnyland/worlds/main.json \
-  --autosave-every 20
-'
-```
-
-Load an external plugin module and select one of its plugins:
-
-```bash
-sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --extra server bunnyland serve \
-  --import module_foo \
-  --plugin bar \
-  --plugin bunnyland.core_verbs \
-  --plugin bunnyland.worldgen \
-  --ticks 0 \
-  --api-host 127.0.0.1 \
-  --api-port 8765
-```
-
-Imported plugin ids are namespaced by module for world metadata, so
-`--import module_foo --plugin bar` is recorded as `module_foo.bar`.
-
-Resume an existing world:
-
-```bash
-sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
-  --load /var/lib/bunnyland/worlds/main.json \
-  --save /var/lib/bunnyland/worlds/main.json \
-  --ticks 0 \
-  --api-host 127.0.0.1 \
-  --api-port 8765
-```
-
-## 4. Run the server with systemd
-
-Create `/etc/systemd/system/bunnyland.service`:
-
-```ini
-[Unit]
-Description=Bunnyland server
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=bunnyland
-Group=bunnyland
-WorkingDirectory=/opt/bunnyland/server
-EnvironmentFile=/etc/bunnyland/server.env
-ExecStart=/opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve --llm --generator recursive --max-rooms 8 --ticks 0 --tick-seconds 30 --time-scale 1800 --api-host 127.0.0.1 --api-port 8765 --save /var/lib/bunnyland/worlds/main.json --autosave-every 20
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable it:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now bunnyland
-sudo systemctl status bunnyland
-curl -fsS http://127.0.0.1:8765/health
-```
-
-## 5. Configure nginx
-
-Serve the homepage at the apex domain, serve the web client at the sandbox domain, and proxy
-the Bunnyland API under `/api` on the sandbox domain.
-
-Create the editor password file:
-
-```bash
-sudo install -d -o root -g www-data -m 0750 /etc/nginx/bunnyland
-sudo htpasswd -c /etc/nginx/bunnyland/world-editor.htpasswd editor
-sudo chown root:www-data /etc/nginx/bunnyland/world-editor.htpasswd
-sudo chmod 0640 /etc/nginx/bunnyland/world-editor.htpasswd
-```
-
-Create the websocket upgrade map before enabling the site config. On Ubuntu, files in
-`/etc/nginx/conf.d/*.conf` are included from nginx's `http` block, so this defines
-`$connection_upgrade` for the proxy headers below:
-
-```bash
-sudo tee /etc/nginx/conf.d/bunnyland-upgrade-map.conf >/dev/null <<'NGINX'
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-    '' close;
-}
-NGINX
-```
-
-`$connection_upgrade` is not a built-in nginx variable; this `map` creates it. The map is
-needed on any nginx version when the site config uses
-`proxy_set_header Connection $connection_upgrade;`. If your distro or custom nginx config
-does not include `/etc/nginx/conf.d/*.conf` from the `http` block, add the `map` directly
-inside `http { ... }` instead.
-
-Create `/etc/nginx/sites-available/bunnyland`:
-
-```nginx
-server {
-    listen 80;
-    server_name example.com;
-
-    root /opt/bunnyland/home;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
-
-server {
-    listen 80;
-    server_name home.example.com;
-    return 301 https://example.com$request_uri;
-}
-
-server {
-    listen 80;
-    server_name sandbox.example.com;
-
-    root /opt/bunnyland/web;
-    index index.html;
-
-    location = /config.json {
-        alias /var/www/bunnyland/config.json;
-        default_type application/json;
-        add_header Cache-Control "no-store" always;
-    }
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    location /api/admin/ {
-        auth_basic "Bunnyland world editor";
-        auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-        proxy_pass http://127.0.0.1:8765/admin/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:8765/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 3600s;
-    }
-}
-```
-
-Enable and reload:
-
-```bash
-sudo ln -s /etc/nginx/sites-available/bunnyland /etc/nginx/sites-enabled/bunnyland
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-Add TLS with certbot or your normal certificate automation:
-
-```bash
-sudo certbot --nginx \
-  -d example.com \
-  -d home.example.com \
-  -d sandbox.example.com \
-  --agree-tos \
-  -m admin@example.com \
-  --redirect
-```
-
-After TLS is enabled, verify that the certbot-managed HTTPS server for
-`sandbox.example.com` still contains the `/api/` proxy block and the `/config.json` alias.
-
-## 6. Connect through the web client
-
-Open `https://sandbox.example.com`.
-
-In the web client's **Server** field:
-
-- use `https://sandbox.example.com/api/` when nginx proxies the API under `/api`;
-- use `http://localhost:8765` when running both pieces locally;
-- use `https://api.example.com` if you expose the API on a separate hostname.
-
-Click **Connect Live**. The client first requests:
-
-```text
-GET /world/snapshot
-```
-
-through the configured base URL, then opens:
-
-```text
-WS /world/updates
-```
-
-for the initial snapshot and later typed events. If nginx is mounted at `/api`, those become
-`/api/world/snapshot` and `/api/world/updates` externally.
-
-Useful checks:
-
-```bash
-curl -fsS https://example.com/
-curl -fsS -I https://home.example.com/
-curl -fsS https://sandbox.example.com/
-curl -fsS https://sandbox.example.com/config.json
-curl -fsS https://sandbox.example.com/api/health
-curl -fsS https://sandbox.example.com/api/world/snapshot
-curl -i -X PATCH https://sandbox.example.com/api/admin/world
-curl -fsS -u editor:YOUR_PASSWORD -X PATCH https://sandbox.example.com/api/admin/world \
-  -H 'Content-Type: application/json' \
-  --data '{"operations":[]}'
-curl -i -X POST https://sandbox.example.com/api/admin/world/save
-curl -fsS -u editor:YOUR_PASSWORD -X POST https://sandbox.example.com/api/admin/world/save
-curl -fsS -u editor:YOUR_PASSWORD -X POST https://sandbox.example.com/api/admin/pause
-curl -fsS -u editor:YOUR_PASSWORD -X POST https://sandbox.example.com/api/admin/resume
-cd /opt/bunnyland/server
-/opt/bunnyland/.local/bin/uv run --extra server python - <<'PY'
-import asyncio
-import json
-import websockets
-
-async def main():
-    async with websockets.connect("wss://sandbox.example.com/api/world/updates") as ws:
-        message = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-        print(message["type"])
-
-asyncio.run(main())
-PY
-```
-
-The unauthenticated `PATCH` and save checks should return `401 Unauthorized`. The
-authenticated empty patch should return JSON with the current `world_epoch`, and the
-authenticated save should include the server-side save path.
-
-If the page loads but **Connect Live** fails, check:
-
-- the Server field includes `/api` when using the nginx config above;
-- `https://sandbox.example.com/` serves the web checkout rather than the homepage or a 404;
-- nginx has the websocket `Upgrade` and `Connection` headers;
-- `/etc/nginx/conf.d/bunnyland-upgrade-map.conf` exists before running `nginx -t`;
-- `bunnyland.service` is listening on `127.0.0.1:8765`;
-- browser devtools do not show mixed-content errors from using `http://` on an HTTPS page.
-
-## 7. Enable the firewall
-
-Bind Bunnyland to localhost (`--api-host 127.0.0.1`) and expose it only through nginx.
-Then allow SSH, HTTP, and HTTPS before enabling UFW:
-
-```bash
-sudo ufw allow 22/tcp
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw deny 8765/tcp
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw --force enable
-sudo ufw status verbose
-```
-
-Expected policy:
-
-```text
-Default: deny (incoming), allow (outgoing)
-22/tcp ALLOW IN
-80/tcp ALLOW IN
-443/tcp ALLOW IN
-8765/tcp DENY IN
-```
-
-Verify that nginx still reaches the app locally, but the app port is not public:
-
-```bash
-curl -fsS http://127.0.0.1:8765/health
-curl -fsS https://sandbox.example.com/api/health
-curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health || true
-```
-
-The last command should time out or fail. The public API should be available only through
-`https://sandbox.example.com/api/`.
-
-## 8. VPS Docker setup
+# VPS Docker setup guide
 
 For a ready-to-run container deployment, keep the public edge in one frontend container and
 keep the Bunnyland API private on the Compose network:
@@ -548,23 +14,50 @@ plain HTTP from nginx over Docker DNS (`server:8765`).
 The server repo owns the Compose files:
 
 - `compose.yml` runs `ghcr.io/thalismind/bunnyland-server` and
-  `ghcr.io/thalismind/bunnyland-web`;
-- `compose.load.yml` reloads an existing saved world from the bind mount;
-- `compose.tls.yml` swaps the frontend nginx template to terminate HTTPS;
-- `deploy/nginx/frontend-tls.conf` is the TLS nginx template used by the frontend image.
+  `ghcr.io/thalismind/bunnyland-web` with private service ports only;
+- `compose.user.yml.template` is rendered by setup into `compose.user.yml`, which publishes
+  the frontend port, sets the domain, binds the data directory, configures TLS/homepage and
+  favicon mounts, loads an existing world when requested, and injects Ollama/Discord
+  secrets for the full deployment;
+- `deploy/nginx/frontend-tls.conf` and `deploy/nginx/frontend-tls-home.conf` are the TLS
+  nginx templates mounted by the generated `compose.user.yml`.
 
 The Compose service names are deliberately `server` and `frontend`. The frontend nginx
 config proxies to `http://server:8765/`, which is Docker DNS for the server service. The
 container images are `ghcr.io/thalismind/bunnyland-server` and
 `ghcr.io/thalismind/bunnyland-web`.
 
-For a VPS, use the setup script. It installs the container runtime if needed, writes
-`.env`, creates the admin password file, requests or reuses a Let's Encrypt certificate
-with certbot, configures UFW, stops the old `bunnyland` and `nginx` services if they exist,
-and starts the checked-in Compose files with `sudo nerdctl compose`. Fill in only your own
-domain name, admin username/password, host data folder, Ollama Cloud key, and Discord bot
-token. Optionally provide a favicon path, an existing world save file, and a startup
-Discord claim.
+The fastest path is the setup wizard. It supports Debian and Ubuntu, detects Docker,
+nerdctl, or Podman with Compose support, prompts for the required values, writes
+`compose.user.yml`, and starts the checked-in Compose files. If existing Bunnyland
+containers are present, it asks before removing those containers. It does not delete bind
+mounts or named volumes, and the lower-level setup script backs up the selected world save
+before starting containers.
+
+```bash
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
+sudo install -d -m 0755 /opt/bunnyland
+cd /opt/bunnyland
+if [ ! -d server ]; then
+  git clone https://github.com/thalismind/bunnyland-server.git server
+fi
+cd server
+git pull --ff-only
+scripts/vps-docker-wizard
+```
+
+The rest of this section shows the same setup in copy-pasteable steps. Start with a
+container/routing smoke test if you need to isolate DNS, TLS, firewall, and admin auth.
+That smoke test is not a complete Bunnyland deployment. The full deployment requires both
+the Ollama key and the Discord bot token.
+
+## 1. Container Smoke Test
+
+This starts the same server and frontend containers with deterministic/offline generation
+and waiting controllers. It is only for proving that containers, routing, TLS, admin auth,
+and persistence work before adding external services. It does not need
+`OLLAMA_CLOUD_API_KEY` or `DISCORD_TOKEN`.
 
 Copy this block, change the values in the first section, and paste it into the VPS:
 
@@ -574,8 +67,6 @@ BUNNYLAND_DATA_DIR='/var/lib/bunnyland'
 BUNNYLAND_ADMIN_USER='editor'
 BUNNYLAND_ADMIN_PASSWORD='change-this'
 BUNNYLAND_CERT_EMAIL='admin@example.com'
-OLLAMA_CLOUD_API_KEY='sk-...'
-DISCORD_TOKEN='...'
 
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
@@ -592,75 +83,43 @@ BUNNYLAND_DATA_DIR="$BUNNYLAND_DATA_DIR" \
 BUNNYLAND_ADMIN_USER="$BUNNYLAND_ADMIN_USER" \
 BUNNYLAND_ADMIN_PASSWORD="$BUNNYLAND_ADMIN_PASSWORD" \
 BUNNYLAND_CERT_EMAIL="$BUNNYLAND_CERT_EMAIL" \
-OLLAMA_CLOUD_API_KEY="$OLLAMA_CLOUD_API_KEY" \
-DISCORD_TOKEN="$DISCORD_TOKEN" \
+BUNNYLAND_ENABLE_LLM=0 \
+BUNNYLAND_ENABLE_DISCORD=0 \
   scripts/vps-docker-setup
 ```
 
-Then open `https://sandbox.example.com/`. The frontend image ships a default `/config.json`
-that points the browser at same-origin `/api/`, so the web UI and API proxy come up
-together.
-
-To start from an existing saved world, add `BUNNYLAND_WORLD_SAVE`. If the file is already
-under `BUNNYLAND_DATA_DIR`, the script loads it in place; otherwise it copies the save into
-`$BUNNYLAND_DATA_DIR/worlds/` first. Before starting containers, the script creates a
-timestamped backup next to the selected save file.
+To start from an existing saved world, add `BUNNYLAND_WORLD_SAVE` to the setup command. If
+the file is already under `BUNNYLAND_DATA_DIR`, the script loads it in place; otherwise it
+copies the save into `$BUNNYLAND_DATA_DIR/worlds/` first. Before starting containers, the
+script creates a timestamped backup next to the selected save file.
 
 ```bash
-BUNNYLAND_DOMAIN='sandbox.example.com' \
-BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
-BUNNYLAND_ADMIN_USER='editor' \
-BUNNYLAND_ADMIN_PASSWORD='change-this' \
-BUNNYLAND_CERT_EMAIL='admin@example.com' \
-OLLAMA_CLOUD_API_KEY='sk-...' \
-DISCORD_TOKEN='...' \
 BUNNYLAND_WORLD_SAVE='/var/lib/bunnyland/worlds/main.json' \
-  scripts/vps-docker-setup
 ```
 
-To use a custom favicon, add `BUNNYLAND_FAVICON_FILE`:
+To use a custom favicon, add `BUNNYLAND_FAVICON_FILE` to the setup command:
 
 ```bash
-BUNNYLAND_DOMAIN='sandbox.example.com' \
-BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
-BUNNYLAND_ADMIN_USER='editor' \
-BUNNYLAND_ADMIN_PASSWORD='change-this' \
-BUNNYLAND_CERT_EMAIL='admin@example.com' \
-OLLAMA_CLOUD_API_KEY='sk-...' \
-DISCORD_TOKEN='...' \
 BUNNYLAND_FAVICON_FILE='/opt/bunnyland/favicon.png' \
-  scripts/vps-docker-setup
 ```
 
 To serve a separate static homepage from the same frontend nginx container, add
 `BUNNYLAND_HOME_DOMAIN` and `BUNNYLAND_HOME_DIR`. The homepage directory must contain its
 own `index.html`. The setup script requests or reuses a separate Let's Encrypt certificate
-for that domain and starts `compose.tls-home.yml` instead of `compose.tls.yml`:
+for that domain and mounts the homepage nginx template in `compose.user.yml`:
 
 ```bash
-BUNNYLAND_DOMAIN='sandbox.example.com' \
-BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
-BUNNYLAND_ADMIN_USER='editor' \
-BUNNYLAND_ADMIN_PASSWORD='change-this' \
-BUNNYLAND_CERT_EMAIL='admin@example.com' \
-OLLAMA_CLOUD_API_KEY='sk-...' \
-DISCORD_TOKEN='...' \
 BUNNYLAND_HOME_DOMAIN='example.com' \
 BUNNYLAND_HOME_CERT_NAME='example.com' \
 BUNNYLAND_HOME_DIR='/opt/bunnyland/home' \
-  scripts/vps-docker-setup
 ```
-
-To assign a Discord user to a character at startup, add
-`BUNNYLAND_DISCORD_USER_ID`, `BUNNYLAND_DISCORD_CHANNEL_ID`, and
-`BUNNYLAND_DISCORD_CHARACTER` to any setup command. If these are omitted, the bot still
-starts and users can claim from Discord with `!claim`.
 
 The script uses only Let's Encrypt for public TLS certificate issuance. It never generates
 self-signed certificates for the VPS Docker deployment. If matching certificates already
-exist under `/etc/letsencrypt/live/`, the script reuses them; otherwise it stops anything
-binding port `80` and runs certbot's standalone authenticator for the app domain and,
-when configured, the homepage domain.
+exist under `/etc/letsencrypt/live/`, the script reuses them; otherwise it stops the
+frontend container and runs certbot's standalone authenticator for the app domain and,
+when configured, the homepage domain. Port `80` must be reachable by Let's Encrypt while
+certbot runs.
 
 The script also configures UFW for the containerized deployment. It allows SSH, HTTP, and
 HTTPS as normal inbound rules, denies direct public access to `8765`, and adds routed
@@ -668,25 +127,11 @@ HTTPS as normal inbound rules, denies direct public access to `8765`, and adds r
 nerdctl/containerd because published container ports traverse the container bridge; without
 them, `ufw status` can show `443/tcp ALLOW IN` while public HTTPS still times out.
 
-The script starts the checked-in Compose files:
+After the smoke test, open `https://sandbox.example.com/`. The frontend image ships a
+default `/config.json` that points the browser at same-origin `/api/`, so the web UI and
+API proxy come up together.
 
-- `compose.yml`;
-- `compose.load.yml` when an existing save is selected or `worlds/main.json` already
-  exists in the data directory;
-- `compose.tls.yml`;
-- `compose.tls-home.yml` instead of `compose.tls.yml` when `BUNNYLAND_HOME_DOMAIN` is
-  provided;
-- `compose.favicon.yml` when `BUNNYLAND_FAVICON_FILE` is provided.
-
-The checked-in Docker Compose path loads and saves the selected world, serves the web
-client, proxies `/api/`, enables websocket upgrades, protects `/api/admin/` with nginx
-basic auth, starts LLM character controllers with `--llm`, and starts the Discord bot with
-`--discord`. It uses one `OLLAMA_CLOUD_API_KEY` for both world generation and LLM
-characters. World generation defaults to `deepseek-v4-pro`, character controllers default
-to `deepseek-v4-flash`, and both can be changed with `BUNNYLAND_WORLDGEN_MODEL` and
-`BUNNYLAND_CHARACTER_MODEL`.
-
-After setup, verify the public route and admin auth:
+Verify the public route and admin auth:
 
 ```bash
 BUNNYLAND_DOMAIN='sandbox.example.com' \
@@ -694,6 +139,98 @@ BUNNYLAND_ADMIN_USER='editor' \
 BUNNYLAND_ADMIN_PASSWORD='change-this' \
   scripts/vps-docker-verify
 ```
+
+The verifier checks the web client, world editor, `/config.json`, `/api/health`,
+`/api/world/snapshot`, websocket upgrades through `/api/world/updates`, admin rejection
+with bad credentials (`401`), and admin success with the supplied credentials (`200`).
+
+## 2. Full Bunnyland Deployment
+
+Create the Discord application:
+
+1. Open the Discord Developer Portal and create an application.
+2. Add a bot and copy its token.
+3. Enable **Message Content Intent**.
+4. Generate an OAuth2 URL with scope `bot` and permissions to read and send messages.
+5. Invite the bot to your server.
+
+Then run one full setup command with both required external service credentials. Use one
+`OLLAMA_CLOUD_API_KEY` for both world generation and LLM character controllers. World
+generation defaults to `deepseek-v4-pro`; character controllers default to
+`deepseek-v4-flash`.
+
+Keep the same domain, data directory, admin credentials, and any
+world/homepage/favicon settings you used in the smoke test. The setup script formats
+`compose.user.yml` from `compose.user.yml.template`; after that, `compose.user.yml` is the
+only deployment-specific Compose file an admin should edit.
+
+```bash
+BUNNYLAND_DOMAIN='sandbox.example.com' \
+BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
+BUNNYLAND_ADMIN_USER='editor' \
+BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_CERT_EMAIL='admin@example.com' \
+BUNNYLAND_ENABLE_LLM=1 \
+OLLAMA_CLOUD_API_KEY='sk-...' \
+OLLAMA_HOST='https://ollama.com' \
+BUNNYLAND_WORLDGEN_MODEL='deepseek-v4-pro' \
+BUNNYLAND_CHARACTER_MODEL='deepseek-v4-flash' \
+BUNNYLAND_ENABLE_DISCORD=1 \
+DISCORD_TOKEN='...' \
+  scripts/vps-docker-setup
+```
+
+If you are loading an existing world, keep `BUNNYLAND_WORLD_SAVE` in that command so setup
+continues to point Compose at that save file.
+
+To assign a Discord user to a character at startup, add the numeric user id, channel id,
+and character name to the same full setup command. If these are omitted, the bot still
+starts and users can claim from Discord with `!claim`.
+
+```bash
+BUNNYLAND_DOMAIN='sandbox.example.com' \
+BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
+BUNNYLAND_ADMIN_USER='editor' \
+BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_CERT_EMAIL='admin@example.com' \
+BUNNYLAND_ENABLE_LLM=1 \
+OLLAMA_CLOUD_API_KEY='sk-...' \
+BUNNYLAND_ENABLE_DISCORD=1 \
+DISCORD_TOKEN='...' \
+BUNNYLAND_DISCORD_USER_ID='123' \
+BUNNYLAND_DISCORD_CHANNEL_ID='456' \
+BUNNYLAND_DISCORD_CHARACTER='Juniper' \
+  scripts/vps-docker-setup
+```
+
+At this point the VPS is running the full Bunnyland deployment: web client, private server
+API, Ollama-backed worldgen/characters, and the Discord bot.
+
+Test through Discord:
+
+1. In the invited channel, send `!characters`.
+2. Claim a suspended character with `!claim Character Name`, or just `!claim` to claim the
+   first claimable character.
+3. Send `!look`.
+4. Send a small command such as `!say hello`.
+
+Check the server logs if the bot does not respond:
+
+```bash
+sudo nerdctl logs bunnyland-server-1
+```
+
+If you used Docker or Podman instead of nerdctl, use `sudo docker logs bunnyland-server-1`
+or `sudo podman logs bunnyland-server-1`.
+
+The script starts the checked-in Compose files:
+
+- `compose.yml`;
+- generated `compose.user.yml`, rendered from `compose.user.yml.template`.
+
+The base `compose.yml` is the basic offline web/API deployment. User-specific settings,
+secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading, Ollama, and
+Discord are written into `compose.user.yml`.
 
 If the same frontend container also serves a static homepage, include the homepage domain
 and expected text:
@@ -707,23 +244,18 @@ BUNNYLAND_HOME_EXPECT_TEXT='A social simulation sandbox built as an ECS graph.' 
   scripts/vps-docker-verify
 ```
 
-The verifier checks the web client, world editor, `/config.json`, `/api/health`,
-`/api/world/snapshot`, websocket upgrades through `/api/world/updates`, admin rejection
-with bad credentials (`401`), and admin success with the supplied credentials (`200`).
-
-The generated `.env` is intentionally small and contains only deployment knobs: domain,
-certificate name, data directory, image tags, ports, optional world save path, and optional
-favicon path. Change the public domain by rerunning the script with a different
-`BUNNYLAND_DOMAIN`. Change the admin username/password by rerunning it with different
-`BUNNYLAND_ADMIN_USER` and `BUNNYLAND_ADMIN_PASSWORD`.
+The generated `compose.user.yml` contains deployment knobs and secrets. Keep it out of
+source control. Change the public domain, admin username/password, data directory, favicon,
+homepage, world save, Ollama key, or Discord token by rerunning the wizard or setup script
+with the new value; the setup script rewrites `compose.user.yml`.
 
 To renew Let's Encrypt certificates with the same standalone method, stop the frontend
 while certbot binds port `80`, then start it again:
 
 ```bash
-sudo nerdctl compose -p bunnyland -f compose.yml -f compose.tls.yml stop frontend
+sudo nerdctl compose --env-file /dev/null -p bunnyland -f compose.yml -f compose.user.yml stop frontend
 sudo certbot renew --standalone
-sudo nerdctl compose -p bunnyland -f compose.yml -f compose.tls.yml up -d frontend
+sudo nerdctl compose --env-file /dev/null -p bunnyland -f compose.yml -f compose.user.yml up -d frontend
 ```
 
 The published containers are tagged by branch. For normal VPS installs, keep
@@ -735,58 +267,20 @@ If TLS terminates somewhere else, remove the `443` listener/cert mounts, publish
 proxy in the frontend nginx config so the browser always loads the web page and API from
 the same external origin.
 
-The systemd setup above and the Docker setup are alternatives. Do not run both against the
-same world save path at the same time.
-
-## 9. Connect Discord as a bot
-
-The Discord frontend is an embedded MVP: run it from the same `bunnyland serve` process that
-owns the game loop and API by adding `--discord`.
-
-Create the Discord application:
-
-1. Open the Discord Developer Portal and create an application.
-2. Add a bot and copy its token.
-3. Enable **Message Content Intent**.
-4. Generate an OAuth2 URL with scope `bot` and permissions to read and send messages.
-5. Invite the bot to your server.
-6. Put the token in `/etc/bunnyland/server.env` as `DISCORD_TOKEN=...`.
-7. Optionally set the startup claim:
-   `BUNNYLAND_DISCORD_USER_ID=...`, `BUNNYLAND_DISCORD_CHANNEL_ID=...`, and
-   `BUNNYLAND_DISCORD_CHARACTER=Juniper`.
-
-Then add `--discord` to the existing `bunnyland.service` `ExecStart`. Keep only one process
-responsible for advancing a given world file at a time.
-
-If you skip the startup claim, a player can claim from Discord with `!claim [character]`.
-
-Player commands currently exposed by the bot:
-
-| Command             | Effect                  |
-|---------------------|-------------------------|
-| `!claim [name]`     | claim a suspended character |
-| `!look`             | describe the current room and exits |
-| `!move <direction>` | queue a move command    |
-| `!take <name>`      | queue a take command    |
-| `!say <text>`       | queue room speech       |
-| `!help [topic]`     | help for humans, agents, or a specific verb |
-
-## 10. Operating checklist
+## Operating checklist
 
 Before inviting players:
 
-1. `systemctl status bunnyland` is healthy.
-2. `curl -fsS http://127.0.0.1:8765/health` works on the VPS.
-3. `curl -fsS https://sandbox.example.com/api/health` works through nginx.
-4. The websocket returns an initial `snapshot` from `wss://sandbox.example.com/api/world/updates`.
-5. The web client connects live with `https://sandbox.example.com/api/`.
-6. `curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health` does not connect.
-7. `sudo ufw status verbose` shows SSH, HTTP, HTTPS allowed, `80/tcp` and `443/tcp`
+1. `sudo nerdctl ps` shows `bunnyland-server-1` and `bunnyland-frontend-1` running.
+2. `curl -fsS https://sandbox.example.com/api/health` works through the frontend container.
+3. The websocket returns an initial `snapshot` from `wss://sandbox.example.com/api/world/updates`.
+4. The web client connects live with `https://sandbox.example.com/api/`.
+5. `curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health` does not connect.
+6. `sudo ufw status verbose` shows SSH, HTTP, HTTPS allowed, `80/tcp` and `443/tcp`
    allowed for forwarded traffic, and the app port denied.
-8. `https://example.com/` serves the homepage, if deployed.
-9. `https://home.example.com/` redirects to `https://example.com/`, if deployed.
-10. `https://sandbox.example.com/config.json` contains the production server URL and `autoConnect`.
-11. `/var/lib/bunnyland/worlds/main.json` is being autosaved.
-12. Only one server process writes that world file.
-13. If Discord is enabled, the bot responds and its Discord user ids are assigned to
-   character controllers.
+7. `https://example.com/` serves the homepage, if deployed.
+8. `https://sandbox.example.com/config.json` contains the production server URL and `autoConnect`.
+9. The selected world save under `BUNNYLAND_DATA_DIR` is being autosaved.
+10. Only one server container writes that world file.
+11. If Discord is enabled, the bot responds and its Discord user ids are assigned to
+    character controllers.
