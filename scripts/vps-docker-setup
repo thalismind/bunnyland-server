@@ -221,6 +221,7 @@ chmod 0640 .env
 sudo systemctl stop bunnyland 2>/dev/null || true
 sudo systemctl stop nginx 2>/dev/null || true
 run_compose_quiet up -d
+run_compose_quiet restart frontend
 
 printf '\nBunnyland is starting at https://%s/\n' "$BUNNYLAND_DOMAIN"
 printf 'World data is mounted from %s.\n' "$BUNNYLAND_DATA_DIR"
