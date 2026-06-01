@@ -15,7 +15,7 @@ from .store import MemoryEntry
 class ChromaMemoryStore:
     """Vector-backed store. ``chromadb`` is imported lazily so core stays light."""
 
-    def __init__(self, client=None) -> None:
+    def __init__(self, client=None, embedding_function=None) -> None:
         if client is None:
             try:
                 import chromadb
@@ -25,10 +25,14 @@ class ChromaMemoryStore:
                 ) from exc
             client = chromadb.EphemeralClient()
         self._client = client
+        self._embedding_function = embedding_function
         self._counter = 0
 
     def _collection(self, collection: str):
-        return self._client.get_or_create_collection(name=collection)
+        kwargs = {}
+        if self._embedding_function is not None:
+            kwargs["embedding_function"] = self._embedding_function
+        return self._client.get_or_create_collection(name=collection, **kwargs)
 
     def add(
         self,

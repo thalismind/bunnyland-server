@@ -13,14 +13,21 @@ agent (see the docs).
 
 from __future__ import annotations
 
+import re
+
+import pytest
+
 from bunnyland.core import (
     CharacterComponent,
     ContainerComponent,
     ControlledBy,
+    FocusPointsComponent,
     LLMControllerComponent,
+    MemoryProfileComponent,
     SuspendedComponent,
     WorldActor,
     container_of,
+    replace_component,
 )
 from bunnyland.core.components import RoomComponent, WritableComponent
 from bunnyland.core.edges import ExitTo
@@ -28,12 +35,15 @@ from bunnyland.core.events import (
     ActorMovedEvent,
     CommandRejectedEvent,
     ItemTakenEvent,
+    NotesSearchedEvent,
     SpeechSaidEvent,
 )
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
 from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
+from bunnyland.memory import install_memory
+from bunnyland.memory.chroma import ChromaMemoryStore
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.worldgen import StubWorldBuilder, instantiate
@@ -44,6 +54,62 @@ KIND_COMPONENT = {
     "container": ContainerComponent,
     "paper": WritableComponent,
 }
+
+
+class _SynonymEmbedding:
+    """Tiny deterministic embedding for Chroma e2e tests."""
+
+    _GROUPS = (
+        {"petals", "blossom", "flower", "lunar", "moon", "sky", "dark"},
+        {"kettle", "teapot", "rust", "ferrous"},
+        {"crawlspace", "tunnel", "hidden", "below"},
+    )
+
+    def __call__(self, input):  # noqa: A002 - Chroma validates this parameter name.
+        return [self._embed(text) for text in input]
+
+    def embed_query(self, input):  # noqa: A002 - Chroma validates this parameter name.
+        return self(input)
+
+    @staticmethod
+    def name() -> str:
+        return "bunnyland-test-synonyms"
+
+    @staticmethod
+    def build_from_config(config):
+        del config
+        return _SynonymEmbedding()
+
+    def get_config(self):
+        return {}
+
+    def default_space(self) -> str:
+        return "l2"
+
+    def supported_spaces(self) -> list[str]:
+        return ["l2"]
+
+    def is_legacy(self) -> bool:
+        return False
+
+    def _embed(self, text: str) -> list[float]:
+        tokens = _tokens(text)
+        vector = [float(len(tokens & group)) for group in self._GROUPS]
+        return vector if any(vector) else [0.001, 0.001, 0.001]
+
+
+class _RecordingAgent(ScriptedAgent):
+    def __init__(self, calls):
+        super().__init__(calls)
+        self.prompts: list[str] = []
+
+    def decide(self, prompt, context, *, character_id: str, model: str | None = None):
+        self.prompts.append(prompt)
+        return super().decide(prompt, context, character_id=character_id, model=model)
+
+
+def _tokens(text: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9]+", text.lower())}
 
 
 async def _new_world():
@@ -176,6 +242,60 @@ async def test_scripted_playthrough_processes_actions_each_round():
     world = actor.world
     assert container_of(world.get_entity(result.objects["paper"])) == hazel
     assert container_of(world.get_entity(hazel)) == result.rooms["tunnel"]
+
+
+async def test_llm_agent_notes_can_be_found_by_chroma_vector_synonyms():
+    chromadb = pytest.importorskip("chromadb")
+
+    actor, _proposal, result = await _new_world()
+    hazel = result.characters["hazel"]
+    character = actor.world.get_entity(hazel)
+    replace_component(
+        character,
+        MemoryProfileComponent(vector_collection="test-memory-synonyms"),
+    )
+    replace_component(
+        character,
+        FocusPointsComponent(current=6.0, maximum=6.0, regen_per_hour=0.0),
+    )
+    install_memory(
+        actor,
+        ChromaMemoryStore(
+            client=chromadb.EphemeralClient(),
+            embedding_function=_SynonymEmbedding(),
+        ),
+    )
+    searched: list[NotesSearchedEvent] = []
+    actor.bus.subscribe(NotesSearchedEvent, searched.append)
+
+    flower_note = "Silver petals open when the sky goes dark."
+    kettle_note = "The old kettle smells like rust after rain."
+    crawlspace_note = "A narrow crawlspace runs below the pantry."
+    flower_query = "lunar blossom"
+    kettle_query = "ferrous teapot"
+    assert _tokens(flower_note).isdisjoint(_tokens(flower_query))
+    assert _tokens(kettle_note).isdisjoint(_tokens(kettle_query))
+
+    agent = _RecordingAgent(
+        [
+            ToolCall("take_note", {"text": flower_note}),
+            ToolCall("take_note", {"text": kettle_note}),
+            ToolCall("take_note", {"text": crawlspace_note}),
+            ToolCall("remember", {"query": flower_query, "mode": "vector", "limit": 1}),
+            ToolCall("remember", {"query": kettle_query, "mode": "vector", "limit": 1}),
+        ]
+    )
+    dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), agent)
+    loop = GameLoop(actor, dispatch, tick_seconds=1.0, time_scale=0.0)
+
+    # One extra tick executes the final command submitted by dispatch.
+    await loop.run(max_ticks=6)
+
+    assert len(agent.prompts) >= 5
+    assert searched[0].query == flower_query
+    assert searched[0].results == (flower_note,)
+    assert searched[1].query == kettle_query
+    assert searched[1].results == (kettle_note,)
 
 
 async def test_unreachable_target_is_not_processed_and_coaches_the_agent():
