@@ -108,8 +108,20 @@ if [[ -f "$host_world_file" ]]; then
 fi
 
 install_nerdctl
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y certbot
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y certbot ufw
 need openssl
+
+configure_firewall() {
+  sudo ufw allow 22/tcp
+  sudo ufw allow 80/tcp
+  sudo ufw allow 443/tcp
+  sudo ufw route allow proto tcp to any port 80
+  sudo ufw route allow proto tcp to any port 443
+  sudo ufw deny 8765/tcp
+  sudo ufw default deny incoming
+  sudo ufw default allow outgoing
+  sudo ufw --force enable
+}
 
 sudo install -d -o root -g root -m 0755 "$auth_dir"
 printf '%s:%s\n' "$BUNNYLAND_ADMIN_USER" "$(openssl passwd -apr1 "$BUNNYLAND_ADMIN_PASSWORD")" \
@@ -120,7 +132,7 @@ ensure_letsencrypt_cert() {
   local domain="$1"
   local name="$2"
 
-  if [[ -f "$letsencrypt_dir/live/$name/fullchain.pem" && -f "$letsencrypt_dir/live/$name/privkey.pem" ]]; then
+  if sudo test -f "$letsencrypt_dir/live/$name/fullchain.pem" && sudo test -f "$letsencrypt_dir/live/$name/privkey.pem"; then
     printf 'Using existing Let'\''s Encrypt certificate at %s/live/%s.\n' "$letsencrypt_dir" "$name"
     return
   fi
@@ -128,7 +140,7 @@ ensure_letsencrypt_cert() {
   printf 'Requesting a Let'\''s Encrypt certificate for %s with certbot.\n' "$domain"
   sudo systemctl stop nginx 2>/dev/null || true
   sudo nerdctl compose -p bunnyland "${compose_files[@]}" stop frontend 2>/dev/null || true
-  certbot_args=(certonly --standalone -d "$domain" --agree-tos --non-interactive)
+  certbot_args=(certonly --standalone --cert-name "$name" -d "$domain" --agree-tos --non-interactive)
   if [[ -n "${BUNNYLAND_CERT_EMAIL:-}" ]]; then
     certbot_args+=(--email "$BUNNYLAND_CERT_EMAIL" --no-eff-email)
   else
@@ -141,6 +153,8 @@ ensure_letsencrypt_cert "$BUNNYLAND_DOMAIN" "$cert_name"
 if [[ -n "$home_domain" ]]; then
   ensure_letsencrypt_cert "$home_domain" "$home_cert_name"
 fi
+
+configure_firewall
 
 cat > .env <<ENV
 BUNNYLAND_DATA_DIR=$BUNNYLAND_DATA_DIR

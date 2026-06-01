@@ -560,10 +560,10 @@ container images are `ghcr.io/thalismind/bunnyland-server` and
 
 For a VPS, use the setup script. It installs the container runtime if needed, writes
 `.env`, creates the admin password file, requests or reuses a Let's Encrypt certificate
-with certbot, stops the old `bunnyland` and `nginx` services if they exist, and starts the
-checked-in Compose files with `sudo nerdctl compose`. Fill in only your own domain name,
-admin username/password, and host data folder. Optionally provide a favicon path and an
-existing world save file.
+with certbot, configures UFW, stops the old `bunnyland` and `nginx` services if they exist,
+and starts the checked-in Compose files with `sudo nerdctl compose`. Fill in only your own
+domain name, admin username/password, and host data folder. Optionally provide a favicon
+path and an existing world save file.
 
 Copy this block, change the values in the first section, and paste it into the VPS:
 
@@ -645,6 +645,12 @@ self-signed certificates for the VPS Docker deployment. If matching certificates
 exist under `/etc/letsencrypt/live/`, the script reuses them; otherwise it stops anything
 binding port `80` and runs certbot's standalone authenticator for the app domain and,
 when configured, the homepage domain.
+
+The script also configures UFW for the containerized deployment. It allows SSH, HTTP, and
+HTTPS as normal inbound rules, denies direct public access to `8765`, and adds routed
+`ALLOW FWD` rules for ports `80` and `443`. Those routed rules are required with
+nerdctl/containerd because published container ports traverse the container bridge; without
+them, `ufw status` can show `443/tcp ALLOW IN` while public HTTPS still times out.
 
 The script starts the checked-in Compose files:
 
@@ -757,7 +763,8 @@ Before inviting players:
 4. The websocket returns an initial `snapshot` from `wss://sandbox.example.com/api/world/updates`.
 5. The web client connects live with `https://sandbox.example.com/api/`.
 6. `curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health` does not connect.
-7. `sudo ufw status verbose` shows SSH, HTTP, HTTPS allowed and the app port denied.
+7. `sudo ufw status verbose` shows SSH, HTTP, HTTPS allowed, `80/tcp` and `443/tcp`
+   allowed for forwarded traffic, and the app port denied.
 8. `https://example.com/` serves the homepage, if deployed.
 9. `https://home.example.com/` redirects to `https://example.com/`, if deployed.
 10. `https://sandbox.example.com/config.json` contains the production server URL and `autoConnect`.
