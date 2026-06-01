@@ -10,9 +10,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml uv.lock README.md ./
-COPY src ./src
+# Install dependencies first, without the project itself, so this layer is
+# cached and only rebuilt when pyproject.toml / uv.lock change.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --extra server --extra llm --extra discord --extra chroma --no-dev --no-install-project
 
+# Then add the source and install the project on top of the cached deps.
+COPY README.md ./
+COPY src ./src
 RUN uv sync --frozen --extra server --extra llm --extra discord --extra chroma --no-dev
 
 EXPOSE 8765
