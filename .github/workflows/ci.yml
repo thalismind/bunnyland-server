@@ -74,3 +74,83 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  vps-setup:
+    name: VPS Docker setup smoke test
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Check Docker availability
+        run: |
+          docker version
+          docker compose version
+          sudo docker version
+          sudo docker compose version
+
+      - name: Build local server image
+        run: docker build --pull -t ghcr.io/thalismind/bunnyland-server:ci .
+
+      - name: Validate rendered Compose config
+        env:
+          BUNNYLAND_CONTAINER_RUNTIME: docker
+          BUNNYLAND_SETUP_DRY_RUN: "1"
+          BUNNYLAND_TLS: "0"
+          BUNNYLAND_CONFIGURE_FIREWALL: "0"
+          BUNNYLAND_HTTP_BIND: 127.0.0.1:18080
+          BUNNYLAND_DOMAIN: localhost
+          BUNNYLAND_DATA_DIR: ${{ runner.temp }}/bunnyland-vps-data-dry-run
+          BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth-dry-run
+          BUNNYLAND_ADMIN_USER: editor
+          BUNNYLAND_ADMIN_PASSWORD: local
+          BUNNYLAND_SERVER_TAG: ci
+          BUNNYLAND_ENABLE_LLM: "0"
+          BUNNYLAND_ENABLE_DISCORD: "0"
+        run: scripts/vps-docker-setup
+
+      - name: Run setup script
+        env:
+          BUNNYLAND_CONTAINER_RUNTIME: docker
+          BUNNYLAND_TLS: "0"
+          BUNNYLAND_CONFIGURE_FIREWALL: "0"
+          BUNNYLAND_HTTP_BIND: 127.0.0.1:18080
+          BUNNYLAND_DOMAIN: localhost
+          BUNNYLAND_DATA_DIR: ${{ runner.temp }}/bunnyland-vps-data
+          BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth
+          BUNNYLAND_ADMIN_USER: editor
+          BUNNYLAND_ADMIN_PASSWORD: local
+          BUNNYLAND_SERVER_TAG: ci
+          BUNNYLAND_ENABLE_LLM: "0"
+          BUNNYLAND_ENABLE_DISCORD: "0"
+        run: scripts/vps-docker-setup
+
+      - name: Verify local deployment
+        env:
+          BUNNYLAND_VERIFY_SCHEME: http
+          BUNNYLAND_VERIFY_CONNECT_HOST: 127.0.0.1
+          BUNNYLAND_VERIFY_PORT: "18080"
+          BUNNYLAND_DOMAIN: localhost
+          BUNNYLAND_ADMIN_USER: editor
+          BUNNYLAND_ADMIN_PASSWORD: local
+          BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS: "403"
+          BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS: "403"
+        run: |
+          for attempt in {1..24}; do
+            if scripts/vps-docker-verify; then
+              exit 0
+            fi
+            sleep 5
+          done
+          scripts/vps-docker-verify
+
+      - name: Clean up local deployment
+        if: always()
+        run: |
+          sudo docker compose --env-file /dev/null -p bunnyland -f compose.yml -f compose.user.yml down -v --remove-orphans || true
+          sudo rm -rf "${{ runner.temp }}/bunnyland-vps-data" "${{ runner.temp }}/bunnyland-vps-data-dry-run"
+          sudo rm -rf "${{ runner.temp }}/bunnyland-vps-auth" "${{ runner.temp }}/bunnyland-vps-auth-dry-run"

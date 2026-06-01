@@ -46,6 +46,7 @@ generator="${BUNNYLAND_GENERATOR:-lifesim-demo}"
 tick_seconds="${BUNNYLAND_TICK_SECONDS:-30}"
 time_scale="${BUNNYLAND_TIME_SCALE:-1800}"
 autosave_every="${BUNNYLAND_AUTOSAVE_EVERY:-20}"
+dry_run="${BUNNYLAND_SETUP_DRY_RUN:-0}"
 
 # Explicit BUNNYLAND_ENABLE_LLM=0 and BUNNYLAND_ENABLE_DISCORD=0 force the offline smoke
 # test even if Ollama/Discord secrets are present in the environment.
@@ -391,6 +392,12 @@ else
 fi
 
 render_user_compose
+
+if [[ "$dry_run" == "1" ]]; then
+  run_compose_quiet config --quiet
+  printf 'Rendered and validated compose.user.yml without starting containers.\n'
+  exit 0
+fi
 
 warn_if_dns_mismatch() {
   local domain="$1"
