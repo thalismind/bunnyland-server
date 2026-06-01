@@ -37,6 +37,8 @@ uv run bunnyland serve --llm --generator recursive --ticks 20
 
 ## Documentation
 
+- **[The Vision](docs/vision.md)** — what bunnyland is trying to be, and what belongs in
+  core, plugins, clients, scripts, and content libraries.
 - **[Running a server](docs/running-a-server.md)** — install, the `serve` loop, the time
   model, and connecting an LLM.
 - **[VPS admin setup](docs/vps-admin-setup.md)** — Linux VPS deployment with nginx,
