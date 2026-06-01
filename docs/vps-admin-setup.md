@@ -274,15 +274,24 @@ sudo chown root:www-data /etc/nginx/bunnyland/world-editor.htpasswd
 sudo chmod 0640 /etc/nginx/bunnyland/world-editor.htpasswd
 ```
 
-Add these `map`s once in nginx's `http` block. A clean way on Ubuntu is a file such as
-`/etc/nginx/conf.d/bunnyland-upgrade-map.conf`:
+Create the websocket upgrade map before enabling the site config. On Ubuntu, files in
+`/etc/nginx/conf.d/*.conf` are included from nginx's `http` block, so this defines
+`$connection_upgrade` for the proxy headers below:
 
-```nginx
+```bash
+sudo tee /etc/nginx/conf.d/bunnyland-upgrade-map.conf >/dev/null <<'NGINX'
 map $http_upgrade $connection_upgrade {
     default upgrade;
     '' close;
 }
+NGINX
 ```
+
+`$connection_upgrade` is not a built-in nginx variable; this `map` creates it. The map is
+needed on any nginx version when the site config uses
+`proxy_set_header Connection $connection_upgrade;`. If your distro or custom nginx config
+does not include `/etc/nginx/conf.d/*.conf` from the `http` block, add the `map` directly
+inside `http { ... }` instead.
 
 Create `/etc/nginx/sites-available/bunnyland`:
 
@@ -435,6 +444,7 @@ If the page loads but **Connect Live** fails, check:
 
 - the Server field includes `/api` when using the nginx config above;
 - nginx has the websocket `Upgrade` and `Connection` headers;
+- `/etc/nginx/conf.d/bunnyland-upgrade-map.conf` exists before running `nginx -t`;
 - `bunnyland.service` is listening on `127.0.0.1:8765`;
 - browser devtools do not show mixed-content errors from using `http://` on an HTTPS page.
 
