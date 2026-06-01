@@ -642,6 +642,19 @@ upgrades, and protects `/api/admin/` with nginx basic auth. It does not currentl
 systemd-only flags such as `--llm`, `--discord`, or `--memory-backend chroma`; keep the
 systemd setup if those are required until they are added as first-class Docker settings.
 
+After setup, verify the public route and admin auth:
+
+```bash
+BUNNYLAND_DOMAIN='sandbox.example.com' \
+BUNNYLAND_ADMIN_USER='editor' \
+BUNNYLAND_ADMIN_PASSWORD='change-this' \
+  scripts/vps-docker-verify
+```
+
+The verifier checks the web client, world editor, `/config.json`, `/api/health`,
+`/api/world/snapshot`, websocket upgrades through `/api/world/updates`, admin rejection
+with bad credentials (`401`), and admin success with the supplied credentials (`200`).
+
 The generated `.env` is intentionally small and contains only deployment knobs: domain,
 certificate name, data directory, image tags, ports, optional world save path, and optional
 favicon path. Change the public domain by rerunning the script with a different

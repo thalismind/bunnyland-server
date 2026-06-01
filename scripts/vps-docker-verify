@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${BUNNYLAND_DOMAIN:?set BUNNYLAND_DOMAIN to your public domain, for example sandbox.example.com}"
+: "${BUNNYLAND_ADMIN_USER:?set BUNNYLAND_ADMIN_USER to the admin username}"
+: "${BUNNYLAND_ADMIN_PASSWORD:?set BUNNYLAND_ADMIN_PASSWORD to the admin password}"
+
+export BUNNYLAND_DOMAIN
+export BUNNYLAND_ADMIN_USER
+export BUNNYLAND_ADMIN_PASSWORD
+export BUNNYLAND_VERIFY_CONNECT_HOST="${BUNNYLAND_VERIFY_CONNECT_HOST:-$BUNNYLAND_DOMAIN}"
+export BUNNYLAND_VERIFY_PORT="${BUNNYLAND_VERIFY_PORT:-443}"
+
+python3 - <<'PY'
+import base64
+import json
+import os
+import socket
+import ssl
+import struct
+import sys
+
+domain = os.environ["BUNNYLAND_DOMAIN"]
+connect_host = os.environ["BUNNYLAND_VERIFY_CONNECT_HOST"]
+port = int(os.environ["BUNNYLAND_VERIFY_PORT"])
+admin_user = os.environ["BUNNYLAND_ADMIN_USER"]
+admin_password = os.environ["BUNNYLAND_ADMIN_PASSWORD"]
+base_url = f"https://{domain}"
+
+
+def fail(message: str) -> None:
+    print(f"FAIL {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def ok(message: str) -> None:
+    print(f"OK   {message}")
+
+
+def decode_chunked(body: bytes) -> bytes:
+    decoded = bytearray()
+    offset = 0
+    while True:
+        line_end = body.find(b"\r\n", offset)
+        if line_end < 0:
+            fail("HTTP response: malformed chunked body")
+        size_line = body[offset:line_end].split(b";", 1)[0]
+        size = int(size_line, 16)
+        offset = line_end + 2
+        if size == 0:
+            return bytes(decoded)
+        decoded.extend(body[offset : offset + size])
+        offset += size + 2
+
+
+def request(method: str, path: str, *, auth: str | None = None) -> tuple[int, bytes]:
+    headers = {"User-Agent": "bunnyland-vps-docker-verify/1"}
+    if auth is not None:
+        headers["Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
+    headers["Host"] = domain
+    headers["Connection"] = "close"
+    raw_request = f"{method} {path} HTTP/1.1\r\n" + "".join(
+        f"{key}: {value}\r\n" for key, value in headers.items()
+    ) + "\r\n"
+    ctx = ssl.create_default_context()
+    with socket.create_connection((connect_host, port), timeout=15) as raw:
+        with ctx.wrap_socket(raw, server_hostname=domain) as sock:
+            sock.sendall(raw_request.encode("ascii"))
+            data = b""
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+
+    header_bytes, body = data.split(b"\r\n\r\n", 1)
+    header_lines = header_bytes.decode("iso-8859-1").split("\r\n")
+    status = int(header_lines[0].split()[1])
+    response_headers = {}
+    for line in header_lines[1:]:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            response_headers[key.strip().lower()] = value.strip().lower()
+    if response_headers.get("transfer-encoding") == "chunked":
+        body = decode_chunked(body)
+    return status, body
+
+
+def expect_status(name: str, method: str, path: str, expected: int, *, auth: str | None = None) -> bytes:
+    status, body = request(method, path, auth=auth)
+    if status != expected:
+        fail(f"{name}: expected HTTP {expected}, got HTTP {status}")
+    ok(f"{name}: HTTP {status}")
+    return body
+
+
+body = expect_status("web client", "GET", "/", 200)
+if b"Bunnyland Inspector" not in body:
+    fail("web client: response did not contain Bunnyland Inspector")
+
+body = expect_status("world editor", "GET", "/world-editor.html", 200)
+if b"Bunnyland World Editor" not in body:
+    fail("world editor: response did not contain Bunnyland World Editor")
+
+config = json.loads(expect_status("frontend config", "GET", "/config.json", 200).decode())
+if config.get("serverUrl") != "/api/":
+    fail(f"frontend config: expected serverUrl '/api/', got {config.get('serverUrl')!r}")
+ok("frontend config: same-origin /api/")
+
+health = json.loads(expect_status("REST health", "GET", "/api/health", 200).decode())
+if health.get("ok") is not True:
+    fail(f"REST health: expected ok=true, got {health!r}")
+
+snapshot = json.loads(expect_status("world snapshot", "GET", "/api/world/snapshot", 200).decode())
+metadata = snapshot.get("metadata") or {}
+ok(
+    "world snapshot: "
+    + f"seed={metadata.get('seed')!r} generator={metadata.get('generator')!r} "
+    + f"epoch={snapshot.get('world_epoch')!r}"
+)
+
+bad_auth = f"{admin_user}:definitely-not-the-right-password"
+expect_status("admin rejects bad credentials", "POST", "/api/admin/pause", 401, auth=bad_auth)
+
+good_auth = f"{admin_user}:{admin_password}"
+pause = json.loads(expect_status("admin accepts good credentials", "POST", "/api/admin/pause", 200, auth=good_auth).decode())
+if pause.get("ok") is not True or pause.get("paused") is not True:
+    fail(f"admin pause: unexpected response {pause!r}")
+
+resume = json.loads(expect_status("admin resume", "POST", "/api/admin/resume", 200, auth=good_auth).decode())
+if resume.get("ok") is not True or resume.get("paused") is not False:
+    fail(f"admin resume: unexpected response {resume!r}")
+
+key = base64.b64encode(os.urandom(16)).decode()
+ctx = ssl.create_default_context()
+with socket.create_connection((connect_host, port), timeout=15) as raw:
+    with ctx.wrap_socket(raw, server_hostname=domain) as sock:
+        sock.sendall(
+            (
+                "GET /api/world/updates HTTP/1.1\r\n"
+                f"Host: {domain}\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                "Sec-WebSocket-Version: 13\r\n\r\n"
+            ).encode("ascii")
+        )
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                fail("websocket: connection closed before headers")
+            data += chunk
+        headers, rest = data.split(b"\r\n\r\n", 1)
+        status_line = headers.split(b"\r\n", 1)[0].decode("ascii", "replace")
+        if " 101 " not in status_line:
+            fail(f"websocket: expected HTTP 101, got {status_line}")
+
+        while len(rest) < 2:
+            rest += sock.recv(4096)
+        length = rest[1] & 0x7F
+        offset = 2
+        if length == 126:
+            while len(rest) < offset + 2:
+                rest += sock.recv(4096)
+            length = struct.unpack("!H", rest[offset : offset + 2])[0]
+            offset += 2
+        elif length == 127:
+            while len(rest) < offset + 8:
+                rest += sock.recv(4096)
+            length = struct.unpack("!Q", rest[offset : offset + 8])[0]
+            offset += 8
+        while len(rest) < offset + length:
+            rest += sock.recv(65536)
+        payload = rest[offset : offset + length]
+        if b'"type":"snapshot"' not in payload:
+            fail("websocket: first frame was not a snapshot event")
+        ok("websocket: HTTP 101 and snapshot frame")
+
+print(f"Verified Bunnyland VPS Docker deployment at {base_url}/")
+PY
