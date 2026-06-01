@@ -6,8 +6,14 @@ services:
     command:
       - bunnyland
       - serve
+      - --llm
+      - --discord
       - --generator
       - ${BUNNYLAND_GENERATOR:-lifesim-demo}
+      - --worldgen-model
+      - ${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}
+      - --character-model
+      - ${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}
       - --ticks
       - "0"
       - --tick-seconds
@@ -24,6 +30,13 @@ services:
       - ${BUNNYLAND_AUTOSAVE_EVERY:-20}
     volumes:
       - ${BUNNYLAND_DATA_DIR:-./data}:/data
+    environment:
+      OLLAMA_CLOUD_API_KEY: ${OLLAMA_CLOUD_API_KEY:?set OLLAMA_CLOUD_API_KEY}
+      OLLAMA_HOST: ${OLLAMA_HOST:-https://ollama.com}
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?set DISCORD_TOKEN}
+      BUNNYLAND_DISCORD_USER_ID: ${BUNNYLAND_DISCORD_USER_ID:-}
+      BUNNYLAND_DISCORD_CHANNEL_ID: ${BUNNYLAND_DISCORD_CHANNEL_ID:-}
+      BUNNYLAND_DISCORD_CHARACTER: ${BUNNYLAND_DISCORD_CHARACTER:-}
     expose:
       - "8765"
     restart: unless-stopped

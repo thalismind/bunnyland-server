@@ -3,8 +3,14 @@ services:
     command:
       - bunnyland
       - serve
+      - --llm
+      - --discord
       - --load
       - ${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}
+      - --worldgen-model
+      - ${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}
+      - --character-model
+      - ${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}
       - --ticks
       - "0"
       - --tick-seconds

@@ -17,6 +17,8 @@ cd "$repo_dir"
 : "${BUNNYLAND_DATA_DIR:?set BUNNYLAND_DATA_DIR to the host data directory, for example /var/lib/bunnyland}"
 : "${BUNNYLAND_ADMIN_USER:?set BUNNYLAND_ADMIN_USER to the admin username}"
 : "${BUNNYLAND_ADMIN_PASSWORD:?set BUNNYLAND_ADMIN_PASSWORD to the admin password}"
+: "${OLLAMA_CLOUD_API_KEY:?set OLLAMA_CLOUD_API_KEY for world generation and LLM characters}"
+: "${DISCORD_TOKEN:?set DISCORD_TOKEN for the Discord bot}"
 
 world_save="${BUNNYLAND_WORLD_SAVE:-}"
 favicon_file="${BUNNYLAND_FAVICON_FILE:-}"
@@ -168,7 +170,24 @@ BUNNYLAND_CERT_NAME=$cert_name
 BUNNYLAND_LETSENCRYPT_DIR=$letsencrypt_dir
 BUNNYLAND_NGINX_AUTH_DIR=$auth_dir
 BUNNYLAND_AUTOSAVE_EVERY=${BUNNYLAND_AUTOSAVE_EVERY:-120}
+OLLAMA_CLOUD_API_KEY=$OLLAMA_CLOUD_API_KEY
+OLLAMA_HOST=${OLLAMA_HOST:-https://ollama.com}
+DISCORD_TOKEN=$DISCORD_TOKEN
+BUNNYLAND_WORLDGEN_MODEL=${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}
+BUNNYLAND_CHARACTER_MODEL=${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}
 ENV
+
+if [[ -n "${BUNNYLAND_DISCORD_USER_ID:-}" ]]; then
+  printf 'BUNNYLAND_DISCORD_USER_ID=%s\n' "$BUNNYLAND_DISCORD_USER_ID" >> .env
+fi
+
+if [[ -n "${BUNNYLAND_DISCORD_CHANNEL_ID:-}" ]]; then
+  printf 'BUNNYLAND_DISCORD_CHANNEL_ID=%s\n' "$BUNNYLAND_DISCORD_CHANNEL_ID" >> .env
+fi
+
+if [[ -n "${BUNNYLAND_DISCORD_CHARACTER:-}" ]]; then
+  printf 'BUNNYLAND_DISCORD_CHARACTER=%s\n' "$BUNNYLAND_DISCORD_CHARACTER" >> .env
+fi
 
 if [[ -n "$home_domain" ]]; then
   {

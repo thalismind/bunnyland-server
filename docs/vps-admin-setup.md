@@ -562,8 +562,9 @@ For a VPS, use the setup script. It installs the container runtime if needed, wr
 `.env`, creates the admin password file, requests or reuses a Let's Encrypt certificate
 with certbot, configures UFW, stops the old `bunnyland` and `nginx` services if they exist,
 and starts the checked-in Compose files with `sudo nerdctl compose`. Fill in only your own
-domain name, admin username/password, and host data folder. Optionally provide a favicon
-path and an existing world save file.
+domain name, admin username/password, host data folder, Ollama Cloud key, and Discord bot
+token. Optionally provide a favicon path, an existing world save file, and a startup
+Discord claim.
 
 Copy this block, change the values in the first section, and paste it into the VPS:
 
@@ -573,6 +574,8 @@ BUNNYLAND_DATA_DIR='/var/lib/bunnyland'
 BUNNYLAND_ADMIN_USER='editor'
 BUNNYLAND_ADMIN_PASSWORD='change-this'
 BUNNYLAND_CERT_EMAIL='admin@example.com'
+OLLAMA_CLOUD_API_KEY='sk-...'
+DISCORD_TOKEN='...'
 
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
@@ -589,6 +592,8 @@ BUNNYLAND_DATA_DIR="$BUNNYLAND_DATA_DIR" \
 BUNNYLAND_ADMIN_USER="$BUNNYLAND_ADMIN_USER" \
 BUNNYLAND_ADMIN_PASSWORD="$BUNNYLAND_ADMIN_PASSWORD" \
 BUNNYLAND_CERT_EMAIL="$BUNNYLAND_CERT_EMAIL" \
+OLLAMA_CLOUD_API_KEY="$OLLAMA_CLOUD_API_KEY" \
+DISCORD_TOKEN="$DISCORD_TOKEN" \
   scripts/vps-docker-setup
 ```
 
@@ -607,6 +612,8 @@ BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
 BUNNYLAND_ADMIN_USER='editor' \
 BUNNYLAND_ADMIN_PASSWORD='change-this' \
 BUNNYLAND_CERT_EMAIL='admin@example.com' \
+OLLAMA_CLOUD_API_KEY='sk-...' \
+DISCORD_TOKEN='...' \
 BUNNYLAND_WORLD_SAVE='/var/lib/bunnyland/worlds/main.json' \
   scripts/vps-docker-setup
 ```
@@ -619,6 +626,8 @@ BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
 BUNNYLAND_ADMIN_USER='editor' \
 BUNNYLAND_ADMIN_PASSWORD='change-this' \
 BUNNYLAND_CERT_EMAIL='admin@example.com' \
+OLLAMA_CLOUD_API_KEY='sk-...' \
+DISCORD_TOKEN='...' \
 BUNNYLAND_FAVICON_FILE='/opt/bunnyland/favicon.png' \
   scripts/vps-docker-setup
 ```
@@ -634,11 +643,18 @@ BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
 BUNNYLAND_ADMIN_USER='editor' \
 BUNNYLAND_ADMIN_PASSWORD='change-this' \
 BUNNYLAND_CERT_EMAIL='admin@example.com' \
+OLLAMA_CLOUD_API_KEY='sk-...' \
+DISCORD_TOKEN='...' \
 BUNNYLAND_HOME_DOMAIN='example.com' \
 BUNNYLAND_HOME_CERT_NAME='example.com' \
 BUNNYLAND_HOME_DIR='/opt/bunnyland/home' \
   scripts/vps-docker-setup
 ```
+
+To assign a Discord user to a character at startup, add
+`BUNNYLAND_DISCORD_USER_ID`, `BUNNYLAND_DISCORD_CHANNEL_ID`, and
+`BUNNYLAND_DISCORD_CHARACTER` to any setup command. If these are omitted, the bot still
+starts and users can claim from Discord with `!claim`.
 
 The script uses only Let's Encrypt for public TLS certificate issuance. It never generates
 self-signed certificates for the VPS Docker deployment. If matching certificates already
@@ -662,11 +678,13 @@ The script starts the checked-in Compose files:
   provided;
 - `compose.favicon.yml` when `BUNNYLAND_FAVICON_FILE` is provided.
 
-The checked-in Docker Compose path is intentionally the simple web/API deployment. It loads
-and saves the selected world, serves the web client, proxies `/api/`, enables websocket
-upgrades, and protects `/api/admin/` with nginx basic auth. It does not currently reproduce
-systemd-only flags such as `--llm`, `--discord`, or `--memory-backend chroma`; keep the
-systemd setup if those are required until they are added as first-class Docker settings.
+The checked-in Docker Compose path loads and saves the selected world, serves the web
+client, proxies `/api/`, enables websocket upgrades, protects `/api/admin/` with nginx
+basic auth, starts LLM character controllers with `--llm`, and starts the Discord bot with
+`--discord`. It uses one `OLLAMA_CLOUD_API_KEY` for both world generation and LLM
+characters. World generation defaults to `deepseek-v4-pro`, character controllers default
+to `deepseek-v4-flash`, and both can be changed with `BUNNYLAND_WORLDGEN_MODEL` and
+`BUNNYLAND_CHARACTER_MODEL`.
 
 After setup, verify the public route and admin auth:
 
