@@ -99,6 +99,15 @@ sudo chown root:bunnyland /etc/bunnyland/server.env
 sudo chmod 0640 /etc/bunnyland/server.env
 ```
 
+The systemd service below loads this file with `EnvironmentFile=...`; ad hoc shell
+commands do not. If you run `bunnyland serve --llm` manually, source the file in that
+command before starting the process. Keep the file to simple `KEY=value` lines so it works
+for both systemd and shell sourcing.
+
+The `bunnyland` account is created with `/usr/sbin/nologin` for security. That means
+`sudo su - bunnyland` is expected to fail with `This account is currently not available`.
+Use `sudo -u bunnyland <command>` instead.
+
 ## 2. Web client install
 
 The current web client is a static snapshot/live inspector. It has no build step.
@@ -165,8 +174,12 @@ Common builtin plugin ids:
 Create a new long-running world with the defaults:
 
 ```bash
+sudo -u bunnyland bash -lc '
 cd /opt/bunnyland/server
-sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
+set -a
+. /etc/bunnyland/server.env
+set +a
+exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
   --llm \
   --generator recursive \
   --seed "a mossy rabbit village under an old observatory" \
@@ -178,12 +191,18 @@ sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --extra server --extra llm bu
   --api-port 8765 \
   --save /var/lib/bunnyland/worlds/main.json \
   --autosave-every 20
+'
 ```
 
 Create a smaller curated server surface:
 
 ```bash
-sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
+sudo -u bunnyland bash -lc '
+cd /opt/bunnyland/server
+set -a
+. /etc/bunnyland/server.env
+set +a
+exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
   --plugin bunnyland.core_verbs \
   --plugin bunnyland.worldgen \
   --plugin bunnyland.lifesim \
@@ -198,6 +217,7 @@ sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --extra server --extra llm bu
   --api-port 8765 \
   --save /var/lib/bunnyland/worlds/main.json \
   --autosave-every 20
+'
 ```
 
 Load an external plugin module and select one of its plugins:
