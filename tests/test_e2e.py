@@ -47,6 +47,7 @@ from bunnyland.core.events import (
 )
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
+from bunnyland.mechanics.colonysim import Owns
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
 from bunnyland.mechanics.gardensim import (
     CropComponent,
@@ -273,7 +274,7 @@ async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
     character = actor.world.get_entity(hazel)
     replace_component(
         character,
-        ActionPointsComponent(current=8.0, maximum=8.0, regen_per_hour=0.0),
+        ActionPointsComponent(current=9.0, maximum=9.0, regen_per_hour=0.0),
     )
     character.add_component(HouseholdFundsComponent(balance=10))
     merchant = spawn_entity(
@@ -328,6 +329,7 @@ async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
     agent = ScriptedAgent(
         [
             ToolCall("buy_item", {"seller_id": "Marigold", "item_id": str(seeds.id)}),
+            ToolCall("claim_ownership", {"target_id": "garden bed"}),
             ToolCall("till", {"soil_id": "garden bed"}),
             ToolCall("plant", {"soil_id": "garden bed", "seed_id": "radish seeds"}),
             ToolCall("water_crop", {"soil_id": "garden bed"}),
@@ -348,7 +350,7 @@ async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
         time_scale=24 * 60 * 60,
     )
 
-    await loop.run(max_ticks=9)
+    await loop.run(max_ticks=10)
 
     assert rejected == []
     assert len(bought) == 1
@@ -356,6 +358,7 @@ async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
     assert len(harvested) == 1
     assert len(sold) == 1
     soil_entity = actor.world.get_entity(soil.id)
+    assert character.has_relationship(Owns, soil.id)
     assert not soil_entity.has_component(CropComponent)
     assert not soil_entity.has_component(HarvestableComponent)
     harvested_item = actor.world.get_entity(parse_entity_id(harvested[0].item_id))
