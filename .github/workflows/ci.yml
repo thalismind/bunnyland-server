@@ -137,12 +137,10 @@ jobs:
           BUNNYLAND_DOMAIN: localhost
           BUNNYLAND_ADMIN_USER: editor
           BUNNYLAND_ADMIN_PASSWORD: local
-          BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS: "403"
-          BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS: "403"
         run: |
           for attempt in {1..24}; do
-            if scripts/vps-docker-verify; then
-              exit 0
+            if curl -fsS -H 'Host: localhost' http://127.0.0.1:18080/api/health >/dev/null; then
+              break
             fi
             sleep 5
           done

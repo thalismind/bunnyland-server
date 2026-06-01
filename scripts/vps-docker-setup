@@ -290,10 +290,13 @@ render_server_service() {
 }
 
 render_frontend_service() {
-  local nginx_template="./deploy/nginx/frontend-tls.conf"
+  local nginx_template="./deploy/nginx/frontend-http.conf"
 
-  if [[ "$enable_tls" == "1" && -n "$home_domain" ]]; then
-    nginx_template="./deploy/nginx/frontend-tls-home.conf"
+  if [[ "$enable_tls" == "1" ]]; then
+    nginx_template="./deploy/nginx/frontend-tls.conf"
+    if [[ -n "$home_domain" ]]; then
+      nginx_template="./deploy/nginx/frontend-tls-home.conf"
+    fi
   fi
 
   printf '  frontend:\n'
@@ -310,21 +313,19 @@ render_frontend_service() {
     printf '      BUNNYLAND_HOME_NAME: %s\n' "$(yaml_quote "$home_domain")"
     printf '      BUNNYLAND_HOME_CERT_NAME: %s\n' "$(yaml_quote "$home_cert_name")"
   fi
-  if [[ "$enable_tls" == "1" || -n "$favicon_file" ]]; then
-    printf '    volumes:\n'
-  fi
+  printf '    volumes:\n'
+  printf '      - type: bind\n'
+  printf '        source: %s\n' "$(yaml_quote "$nginx_template")"
+  printf '        target: /etc/nginx/templates/default.conf.template\n'
+  printf '        read_only: true\n'
+  printf '      - type: bind\n'
+  printf '        source: %s\n' "$(yaml_quote "$auth_dir")"
+  printf '        target: /etc/nginx/bunnyland\n'
+  printf '        read_only: true\n'
   if [[ "$enable_tls" == "1" ]]; then
-    printf '      - type: bind\n'
-    printf '        source: %s\n' "$(yaml_quote "$nginx_template")"
-    printf '        target: /etc/nginx/templates/default.conf.template\n'
-    printf '        read_only: true\n'
     printf '      - type: bind\n'
     printf '        source: %s\n' "$(yaml_quote "$letsencrypt_dir")"
     printf '        target: /etc/letsencrypt\n'
-    printf '        read_only: true\n'
-    printf '      - type: bind\n'
-    printf '        source: %s\n' "$(yaml_quote "$auth_dir")"
-    printf '        target: /etc/nginx/bunnyland\n'
     printf '        read_only: true\n'
   fi
   if [[ "$enable_tls" == "1" && -n "$home_domain" ]]; then
