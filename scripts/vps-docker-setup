@@ -12,12 +12,18 @@ cd "$repo_dir"
 : "${BUNNYLAND_DOMAIN:?set BUNNYLAND_DOMAIN to your public domain, for example sandbox.example.com}"
 : "${BUNNYLAND_DATA_DIR:?set BUNNYLAND_DATA_DIR to the host data directory, for example /var/lib/bunnyland}"
 
-# Admin credentials are required to (re)generate the world-editor htpasswd, but a rerun may
-# reuse the existing htpasswd instead (see the credentials block below).
+# Admin credentials (re)generate the world-editor htpasswd. A rerun can instead keep the
+# existing htpasswd, but only when explicitly asked with BUNNYLAND_REUSE_ADMIN=1, so a stale
+# or unknown credential is never carried forward by accident.
+reuse_admin="${BUNNYLAND_REUSE_ADMIN:-0}"
 admin_user="${BUNNYLAND_ADMIN_USER:-}"
 admin_password="${BUNNYLAND_ADMIN_PASSWORD:-}"
-if [[ -n "$admin_user" && -z "$admin_password" ]] || [[ -z "$admin_user" && -n "$admin_password" ]]; then
-  die "set both BUNNYLAND_ADMIN_USER and BUNNYLAND_ADMIN_PASSWORD, or neither to reuse existing credentials"
+if [[ "$reuse_admin" == "1" ]]; then
+  if [[ -n "$admin_user" || -n "$admin_password" ]]; then
+    die "set either BUNNYLAND_REUSE_ADMIN=1 or BUNNYLAND_ADMIN_USER/BUNNYLAND_ADMIN_PASSWORD, not both"
+  fi
+elif [[ -z "$admin_user" || -z "$admin_password" ]]; then
+  die "set BUNNYLAND_ADMIN_USER and BUNNYLAND_ADMIN_PASSWORD (or BUNNYLAND_REUSE_ADMIN=1 to keep the existing world-editor login)"
 fi
 
 world_save="${BUNNYLAND_WORLD_SAVE:-}"
@@ -361,22 +367,26 @@ configure_firewall() {
   sudo ufw route allow proto tcp to any port 80
   sudo ufw route allow proto tcp to any port 443
   sudo ufw deny 8765/tcp
-  sudo ufw default deny incoming
-  sudo ufw default allow outgoing
-  sudo ufw --force enable
+  # Add the rules but never enable ufw ourselves: if it is already active the rules apply
+  # now, otherwise they are staged and the admin decides when to turn the firewall on.
+  if sudo ufw status | grep -qi '^Status: active'; then
+    printf 'Updated ufw rules; ufw is already active.\n'
+  else
+    printf 'Added ufw rules but left ufw disabled. Enable it when ready with: sudo ufw enable\n'
+  fi
 }
 
 htpasswd_file="$auth_dir/world-editor.htpasswd"
 sudo install -d -o root -g root -m 0755 "$auth_dir"
-if [[ -n "$admin_user" && -n "$admin_password" ]]; then
+if [[ "$reuse_admin" == "1" ]]; then
+  sudo test -f "$htpasswd_file" || die "BUNNYLAND_REUSE_ADMIN=1 but no existing credentials at $htpasswd_file"
+  admin_user="$(sudo head -n1 "$htpasswd_file" | cut -d: -f1)"
+  printf 'Reusing existing world-editor credentials at %s (password kept as-is, not validated).\n' "$htpasswd_file"
+  printf 'Run scripts/vps-docker-verify afterward to confirm the admin login still works.\n'
+else
   printf '%s:%s\n' "$admin_user" "$(openssl passwd -apr1 "$admin_password")" \
     | sudo tee "$htpasswd_file" >/dev/null
   sudo chmod 0644 "$htpasswd_file"
-elif sudo test -f "$htpasswd_file"; then
-  printf 'Reusing existing world-editor credentials at %s.\n' "$htpasswd_file"
-  admin_user="$(sudo head -n1 "$htpasswd_file" | cut -d: -f1)"
-else
-  die "set BUNNYLAND_ADMIN_USER and BUNNYLAND_ADMIN_PASSWORD (no existing $htpasswd_file to reuse)"
 fi
 
 render_user_compose

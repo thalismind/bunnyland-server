@@ -149,11 +149,16 @@ frontend container and runs certbot's standalone authenticator for the app domai
 when configured, the homepage domain. Port `80` must be reachable by Let's Encrypt while
 certbot runs.
 
-The script also configures UFW for the containerized deployment. It allows SSH, HTTP, and
-HTTPS as normal inbound rules, denies direct public access to `8765`, and adds routed
+The script also configures UFW rules for the containerized deployment. It allows SSH, HTTP,
+and HTTPS as normal inbound rules, denies direct public access to `8765`, and adds routed
 `ALLOW FWD` rules for ports `80` and `443`. Those routed rules are required with
 nerdctl/containerd because published container ports traverse the container bridge; without
 them, `ufw status` can show `443/tcp ALLOW IN` while public HTTPS still times out.
+
+The script does **not** enable UFW itself. If UFW is already active the new rules apply
+immediately; otherwise they are staged and you turn the firewall on when ready with
+`sudo ufw enable`. SSH on port `22` is allowed first, so enabling will not drop your
+session.
 
 After the smoke test, open `https://sandbox.example.com/`. The frontend image ships a
 default `/config.json` that points the browser at same-origin `/api/`, so the web UI and
@@ -277,6 +282,12 @@ source control. Change the public domain, admin username/password, data director
 homepage, world save, Ollama key, or Discord token by rerunning the wizard or setup script
 with the new value; the setup script rewrites `compose.user.yml`.
 
+`scripts/vps-docker-setup` requires `BUNNYLAND_ADMIN_USER` and `BUNNYLAND_ADMIN_PASSWORD` on
+every run and regenerates the world-editor htpasswd from them. To rerun without resupplying
+the password and keep the existing login, set `BUNNYLAND_REUSE_ADMIN=1` and omit both admin
+variables. Reuse keeps the stored htpasswd as-is and cannot validate it, so run
+`scripts/vps-docker-verify` afterward to confirm the admin login still works.
+
 To renew Let's Encrypt certificates with the same standalone method, stop the frontend
 while certbot binds port `80`, then start it again:
 
@@ -305,7 +316,8 @@ Before inviting players:
 4. The web client connects live with `https://sandbox.example.com/api/`.
 5. `curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health` does not connect.
 6. `sudo ufw status verbose` shows SSH, HTTP, HTTPS allowed, `80/tcp` and `443/tcp`
-   allowed for forwarded traffic, and the app port denied.
+   allowed for forwarded traffic, and the app port denied. If it reports `Status: inactive`,
+   the rules are staged but the firewall is off — enable it with `sudo ufw enable`.
 7. `https://example.com/` serves the homepage, if deployed.
 8. `https://sandbox.example.com/config.json` contains the production server URL and `autoConnect`.
 9. The selected world save under `BUNNYLAND_DATA_DIR` is being autosaved.
