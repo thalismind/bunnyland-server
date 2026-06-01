@@ -299,8 +299,9 @@ if [[ "$full_deployment" == "1" ]]; then
 else
   printf '  Mode              : smoke test only (no Ollama or Discord)\n'
 fi
-printf '\nThis installs packages, enables the firewall, and requests a real Let'\''s Encrypt\n'
-printf 'certificate (which is rate-limited), then starts the containers.\n'
+printf '\nThis installs packages, adds firewall rules, and requests a real Let'\''s Encrypt\n'
+printf 'certificate (which is rate-limited), then starts the containers. If UFW is inactive,\n'
+printf 'the setup script leaves it disabled and tells you how to enable it.\n'
 if ! confirm "Proceed with these settings?" "y"; then
   die "aborted before setup; no changes were made to TLS, the firewall, or containers"
 fi

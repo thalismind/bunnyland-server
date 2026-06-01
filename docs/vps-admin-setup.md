@@ -312,7 +312,8 @@ browser always loads the web page and API from the same external origin.
 
 Before inviting players:
 
-1. `sudo nerdctl ps` shows `bunnyland-server-1` and `bunnyland-frontend-1` running.
+1. Your selected runtime shows `bunnyland-server-1` and `bunnyland-frontend-1` running:
+   `sudo nerdctl ps`, `sudo docker ps`, or `sudo podman ps`.
 2. `curl -fsS https://sandbox.example.com/api/health` works through the frontend container.
 3. The websocket returns an initial `snapshot` from `wss://sandbox.example.com/api/world/updates`.
 4. The web client connects live with `https://sandbox.example.com/api/`.
