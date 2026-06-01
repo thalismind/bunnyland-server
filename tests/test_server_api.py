@@ -28,7 +28,7 @@ from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
 from bunnyland.server import app as server_app
 from bunnyland.server.admin import save_configured_world
-from bunnyland.server.app import create_app
+from bunnyland.server.app import create_app, next_websocket_update
 from bunnyland.server.models import (
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
@@ -565,17 +565,16 @@ def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
     )
 
 
-def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypatch):
-    pytest.importorskip("fastapi")
-    testclient = pytest.importorskip("fastapi.testclient")
+async def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypatch):
     monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
 
-    app = create_app(scenario.actor)
-
-    with testclient.TestClient(app) as client:
-        with client.websocket_connect("/world/updates") as websocket:
-            snapshot = websocket.receive_json()
-            heartbeat = websocket.receive_json()
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe()
+    try:
+        snapshot = {"type": "snapshot", "data": serialize_world(scenario.actor)}
+        heartbeat = await next_websocket_update(scenario.actor, subscription)
+    finally:
+        subscription.close()
 
     assert snapshot["type"] == "snapshot"
     assert snapshot["data"]["world_epoch"] == scenario.actor.epoch

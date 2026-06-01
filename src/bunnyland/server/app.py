@@ -43,6 +43,7 @@ WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 if TYPE_CHECKING:
     from ..engine import GameLoop
     from ..worldgen import GenOptions
+    from .subscriptions import EventSubscription
 
 # Imported at module scope (not inside ``create_app``) so that FastAPI can resolve the
 # ``websocket: WebSocket`` annotation on the route handler. Under ``from __future__ import
@@ -55,6 +56,16 @@ try:
     from fastapi.middleware.cors import CORSMiddleware
 except ImportError:  # pragma: no cover - exercised only without optional deps
     FastAPI = HTTPException = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
+
+
+async def next_websocket_update(actor: WorldActor, subscription: EventSubscription) -> dict:
+    try:
+        return await asyncio.wait_for(
+            subscription.queue.get(),
+            timeout=WEBSOCKET_HEARTBEAT_SECONDS,
+        )
+    except TimeoutError:
+        return {"type": "heartbeat", "data": {"world_epoch": actor.epoch}}
 
 
 def create_app(
@@ -216,14 +227,7 @@ def create_app(
         try:
             await websocket.send_json({"type": "snapshot", "data": serialize_world(actor, meta)})
             while True:
-                try:
-                    message = await asyncio.wait_for(
-                        subscription.queue.get(),
-                        timeout=WEBSOCKET_HEARTBEAT_SECONDS,
-                    )
-                except TimeoutError:
-                    message = {"type": "heartbeat", "data": {"world_epoch": actor.epoch}}
-                await websocket.send_json(message)
+                await websocket.send_json(await next_websocket_update(actor, subscription))
         except WebSocketDisconnect:
             pass
         finally:
