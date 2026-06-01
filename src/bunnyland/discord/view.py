@@ -11,6 +11,7 @@ from .claim import discord_controlled_character
 
 DISCORD_MESSAGE_LIMIT = 2000
 HELP_MESSAGE_LIMIT = 1900
+HELP_VERBS_PER_PAGE = 16
 
 HUMAN_HELP_TEXT = "\n".join(
     [
@@ -105,15 +106,21 @@ def _tool_argument_index() -> dict[str, str]:
     return by_verb
 
 
-def _verb_detail_lines(actor: WorldActor | None) -> list[str]:
+def _verb_detail_lines(actor: WorldActor | None, *, page: int = 1) -> list[str]:
     verbs = _available_verbs(actor)
     if not verbs:
         return []
     args_by_verb = _tool_argument_index()
-    lines = ["World verbs available now:"]
-    for verb in verbs:
+    page_count = max(1, (len(verbs) + HELP_VERBS_PER_PAGE - 1) // HELP_VERBS_PER_PAGE)
+    page = max(1, min(page, page_count))
+    start = (page - 1) * HELP_VERBS_PER_PAGE
+    selected = verbs[start : start + HELP_VERBS_PER_PAGE]
+    lines = [f"World verbs available now (page {page}/{page_count}):"]
+    for verb in selected:
         args = args_by_verb.get(verb, "no documented arguments")
         lines.append(f"{verb}: {args}")
+    if page < page_count:
+        lines.append(f"Use !help verbs {page + 1} for the next page.")
     return lines
 
 
@@ -181,12 +188,15 @@ def render_help(topic: str | None = None, actor: WorldActor | None = None) -> st
     """Render Discord help by topic."""
 
     normalized = (topic or "humans").strip().lower()
+    parts = normalized.split()
+    head = parts[0] if parts else ""
     if normalized in {"", "human", "humans"}:
         return "\n".join([HUMAN_HELP_TEXT, *_verb_name_lines(actor)])
     if normalized in {"agent", "agents", "llm", "llms"}:
         return AGENT_HELP_TEXT
-    if normalized in {"verb", "verbs", "commands", "actions"}:
-        lines = _verb_detail_lines(actor)
+    if head in {"verb", "verbs", "commands", "actions"}:
+        page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        lines = _verb_detail_lines(actor, page=page)
         if not lines:
             return "No world verbs are available."
         return "\n".join(lines).strip()

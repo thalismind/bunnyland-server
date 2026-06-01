@@ -65,9 +65,30 @@ def test_help_agents_describes_llm_agent_rules(scenario):
 def test_help_verbs_lists_available_discord_verbs_with_arguments(scenario):
     text = render_help("verbs", scenario.actor)
 
-    assert "World verbs available now:" in text
+    assert "World verbs available now (page 1/1):" in text
     assert "move: direction, exit_id" in text
     assert "take-control: no documented arguments" in text
+
+
+def test_help_verbs_is_paginated(scenario):
+    class DummyHandler:
+        def __init__(self, command_type: str) -> None:
+            self.command_type = command_type
+
+        def execute(self, ctx, command):
+            raise AssertionError("not called")
+
+    for index in range(30):
+        scenario.actor.register_handler(DummyHandler(f"zz-{index:02d}"))
+
+    first_page = render_help("verbs", scenario.actor)
+    second_page = render_help("verbs 2", scenario.actor)
+
+    assert "World verbs available now (page 1/3):" in first_page
+    assert "Use !help verbs 2 for the next page." in first_page
+    assert "World verbs available now (page 2/3):" in second_page
+    assert len(first_page) < 1900
+    assert len(second_page) < 1900
 
 
 def test_split_discord_text_keeps_chunks_below_the_api_limit():

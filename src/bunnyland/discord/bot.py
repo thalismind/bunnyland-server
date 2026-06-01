@@ -118,6 +118,15 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         """Reply to the player and ping them so the result reaches their notifications."""
         await ctx.send(f"{ctx.author.mention} {body}")
 
+    @staticmethod
+    async def _send_help(ctx, body: str) -> None:
+        """Send bounded help chunks without flooding the Discord API."""
+        chunks = split_discord_text(body)
+        for index, chunk in enumerate(chunks):
+            await ctx.send(chunk)
+            if index < len(chunks) - 1:
+                await asyncio.sleep(0.25)
+
     def _register_commands(self) -> None:
         discord, commands = _require_discord()
 
@@ -165,8 +174,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
         @self.client.command(name="help")
         async def help_command(ctx, *, topic: str | None = None):
-            for chunk in split_discord_text(render_help(topic, self.actor)):
-                await ctx.send(chunk)
+            await self._send_help(ctx, render_help(topic, self.actor))
 
         @self.client.event
         async def on_ready():
