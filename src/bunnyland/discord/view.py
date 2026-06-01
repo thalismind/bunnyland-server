@@ -10,7 +10,7 @@ from ..projections import RoomSummaryProjection
 from .claim import discord_controlled_character
 
 DISCORD_MESSAGE_LIMIT = 2000
-HELP_MESSAGE_LIMIT = 1900
+HELP_MESSAGE_LIMIT = 1990
 HELP_VERBS_PER_PAGE = 16
 
 HUMAN_HELP_TEXT = "\n".join(
