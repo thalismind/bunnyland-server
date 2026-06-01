@@ -58,6 +58,7 @@ def test_tool_schemas_cover_every_verb():
         "take",
         "adopt_child",
         "accept_quest",
+        "buy_item",
         "claim_ownership",
         "complete_objective",
         "discover_location",
@@ -69,6 +70,8 @@ def test_tool_schemas_cover_every_verb():
         "join_faction",
         "leave_faction",
         "release_ownership",
+        "open_business",
+        "sell_item",
         "take_note",
         "till",
         "water_crop",
@@ -126,6 +129,15 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     )
     assert parse_natural_command("pickpocket Hazel brass key") == ToolCall(
         "pickpocket", {"target_id": "Hazel", "item_id": "brass key"}
+    )
+    assert parse_natural_command("buy radish seeds from Marigold") == ToolCall(
+        "buy_item", {"item_id": "radish seeds", "seller_id": "Marigold"}
+    )
+    assert parse_natural_command("sell radish x2 to Marigold") == ToolCall(
+        "sell_item", {"item_id": "radish x2", "customer_id": "Marigold"}
+    )
+    assert parse_natural_command("open business Hazel's Farm Stand") == ToolCall(
+        "open_business", {"name": "Hazel's Farm Stand"}
     )
     assert parse_natural_command("adopt Clover") == ToolCall(
         "adopt_child", {"child_id": "Clover"}

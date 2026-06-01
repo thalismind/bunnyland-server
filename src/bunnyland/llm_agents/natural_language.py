@@ -180,6 +180,28 @@ def parse_natural_command(text: str) -> ToolCall | None:
     if verb == "pickpocket" and len(words) >= 3:
         return ToolCall("pickpocket", {"target_id": words[1], "item_id": _rest(words, 2)})
 
+    if verb == "buy" and len(words) >= 4:
+        lowered = [word.lower() for word in words]
+        if "from" in lowered[2:]:
+            index = lowered.index("from")
+            item = _rest(words[:index], 1)
+            seller = _rest(words, index + 1)
+            if item and seller:
+                return ToolCall("buy_item", {"item_id": item, "seller_id": seller})
+
+    if verb == "sell" and len(words) >= 4:
+        lowered = [word.lower() for word in words]
+        if "to" in lowered[2:]:
+            index = lowered.index("to")
+            item = _rest(words[:index], 1)
+            customer = _rest(words, index + 1)
+            if item and customer:
+                return ToolCall("sell_item", {"item_id": item, "customer_id": customer})
+
+    if verb == "open" and len(words) > 1 and words[1].lower() == "business":
+        name = _rest(words, 2)
+        return ToolCall("open_business", {"name": name}) if name else None
+
     if verb == "adopt":
         child = _rest(words, 1)
         return ToolCall("adopt_child", {"child_id": child}) if child else None

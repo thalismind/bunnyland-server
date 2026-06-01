@@ -56,6 +56,14 @@ from bunnyland.mechanics.gardensim import (
     SeedComponent,
     SoilComponent,
 )
+from bunnyland.mechanics.lifesim import (
+    BusinessOwnerComponent,
+    BusinessPurchaseEvent,
+    BusinessSaleEvent,
+    CustomerComponent,
+    HouseholdFundsComponent,
+    OwnsBusiness,
+)
 from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
 from bunnyland.memory import install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
@@ -259,17 +267,33 @@ async def test_scripted_playthrough_processes_actions_each_round():
     assert container_of(world.get_entity(hazel)) == result.rooms["tunnel"]
 
 
-async def test_scripted_agent_grows_and_harvests_garden_crop():
+async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
     actor, _proposal, result = await _new_world()
     hazel = result.characters["hazel"]
     character = actor.world.get_entity(hazel)
     replace_component(
         character,
-        ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=0.0),
+        ActionPointsComponent(current=8.0, maximum=8.0, regen_per_hour=0.0),
+    )
+    character.add_component(HouseholdFundsComponent(balance=10))
+    merchant = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Marigold", kind="character"),
+            CharacterComponent(),
+            CustomerComponent(budget=20),
+            HouseholdFundsComponent(balance=0),
+        ],
     )
     room_id = container_of(character)
     assert room_id is not None
     room = actor.world.get_entity(room_id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), merchant.id)
+    merchant_business = spawn_entity(
+        actor.world,
+        [BusinessOwnerComponent(name="Marigold's Seeds", default_price=3)],
+    )
+    merchant.add_relationship(OwnsBusiness(), merchant_business.id)
     soil = spawn_entity(
         actor.world,
         [IdentityComponent(name="garden bed", kind="soil"), SoilComponent()],
@@ -288,22 +312,29 @@ async def test_scripted_agent_grows_and_harvests_garden_crop():
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
-    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), seeds.id)
+    merchant.add_relationship(Contains(mode=ContainmentMode.INVENTORY), seeds.id)
 
+    bought: list[BusinessPurchaseEvent] = []
     ready: list[CropReadyEvent] = []
     harvested: list[CropHarvestedEvent] = []
+    sold: list[BusinessSaleEvent] = []
     rejected: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(BusinessPurchaseEvent, bought.append)
     actor.bus.subscribe(CropReadyEvent, ready.append)
     actor.bus.subscribe(CropHarvestedEvent, harvested.append)
+    actor.bus.subscribe(BusinessSaleEvent, sold.append)
     actor.bus.subscribe(CommandRejectedEvent, rejected.append)
 
     agent = ScriptedAgent(
         [
+            ToolCall("buy_item", {"seller_id": "Marigold", "item_id": str(seeds.id)}),
             ToolCall("till", {"soil_id": "garden bed"}),
             ToolCall("plant", {"soil_id": "garden bed", "seed_id": "radish seeds"}),
             ToolCall("water_crop", {"soil_id": "garden bed"}),
             ToolCall("wait", {}),
+            ToolCall("open_business", {"name": "Hazel's Farm Stand", "default_price": 8}),
             ToolCall("harvest_crop", {"soil_id": "garden bed"}),
+            ToolCall("sell_item", {"item_id": "radish x2", "customer_id": "Marigold"}),
         ]
     )
     builder = PromptBuilder(
@@ -317,17 +348,22 @@ async def test_scripted_agent_grows_and_harvests_garden_crop():
         time_scale=24 * 60 * 60,
     )
 
-    await loop.run(max_ticks=6)
+    await loop.run(max_ticks=9)
 
     assert rejected == []
+    assert len(bought) == 1
     assert len(ready) == 1
     assert len(harvested) == 1
+    assert len(sold) == 1
     soil_entity = actor.world.get_entity(soil.id)
     assert not soil_entity.has_component(CropComponent)
     assert not soil_entity.has_component(HarvestableComponent)
     harvested_item = actor.world.get_entity(parse_entity_id(harvested[0].item_id))
     assert harvested_item.get_component(IdentityComponent).name == "radish x2"
-    assert container_of(harvested_item) == hazel
+    assert container_of(harvested_item) is None
+    assert character.get_component(HouseholdFundsComponent).balance == 15
+    assert merchant.get_component(HouseholdFundsComponent).balance == 3
+    assert merchant.get_component(CustomerComponent).budget == 12
 
 
 async def test_llm_agent_notes_can_be_found_by_chroma_vector_synonyms():

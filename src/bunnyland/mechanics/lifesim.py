@@ -25,7 +25,13 @@ from ..core.components import (
     SuspendedComponent,
 )
 from ..core.controllers import LLMControllerComponent
-from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_entity
+from ..core.ecs import (
+    container_of,
+    parse_entity_id,
+    reachable_ids,
+    replace_component,
+    spawn_entity,
+)
 from ..core.edges import ContainmentMode, Contains, ControlledBy
 from ..core.events import (
     AdoptionCompletedEvent,
@@ -270,6 +276,14 @@ class BusinessSaleEvent(DomainEvent):
     business_name: str
     item_id: str
     customer_id: str
+    price: int
+    balance: int
+
+
+class BusinessPurchaseEvent(DomainEvent):
+    business_name: str
+    item_id: str
+    seller_id: str
     price: int
     balance: int
 
@@ -1146,6 +1160,65 @@ class SellItemHandler:
         )
 
 
+class BuyItemHandler:
+    command_type = "buy-item"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        seller_id = parse_entity_id(command.payload.get("seller_id"))
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if actor_id is None or seller_id is None or item_id is None:
+            return rejected("invalid buyer, seller, or item id")
+        if not ctx.world.has_entity(seller_id) or not ctx.world.has_entity(item_id):
+            return rejected("seller or item does not exist")
+        buyer = ctx.entity(actor_id)
+        seller = ctx.entity(seller_id)
+        if seller_id not in reachable_ids(ctx.world, buyer):
+            return rejected("seller is not reachable")
+        if not seller.has_relationship(Contains, item_id):
+            return rejected("item is not for sale")
+
+        business_id = parse_entity_id(command.payload.get("business_id"))
+        business_entity = _first_business(ctx.world, seller, business_id)
+        business = (
+            business_entity.get_component(BusinessOwnerComponent)
+            if business_entity is not None
+            else None
+        )
+        price = int(command.payload.get("price", business.default_price if business else 0))
+        if price <= 0:
+            return rejected("price must be positive")
+        buyer_funds = _funds(buyer)
+        if buyer_funds.balance < price:
+            return rejected("insufficient household funds")
+
+        seller.remove_relationship(Contains, item_id)
+        buyer.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+        updated_buyer_funds = HouseholdFundsComponent(balance=buyer_funds.balance - price)
+        replace_component(buyer, updated_buyer_funds)
+        seller_funds = _funds(seller)
+        replace_component(seller, HouseholdFundsComponent(balance=seller_funds.balance + price))
+        if business_entity is not None and business is not None:
+            replace_component(
+                business_entity,
+                replace(business, sales_count=business.sales_count + 1),
+            )
+        return ok(
+            BusinessPurchaseEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(seller_id), str(item_id)),
+                    business_name=business.name if business is not None else "",
+                    item_id=str(item_id),
+                    seller_id=str(seller_id),
+                    price=price,
+                    balance=updated_buyer_funds.balance,
+                )
+            )
+        )
+
+
 class PromoteBusinessHandler:
     command_type = "promote-business"
 
@@ -1858,7 +1931,9 @@ __all__ = [
     "BusinessOpenedEvent",
     "BusinessOwnerComponent",
     "BusinessPromotedEvent",
+    "BusinessPurchaseEvent",
     "BusinessSaleEvent",
+    "BuyItemHandler",
     "CareerComponent",
     "CareerStartedEvent",
     "ChargeRentHandler",

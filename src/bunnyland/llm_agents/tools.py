@@ -38,6 +38,8 @@ _FREE = CommandCost()
 REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
     {
         "child_id",
+        "business_id",
+        "customer_id",
         "exit_id",
         "fertilizer_id",
         "faction_id",
@@ -46,6 +48,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "objective_id",
         "quest_id",
         "seed_id",
+        "seller_id",
         "soil_id",
         "target_container_id",
         "target_id",
@@ -79,6 +82,13 @@ _VERBS: dict[str, _Verb] = {
     "say": _Verb("say", Lane.WORLD, _SPEECH, ("text", "intent")),
     "tell": _Verb("tell", Lane.WORLD, _SPEECH, ("target_id", "text", "intent")),
     "pickpocket": _Verb("pickpocket", Lane.WORLD, _ACTION, ("target_id", "item_id")),
+    "open_business": _Verb("open-business", Lane.WORLD, _ACTION, ("name", "default_price")),
+    "buy_item": _Verb(
+        "buy-item", Lane.WORLD, _ACTION, ("seller_id", "item_id", "business_id", "price")
+    ),
+    "sell_item": _Verb(
+        "sell-item", Lane.WORLD, _ACTION, ("item_id", "customer_id", "business_id", "price")
+    ),
     "take_note": _Verb(
         "take-note", Lane.FOCUS, _FOCUS, ("text", "tags", "scope", "collection")
     ),
