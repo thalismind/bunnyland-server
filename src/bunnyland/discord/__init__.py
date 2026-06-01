@@ -1,6 +1,7 @@
 """Discord front-end (spec 24). Import the bot lazily so the extra stays optional."""
 
 from .bot import assign_discord_controller, did_you_mean
+from .claim import render_character_list
 from .view import (
     HELP_TEXT,
     explain_rejection,
@@ -17,6 +18,7 @@ __all__ = [
     "assign_discord_controller",
     "did_you_mean",
     "explain_rejection",
+    "render_character_list",
     "render_action_result",
     "render_help",
     "render_look",

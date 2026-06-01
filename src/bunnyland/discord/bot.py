@@ -22,7 +22,7 @@ from ..core.events import CommandExecutedEvent, CommandRejectedEvent
 from ..core.world_actor import WorldActor
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call
-from .claim import assign_discord_controller, discord_controlled_character, list_character_names
+from .claim import assign_discord_controller, discord_controlled_character, render_character_list
 from .view import render_action_result, render_help, render_look, split_discord_text
 
 MOVE_RESULT_TIMEOUT_SECONDS = 120.0
@@ -162,11 +162,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
         @self.client.command(name="characters")
         async def characters(ctx):
-            names = list_character_names(self.actor)
-            if not names:
-                await ctx.send("There are no characters in this world.")
-                return
-            await ctx.send("Characters: " + ", ".join(names))
+            await self._send_help(ctx, render_character_list(self.actor))
 
         @self.client.command(name="look")
         async def look(ctx):

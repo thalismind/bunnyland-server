@@ -7,6 +7,7 @@ from ..core import (
     ControlledBy,
     DiscordControllerComponent,
     IdentityComponent,
+    LLMControllerComponent,
     SuspendedComponent,
     spawn_entity,
 )
@@ -24,6 +25,42 @@ def list_character_names(actor: WorldActor) -> list[str]:
         character.get_component(IdentityComponent).name
         for character in characters.execute_entities()
     ]
+
+
+def _active_controller_kind(actor: WorldActor, character) -> str:
+    for _edge, controller_id in character.get_relationships(ControlledBy):
+        if not actor.world.has_entity(controller_id):
+            continue
+        controller = actor.world.get_entity(controller_id)
+        if controller.has_component(DiscordControllerComponent):
+            return "Discord controller"
+        if controller.has_component(LLMControllerComponent):
+            return "LLM controller"
+    return "free"
+
+
+def list_character_statuses(actor: WorldActor) -> list[tuple[str, str]]:
+    """Return public character names with their player-facing controller status."""
+
+    characters = actor.world.query().with_all([CharacterComponent, IdentityComponent])
+    return [
+        (
+            character.get_component(IdentityComponent).name,
+            _active_controller_kind(actor, character),
+        )
+        for character in characters.execute_entities()
+    ]
+
+
+def render_character_list(actor: WorldActor) -> str:
+    """Render the Discord ``!characters`` response."""
+
+    statuses = list_character_statuses(actor)
+    if not statuses:
+        return "There are no characters in this world."
+    lines = ["Characters:"]
+    lines.extend(f"- {name} - {status}" for name, status in statuses)
+    return "\n".join(lines)
 
 
 def _match_character(characters, character_name: str):
@@ -126,4 +163,10 @@ def discord_controlled_character(actor: WorldActor, discord_user_id: int):
     return None
 
 
-__all__ = ["assign_discord_controller", "discord_controlled_character", "list_character_names"]
+__all__ = [
+    "assign_discord_controller",
+    "discord_controlled_character",
+    "list_character_names",
+    "list_character_statuses",
+    "render_character_list",
+]

@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from bunnyland.core import ContainmentMode, Contains
+from bunnyland.core import (
+    CharacterComponent,
+    ContainmentMode,
+    Contains,
+    IdentityComponent,
+    LLMControllerComponent,
+    spawn_entity,
+)
 from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent, EventVisibility
 from bunnyland.discord import (
     HELP_TEXT,
@@ -16,6 +23,7 @@ from bunnyland.discord import (
     did_you_mean,
     explain_rejection,
     render_action_result,
+    render_character_list,
     render_help,
     render_look,
     render_move_result,
@@ -34,6 +42,40 @@ def test_did_you_mean_is_the_shared_resolver_helper():
     from bunnyland.llm_agents import did_you_mean as shared
 
     assert did_you_mean is shared
+
+
+def test_render_character_list_includes_controller_statuses(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        character_name="Juniper",
+    )
+    llm_character = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    llm_controller = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="default", model="deepseek-v4-flash")],
+    )
+    scenario.actor.assign_controller(llm_character.id, llm_controller.id)
+    spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+
+    text = render_character_list(scenario.actor)
+
+    assert "Characters:" in text
+    assert "- Juniper - Discord controller" in text
+    assert "- Hazel - LLM controller" in text
+    assert "- Clover - free" in text
 
 
 def test_help_lists_available_discord_verbs(scenario):
