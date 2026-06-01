@@ -10,6 +10,8 @@ export BUNNYLAND_ADMIN_USER
 export BUNNYLAND_ADMIN_PASSWORD
 export BUNNYLAND_VERIFY_CONNECT_HOST="${BUNNYLAND_VERIFY_CONNECT_HOST:-$BUNNYLAND_DOMAIN}"
 export BUNNYLAND_VERIFY_PORT="${BUNNYLAND_VERIFY_PORT:-443}"
+export BUNNYLAND_HOME_DOMAIN="${BUNNYLAND_HOME_DOMAIN:-}"
+export BUNNYLAND_HOME_EXPECT_TEXT="${BUNNYLAND_HOME_EXPECT_TEXT:-}"
 
 python3 - <<'PY'
 import base64
@@ -25,6 +27,8 @@ connect_host = os.environ["BUNNYLAND_VERIFY_CONNECT_HOST"]
 port = int(os.environ["BUNNYLAND_VERIFY_PORT"])
 admin_user = os.environ["BUNNYLAND_ADMIN_USER"]
 admin_password = os.environ["BUNNYLAND_ADMIN_PASSWORD"]
+home_domain = os.environ["BUNNYLAND_HOME_DOMAIN"]
+home_expect_text = os.environ["BUNNYLAND_HOME_EXPECT_TEXT"]
 base_url = f"https://{domain}"
 
 
@@ -53,18 +57,19 @@ def decode_chunked(body: bytes) -> bytes:
         offset += size + 2
 
 
-def request(method: str, path: str, *, auth: str | None = None) -> tuple[int, bytes]:
+def request(method: str, path: str, *, auth: str | None = None, target_domain: str | None = None) -> tuple[int, bytes]:
+    request_domain = target_domain or domain
     headers = {"User-Agent": "bunnyland-vps-docker-verify/1"}
     if auth is not None:
         headers["Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
-    headers["Host"] = domain
+    headers["Host"] = request_domain
     headers["Connection"] = "close"
     raw_request = f"{method} {path} HTTP/1.1\r\n" + "".join(
         f"{key}: {value}\r\n" for key, value in headers.items()
     ) + "\r\n"
     ctx = ssl.create_default_context()
     with socket.create_connection((connect_host, port), timeout=15) as raw:
-        with ctx.wrap_socket(raw, server_hostname=domain) as sock:
+        with ctx.wrap_socket(raw, server_hostname=request_domain) as sock:
             sock.sendall(raw_request.encode("ascii"))
             data = b""
             while True:
@@ -86,13 +91,28 @@ def request(method: str, path: str, *, auth: str | None = None) -> tuple[int, by
     return status, body
 
 
-def expect_status(name: str, method: str, path: str, expected: int, *, auth: str | None = None) -> bytes:
-    status, body = request(method, path, auth=auth)
+def expect_status(
+    name: str,
+    method: str,
+    path: str,
+    expected: int,
+    *,
+    auth: str | None = None,
+    target_domain: str | None = None,
+) -> bytes:
+    status, body = request(method, path, auth=auth, target_domain=target_domain)
     if status != expected:
         fail(f"{name}: expected HTTP {expected}, got HTTP {status}")
     ok(f"{name}: HTTP {status}")
     return body
 
+
+if home_domain:
+    body = expect_status("homepage", "GET", "/", 200, target_domain=home_domain)
+    if home_expect_text and home_expect_text.encode() not in body:
+        fail(f"homepage: expected text {home_expect_text!r} was not present")
+    if home_expect_text:
+        ok("homepage: expected text present")
 
 body = expect_status("web client", "GET", "/", 200)
 if b"Bunnyland Inspector" not in body:

@@ -623,10 +623,28 @@ BUNNYLAND_FAVICON_FILE='/opt/bunnyland/favicon.png' \
   scripts/vps-docker-setup
 ```
 
+To serve a separate static homepage from the same frontend nginx container, add
+`BUNNYLAND_HOME_DOMAIN` and `BUNNYLAND_HOME_DIR`. The homepage directory must contain its
+own `index.html`. The setup script requests or reuses a separate Let's Encrypt certificate
+for that domain and starts `compose.tls-home.yml` instead of `compose.tls.yml`:
+
+```bash
+BUNNYLAND_DOMAIN='sandbox.example.com' \
+BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
+BUNNYLAND_ADMIN_USER='editor' \
+BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_CERT_EMAIL='admin@example.com' \
+BUNNYLAND_HOME_DOMAIN='example.com' \
+BUNNYLAND_HOME_CERT_NAME='example.com' \
+BUNNYLAND_HOME_DIR='/opt/bunnyland/home' \
+  scripts/vps-docker-setup
+```
+
 The script uses only Let's Encrypt for public TLS certificate issuance. It never generates
-self-signed certificates for the VPS Docker deployment. If a matching certificate already
-exists under `/etc/letsencrypt/live/$BUNNYLAND_DOMAIN`, the script reuses it; otherwise it
-stops anything binding port `80` and runs certbot's standalone authenticator.
+self-signed certificates for the VPS Docker deployment. If matching certificates already
+exist under `/etc/letsencrypt/live/`, the script reuses them; otherwise it stops anything
+binding port `80` and runs certbot's standalone authenticator for the app domain and,
+when configured, the homepage domain.
 
 The script starts the checked-in Compose files:
 
@@ -634,6 +652,8 @@ The script starts the checked-in Compose files:
 - `compose.load.yml` when an existing save is selected or `worlds/main.json` already
   exists in the data directory;
 - `compose.tls.yml`;
+- `compose.tls-home.yml` instead of `compose.tls.yml` when `BUNNYLAND_HOME_DOMAIN` is
+  provided;
 - `compose.favicon.yml` when `BUNNYLAND_FAVICON_FILE` is provided.
 
 The checked-in Docker Compose path is intentionally the simple web/API deployment. It loads
@@ -648,6 +668,18 @@ After setup, verify the public route and admin auth:
 BUNNYLAND_DOMAIN='sandbox.example.com' \
 BUNNYLAND_ADMIN_USER='editor' \
 BUNNYLAND_ADMIN_PASSWORD='change-this' \
+  scripts/vps-docker-verify
+```
+
+If the same frontend container also serves a static homepage, include the homepage domain
+and expected text:
+
+```bash
+BUNNYLAND_DOMAIN='sandbox.example.com' \
+BUNNYLAND_ADMIN_USER='editor' \
+BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_HOME_DOMAIN='example.com' \
+BUNNYLAND_HOME_EXPECT_TEXT='A social simulation sandbox built as an ECS graph.' \
   scripts/vps-docker-verify
 ```
 

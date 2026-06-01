@@ -20,6 +20,9 @@ cd "$repo_dir"
 
 world_save="${BUNNYLAND_WORLD_SAVE:-}"
 favicon_file="${BUNNYLAND_FAVICON_FILE:-}"
+home_domain="${BUNNYLAND_HOME_DOMAIN:-}"
+home_dir="${BUNNYLAND_HOME_DIR:-}"
+home_cert_name="${BUNNYLAND_HOME_CERT_NAME:-$home_domain}"
 cert_name="${BUNNYLAND_CERT_NAME:-$BUNNYLAND_DOMAIN}"
 letsencrypt_dir="${BUNNYLAND_LETSENCRYPT_DIR:-/etc/letsencrypt}"
 auth_dir="${BUNNYLAND_NGINX_AUTH_DIR:-/etc/nginx/bunnyland}"
@@ -85,7 +88,13 @@ elif [[ -f "$BUNNYLAND_DATA_DIR/worlds/main.json" ]]; then
   compose_files+=(-f compose.load.yml)
 fi
 
-compose_files+=(-f compose.tls.yml)
+if [[ -n "$home_domain" ]]; then
+  [[ -n "$home_dir" ]] || die "set BUNNYLAND_HOME_DIR when BUNNYLAND_HOME_DOMAIN is set"
+  [[ -d "$home_dir" ]] || die "BUNNYLAND_HOME_DIR does not exist: $home_dir"
+  compose_files+=(-f compose.tls-home.yml)
+else
+  compose_files+=(-f compose.tls.yml)
+fi
 
 if [[ -n "$favicon_file" ]]; then
   [[ -f "$favicon_file" ]] || die "BUNNYLAND_FAVICON_FILE does not exist: $favicon_file"
@@ -107,19 +116,30 @@ printf '%s:%s\n' "$BUNNYLAND_ADMIN_USER" "$(openssl passwd -apr1 "$BUNNYLAND_ADM
   | sudo tee "$auth_dir/world-editor.htpasswd" >/dev/null
 sudo chmod 0644 "$auth_dir/world-editor.htpasswd"
 
-if [[ ! -f "$letsencrypt_dir/live/$cert_name/fullchain.pem" || ! -f "$letsencrypt_dir/live/$cert_name/privkey.pem" ]]; then
-  printf 'Requesting a Let'\''s Encrypt certificate for %s with certbot.\n' "$BUNNYLAND_DOMAIN"
+ensure_letsencrypt_cert() {
+  local domain="$1"
+  local name="$2"
+
+  if [[ -f "$letsencrypt_dir/live/$name/fullchain.pem" && -f "$letsencrypt_dir/live/$name/privkey.pem" ]]; then
+    printf 'Using existing Let'\''s Encrypt certificate at %s/live/%s.\n' "$letsencrypt_dir" "$name"
+    return
+  fi
+
+  printf 'Requesting a Let'\''s Encrypt certificate for %s with certbot.\n' "$domain"
   sudo systemctl stop nginx 2>/dev/null || true
   sudo nerdctl compose -p bunnyland "${compose_files[@]}" stop frontend 2>/dev/null || true
-  certbot_args=(certonly --standalone -d "$BUNNYLAND_DOMAIN" --agree-tos --non-interactive)
+  certbot_args=(certonly --standalone -d "$domain" --agree-tos --non-interactive)
   if [[ -n "${BUNNYLAND_CERT_EMAIL:-}" ]]; then
     certbot_args+=(--email "$BUNNYLAND_CERT_EMAIL" --no-eff-email)
   else
     certbot_args+=(--register-unsafely-without-email)
   fi
   sudo certbot "${certbot_args[@]}"
-else
-  printf 'Using existing Let'\''s Encrypt certificate at %s/live/%s.\n' "$letsencrypt_dir" "$cert_name"
+}
+
+ensure_letsencrypt_cert "$BUNNYLAND_DOMAIN" "$cert_name"
+if [[ -n "$home_domain" ]]; then
+  ensure_letsencrypt_cert "$home_domain" "$home_cert_name"
 fi
 
 cat > .env <<ENV
@@ -135,6 +155,14 @@ BUNNYLAND_LETSENCRYPT_DIR=$letsencrypt_dir
 BUNNYLAND_NGINX_AUTH_DIR=$auth_dir
 BUNNYLAND_AUTOSAVE_EVERY=${BUNNYLAND_AUTOSAVE_EVERY:-120}
 ENV
+
+if [[ -n "$home_domain" ]]; then
+  {
+    printf 'BUNNYLAND_HOME_DOMAIN=%s\n' "$home_domain"
+    printf 'BUNNYLAND_HOME_CERT_NAME=%s\n' "$home_cert_name"
+    printf 'BUNNYLAND_HOME_DIR=%s\n' "$home_dir"
+  } >> .env
+fi
 
 if [[ -n "$favicon_file" ]]; then
   printf 'BUNNYLAND_FAVICON_FILE=%s\n' "$favicon_file" >> .env
