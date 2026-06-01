@@ -1,0 +1,21 @@
+services:
+  server:
+    command:
+      - bunnyland
+      - serve
+      - --load
+      - ${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}
+      - --ticks
+      - "0"
+      - --tick-seconds
+      - ${BUNNYLAND_TICK_SECONDS:-30}
+      - --time-scale
+      - ${BUNNYLAND_TIME_SCALE:-1800}
+      - --api-host
+      - 0.0.0.0
+      - --api-port
+      - "8765"
+      - --save
+      - ${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}
+      - --autosave-every
+      - ${BUNNYLAND_AUTOSAVE_EVERY:-20}

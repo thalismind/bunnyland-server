@@ -56,6 +56,12 @@ For local image development, add the build override:
 docker compose -f compose.yml -f compose.build.yml up -d --build
 ```
 
+To reload an existing bind-mounted world instead of generating one, add `compose.load.yml`:
+
+```bash
+docker compose -f compose.yml -f compose.load.yml up -d
+```
+
 CI builds and publishes `ghcr.io/thalismind/bunnyland-server` on pushes to `main`, with
 `latest`, branch, and commit-SHA tags. The web repo publishes
 `ghcr.io/thalismind/bunnyland-web` with the same tag scheme.

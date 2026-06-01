@@ -549,6 +549,7 @@ The server repo owns the Compose files:
 
 - `compose.yml` runs `ghcr.io/thalismind/bunnyland-server` and
   `ghcr.io/thalismind/bunnyland-web`;
+- `compose.load.yml` reloads an existing saved world from the bind mount;
 - `compose.tls.yml` swaps the frontend nginx template to terminate HTTPS;
 - `deploy/nginx/frontend-tls.conf` is the TLS nginx template used by the frontend image.
 
@@ -568,6 +569,7 @@ git clone https://github.com/thalismind/bunnyland-server.git server
 cd server
 cat > .env <<'ENV'
 BUNNYLAND_DATA_DIR=/var/lib/bunnyland
+BUNNYLAND_WORLD_FILE=/data/worlds/main.json
 BUNNYLAND_HTTP_BIND=0.0.0.0:80
 BUNNYLAND_SERVER_NAME=_
 ENV
@@ -584,12 +586,22 @@ Then open `http://YOUR_VPS_PUBLIC_IP/`. The frontend image ships a default
 `/config.json` that points the browser at same-origin `/api/`, so the web UI and API proxy
 come up together.
 
+To reload an existing saved world from the bind mount, use the load override:
+
+```bash
+docker compose -f compose.yml -f compose.load.yml up -d
+```
+
 For HTTPS with SNI handled inside the frontend container, issue a certificate first, then
 create the editor password file and run the TLS override:
 
 ```bash
 sudo install -d -o root -g root -m 0755 /etc/nginx/bunnyland
-sudo htpasswd -c /etc/nginx/bunnyland/world-editor.htpasswd editor
+BUNNYLAND_ADMIN_USER=editor
+BUNNYLAND_ADMIN_PASSWORD='change-this'
+printf '%s:%s\n' "$BUNNYLAND_ADMIN_USER" \
+  "$(openssl passwd -apr1 "$BUNNYLAND_ADMIN_PASSWORD")" | \
+  sudo tee /etc/nginx/bunnyland/world-editor.htpasswd >/dev/null
 cat >> .env <<'ENV'
 BUNNYLAND_SERVER_NAME=sandbox.example.com
 BUNNYLAND_CERT_NAME=sandbox.example.com
@@ -605,7 +617,8 @@ the matching certificate directory under `/etc/letsencrypt/live`. The TLS overri
 in the frontend nginx container, so the browser always loads the web page and API from the
 same external origin.
 The default HTTP-only Compose stack blocks `/api/admin/`; the TLS override enables it with
-nginx basic auth.
+nginx basic auth. Change the admin username and password by recreating
+`world-editor.htpasswd`; no Compose file changes are required.
 
 If TLS terminates somewhere else, remove the `443` listener/cert mounts, publish only
 `127.0.0.1:8080:80`, and point the outer proxy at the frontend container. Keep the `/api/`
