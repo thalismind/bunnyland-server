@@ -27,6 +27,33 @@ config proxies to `http://server:8765/`, which is Docker DNS for the server serv
 container images are `ghcr.io/thalismind/bunnyland-server` and
 `ghcr.io/thalismind/bunnyland-web`.
 
+## Before you start
+
+Have these ready before running anything. The wizard requests a real Let's Encrypt
+certificate partway through, and that step fails if your domain does not already point at
+this server:
+
+1. **A VPS or mini PC** running Ubuntu 24 or 26 with a public IP, where you log in as a user
+   with `sudo` (the default `ubuntu` user on most cloud images is fine). Size it with **at
+   least 2 CPU cores and 4 GB RAM** (the reasonable minimum); **4 cores / 8 GB is
+   recommended**. Shared/managed hosting that cannot run your own containers will not work;
+   most mini PCs do, though ChromaDB vector searches may be slower on low-end hardware.
+2. **A domain name with a DNS A record** pointing at the VPS's public IP (add an `AAAA`
+   record too if the VPS has IPv6). Create this first and wait for it to propagate —
+   `getent ahosts your.domain` from the VPS should return the VPS's public IP before you
+   continue.
+3. **Inbound port 443 open** in your cloud provider's firewall / security group for normal
+   HTTPS traffic, plus **port 22** for SSH (this is separate from the host firewall the
+   setup configures). **Port 80** only needs to be reachable from the internet while certbot
+   issues or renews the certificate — the standalone HTTP-01 challenge binds it briefly. A
+   rerun that reuses an existing certificate does not need port 80.
+4. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key and a
+   Discord bot token. Creating the Discord application is described in
+   [Full Bunnyland Deployment](#2-full-bunnyland-deployment) below.
+
+You also choose an admin username and password during setup; these protect the world
+editor. There is no recovery if you forget them — you simply rerun setup to reset them.
+
 The fastest path is the setup wizard. It supports Debian and Ubuntu, detects Docker,
 nerdctl, or Podman with Compose support, prompts for the required values, writes
 `compose.user.yml`, and starts the checked-in Compose files. If existing Bunnyland

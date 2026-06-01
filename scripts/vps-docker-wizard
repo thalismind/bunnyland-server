@@ -59,6 +59,26 @@ prompt_secret() {
   done
 }
 
+prompt_secret_confirm() {
+  local label="$1"
+  local value confirm
+  while true; do
+    read -r -s -p "$label: " value
+    printf '\n' >&2
+    if [[ -z "$value" ]]; then
+      printf 'Please enter a value.\n' >&2
+      continue
+    fi
+    read -r -s -p "$label (again): " confirm
+    printf '\n' >&2
+    if [[ "$value" == "$confirm" ]]; then
+      printf '%s\n' "$value"
+      return
+    fi
+    printf 'Passwords did not match. Try again.\n' >&2
+  done
+}
+
 confirm() {
   local label="$1"
   local default="${2:-n}"
@@ -154,7 +174,7 @@ fi
 domain="$(prompt_required "Sandbox domain" "sandbox.example.com")"
 data_dir="$(prompt_required "Host data directory" "/var/lib/bunnyland")"
 admin_user="$(prompt_required "Admin username" "editor")"
-admin_password="$(prompt_secret "Admin password")"
+admin_password="$(prompt_secret_confirm "Admin password")"
 cert_email="$(prompt "Let's Encrypt email (blank is allowed)")"
 world_save="$(prompt "Existing world save path (blank to generate/use data-dir default)")"
 favicon_file="$(prompt "Custom favicon path (blank for default)")"
@@ -229,6 +249,60 @@ if [[ "$enable_discord" == "1" ]]; then
   if [[ -n "$discord_user_id" ]]; then write_env BUNNYLAND_DISCORD_USER_ID "$discord_user_id"; fi
   if [[ -n "$discord_channel_id" ]]; then write_env BUNNYLAND_DISCORD_CHANNEL_ID "$discord_channel_id"; fi
   if [[ -n "$discord_character" ]]; then write_env BUNNYLAND_DISCORD_CHARACTER "$discord_character"; fi
+fi
+
+dns_line() {
+  local name="$1" resolved public
+  resolved="$(getent ahosts "$name" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, -)"
+  if [[ -z "$resolved" ]]; then
+    printf 'does not resolve yet (certbot will fail until a DNS A record points here)'
+    return
+  fi
+  public="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  if [[ -n "$public" ]]; then
+    if printf '%s' "$resolved" | tr ',' '\n' | grep -qxF "$public"; then
+      printf 'resolves to %s (matches this server)' "$resolved"
+    else
+      printf 'resolves to %s but this server looks like %s — check the DNS A record' "$resolved" "$public"
+    fi
+  else
+    printf 'resolves to %s' "$resolved"
+  fi
+}
+
+printf '\nReview these settings before setup starts:\n'
+printf '  Container runtime : %s\n' "$runtime"
+printf '  Public domain     : %s\n' "$domain"
+printf '  DNS check         : %s\n' "$(dns_line "$domain")"
+printf '  Data directory    : %s\n' "$data_dir"
+printf '  Admin username    : %s\n' "$admin_user"
+printf '  Admin password    : (set)\n'
+printf '  Let'\''s Encrypt email: %s\n' "${cert_email:-(none, registering without email)}"
+if [[ -n "$world_save" ]]; then printf '  Existing world    : %s\n' "$world_save"; fi
+if [[ -n "$favicon_file" ]]; then printf '  Custom favicon    : %s\n' "$favicon_file"; fi
+if [[ -n "$home_domain" ]]; then
+  printf '  Homepage domain   : %s\n' "$home_domain"
+  printf '  Homepage DNS check: %s\n' "$(dns_line "$home_domain")"
+  printf '  Homepage files    : %s\n' "$home_dir"
+fi
+if [[ "$full_deployment" == "1" ]]; then
+  printf '  Mode              : full deployment (Ollama + Discord)\n'
+  printf '  Ollama host       : %s\n' "$ollama_host"
+  printf '  Worldgen model    : %s\n' "$worldgen_model"
+  printf '  Character model   : %s\n' "$character_model"
+  printf '  Ollama API key    : (set)\n'
+  printf '  Discord token     : (set)\n'
+  if [[ -n "$discord_user_id" ]]; then
+    printf '  Discord startup   : user %s -> %s in channel %s\n' \
+      "$discord_user_id" "${discord_character:-first claimable character}" "${discord_channel_id:-(none)}"
+  fi
+else
+  printf '  Mode              : smoke test only (no Ollama or Discord)\n'
+fi
+printf '\nThis installs packages, enables the firewall, and requests a real Let'\''s Encrypt\n'
+printf 'certificate (which is rate-limited), then starts the containers.\n'
+if ! confirm "Proceed with these settings?" "y"; then
+  die "aborted before setup; no changes were made to TLS, the firewall, or containers"
 fi
 
 printf '\nStarting setup with %s. Public TLS will use Let'\''s Encrypt.\n' "$runtime"
