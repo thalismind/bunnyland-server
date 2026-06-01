@@ -22,6 +22,7 @@ from bunnyland.discord import (
     assign_discord_controller,
     did_you_mean,
     explain_rejection,
+    parse_discord_action,
     render_action_result,
     render_character_list,
     render_help,
@@ -29,6 +30,7 @@ from bunnyland.discord import (
     render_move_result,
     split_discord_text,
 )
+from bunnyland.memory import InMemoryStore, install_memory
 
 
 def test_did_you_mean_importable_without_the_discord_extra():
@@ -80,7 +82,7 @@ def test_render_character_list_includes_controller_statuses(scenario):
 
 def test_help_lists_available_discord_verbs(scenario):
     assert "!look" in HELP_TEXT
-    assert "!move <direction>" in HELP_TEXT
+    assert "!<verb> ..." in HELP_TEXT
     assert "!claim [character]" in HELP_TEXT
     assert render_help() == HELP_TEXT
     assert render_help("humans") == HELP_TEXT
@@ -89,6 +91,59 @@ def test_help_lists_available_discord_verbs(scenario):
     assert "move" in text
     assert "take-control" in text
     assert "move:" not in text
+
+
+def test_discord_action_parser_uses_live_world_verbs(scenario):
+    install_memory(scenario.actor, InMemoryStore())
+    verbs = scenario.actor.available_command_types()
+
+    note = parse_discord_action("note Porcupines cannot be trusted", verbs)
+    assert note.command_type == "take-note"
+    assert note.tool == "take_note"
+    assert note.payload == {"text": "Porcupines cannot be trusted"}
+
+    remember = parse_discord_action("remember trust", verbs)
+    assert remember.command_type == "remember"
+    assert remember.tool == "remember"
+    assert remember.payload == {"query": "trust", "mode": "vector"}
+
+    structured = parse_discord_action("remember query=trust mode=keyword limit=2", verbs)
+    assert structured.payload == {"query": "trust", "mode": "keyword", "limit": 2}
+
+
+def test_discord_action_parser_accepts_plugin_only_world_verbs(scenario):
+    class DummyHandler:
+        command_type = "attack"
+
+        def execute(self, ctx, command):
+            raise AssertionError("not called")
+
+    scenario.actor.register_handler(DummyHandler())
+
+    action = parse_discord_action(
+        "attack target_id=Hazel lethal=true", scenario.actor.available_command_types()
+    )
+
+    assert action.command_type == "attack"
+    assert action.tool is None
+    assert action.payload == {"target_id": "Hazel", "lethal": True}
+
+
+def test_discord_action_parser_rejects_unstructured_plugin_only_args(scenario):
+    class DummyHandler:
+        command_type = "attack"
+
+        def execute(self, ctx, command):
+            raise AssertionError("not called")
+
+    scenario.actor.register_handler(DummyHandler())
+
+    try:
+        parse_discord_action("attack Hazel", scenario.actor.available_command_types())
+    except ValueError as exc:
+        assert "key=value" in str(exc)
+    else:
+        raise AssertionError("expected unstructured plugin-only command to fail")
 
 
 def test_help_agents_describes_llm_agent_rules(scenario):

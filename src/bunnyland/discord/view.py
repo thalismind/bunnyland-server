@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..core.ecs import container_of
-from ..core.events import CommandExecutedEvent, CommandRejectedEvent
+from ..core.events import CommandExecutedEvent, CommandRejectedEvent, NotesSearchedEvent
 from ..core.world_actor import WorldActor
 from ..llm_agents.tools import tool_schemas
 from ..projections import RoomSummaryProjection
@@ -20,9 +20,8 @@ HUMAN_HELP_TEXT = "\n".join(
         "!characters - list character names.",
         "!claim [character] - control a character.",
         "!look - show your current room.",
-        "!move <direction> - move through an exit.",
-        "!say <text> - speak in the room.",
-        "!take <item> - pick up an item.",
+        "!<verb> ... - run any available world verb.",
+        "Use key=value pairs or JSON for verbs without documented arguments.",
     ]
 )
 HELP_TEXT = HUMAN_HELP_TEXT
@@ -268,6 +267,14 @@ def render_action_result(
     return f"Done: {label}."
 
 
+def render_notes_search_result(event: NotesSearchedEvent) -> str:
+    if not event.results:
+        return "No matching notes."
+    lines = [f"Notes for {event.query!r}:" if event.query else "Recent notes:"]
+    lines.extend(f"- {result}" for result in event.results)
+    return "\n".join(lines)
+
+
 __all__ = [
     "AGENT_HELP_TEXT",
     "DISCORD_MESSAGE_LIMIT",
@@ -279,5 +286,6 @@ __all__ = [
     "render_help",
     "render_look",
     "render_move_result",
+    "render_notes_search_result",
     "split_discord_text",
 ]

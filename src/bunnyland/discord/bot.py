@@ -15,20 +15,45 @@ name-resolution helpers below are.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+import json
+import shlex
+from dataclasses import dataclass, replace
+from typing import Any
 
-from ..core.commands import OnInsufficientPoints
-from ..core.events import CommandExecutedEvent, CommandRejectedEvent
+from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
+from ..core.events import CommandExecutedEvent, CommandRejectedEvent, NotesSearchedEvent
 from ..core.world_actor import WorldActor
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
-from ..llm_agents.tools import ToolCall, command_from_tool_call
+from ..llm_agents.natural_language import parse_natural_command
+from ..llm_agents.tools import (
+    ToolCall,
+    command_from_tool_call,
+    command_type_for_tool,
+    tool_arg_keys,
+    tool_for_command_type,
+    tool_names,
+)
 from .claim import assign_discord_controller, discord_controlled_character, render_character_list
-from .view import render_action_result, render_help, render_look, split_discord_text
+from .view import (
+    render_action_result,
+    render_help,
+    render_look,
+    render_notes_search_result,
+    split_discord_text,
+)
 
 MOVE_RESULT_TIMEOUT_SECONDS = 120.0
 
 #: Reaction added to a player's message once their command is accepted and queued.
 QUEUED_REACTION = "\N{HOURGLASS WITH FLOWING SAND}"
+META_COMMANDS = frozenset({"help", "claim", "characters", "look"})
+
+
+@dataclass(frozen=True)
+class DiscordAction:
+    command_type: str
+    payload: dict[str, Any]
+    tool: str | None = None
 
 
 def _require_discord():  # pragma: no cover - exercised only with the extra
@@ -40,6 +65,108 @@ def _require_discord():  # pragma: no cover - exercised only with the extra
             "the Discord bot requires the 'discord' extra: pip install bunnyland[discord]"
         ) from exc
     return discord, commands
+
+
+def _split(text: str) -> list[str]:
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def _parse_scalar(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _parse_structured_payload(text: str) -> dict[str, Any] | None:
+    stripped = text.strip()
+    if not stripped:
+        return {}
+    if stripped.startswith("{"):
+        parsed = json.loads(stripped)
+        if not isinstance(parsed, dict):
+            raise ValueError("JSON command payload must be an object")
+        return parsed
+    words = _split(stripped)
+    if words and all("=" in word for word in words):
+        payload: dict[str, Any] = {}
+        for word in words:
+            key, value = word.split("=", 1)
+            payload[key] = (
+                [item for item in value.split(",") if item]
+                if key == "tags"
+                else _parse_scalar(value)
+            )
+        return payload
+    return None
+
+
+def _payload_from_text(text: str, arg_keys: tuple[str, ...]) -> dict[str, Any]:
+    structured = _parse_structured_payload(text)
+    if structured is not None:
+        return structured
+    if not arg_keys:
+        raise ValueError("Use key=value pairs or a JSON object for this verb")
+    return {arg_keys[0]: text.strip()}
+
+
+def _with_discord_defaults(action: DiscordAction) -> DiscordAction:
+    if action.command_type != "remember":
+        return action
+    payload = dict(action.payload)
+    if payload.get("query") and not payload.get("mode"):
+        payload["mode"] = "vector"
+    return replace(action, payload=payload)
+
+
+def parse_discord_action(text: str, available_commands: tuple[str, ...]) -> DiscordAction:
+    """Parse a Discord ``!`` action against the live world verb set."""
+
+    available = set(available_commands)
+    words = _split(text.strip())
+    if not words:
+        raise ValueError("No command provided")
+    typed = words[0].lower()
+    rest = text.strip()[len(words[0]) :].strip()
+    command_type = typed.replace("_", "-")
+    tool = typed.replace("-", "_")
+    structured = bool(rest) and _parse_structured_payload(rest) is not None
+
+    if not structured:
+        natural = parse_natural_command(text)
+        if natural is not None:
+            natural_command_type = command_type_for_tool(natural.name)
+            if natural_command_type in available:
+                return _with_discord_defaults(
+                    DiscordAction(
+                        command_type=natural_command_type,
+                        payload=natural.arguments,
+                        tool=natural.name,
+                    )
+                )
+
+    if tool in tool_names():
+        mapped = command_type_for_tool(tool)
+        if mapped in available:
+            return _with_discord_defaults(
+                DiscordAction(mapped, _payload_from_text(rest, tool_arg_keys(tool)), tool=tool)
+            )
+    if command_type in available:
+        mapped_tool = tool_for_command_type(command_type)
+        if mapped_tool is not None:
+            return _with_discord_defaults(
+                DiscordAction(
+                    command_type,
+                    _payload_from_text(rest, tool_arg_keys(mapped_tool)),
+                    tool=mapped_tool,
+                )
+            )
+        return DiscordAction(command_type, _payload_from_text(rest, ()))
+
+    raise ValueError(f"Unknown world verb `{typed}`. Use `!help verbs` to see available verbs.")
 
 
 class DiscordBot:  # pragma: no cover - needs network + extra
@@ -67,26 +194,36 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         if future is not None and not future.done():
             future.set_result(event)
 
-    async def _build_command(
-        self, discord_user_id: int, tool: str, arguments: dict
-    ):
+    async def _build_command(self, discord_user_id: int, action: DiscordAction):
         found = self._character_for_user(discord_user_id)
         if found is None:
             return None, "You are not controlling a character yet."
         character_id, controller_id, generation = found
 
         character = self.actor.world.get_entity(character_id)
-        resolved, unresolved = resolve_reference_args(self.actor.world, character, arguments)
+        resolved, unresolved = resolve_reference_args(self.actor.world, character, action.payload)
         if unresolved:
-            return None, did_you_mean(arguments, unresolved)
+            return None, did_you_mean(action.payload, unresolved)
 
-        command = command_from_tool_call(
-            ToolCall(name=tool, arguments=resolved),
-            character_id=str(character_id),
-            controller_id=str(controller_id),
-            controller_generation=generation,
-            submitted_at_epoch=self.actor.epoch,
-        )
+        if action.tool is not None:
+            command = command_from_tool_call(
+                ToolCall(name=action.tool, arguments=resolved),
+                character_id=str(character_id),
+                controller_id=str(controller_id),
+                controller_generation=generation,
+                submitted_at_epoch=self.actor.epoch,
+            )
+        else:
+            command = build_submitted_command(
+                character_id=str(character_id),
+                controller_id=str(controller_id),
+                controller_generation=generation,
+                command_type=action.command_type,
+                cost=CommandCost(action=1),
+                lane=Lane.WORLD,
+                payload=resolved,
+                submitted_at_epoch=self.actor.epoch,
+            )
         return command, None
 
     @staticmethod
@@ -97,21 +234,40 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         except Exception:  # pragma: no cover - reaction is best-effort (e.g. missing perms)
             pass
 
-    async def _submit_action(self, ctx, tool: str, arguments: dict) -> str:
-        command, error = await self._build_command(ctx.author.id, tool, arguments)
+    async def _submit_action(self, ctx, action: DiscordAction) -> str:
+        command, error = await self._build_command(ctx.author.id, action)
         if error is not None:
             return error
         command = replace(command, on_insufficient_points=OnInsufficientPoints.DENY)
         future = asyncio.get_running_loop().create_future()
+        notes_future = asyncio.get_running_loop().create_future()
+
+        def capture_notes(event: NotesSearchedEvent) -> None:
+            if event.actor_id == command.character_id and not notes_future.done():
+                notes_future.set_result(event)
+
+        if command.command_type == "remember":
+            self.actor.bus.subscribe(NotesSearchedEvent, capture_notes)
         self._pending[command.command_id] = future
-        await self.actor.submit(command)
-        await self._acknowledge_queued(ctx)
         try:
+            await self.actor.submit(command)
+            await self._acknowledge_queued(ctx)
             event = await asyncio.wait_for(future, timeout=MOVE_RESULT_TIMEOUT_SECONDS)
+            if command.command_type == "remember" and isinstance(event, CommandExecutedEvent):
+                notes = await asyncio.wait_for(notes_future, timeout=1.0)
+                return render_notes_search_result(notes)
         except TimeoutError:
             self._pending.pop(command.command_id, None)
-            return f"{tool.replace('_', ' ').capitalize()} queued, but it has not run yet."
-        return render_action_result(self.actor, ctx.author.id, tool, event)
+            return (
+                f"{command.command_type.replace('-', ' ').capitalize()} queued, "
+                "but it has not run yet."
+            )
+        finally:
+            if command.command_type == "remember":
+                self.actor.bus.unsubscribe(NotesSearchedEvent, capture_notes)
+        return render_action_result(
+            self.actor, ctx.author.id, action.tool or action.command_type, event
+        )
 
     @staticmethod
     async def _reply(ctx, body: str) -> None:
@@ -129,18 +285,6 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
     def _register_commands(self) -> None:
         discord, commands = _require_discord()
-
-        @self.client.command(name="move")
-        async def move(ctx, direction: str):
-            await self._reply(ctx, await self._submit_action(ctx, "move", {"direction": direction}))
-
-        @self.client.command(name="say")
-        async def say(ctx, *, text: str):
-            await self._reply(ctx, await self._submit_action(ctx, "say", {"text": text}))
-
-        @self.client.command(name="take")
-        async def take(ctx, *, item_id: str):
-            await self._reply(ctx, await self._submit_action(ctx, "take", {"item_id": item_id}))
 
         @self.client.command(name="claim")
         async def claim(ctx, *, character: str | None = None):
@@ -177,6 +321,24 @@ class DiscordBot:  # pragma: no cover - needs network + extra
             print(f"Discord bot connected as {self.client.user}.", flush=True)
 
         @self.client.event
+        async def on_message(message):
+            if message.author.bot or not message.content.startswith("!"):
+                return
+            ctx = await self.client.get_context(message)
+            head = message.content[1:].strip().split(maxsplit=1)[0].lower()
+            if ctx.valid and head in META_COMMANDS:
+                await self.client.process_commands(message)
+                return
+            try:
+                action = parse_discord_action(
+                    message.content[1:].strip(), self.actor.available_command_types()
+                )
+            except ValueError as exc:
+                await self._reply(ctx, str(exc))
+                return
+            await self._reply(ctx, await self._submit_action(ctx, action))
+
+        @self.client.event
         async def on_command_error(ctx, error):
             if isinstance(error, commands.CommandNotFound):
                 return
@@ -198,4 +360,5 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         await self.client.close()
 
 
-__all__ = ["DiscordBot", "assign_discord_controller", "did_you_mean"]
+__all__ = ["DiscordAction", "DiscordBot", "assign_discord_controller", "did_you_mean",
+           "parse_discord_action"]

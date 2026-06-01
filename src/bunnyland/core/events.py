@@ -381,6 +381,15 @@ class EventBus:
     def subscribe(self, event_type: type[E], handler: Handler) -> None:
         self._handlers[event_type].append(handler)
 
+    def unsubscribe(self, event_type: type[E], handler: Handler) -> None:
+        handlers = self._handlers.get(event_type)
+        if not handlers:
+            return
+        try:
+            handlers.remove(handler)
+        except ValueError:
+            return
+
     async def publish(self, event: DomainEvent) -> None:
         for event_type, handlers in self._handlers.items():
             if isinstance(event, event_type):

@@ -95,6 +95,23 @@ def tool_names() -> tuple[str, ...]:
     return tuple(_VERBS)
 
 
+def command_type_for_tool(name: str) -> str | None:
+    verb = _VERBS.get(name)
+    return verb.command_type if verb is not None else None
+
+
+def tool_arg_keys(name: str) -> tuple[str, ...]:
+    verb = _VERBS.get(name)
+    return verb.arg_keys if verb is not None else ()
+
+
+def tool_for_command_type(command_type: str) -> str | None:
+    for name, verb in _VERBS.items():
+        if verb.command_type == command_type:
+            return name
+    return None
+
+
 def tool_schemas() -> list[dict[str, Any]]:
     """JSON-schema-ish tool definitions for the LLM (Ollama/OpenAI ``tools`` format)."""
     schemas: list[dict[str, Any]] = []
@@ -142,6 +159,9 @@ __all__ = [
     "REFERENCE_ARG_KEYS",
     "ToolCall",
     "command_from_tool_call",
+    "command_type_for_tool",
+    "tool_arg_keys",
+    "tool_for_command_type",
     "tool_names",
     "tool_schemas",
 ]
