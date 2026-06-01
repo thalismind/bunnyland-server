@@ -10,7 +10,7 @@ the agent never touches the ECS and cannot bypass costs or policy (spec 25.3).
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
 from typing import Protocol
 
 from ..prompts.builder import PromptContext
@@ -38,7 +38,7 @@ class Agent(Protocol):
 
     def decide(
         self, prompt: str, context: PromptContext, *, character_id: str, model: str | None = None
-    ) -> ToolCall | None: ...
+    ) -> ToolCall | None | Awaitable[ToolCall | None]: ...
 
 
 class ScriptedAgent:
@@ -82,20 +82,21 @@ class OllamaAgent:
                 "OllamaAgent requires the 'llm' extra: pip install bunnyland[llm]"
             ) from exc
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
-        self._client = ollama.Client(host=host, headers=headers) if host else ollama.Client()
+        client_cls = ollama.AsyncClient
+        self._client = client_cls(host=host, headers=headers) if host else client_cls()
         self._model = model
         self._history_turns = history_turns
         # character_id -> running list of {"role", "content"/"tool_calls"} messages.
         self._history: dict[str, list[dict]] = {}
 
-    def decide(  # pragma: no cover - needs network + extra
+    async def decide(  # pragma: no cover - needs network + extra
         self, prompt: str, context: PromptContext, *, character_id: str, model: str | None = None
     ) -> ToolCall | None:
         del context
         history = self._history.setdefault(character_id, [])
         history.append({"role": "user", "content": prompt})
 
-        response = self._client.chat(
+        response = await self._client.chat(
             model=normalize_model(model or self._model),
             messages=history,
             tools=tool_schemas(),

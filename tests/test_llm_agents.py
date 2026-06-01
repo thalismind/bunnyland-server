@@ -226,7 +226,7 @@ class _FakeOllamaClient:
         self.calls: list[list[dict]] = []
         self.models: list[str] = []
 
-    def chat(self, *, model, messages, tools):
+    async def chat(self, *, model, messages, tools):
         del tools
         self.models.append(model)
         self.calls.append([dict(m) for m in messages])  # snapshot
@@ -234,14 +234,14 @@ class _FakeOllamaClient:
                             "tool_calls": [{"function": {"name": "wait", "arguments": {}}}]}}
 
 
-def test_ollama_agent_resends_prior_turns_as_context(monkeypatch):
+async def test_ollama_agent_resends_prior_turns_as_context(monkeypatch):
     fake_module = types.ModuleType("ollama")
-    fake_module.Client = _FakeOllamaClient
+    fake_module.AsyncClient = _FakeOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
     agent = OllamaAgent(model="llama3")
-    agent.decide("turn one", None, character_id="char_1")
-    agent.decide("turn two", None, character_id="char_1")
+    await agent.decide("turn one", None, character_id="char_1")
+    await agent.decide("turn two", None, character_id="char_1")
 
     client = agent._client
     # Second chat call carries the full history: turn one (user + assistant) + turn two.
@@ -251,38 +251,38 @@ def test_ollama_agent_resends_prior_turns_as_context(monkeypatch):
     assert second[2] == {"role": "user", "content": "turn two"}
 
 
-def test_ollama_agent_keeps_history_per_character(monkeypatch):
+async def test_ollama_agent_keeps_history_per_character(monkeypatch):
     fake_module = types.ModuleType("ollama")
-    fake_module.Client = _FakeOllamaClient
+    fake_module.AsyncClient = _FakeOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
     agent = OllamaAgent(model="llama3")
-    agent.decide("hazel turn", None, character_id="hazel")
-    agent.decide("juniper turn", None, character_id="juniper")
+    await agent.decide("hazel turn", None, character_id="hazel")
+    await agent.decide("juniper turn", None, character_id="juniper")
 
     # Juniper's first call must not contain Hazel's history.
     juniper_call = agent._client.calls[1]
     assert juniper_call == [{"role": "user", "content": "juniper turn"}]
 
 
-def test_ollama_agent_can_override_model_per_decision(monkeypatch):
+async def test_ollama_agent_can_override_model_per_decision(monkeypatch):
     fake_module = types.ModuleType("ollama")
-    fake_module.Client = _FakeOllamaClient
+    fake_module.AsyncClient = _FakeOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
     agent = OllamaAgent(model="fallback")
-    agent.decide("turn one", None, character_id="hazel", model="controller-model")
+    await agent.decide("turn one", None, character_id="hazel", model="controller-model")
 
     assert agent._client.models == ["controller-model"]
 
 
-def test_ollama_agent_maps_legacy_default_model_to_flash(monkeypatch):
+async def test_ollama_agent_maps_legacy_default_model_to_flash(monkeypatch):
     fake_module = types.ModuleType("ollama")
-    fake_module.Client = _FakeOllamaClient
+    fake_module.AsyncClient = _FakeOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
     agent = OllamaAgent(model="fallback")
-    agent.decide("turn one", None, character_id="hazel", model="llama3")
+    await agent.decide("turn one", None, character_id="hazel", model="llama3")
 
     assert normalize_model("llama3") == DEFAULT_MODEL
     assert agent._client.models == [DEFAULT_MODEL]
@@ -411,3 +411,18 @@ async def test_dispatch_resolves_item_names_to_ids_before_submitting():
 
     # "Mar" resolved to the journal, which is now in the character's inventory.
     assert container_of(world.get_entity(journal)) == scenario.character
+
+
+async def test_dispatch_rejects_unknown_agent_tools_without_crashing():
+    scenario = build_scenario()
+    agent = _RecordingAgent([ToolCall("read", {}), None])
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    first = await dispatch.run_once()
+
+    assert first[0].tool == "read"
+    assert "unknown tool" in first[0].summary
+    assert scenario.actor._inbox.empty()
+
+    await dispatch.run_once()
+    assert "Choose one of the available tools exactly as named" in agent.prompts[1]

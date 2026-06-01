@@ -10,6 +10,7 @@ tick — dispatch only proposes.
 from __future__ import annotations
 
 import difflib
+import inspect
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -234,12 +235,13 @@ class ControllerDispatch:
         if pending is not None:
             context = replace(context, warnings=(*context.warnings, pending))
         prompt = render_prompt(context)
-        call = self.agent.decide(
+        decision = self.agent.decide(
             prompt,
             context,
             character_id=cid,
             model=controller_component.model,
         )
+        call = await decision if inspect.isawaitable(decision) else decision
 
         if call is None:
             logger.info("character %s decided to wait", character_id)
@@ -258,13 +260,21 @@ class ControllerDispatch:
             logger.info("character %s named something unreachable: %s", character_id, message)
             return Decision(cid, call.name, f"unresolved: {message}")
 
-        command = command_from_tool_call(
-            ToolCall(name=call.name, arguments=resolved),
-            character_id=cid,
-            controller_id=str(controller_id),
-            controller_generation=generation,
-            submitted_at_epoch=self.actor.epoch,
-        )
+        try:
+            command = command_from_tool_call(
+                ToolCall(name=call.name, arguments=resolved),
+                character_id=cid,
+                controller_id=str(controller_id),
+                controller_generation=generation,
+                submitted_at_epoch=self.actor.epoch,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            self._feedback[cid] = (
+                f"{message}. Choose one of the available tools exactly as named."
+            )
+            logger.info("character %s chose an unavailable tool: %s", character_id, message)
+            return Decision(cid, call.name, message)
         await self.actor.submit(command)
         summary = f"{call.name} {resolved}".strip()
         logger.info("character %s chose %s", character_id, summary)
