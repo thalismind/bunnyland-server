@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_dir"
+
+[[ -f compose.yml ]] || die "compose.yml is missing; run this from a Bunnyland server checkout"
+[[ -f compose.user.yml ]] || die "compose.user.yml is missing; run scripts/vps-docker-setup first"
+
+compose_cmd=()
+selected_runtime=""
+
+runtime_compose_available() {
+  case "$1" in
+    docker) command -v docker >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1 ;;
+    nerdctl) command -v nerdctl >/dev/null 2>&1 && sudo nerdctl compose version >/dev/null 2>&1 ;;
+    podman) command -v podman >/dev/null 2>&1 && sudo podman compose version >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+set_compose_cmd() {
+  case "$1" in
+    docker) compose_cmd=(sudo docker compose --env-file /dev/null) ;;
+    nerdctl) compose_cmd=(sudo nerdctl compose --env-file /dev/null) ;;
+    podman) compose_cmd=(sudo podman compose --env-file /dev/null) ;;
+    *) die "unsupported BUNNYLAND_CONTAINER_RUNTIME: $1" ;;
+  esac
+  selected_runtime="$1"
+}
+
+select_container_runtime() {
+  local requested="${BUNNYLAND_CONTAINER_RUNTIME:-}"
+  if [[ -n "$requested" ]]; then
+    runtime_compose_available "$requested" || die "$requested compose support is not available"
+    set_compose_cmd "$requested"
+    return
+  fi
+
+  for runtime in docker nerdctl podman; do
+    if runtime_compose_available "$runtime"; then
+      set_compose_cmd "$runtime"
+      return
+    fi
+  done
+
+  die "install Docker, nerdctl, or Podman with Compose support before restarting Bunnyland"
+}
+
+run_compose() {
+  "${compose_cmd[@]}" -p bunnyland -f compose.yml -f compose.user.yml "$@"
+}
+
+select_container_runtime
+printf 'Reapplying Bunnyland deployment with %s compose.\n' "$selected_runtime"
+run_compose config --quiet
+run_compose up -d
+run_compose ps

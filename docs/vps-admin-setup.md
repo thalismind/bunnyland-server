@@ -310,9 +310,31 @@ BUNNYLAND_HOME_EXPECT_TEXT='A social simulation sandbox built as an ECS graph.' 
 ```
 
 The generated `compose.user.yml` contains deployment knobs and secrets. Keep it out of
-source control. Change the public domain, admin username/password, data directory, favicon,
-homepage, world save, LLM provider/key, optional provider endpoint, or Discord token by
-rerunning setup with the new value. The setup script rewrites `compose.user.yml`.
+source control.
+
+To change LLM provider keys, optional provider endpoints, Discord token, image tags, tick
+timing, or similar settings that already exist in `compose.user.yml`, edit that file and
+then reapply the Compose deployment:
+
+```bash
+scripts/vps-docker-restart
+```
+
+Set `BUNNYLAND_CONTAINER_RUNTIME` if you want to force the same runtime used during setup:
+
+```bash
+BUNNYLAND_CONTAINER_RUNTIME=nerdctl scripts/vps-docker-restart
+```
+
+The restart script validates `compose.user.yml` and runs Compose `up -d` with the checked-in
+`compose.yml` plus the generated `compose.user.yml`. It intentionally does not run a plain
+Compose `restart`, because `restart` can keep old container configuration after secrets or
+environment values change. If you use Docker or Podman instead of nerdctl, set
+`BUNNYLAND_CONTAINER_RUNTIME=docker` or `BUNNYLAND_CONTAINER_RUNTIME=podman`.
+
+Rerun `scripts/vps-docker-setup` instead when changing values that need generated files or
+host-side setup: public domain, admin username/password, data directory, favicon, homepage,
+world save, TLS settings, or firewall setup. The setup script rewrites `compose.user.yml`.
 
 `scripts/vps-docker-setup` requires `BUNNYLAND_ADMIN_USER` and `BUNNYLAND_ADMIN_PASSWORD` on
 every run and regenerates the world-editor htpasswd from them. To rerun without resupplying
