@@ -6,7 +6,7 @@ by name, so a plugin can add a new generation strategy without touching the CLI.
 
 Each generator is ``async generate(actor, seed, options) -> InstantiatedWorld``. The two
 builtins wrap the existing paths: ``oneshot`` (one big proposal) and ``recursive``
-(breadth-first graph). Both pick a stub or Ollama builder from ``options.llm``.
+(breadth-first graph). LLM generation uses a DM/world agent selected from ``options.llm``.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from .builder import StubWorldBuilder
 from .defaults import DEFAULT_WORLDGEN_MODEL
 from .instantiate import InstantiatedWorld, instantiate
 from .recursive import RecursiveWorldGenerator
-from .recursive_builder import StubRecursiveBuilder
+from .recursive_builder import StubWorldAgent
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -30,9 +30,11 @@ class GenOptions:
     """Runtime knobs passed to a generator (LLM wiring + budgets)."""
 
     llm: bool = False
+    provider: str = "ollama"
     model: str = DEFAULT_WORLDGEN_MODEL
     host: str | None = None
     api_key: str | None = None
+    server_url: str | None = None
     max_rooms: int = 6
 
 
@@ -50,6 +52,11 @@ class WorldGenerator:
 
 async def oneshot_generator(actor: WorldActor, seed: str, options: GenOptions) -> InstantiatedWorld:
     if options.llm:
+        if options.provider != "ollama":
+            raise RuntimeError(
+                "OpenRouter world generation uses the recursive generator; "
+                "rerun with --generator recursive"
+            )
         from .ollama_builder import OllamaWorldBuilder
 
         builder = OllamaWorldBuilder(
@@ -66,13 +73,20 @@ async def recursive_generator(
     actor: WorldActor, seed: str, options: GenOptions
 ) -> InstantiatedWorld:
     if options.llm:
-        from .recursive_builder import OllamaRecursiveBuilder
+        if options.provider == "openrouter":
+            from .recursive_builder import OpenRouterWorldAgent
 
-        builder = OllamaRecursiveBuilder(
-            model=options.model, host=options.host, api_key=options.api_key
-        )
+            builder = OpenRouterWorldAgent(
+                model=options.model, api_key=options.api_key, server_url=options.server_url
+            )
+        else:
+            from .recursive_builder import OllamaWorldAgent
+
+            builder = OllamaWorldAgent(
+                model=options.model, host=options.host, api_key=options.api_key
+            )
     else:
-        builder = StubRecursiveBuilder()
+        builder = StubWorldAgent()
     generator = RecursiveWorldGenerator(actor, builder, max_rooms=options.max_rooms)
     result = await generator.generate(seed)
     result.prompt = builder.system_prompt  # literal DM system prompt, for provenance

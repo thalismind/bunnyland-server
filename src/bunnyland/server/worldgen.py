@@ -25,7 +25,7 @@ from ..core.ecs import container_of, parse_entity_id
 from ..core.edges import ContainmentMode, Contains, ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
 from ..mechanics.storyteller import IncidentComponent
-from ..worldgen import DoorProposal, GenOptions, RoomNodeProposal, StubRecursiveBuilder
+from ..worldgen import DoorProposal, GenOptions, RoomNodeProposal, StubWorldAgent
 from ..worldgen.instantiate import _character_components, _object_components
 from ..worldgen.proposal import CharacterProposal, ItemProposal, StoryEventProposal
 from ..worldgen.recursive import _opposite
@@ -253,14 +253,22 @@ def collect_container_selection_context(
 
 def _builder(options: GenOptions):
     if options.llm:
-        from ..worldgen import OllamaRecursiveBuilder
+        if options.provider == "openrouter":
+            from ..worldgen import OpenRouterWorldAgent
 
-        return OllamaRecursiveBuilder(
+            return OpenRouterWorldAgent(
+                model=options.model,
+                api_key=options.api_key,
+                server_url=options.server_url,
+            )
+        from ..worldgen import OllamaWorldAgent
+
+        return OllamaWorldAgent(
             model=options.model,
             host=options.host,
             api_key=options.api_key,
         )
-    return StubRecursiveBuilder()
+    return StubWorldAgent()
 
 
 def _dm_schema_context(actor: WorldActor, options: GenOptions) -> str:

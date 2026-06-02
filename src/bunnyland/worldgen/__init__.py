@@ -31,8 +31,12 @@ from .proposal import (
 from .recursive import RecursiveWorldGenerator
 from .recursive_builder import (
     OllamaRecursiveBuilder,
+    OllamaWorldAgent,
+    OpenRouterWorldAgent,
     RecursiveWorldBuilder,
     StubRecursiveBuilder,
+    StubWorldAgent,
+    WorldAgent,
 )
 
 __all__ = [
@@ -47,6 +51,8 @@ __all__ = [
     "ItemProposal",
     "ObjectSpec",
     "OllamaRecursiveBuilder",
+    "OllamaWorldAgent",
+    "OpenRouterWorldAgent",
     "RecursiveWorldBuilder",
     "RecursiveWorldGenerator",
     "RoomContentsProposal",
@@ -54,7 +60,9 @@ __all__ = [
     "RoomSpec",
     "StoryEventProposal",
     "StubRecursiveBuilder",
+    "StubWorldAgent",
     "StubWorldBuilder",
+    "WorldAgent",
     "WorldBuilder",
     "WorldGenerator",
     "WorldProposal",

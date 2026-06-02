@@ -124,7 +124,7 @@ async def _serve(args) -> None:
         raise SystemExit(2) from exc
     # TODO: add --auto-load-requires to include missing required plugins automatically.
 
-    host = api_key = discord_token = None
+    host = api_key = worldgen_api_key = discord_token = None
     openrouter_api_key = openrouter_server_url = None
     if args.llm or args.discord:
         load_dotenv()
@@ -133,10 +133,15 @@ async def _serve(args) -> None:
         openrouter_server_url = os.environ.get("OPENROUTER_SERVER_URL")
         host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
         api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
-        if (not args.load or args.llm_provider == "ollama") and not api_key:
+        worldgen_api_key = api_key
+        if args.llm_provider == "openrouter" and args.worldgen_provider == "openrouter":
+            worldgen_api_key = openrouter_api_key
+        if args.worldgen_provider == "ollama" and (not args.load) and not api_key:
             raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
         if args.llm_provider == "openrouter" and not openrouter_api_key:
             raise SystemExit("--llm-provider openrouter needs OPENROUTER_API_KEY")
+        if args.worldgen_provider == "openrouter" and not openrouter_api_key:
+            raise SystemExit("--worldgen-provider openrouter needs OPENROUTER_API_KEY")
     worldgen_model = args.worldgen_model or args.ollama_model or DEFAULT_WORLDGEN_MODEL
     character_model = args.character_model or args.ollama_model or DEFAULT_MODEL
     if args.discord:
@@ -166,9 +171,17 @@ async def _serve(args) -> None:
             raise SystemExit(f"unknown generator {args.generator!r}; available: {names}")
 
         if args.llm:
-            print(f"Generating world with Ollama model {worldgen_model!r} at {host}.")
+            print(
+                f"Generating world with {args.worldgen_provider} model "
+                f"{worldgen_model!r}."
+            )
         options = GenOptions(
-            llm=args.llm, model=worldgen_model, host=host, api_key=api_key,
+            llm=args.llm,
+            provider=args.worldgen_provider,
+            model=worldgen_model,
+            host=host,
+            api_key=worldgen_api_key,
+            server_url=openrouter_server_url,
             max_rooms=args.max_rooms,
         )
         result = await generator.generate(actor, args.seed, options)
@@ -270,9 +283,11 @@ async def _serve(args) -> None:
                     save_path=args.save,
                     worldgen_options=GenOptions(
                         llm=args.llm,
+                        provider=args.worldgen_provider,
                         model=worldgen_model,
                         host=host,
-                        api_key=api_key,
+                        api_key=worldgen_api_key,
+                        server_url=openrouter_server_url,
                         max_rooms=args.max_rooms,
                     ),
                     max_ticks=max_ticks,
@@ -312,6 +327,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=("ollama", "openrouter"),
         default="ollama",
         help="default LLM provider for character controllers (default: ollama)",
+    )
+    serve.add_argument(
+        "--worldgen-provider",
+        choices=("ollama", "openrouter"),
+        default="ollama",
+        help="LLM provider for world generation (default: ollama)",
     )
     serve.add_argument(
         "--ollama-model",

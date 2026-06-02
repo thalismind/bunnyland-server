@@ -1,8 +1,8 @@
 """Agents decide a character's next action (spec 25).
 
-An ``Agent`` is given a rendered prompt plus the structured context and returns a single
-``ToolCall`` (or ``None`` to wait). The dispatch layer turns that into a validated command;
-the agent never touches the ECS and cannot bypass costs or policy (spec 25.3).
+A ``CharacterAgent`` is given a rendered prompt plus the structured context and returns a
+single ``ToolCall`` (or ``None`` to wait). The dispatch layer turns that into a validated
+command; the agent never touches the ECS and cannot bypass costs or policy (spec 25.3).
 
 ``ScriptedAgent`` replays preset decisions and drives the deterministic tests.
 ``OllamaAgent`` calls Ollama Cloud with the verb tool schemas (optional ``llm`` extra).
@@ -31,7 +31,7 @@ def normalize_model(model: str | None) -> str:
     return model
 
 
-class Agent(Protocol):
+class CharacterAgent(Protocol):
     """Chooses the next action for a character, or ``None`` to wait this turn.
 
     ``character_id`` identifies which character is deciding so stateful agents can keep
@@ -202,7 +202,9 @@ class OpenRouterAgent:
 class ProviderRouterAgent:
     """Routes decisions to the concrete agent named by a controller's provider."""
 
-    def __init__(self, providers: MappingABC[str, Agent], *, default_provider: str = "ollama"):
+    def __init__(
+        self, providers: MappingABC[str, CharacterAgent], *, default_provider: str = "ollama"
+    ):
         self._providers = dict(providers)
         self._default_provider = default_provider
 
@@ -246,10 +248,14 @@ def _openrouter_arguments(arguments: object) -> dict:
     return {}
 
 
+Agent = CharacterAgent
+
+
 __all__ = [
     "DEFAULT_MODEL",
     "LEGACY_DEFAULT_MODEL",
     "Agent",
+    "CharacterAgent",
     "OpenRouterAgent",
     "OllamaAgent",
     "ProviderRouterAgent",
