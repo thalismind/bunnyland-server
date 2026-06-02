@@ -47,7 +47,11 @@ this server:
    setup configures). **Port 80** only needs to be reachable from the internet while certbot
    issues or renews the certificate — the standalone HTTP-01 challenge binds it briefly. A
    rerun that reuses an existing certificate does not need port 80.
-4. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key, an
+4. **A container runtime with Compose support installed:** Docker, nerdctl, or Podman.
+   On Ubuntu, install Docker Engine from Docker's external apt repository by following
+   Docker's [Install using the repository](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository)
+   guide. Do not rely on the older Ubuntu `docker.io` package for this setup.
+5. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key, an
    OpenRouter API key, or both, depending on the LLM providers you choose. Discord
    deployments also need a Discord bot token. Creating the Discord application is described in
    [Full Bunnyland Deployment](#2-full-bunnyland-deployment) below.
@@ -55,9 +59,9 @@ this server:
 You also choose an admin username and password during setup; these protect the world
 editor. There is no recovery if you forget them — you simply rerun setup to reset them.
 
-The fastest path is the setup wizard. It supports Debian and Ubuntu, detects Docker,
-nerdctl, or Podman with Compose support, prompts for the required values, lets you choose
-Ollama or OpenRouter for world generation and character controllers, writes
+The fastest path is the setup wizard. It supports Debian and Ubuntu, detects an installed
+Docker, nerdctl, or Podman runtime with Compose support, prompts for the required values,
+lets you choose Ollama or OpenRouter for world generation and character controllers, writes
 `compose.user.yml`, and starts the checked-in Compose files. If existing Bunnyland
 containers are present, it asks before removing those containers. It does not delete bind
 mounts or named volumes, and the lower-level setup script backs up the selected world save

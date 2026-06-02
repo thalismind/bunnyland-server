@@ -42,6 +42,10 @@ generation with `--llm-provider openrouter`, `--worldgen-provider openrouter`, a
 ## Docker Compose
 
 The server repo includes a ready-to-run Compose stack using published containers:
+Install Docker, nerdctl, or Podman with Compose support before running it. On Ubuntu,
+install Docker Engine from Docker's external apt repository using Docker's
+[Install using the repository](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository)
+guide; do not rely on the older Ubuntu `docker.io` package for this setup.
 
 ```bash
 BUNNYLAND_CONTAINER_RUNTIME=docker \

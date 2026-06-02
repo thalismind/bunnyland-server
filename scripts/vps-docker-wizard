@@ -164,7 +164,9 @@ done
 
 if [[ ${#available[@]} -eq 0 ]]; then
   runtime="nerdctl"
-  printf 'No supported Compose runtime was found. The setup script will install nerdctl.\n'
+  printf 'No supported Compose runtime was found. Install Docker, nerdctl, or Podman with Compose support before running this wizard.\n'
+  printf 'For Docker on Ubuntu, use Docker Engine from Docker'\''s external apt repository: https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository\n'
+  printf 'The lower-level setup script can fall back to installing nerdctl.\n'
 else
   printf 'Available container runtimes: %s\n' "${available[*]}"
   runtime="$(prompt "Container runtime" "${available[0]}")"
