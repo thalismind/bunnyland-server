@@ -96,7 +96,7 @@ jobs:
       - name: Build local server image
         run: docker build --pull -t ghcr.io/thalismind/bunnyland-server:ci .
 
-      - name: Validate rendered Compose config
+      - name: Validate wizard-rendered Compose config
         env:
           BUNNYLAND_CONTAINER_RUNTIME: docker
           BUNNYLAND_SETUP_DRY_RUN: "1"
@@ -111,7 +111,9 @@ jobs:
           BUNNYLAND_SERVER_TAG: ci
           BUNNYLAND_ENABLE_LLM: "0"
           BUNNYLAND_ENABLE_DISCORD: "0"
-        run: scripts/vps-docker-setup
+        run: |
+          printf '\nlocalhost\n%s\neditor\nlocal\nlocal\n\n\n\n\nn\n\n' "$BUNNYLAND_DATA_DIR" \
+            | scripts/vps-docker-wizard
 
       - name: Run setup script
         env:
@@ -128,6 +130,11 @@ jobs:
           BUNNYLAND_ENABLE_LLM: "0"
           BUNNYLAND_ENABLE_DISCORD: "0"
         run: scripts/vps-docker-setup
+
+      - name: Restart local deployment
+        env:
+          BUNNYLAND_CONTAINER_RUNTIME: docker
+        run: scripts/vps-docker-restart
 
       - name: Verify local deployment
         env:
