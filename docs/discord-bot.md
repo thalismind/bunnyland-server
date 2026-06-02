@@ -19,11 +19,12 @@ uv sync --extra discord
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) →
    **New Application**.
-2. **Bot** tab → **Add Bot** → copy the **token**.
+2. **Bot** tab → **Reset Token** → copy the new **token**.
 3. Under **Privileged Gateway Intents**, enable **Message Content Intent** (the bot reads
    `!` command text).
-4. **OAuth2 → URL Generator**: scope `bot`; permissions **Read Messages/View Channels** and
-   **Send Messages**. Open the generated URL to invite the bot to your server.
+4. **OAuth2 → URL Generator**: scope `bot`; permissions **View Channels**,
+   **Read Message History**, and **Send Messages**. Open the generated URL to invite the
+   bot to your server.
 
 ## 3. Provide the token
 
