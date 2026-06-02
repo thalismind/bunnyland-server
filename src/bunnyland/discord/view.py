@@ -19,6 +19,8 @@ HUMAN_HELP_TEXT = "\n".join(
         "!help [humans|agents|command] - show help.",
         "!characters - list character names.",
         "!claim [character] - control a character.",
+        "!release - hand your character back to the LLM.",
+        "!suspend - pause your character until they are claimed again.",
         "!look - show your current room.",
         "!<verb> ... - run any available world verb.",
         "Use key=value pairs or JSON for verbs without documented arguments.",

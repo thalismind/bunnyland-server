@@ -245,7 +245,11 @@ async def _serve(args) -> None:
         from .discord import DiscordBot
 
         discord_bot = DiscordBot(
-            actor, token=discord_token, allow_child_claims=args.discord_allow_child_claims
+            actor,
+            token=discord_token,
+            allow_child_claims=args.discord_allow_child_claims,
+            llm_provider=args.llm_provider,
+            character_model=character_model,
         )
         claim_user_id = args.discord_user_id or _env_int("BUNNYLAND_DISCORD_USER_ID")
         claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0

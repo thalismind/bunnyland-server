@@ -12,8 +12,12 @@ from bunnyland.core import (
     CharacterComponent,
     ContainmentMode,
     Contains,
+    ControlledBy,
+    DiscordControllerComponent,
     IdentityComponent,
     LLMControllerComponent,
+    SuspendedComponent,
+    SuspendedControllerComponent,
     spawn_entity,
 )
 from bunnyland.core.events import (
@@ -28,6 +32,7 @@ from bunnyland.discord import (
     did_you_mean,
     explain_rejection,
     parse_discord_action,
+    release_discord_character_to_llm,
     render_action_result,
     render_character_list,
     render_help,
@@ -35,7 +40,9 @@ from bunnyland.discord import (
     render_move_result,
     render_notes_search_result,
     split_discord_text,
+    suspend_discord_character,
 )
+from bunnyland.discord.claim import discord_controlled_character
 from bunnyland.memory import InMemoryStore, install_memory
 
 
@@ -86,10 +93,66 @@ def test_render_character_list_includes_controller_statuses(scenario):
     assert "- Clover - free" in text
 
 
+def test_release_discord_character_reassigns_to_llm_controller(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        character_name="Juniper",
+    )
+
+    released = release_discord_character_to_llm(
+        scenario.actor,
+        discord_user_id=123,
+        model="deepseek-v4-flash",
+        provider="openrouter",
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    edge, controller_id = character.get_relationships(ControlledBy)[0]
+    controller = scenario.actor.world.get_entity(controller_id)
+    llm = controller.get_component(LLMControllerComponent)
+    assert released == "Juniper"
+    assert edge.generation == 2
+    assert llm.model == "deepseek-v4-flash"
+    assert llm.provider == "openrouter"
+    assert not controller.has_component(DiscordControllerComponent)
+    assert not character.has_component(SuspendedComponent)
+    assert render_character_list(scenario.actor).splitlines()[1] == "- Juniper - LLM controller"
+
+
+def test_suspend_discord_character_reassigns_to_suspended_controller(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        character_name="Juniper",
+    )
+
+    suspended = suspend_discord_character(
+        scenario.actor,
+        discord_user_id=123,
+        reason="player suspended",
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    edge, controller_id = character.get_relationships(ControlledBy)[0]
+    controller = scenario.actor.world.get_entity(controller_id)
+    marker = character.get_component(SuspendedComponent)
+    no_op = controller.get_component(SuspendedControllerComponent)
+    assert suspended == "Juniper"
+    assert edge.generation == 2
+    assert marker.reason == "player suspended"
+    assert no_op.reason == "player suspended"
+    assert not controller.has_component(DiscordControllerComponent)
+    assert render_character_list(scenario.actor).splitlines()[1] == "- Juniper - suspended"
+    assert discord_controlled_character(scenario.actor, 123) is None
+
+
 def test_help_lists_available_discord_verbs(scenario):
     assert "!look" in HELP_TEXT
     assert "!<verb> ..." in HELP_TEXT
     assert "!claim [character]" in HELP_TEXT
+    assert "!release" in HELP_TEXT
+    assert "!suspend" in HELP_TEXT
     assert render_help() == HELP_TEXT
     assert render_help("humans") == HELP_TEXT
     text = render_help("humans", scenario.actor)
