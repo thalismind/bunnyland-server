@@ -125,9 +125,14 @@ loop on the same `actor` so ticks process the commands users submit.
 | `!take <name>`     | Pick up an item, e.g. `!take marsh journal`.       |
 | `!say <text>`      | Speak to everyone in the room.                     |
 | `!claim [name]`    | Claim a suspended character for your Discord user. |
+| `!release`         | Hand your character back to LLM control.           |
+| `!suspend`         | Pause your character until they are claimed again. |
 | `!characters`      | List character names in the current world.         |
 | `!look`            | Show the current room summary and exits.           |
 | `!help [topic]`    | Help for humans, agents, or a specific verb.       |
+
+`!release` and `!suspend` only reassign your current character's controller. They are not
+sleep commands, and they do not pause or resume the whole world.
 
 ### Names, not ids
 

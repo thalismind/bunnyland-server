@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from ..core import (
     CharacterComponent,
     ControlledBy,
@@ -9,9 +11,11 @@ from ..core import (
     IdentityComponent,
     LLMControllerComponent,
     SuspendedComponent,
+    SuspendedControllerComponent,
     spawn_entity,
 )
 from ..core.world_actor import WorldActor
+from ..llm_agents import DEFAULT_MODEL
 from ..mechanics.lifesim import LifeStageComponent
 
 CHILD_LIFE_STAGES = frozenset({"baby", "infant", "toddler", "child"})
@@ -36,6 +40,8 @@ def _active_controller_kind(actor: WorldActor, character) -> str:
             return "Discord controller"
         if controller.has_component(LLMControllerComponent):
             return "LLM controller"
+        if controller.has_component(SuspendedControllerComponent):
+            return "suspended"
     return "free"
 
 
@@ -163,10 +169,60 @@ def discord_controlled_character(actor: WorldActor, discord_user_id: int):
     return None
 
 
+def _controlled_character_entity(actor: WorldActor, discord_user_id: int):
+    found = discord_controlled_character(actor, discord_user_id)
+    if found is None:
+        raise RuntimeError("You are not controlling a character yet.")
+    character_id, _controller_id, _generation = found
+    return actor.world.get_entity(character_id)
+
+
+def release_discord_character_to_llm(
+    actor: WorldActor,
+    *,
+    discord_user_id: int,
+    model: str | None = None,
+    provider: str | None = None,
+) -> str:
+    """Release a Discord user's current character back to an LLM controller."""
+
+    character = _controlled_character_entity(actor, discord_user_id)
+    controller = spawn_entity(
+        actor.world,
+        [
+            LLMControllerComponent(
+                profile_name="default",
+                model=model or os.environ.get("BUNNYLAND_CHARACTER_MODEL", DEFAULT_MODEL),
+                provider=provider or os.environ.get("BUNNYLAND_LLM_PROVIDER", "ollama"),
+            )
+        ],
+    )
+    actor.assign_controller(character.id, controller.id)
+    if character.has_component(SuspendedComponent):
+        character.remove_component(SuspendedComponent)
+    return character.get_component(IdentityComponent).name
+
+
+def suspend_discord_character(
+    actor: WorldActor,
+    *,
+    discord_user_id: int,
+    reason: str = "player suspended",
+) -> str:
+    """Suspend a Discord user's current character so it can be claimed again later."""
+
+    character = _controlled_character_entity(actor, discord_user_id)
+    controller = spawn_entity(actor.world, [SuspendedControllerComponent(reason=reason)])
+    actor.suspend(character.id, controller.id, reason=reason)
+    return character.get_component(IdentityComponent).name
+
+
 __all__ = [
     "assign_discord_controller",
     "discord_controlled_character",
     "list_character_names",
     "list_character_statuses",
+    "release_discord_character_to_llm",
     "render_character_list",
+    "suspend_discord_character",
 ]

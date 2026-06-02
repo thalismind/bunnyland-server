@@ -23,6 +23,7 @@ from typing import Any
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
 from ..core.events import CommandExecutedEvent, CommandRejectedEvent, NotesSearchedEvent
 from ..core.world_actor import WorldActor
+from ..llm_agents import DEFAULT_MODEL
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.natural_language import parse_natural_command
 from ..llm_agents.tools import (
@@ -33,7 +34,13 @@ from ..llm_agents.tools import (
     tool_for_command_type,
     tool_names,
 )
-from .claim import assign_discord_controller, discord_controlled_character, render_character_list
+from .claim import (
+    assign_discord_controller,
+    discord_controlled_character,
+    release_discord_character_to_llm,
+    render_character_list,
+    suspend_discord_character,
+)
 from .view import (
     render_action_result,
     render_help,
@@ -46,7 +53,7 @@ MOVE_RESULT_TIMEOUT_SECONDS = 120.0
 
 #: Reaction added to a player's message once their command is accepted and queued.
 QUEUED_REACTION = "\N{HOURGLASS WITH FLOWING SAND}"
-META_COMMANDS = frozenset({"help", "claim", "characters", "look"})
+META_COMMANDS = frozenset({"help", "claim", "characters", "look", "release", "suspend"})
 
 
 @dataclass(frozen=True)
@@ -172,11 +179,21 @@ def parse_discord_action(text: str, available_commands: tuple[str, ...]) -> Disc
 class DiscordBot:  # pragma: no cover - needs network + extra
     """Maps Discord slash commands to character verbs for the controlling user."""
 
-    def __init__(self, actor: WorldActor, *, token: str, allow_child_claims: bool = False) -> None:
+    def __init__(
+        self,
+        actor: WorldActor,
+        *,
+        token: str,
+        allow_child_claims: bool = False,
+        llm_provider: str = "ollama",
+        character_model: str = DEFAULT_MODEL,
+    ) -> None:
         discord, commands = _require_discord()
         self.actor = actor
         self.token = token
         self.allow_child_claims = allow_child_claims
+        self.llm_provider = llm_provider
+        self.character_model = character_model
         intents = discord.Intents.default()
         intents.message_content = True  # required to read "!" command text
         self.client = commands.Bot(command_prefix="!", intents=intents, help_command=None)
@@ -308,6 +325,31 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         async def characters(ctx):
             await self._send_help(ctx, render_character_list(self.actor))
 
+        @self.client.command(name="release")
+        async def release(ctx):
+            try:
+                released = release_discord_character_to_llm(
+                    self.actor,
+                    discord_user_id=ctx.author.id,
+                    model=self.character_model,
+                    provider=self.llm_provider,
+                )
+            except RuntimeError as exc:
+                await self._reply(ctx, str(exc))
+                return
+            await self._reply(ctx, f"{released} is now controlled by the LLM.")
+
+        @self.client.command(name="suspend")
+        async def suspend(ctx):
+            try:
+                suspended = suspend_discord_character(
+                    self.actor, discord_user_id=ctx.author.id
+                )
+            except RuntimeError as exc:
+                await self._reply(ctx, str(exc))
+                return
+            await self._reply(ctx, f"{suspended} is suspended until someone claims them.")
+
         @self.client.command(name="look")
         async def look(ctx):
             await ctx.send(render_look(self.actor, ctx.author.id))
@@ -360,5 +402,12 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         await self.client.close()
 
 
-__all__ = ["DiscordAction", "DiscordBot", "assign_discord_controller", "did_you_mean",
-           "parse_discord_action"]
+__all__ = [
+    "DiscordAction",
+    "DiscordBot",
+    "assign_discord_controller",
+    "did_you_mean",
+    "parse_discord_action",
+    "release_discord_character_to_llm",
+    "suspend_discord_character",
+]
