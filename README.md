@@ -167,9 +167,10 @@ uv run pytest
 uv run ruff check src tests
 ```
 
-Optional live LLM checks are marked and skipped by default. To exercise real Ollama and
-OpenRouter SDK calls, install the `llm` extra, set `BUNNYLAND_LIVE_LLM=1` plus
-`OLLAMA_HOST` or `OLLAMA_CLOUD_API_KEY` and/or `OPENROUTER_API_KEY`, then run:
+Optional live LLM checks are marked and skipped by default. They load `.env` before
+checking credentials. To exercise real Ollama and OpenRouter SDK calls, install the `llm`
+extra, set `BUNNYLAND_LIVE_LLM=1` plus `OLLAMA_HOST` or `OLLAMA_CLOUD_API_KEY` and/or
+`OPENROUTER_API_KEY`, then run:
 
 ```bash
 uv run pytest -m live_llm
