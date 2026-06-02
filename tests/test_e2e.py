@@ -20,17 +20,22 @@ import pytest
 from bunnyland.core import (
     ActionPointsComponent,
     CharacterComponent,
+    CommandCost,
     ContainerComponent,
     ContainmentMode,
     Contains,
     ControlledBy,
+    DiscordControllerComponent,
     FocusPointsComponent,
     IdentityComponent,
+    Lane,
     LLMControllerComponent,
     MemoryProfileComponent,
     PortableComponent,
     SuspendedComponent,
+    SuspendedControllerComponent,
     WorldActor,
+    build_submitted_command,
     container_of,
     parse_entity_id,
     replace_component,
@@ -40,10 +45,17 @@ from bunnyland.core.components import RoomComponent, WritableComponent
 from bunnyland.core.edges import ExitTo
 from bunnyland.core.events import (
     ActorMovedEvent,
+    CommandExecutedEvent,
     CommandRejectedEvent,
+    ControllerChangedEvent,
     ItemTakenEvent,
     NotesSearchedEvent,
     SpeechSaidEvent,
+)
+from bunnyland.discord import (
+    assign_discord_controller,
+    release_discord_character_to_llm,
+    suspend_discord_character,
 )
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import (
@@ -296,6 +308,174 @@ async def test_scripted_playthrough_processes_actions_each_round():
     world = actor.world
     assert container_of(world.get_entity(result.objects["paper"])) == hazel
     assert container_of(world.get_entity(hazel)) == result.rooms["tunnel"]
+
+
+async def test_character_controller_lifecycle_e2e():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    world = actor.world
+    room = spawn_entity(world, [RoomComponent(title="Lifecycle Room")])
+    character = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=0.0),
+            FocusPointsComponent(current=3.0, maximum=3.0, regen_per_hour=0.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character.id)
+
+    changed: list[ControllerChangedEvent] = []
+    executed: list[CommandExecutedEvent] = []
+    rejected: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(ControllerChangedEvent, changed.append)
+    actor.bus.subscribe(CommandExecutedEvent, executed.append)
+    actor.bus.subscribe(CommandRejectedEvent, rejected.append)
+
+    def current_controller():
+        edge, controller_id = character.get_relationships(ControlledBy)[0]
+        return edge, controller_id, world.get_entity(controller_id)
+
+    def control_command(command_type: str, controller_id, **payload):
+        rels = character.get_relationships(ControlledBy)
+        submitter_id = str(rels[0][1]) if rels else str(character.id)
+        submitter_generation = rels[0][0].generation if rels else -1
+        return build_submitted_command(
+            character_id=str(character.id),
+            controller_id=submitter_id,
+            controller_generation=submitter_generation,
+            command_type=command_type,
+            cost=CommandCost(),
+            lane=Lane.WORLD,
+            payload={"controller_id": str(controller_id), **payload},
+        )
+
+    async def apply_control(command_type: str, controller_id, **payload) -> None:
+        await actor.submit(control_command(command_type, controller_id, **payload))
+        await actor.tick(0.0)
+
+    assert not character.get_relationships(ControlledBy)
+    assert not character.has_component(SuspendedComponent)
+
+    first_llm = spawn_entity(
+        world,
+        [
+            LLMControllerComponent(
+                profile_name="first",
+                model="deepseek-v4-flash",
+                provider="ollama",
+            )
+        ],
+    )
+    await apply_control("take-control", first_llm.id)
+    edge, controller_id, controller = current_controller()
+    assert controller_id == first_llm.id
+    assert edge.generation == 0
+    assert controller.has_component(LLMControllerComponent)
+    assert changed[-1].controller_kind == "llm"
+
+    claimed = assign_discord_controller(
+        actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    edge, _controller_id, controller = current_controller()
+    assert claimed == "Juniper"
+    assert edge.generation == 1
+    assert controller.has_component(DiscordControllerComponent)
+
+    suspended = suspend_discord_character(
+        actor,
+        discord_user_id=123,
+        reason="player suspended",
+    )
+    edge, _controller_id, controller = current_controller()
+    assert suspended == "Juniper"
+    assert edge.generation == 2
+    assert character.get_component(SuspendedComponent).reason == "player suspended"
+    assert controller.has_component(SuspendedControllerComponent)
+
+    resumed_discord = spawn_entity(
+        world,
+        [DiscordControllerComponent(discord_user_id=123, default_channel_id=456)],
+    )
+    await apply_control("resume", resumed_discord.id)
+    edge, controller_id, controller = current_controller()
+    assert controller_id == resumed_discord.id
+    assert edge.generation == 3
+    assert not character.has_component(SuspendedComponent)
+    assert controller.has_component(DiscordControllerComponent)
+    assert changed[-1].controller_kind == "discord"
+
+    await actor.submit(
+        build_submitted_command(
+            character_id=str(character.id),
+            controller_id=str(controller_id),
+            controller_generation=edge.generation,
+            command_type="wait",
+            cost=CommandCost(),
+            lane=Lane.WORLD,
+        )
+    )
+    await actor.tick(0.0)
+    assert executed[-1].command_type == "wait"
+
+    released = release_discord_character_to_llm(
+        actor,
+        discord_user_id=123,
+        model="deepseek-v4-flash",
+        provider="openrouter",
+    )
+    edge, _controller_id, controller = current_controller()
+    llm = controller.get_component(LLMControllerComponent)
+    assert released == "Juniper"
+    assert edge.generation == 4
+    assert llm.model == "deepseek-v4-flash"
+    assert llm.provider == "openrouter"
+    assert not character.has_component(SuspendedComponent)
+
+    agent = _RecordingAgent([ToolCall("wait", {})])
+    dispatch = ControllerDispatch(actor, PromptBuilder(world), agent)
+    decisions = await dispatch.run_once()
+    assert len(agent.prompts) == 1
+    assert "Juniper" in agent.prompts[0]
+    assert len(decisions) == 1
+    assert decisions[0].character_id == str(character.id)
+    assert decisions[0].tool == "wait"
+    await actor.tick(0.0)
+    assert executed[-1].command_type == "wait"
+
+    llm_suspender = spawn_entity(
+        world, [SuspendedControllerComponent(reason="llm suspended")]
+    )
+    await apply_control("suspend", llm_suspender.id, reason="llm suspended")
+    edge, controller_id, controller = current_controller()
+    assert controller_id == llm_suspender.id
+    assert edge.generation == 5
+    assert character.get_component(SuspendedComponent).reason == "llm suspended"
+    assert controller.has_component(SuspendedControllerComponent)
+    assert changed[-1].controller_kind == "suspended"
+
+    final_llm = spawn_entity(
+        world,
+        [
+            LLMControllerComponent(
+                profile_name="final",
+                model="deepseek-v4-flash",
+                provider="openrouter",
+            )
+        ],
+    )
+    await apply_control("resume", final_llm.id)
+    edge, controller_id, controller = current_controller()
+    assert controller_id == final_llm.id
+    assert edge.generation == 6
+    assert not character.has_component(SuspendedComponent)
+    assert controller.get_component(LLMControllerComponent).provider == "openrouter"
+    assert changed[-1].controller_kind == "llm"
+    assert rejected == []
 
 
 async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
