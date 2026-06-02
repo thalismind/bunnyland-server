@@ -63,7 +63,9 @@ BUNNYLAND_ENABLE_DISCORD=0 \
 
 Open `http://localhost:8080/`. The `frontend` container serves the web client and proxies
 same-origin `/api/` requests to the private `server` container. Server state is bind-mounted
-from `BUNNYLAND_DATA_DIR` into `/data` so admins can inspect saved worlds directly.
+from `BUNNYLAND_DATA_DIR` into `/data` so admins can inspect saved worlds directly. After
+editing secrets or runtime settings in `compose.user.yml`, run `scripts/vps-docker-restart`
+to reapply the deployment.
 For a real VPS deployment over HTTPS, the fastest path is the interactive
 `scripts/vps-docker-wizard`: it prompts for the required values and then runs
 `scripts/vps-docker-setup` for you. You can also run `scripts/vps-docker-setup` directly with
