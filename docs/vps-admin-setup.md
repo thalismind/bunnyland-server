@@ -56,15 +56,13 @@ You also choose an admin username and password during setup; these protect the w
 editor. There is no recovery if you forget them — you simply rerun setup to reset them.
 
 The fastest path is the setup wizard. It supports Debian and Ubuntu, detects Docker,
-nerdctl, or Podman with Compose support, prompts for the required values, writes
+nerdctl, or Podman with Compose support, prompts for the required values, lets you choose
+Ollama or OpenRouter for world generation and character controllers, writes
 `compose.user.yml`, and starts the checked-in Compose files. If existing Bunnyland
 containers are present, it asks before removing those containers. It does not delete bind
 mounts or named volumes, and the lower-level setup script backs up the selected world save
-before starting containers.
-
-The wizard prompts for the default Ollama-backed full deployment. To use OpenRouter, run
-`scripts/vps-docker-setup` directly with `BUNNYLAND_LLM_PROVIDER=openrouter` and/or
-`BUNNYLAND_WORLDGEN_PROVIDER=openrouter` as shown below.
+before starting containers. The wizard also prompts for an optional non-default Ollama or
+OpenRouter endpoint.
 
 ```bash
 sudo apt-get update
@@ -193,10 +191,11 @@ Create the Discord application:
 4. Generate an OAuth2 URL with scope `bot` and permissions to read and send messages.
 5. Invite the bot to your server.
 
-Then run one full setup command with the required external service credentials. Ollama is
-the default provider and uses one `OLLAMA_CLOUD_API_KEY` for both world generation and LLM
-character controllers. World generation defaults to `deepseek-v4-pro`; character
-controllers default to `deepseek-v4-flash`.
+Then run one full setup command with the required external service credentials. The wizard
+prompts for the same provider choice. Ollama is the default provider and uses one
+`OLLAMA_CLOUD_API_KEY` for both world generation and LLM character controllers. World
+generation defaults to `deepseek-v4-pro`; character controllers default to
+`deepseek-v4-flash`.
 
 Keep the same domain, data directory, admin credentials, and any
 world/homepage/favicon settings you used in the smoke test. The setup script formats
@@ -219,9 +218,9 @@ DISCORD_TOKEN='...' \
   scripts/vps-docker-setup
 ```
 
-To drive world generation and character controllers through OpenRouter, set
-`BUNNYLAND_WORLDGEN_PROVIDER=openrouter`, `BUNNYLAND_LLM_PROVIDER=openrouter`, and
-`OPENROUTER_API_KEY`.
+To drive world generation and character controllers through OpenRouter, choose OpenRouter
+in the wizard or set `BUNNYLAND_WORLDGEN_PROVIDER=openrouter`,
+`BUNNYLAND_LLM_PROVIDER=openrouter`, and `OPENROUTER_API_KEY`.
 
 ```bash
 BUNNYLAND_DOMAIN='sandbox.example.com' \
@@ -290,8 +289,8 @@ The script starts the checked-in Compose files:
 - generated `compose.user.yml`, rendered from `compose.user.yml.template`.
 
 The base `compose.yml` is the basic offline web/API deployment. User-specific settings,
-secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading, LLM provider, and
-Discord are written into `compose.user.yml`.
+secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading, LLM
+provider, and Discord are written into `compose.user.yml`.
 
 If the same frontend container also serves a static homepage, include the homepage domain
 and expected text:
@@ -307,9 +306,8 @@ BUNNYLAND_HOME_EXPECT_TEXT='A social simulation sandbox built as an ECS graph.' 
 
 The generated `compose.user.yml` contains deployment knobs and secrets. Keep it out of
 source control. Change the public domain, admin username/password, data directory, favicon,
-homepage, world save, LLM provider/key, or Discord token by rerunning setup with the new
-value; OpenRouter provider changes should use `scripts/vps-docker-setup` directly. The
-setup script rewrites `compose.user.yml`.
+homepage, world save, LLM provider/key, optional provider endpoint, or Discord token by
+rerunning setup with the new value. The setup script rewrites `compose.user.yml`.
 
 `scripts/vps-docker-setup` requires `BUNNYLAND_ADMIN_USER` and `BUNNYLAND_ADMIN_PASSWORD` on
 every run and regenerates the world-editor htpasswd from them. To rerun without resupplying
