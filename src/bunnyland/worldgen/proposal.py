@@ -53,12 +53,13 @@ class CharacterSpec(BaseModel):
     controller: str = "suspended"  # llm | suspended
     llm_profile: str = "default"
     llm_model: str = DEFAULT_MODEL
+    llm_provider: str = "ollama"
     with_needs: bool = True
     with_memory: bool = True
     traits: tuple[str, ...] = ()
     goals: tuple[str, ...] = ()
 
-    @field_validator("llm_profile", "llm_model", mode="before")
+    @field_validator("llm_profile", "llm_model", "llm_provider", mode="before")
     @classmethod
     def _default_llm_fields(cls, value: object, info) -> object:
         if value is None:
@@ -133,13 +134,14 @@ class CharacterProposal(BaseModel):
     controller: str = "suspended"  # llm | suspended
     llm_profile: str = "default"
     llm_model: str = DEFAULT_MODEL
+    llm_provider: str = "ollama"
     with_needs: bool = True
     with_memory: bool = True
     traits: tuple[str, ...] = ()
     goals: tuple[str, ...] = ()
     key: str = ""  # assigned by the generator before instantiation
 
-    @field_validator("llm_profile", "llm_model", mode="before")
+    @field_validator("llm_profile", "llm_model", "llm_provider", mode="before")
     @classmethod
     def _default_llm_fields(cls, value: object, info) -> object:
         if value is None:

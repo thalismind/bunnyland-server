@@ -140,9 +140,19 @@ class _RecordingAgent(ScriptedAgent):
         super().__init__(calls)
         self.prompts: list[str] = []
 
-    def decide(self, prompt, context, *, character_id: str, model: str | None = None):
+    def decide(
+        self,
+        prompt,
+        context,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+    ):
         self.prompts.append(prompt)
-        return super().decide(prompt, context, character_id=character_id, model=model)
+        return super().decide(
+            prompt, context, character_id=character_id, model=model, provider=provider
+        )
 
 
 def _tokens(text: str) -> set[str]:

@@ -88,6 +88,10 @@ OLLAMA_CLOUD_API_KEY=sk-...
 # Optional for local Ollama.
 # OLLAMA_HOST=http://127.0.0.1:11434
 
+# Optional for OpenRouter-backed character controllers.
+# OPENROUTER_API_KEY=sk-or-...
+# OPENROUTER_SERVER_URL=https://openrouter.ai/api/v1
+
 # Required only for the Discord bot.
 # DISCORD_TOKEN=...
 ```
@@ -212,6 +216,29 @@ exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve
   --ticks 0 \
   --tick-seconds 30 \
   --time-scale 1800 \
+  --api-host 127.0.0.1 \
+  --api-port 8765 \
+  --save /var/lib/bunnyland/worlds/main.json \
+  --autosave-every 20
+'
+```
+
+To use OpenRouter for character controllers on a saved world, keep
+`OPENROUTER_API_KEY` in `/etc/bunnyland/server.env` and add `--llm-provider openrouter`.
+Fresh LLM world generation still uses Ollama on this branch.
+
+```bash
+sudo -u bunnyland bash -lc '
+cd /opt/bunnyland/server
+set -a
+. /etc/bunnyland/server.env
+set +a
+exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
+  --load /var/lib/bunnyland/worlds/main.json \
+  --llm \
+  --llm-provider openrouter \
+  --character-model openai/gpt-4.1-mini \
+  --ticks 0 \
   --api-host 127.0.0.1 \
   --api-port 8765 \
   --save /var/lib/bunnyland/worlds/main.json \
@@ -531,4 +558,3 @@ curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health || true
 
 The last command should time out or fail. The public API should be available only through
 `https://sandbox.example.com/api/`.
-

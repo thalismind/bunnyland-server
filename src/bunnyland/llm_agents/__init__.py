@@ -1,6 +1,13 @@
 """LLM agents: the tool surface, agents that decide actions, and the dispatch loop."""
 
-from .agent import DEFAULT_MODEL, Agent, OllamaAgent, ScriptedAgent
+from .agent import (
+    DEFAULT_MODEL,
+    Agent,
+    OllamaAgent,
+    OpenRouterAgent,
+    ProviderRouterAgent,
+    ScriptedAgent,
+)
 from .dispatch import (
     ControllerDispatch,
     Decision,
@@ -20,6 +27,8 @@ __all__ = [
     "ControllerDispatch",
     "Decision",
     "OllamaAgent",
+    "OpenRouterAgent",
+    "ProviderRouterAgent",
     "ScriptedAgent",
     "ToolCall",
     "command_from_tool_call",

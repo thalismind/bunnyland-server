@@ -10,7 +10,9 @@ the agent never touches the ECS and cannot bypass costs or policy (spec 25.3).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Iterable
+from collections.abc import Mapping as MappingABC
 from typing import Protocol
 
 from ..prompts.builder import PromptContext
@@ -37,7 +39,13 @@ class Agent(Protocol):
     """
 
     def decide(
-        self, prompt: str, context: PromptContext, *, character_id: str, model: str | None = None
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
     ) -> ToolCall | None | Awaitable[ToolCall | None]: ...
 
 
@@ -49,9 +57,15 @@ class ScriptedAgent:
         self._index = 0
 
     def decide(
-        self, prompt: str, context: PromptContext, *, character_id: str, model: str | None = None
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
     ) -> ToolCall | None:
-        del prompt, context, character_id, model
+        del prompt, context, character_id, model, provider
         if self._index >= len(self._calls):
             return None
         call = self._calls[self._index]
@@ -90,9 +104,15 @@ class OllamaAgent:
         self._history: dict[str, list[dict]] = {}
 
     async def decide(  # pragma: no cover - needs network + extra
-        self, prompt: str, context: PromptContext, *, character_id: str, model: str | None = None
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
     ) -> ToolCall | None:
-        del context
+        del context, provider
         history = self._history.setdefault(character_id, [])
         history.append({"role": "user", "content": prompt})
 
@@ -119,11 +139,120 @@ class OllamaAgent:
             del history[: len(history) - limit]
 
 
+class OpenRouterAgent:
+    """Asks an OpenRouter model to pick one character action."""
+
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_MODEL,
+        api_key: str | None = None,
+        server_url: str | None = None,
+        history_turns: int = 12,
+    ) -> None:
+        try:
+            from openrouter import OpenRouter
+        except ImportError as exc:  # pragma: no cover - exercised only without extra
+            raise RuntimeError(
+                "OpenRouterAgent requires the 'llm' extra: pip install bunnyland[llm]"
+            ) from exc
+        kwargs = {"api_key": api_key}
+        if server_url:
+            kwargs["server_url"] = server_url
+        self._client = OpenRouter(**kwargs)
+        self._model = model
+        self._history_turns = history_turns
+        self._history: dict[str, list[dict]] = {}
+
+    async def decide(  # pragma: no cover - needs network + extra
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+    ) -> ToolCall | None:
+        del context, provider
+        history = self._history.setdefault(character_id, [])
+        history.append({"role": "user", "content": prompt})
+
+        response = await self._client.chat.send_async(
+            model=normalize_model(model or self._model),
+            messages=history,
+            tools=tool_schemas(),
+        )
+        message = response.choices[0].message
+        history.append(_message_to_history(message))
+        self._trim(history)
+
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if not tool_calls:
+            return None
+        function = tool_calls[0].function
+        arguments = _openrouter_arguments(getattr(function, "arguments", {}))
+        return ToolCall(name=function.name, arguments=arguments)
+
+    def _trim(self, history: list[dict]) -> None:  # pragma: no cover - needs network + extra
+        limit = self._history_turns * 2
+        if len(history) > limit:
+            del history[: len(history) - limit]
+
+
+class ProviderRouterAgent:
+    """Routes decisions to the concrete agent named by a controller's provider."""
+
+    def __init__(self, providers: MappingABC[str, Agent], *, default_provider: str = "ollama"):
+        self._providers = dict(providers)
+        self._default_provider = default_provider
+
+    def decide(
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+    ) -> ToolCall | None | Awaitable[ToolCall | None]:
+        selected = provider or self._default_provider
+        agent = self._providers.get(selected)
+        if agent is None:
+            available = ", ".join(sorted(self._providers)) or "(none)"
+            raise RuntimeError(
+                f"no LLM agent configured for provider {selected!r}; available: {available}"
+            )
+        return agent.decide(prompt, context, character_id=character_id, model=model)
+
+
+def _message_to_history(message) -> dict:
+    if hasattr(message, "model_dump"):
+        return message.model_dump(mode="json", exclude_none=True)
+    result = {"role": getattr(message, "role", "assistant")}
+    content = getattr(message, "content", None)
+    if content is not None:
+        result["content"] = content
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        result["tool_calls"] = tool_calls
+    return result
+
+
+def _openrouter_arguments(arguments: object) -> dict:
+    if isinstance(arguments, str):
+        return dict(json.loads(arguments or "{}"))
+    if isinstance(arguments, MappingABC):
+        return dict(arguments)
+    return {}
+
+
 __all__ = [
     "DEFAULT_MODEL",
     "LEGACY_DEFAULT_MODEL",
     "Agent",
+    "OpenRouterAgent",
     "OllamaAgent",
+    "ProviderRouterAgent",
     "ScriptedAgent",
     "normalize_model",
 ]
