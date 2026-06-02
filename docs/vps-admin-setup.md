@@ -186,9 +186,10 @@ with bad credentials (`401`), and admin success with the supplied credentials (`
 Create the Discord application:
 
 1. Open the Discord Developer Portal and create an application.
-2. Add a bot and copy its token.
+2. Open the **Bot** tab, use **Reset Token**, and copy the new token.
 3. Enable **Message Content Intent**.
-4. Generate an OAuth2 URL with scope `bot` and permissions to read and send messages.
+4. Generate an OAuth2 URL with scope `bot` and permissions **View Channels**,
+   **Read Message History**, and **Send Messages**.
 5. Invite the bot to your server.
 
 Then run one full setup command with the required external service credentials. The wizard
