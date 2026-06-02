@@ -47,10 +47,9 @@ this server:
    setup configures). **Port 80** only needs to be reachable from the internet while certbot
    issues or renews the certificate — the standalone HTTP-01 challenge binds it briefly. A
    rerun that reuses an existing certificate does not need port 80.
-4. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key for
-   fresh LLM world generation, or an OpenRouter API key for loading an existing world and
-   driving character controllers through OpenRouter. Discord deployments also need a
-   Discord bot token. Creating the Discord application is described in
+4. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key, an
+   OpenRouter API key, or both, depending on the LLM providers you choose. Discord
+   deployments also need a Discord bot token. Creating the Discord application is described in
    [Full Bunnyland Deployment](#2-full-bunnyland-deployment) below.
 
 You also choose an admin username and password during setup; these protect the world
@@ -63,9 +62,9 @@ containers are present, it asks before removing those containers. It does not de
 mounts or named volumes, and the lower-level setup script backs up the selected world save
 before starting containers.
 
-The wizard prompts for the default Ollama-backed full deployment. To use OpenRouter for
-character controllers, run `scripts/vps-docker-setup` directly with
-`BUNNYLAND_LLM_PROVIDER=openrouter` as shown below.
+The wizard prompts for the default Ollama-backed full deployment. To use OpenRouter, run
+`scripts/vps-docker-setup` directly with `BUNNYLAND_LLM_PROVIDER=openrouter` and/or
+`BUNNYLAND_WORLDGEN_PROVIDER=openrouter` as shown below.
 
 ```bash
 sudo apt-get update
@@ -220,20 +219,22 @@ DISCORD_TOKEN='...' \
   scripts/vps-docker-setup
 ```
 
-To drive character controllers through OpenRouter, set `BUNNYLAND_LLM_PROVIDER=openrouter`
-and `OPENROUTER_API_KEY`. On this branch, world generation still uses Ollama, so OpenRouter
-setup is intended for an existing save passed with `BUNNYLAND_WORLD_SAVE`.
+To drive world generation and character controllers through OpenRouter, set
+`BUNNYLAND_WORLDGEN_PROVIDER=openrouter`, `BUNNYLAND_LLM_PROVIDER=openrouter`, and
+`OPENROUTER_API_KEY`.
 
 ```bash
 BUNNYLAND_DOMAIN='sandbox.example.com' \
 BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
-BUNNYLAND_WORLD_SAVE='/var/lib/bunnyland/worlds/apartment-demo.json' \
 BUNNYLAND_ADMIN_USER='editor' \
 BUNNYLAND_ADMIN_PASSWORD='change-this' \
 BUNNYLAND_CERT_EMAIL='admin@example.com' \
 BUNNYLAND_ENABLE_LLM=1 \
+BUNNYLAND_GENERATOR='recursive' \
+BUNNYLAND_WORLDGEN_PROVIDER='openrouter' \
 BUNNYLAND_LLM_PROVIDER='openrouter' \
 OPENROUTER_API_KEY='sk-or-...' \
+BUNNYLAND_WORLDGEN_MODEL='openai/gpt-4.1' \
 BUNNYLAND_CHARACTER_MODEL='openai/gpt-4.1-mini' \
 BUNNYLAND_ENABLE_DISCORD=1 \
 DISCORD_TOKEN='...' \

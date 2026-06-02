@@ -3,6 +3,7 @@
 from .agent import (
     DEFAULT_MODEL,
     Agent,
+    CharacterAgent,
     OllamaAgent,
     OpenRouterAgent,
     ProviderRouterAgent,
@@ -24,6 +25,7 @@ __all__ = [
     "DEFAULT_MODEL",
     "REFERENCE_ARG_KEYS",
     "Agent",
+    "CharacterAgent",
     "ControllerDispatch",
     "Decision",
     "OllamaAgent",

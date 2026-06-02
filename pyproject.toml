@@ -38,6 +38,9 @@ packages = ["src/bunnyland"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "live_llm: optional live LLM integration tests; skipped unless BUNNYLAND_LIVE_LLM=1 and provider credentials are set",
+]
 
 [tool.ruff]
 line-length = 100

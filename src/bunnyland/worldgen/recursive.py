@@ -10,7 +10,7 @@ Grows the world as a graph instead of one flat proposal:
 4. Populate each room with characters and items (the DM is reminded of all rooms first).
 5. Recurse into containment: fill each character's inventory, then each container.
 
-The LLM-never-mutates-ECS boundary holds: the builder only proposes; this generator
+The LLM-never-mutates-ECS boundary holds: the world agent only proposes; this generator
 validates structurally (guarding against duplicate edges) and performs every spawn/edge.
 """
 
@@ -41,7 +41,7 @@ from .instantiate import (
     _wire_controller,
 )
 from .proposal import CharacterProposal, DoorProposal, ItemProposal, RoomNodeProposal
-from .recursive_builder import RecursiveWorldBuilder
+from .recursive_builder import WorldAgent
 
 if TYPE_CHECKING:
     from relics import EntityId
@@ -65,10 +65,10 @@ def _opposite(direction: str) -> str:
 
 
 class RecursiveWorldGenerator:
-    """Builds a world graph node-by-node from a ``RecursiveWorldBuilder``."""
+    """Builds a world graph node-by-node from a ``WorldAgent``."""
 
     def __init__(
-        self, actor: WorldActor, builder: RecursiveWorldBuilder, *, max_rooms: int = 6
+        self, actor: WorldActor, builder: WorldAgent, *, max_rooms: int = 6
     ) -> None:
         self.actor = actor
         self.builder = builder

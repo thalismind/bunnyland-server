@@ -1,9 +1,8 @@
 """Builders for the recursive, graph-first world generator (spec 22).
 
-Where ``WorldBuilder`` proposes the whole world in one shot, a ``RecursiveWorldBuilder``
-proposes one piece at a time so the generator can grow the room graph breadth-first and
-then populate it. ``StubRecursiveBuilder`` is deterministic (tests, offline dev);
-``OllamaRecursiveBuilder`` prompts the DM node-by-node and keeps a running conversation so
+A ``WorldAgent`` proposes one piece at a time so the generator can grow the room graph
+breadth-first and then populate it. ``StubWorldAgent`` is deterministic (tests, offline
+dev); ``OllamaWorldAgent`` prompts the DM node-by-node and keeps a running conversation so
 earlier rooms are "remembered" when later pieces are generated.
 """
 
@@ -25,7 +24,14 @@ from .proposal import (
 )
 
 
-class RecursiveWorldBuilder(Protocol):
+class WorldAgent(Protocol):
+    """DM/world-builder role.
+
+    The core proposal methods are room, doors, contents, character, and item proposals.
+    The additional methods below cover the current recursive generator's graph-closing and
+    containment recursion phases.
+    """
+
     def propose_room(
         self,
         seed: str,
@@ -84,7 +90,7 @@ class RecursiveWorldBuilder(Protocol):
     def propose_container_contents(self, *, name: str) -> list[ItemProposal]: ...
 
 
-class StubRecursiveBuilder:
+class StubWorldAgent:
     """A fixed, deterministic builder used for tests and offline development.
 
     Produces a small marsh world whose root room has three doors that exercise the
@@ -242,7 +248,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-class OllamaRecursiveBuilder:
+class OllamaWorldAgent:
     """Prompts Ollama node-by-node, keeping the conversation so earlier rooms are remembered.
 
     ``ollama`` is imported lazily; requires the ``llm`` extra.
@@ -262,7 +268,7 @@ class OllamaRecursiveBuilder:
             import ollama
         except ImportError as exc:  # pragma: no cover - exercised only without extra
             raise RuntimeError(
-                "OllamaRecursiveBuilder requires the 'llm' extra: pip install bunnyland[llm]"
+                "OllamaWorldAgent requires the 'llm' extra: pip install bunnyland[llm]"
             ) from exc
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         self._client = ollama.Client(host=host, headers=headers) if host else ollama.Client()
@@ -436,4 +442,63 @@ class OllamaRecursiveBuilder:
         return [ItemProposal.model_validate(o) for o in self._ask(instruction).get("objects", [])]
 
 
-__all__ = ["OllamaRecursiveBuilder", "RecursiveWorldBuilder", "StubRecursiveBuilder"]
+class OpenRouterWorldAgent(OllamaWorldAgent):
+    """Prompts OpenRouter node-by-node on the same ``WorldAgent`` proposal surface."""
+
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_WORLDGEN_MODEL,
+        api_key: str | None = None,
+        server_url: str | None = None,
+    ) -> None:
+        try:
+            from openrouter import OpenRouter
+        except ImportError as exc:  # pragma: no cover - exercised only without extra
+            raise RuntimeError(
+                "OpenRouterWorldAgent requires the 'llm' extra: pip install bunnyland[llm]"
+            ) from exc
+        kwargs = {"api_key": api_key}
+        if server_url:
+            kwargs["server_url"] = server_url
+        self._client = OpenRouter(**kwargs)
+        self._model = model
+        self._history: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+
+    def _ask(self, instruction: str) -> dict:  # pragma: no cover - needs network + extra
+        self._history.append({"role": "user", "content": instruction})
+        response = self._client.chat.send(
+            model=self._model,
+            messages=self._history,
+            response_format={"type": "json_object"},
+        )
+        message = response.choices[0].message
+        self._history.append(_message_to_history(message))
+        content = getattr(message, "content", None) or "{}"
+        return json.loads(content)
+
+
+def _message_to_history(message) -> dict:
+    if hasattr(message, "model_dump"):
+        return message.model_dump(mode="json", exclude_none=True)
+    result = {"role": getattr(message, "role", "assistant")}
+    content = getattr(message, "content", None)
+    if content is not None:
+        result["content"] = content
+    return result
+
+
+RecursiveWorldBuilder = WorldAgent
+StubRecursiveBuilder = StubWorldAgent
+OllamaRecursiveBuilder = OllamaWorldAgent
+
+
+__all__ = [
+    "OllamaRecursiveBuilder",
+    "OllamaWorldAgent",
+    "OpenRouterWorldAgent",
+    "RecursiveWorldBuilder",
+    "StubRecursiveBuilder",
+    "StubWorldAgent",
+    "WorldAgent",
+]

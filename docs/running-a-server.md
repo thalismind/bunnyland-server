@@ -64,8 +64,7 @@ Cloud](https://ollama.com) by default, and can also drive character controllers 
 OpenRouter.
 
 1. Install the extra: `uv sync --extra llm`
-2. Put your provider key in a `.env` file (it is git-ignored). Ollama is the default and
-   is still used for LLM world generation:
+2. Put your provider key in a `.env` file (it is git-ignored). Ollama is the default:
    ```
    OLLAMA_CLOUD_API_KEY=sk-...
    # optional: point at a different host (defaults to https://ollama.com)
@@ -85,10 +84,8 @@ its own conversation history, so it remembers what it has done.
 To use a local Ollama instead of the cloud, set `OLLAMA_HOST` to your local server; the API
 key may be any non-empty value for local servers that don't check it.
 
-Character controllers can also use OpenRouter. World generation still uses Ollama on this
-branch, so a fresh generated world still needs `OLLAMA_CLOUD_API_KEY`; a loaded world with
-OpenRouter-backed controllers needs `OPENROUTER_API_KEY` and `--llm-provider openrouter`.
-Set `OPENROUTER_SERVER_URL` only when pointing the SDK at a non-default endpoint.
+OpenRouter can drive character controllers, world generation, or both. Set
+`OPENROUTER_SERVER_URL` only when pointing the SDK at a non-default endpoint.
 
 ```dotenv
 OPENROUTER_API_KEY=sk-or-...
@@ -97,8 +94,10 @@ OPENROUTER_API_KEY=sk-or-...
 ```
 
 ```bash
-uv run bunnyland serve --load worlds/marsh.json --llm \
+uv run bunnyland serve --llm --generator recursive \
   --llm-provider openrouter \
+  --worldgen-provider openrouter \
+  --worldgen-model openai/gpt-4.1 \
   --character-model openai/gpt-4.1-mini \
   --ticks 20
 ```
@@ -112,6 +111,7 @@ uv run bunnyland serve --load worlds/marsh.json --llm \
 | `--max-rooms`    | `6`            | Room budget for graph-based generators (`recursive`).          |
 | `--llm`          | off            | Drive LLM generation and character controllers (needs `llm` extra). |
 | `--llm-provider` | `ollama`       | Default provider for character controllers (`ollama` or `openrouter`). |
+| `--worldgen-provider` | `ollama`  | Provider for LLM world generation (`ollama` or `openrouter`). |
 | `--ollama-model` | (none)         | Shared Ollama model override for generation and characters. |
 | `--worldgen-model` | `deepseek-v4-pro` | Ollama model for world generation.                    |
 | `--character-model` | `deepseek-v4-flash` | Default Ollama model for character controllers.    |

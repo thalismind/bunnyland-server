@@ -39,7 +39,8 @@ uv run bunnyland serve --load worlds/marsh.json --llm --save worlds/marsh.json \
 ```
 
 If the saved world's LLM controllers should use OpenRouter, add `--llm-provider openrouter`
-and set `OPENROUTER_API_KEY`.
+and set `OPENROUTER_API_KEY`. New LLM worlds can also use OpenRouter by adding
+`--worldgen-provider openrouter`.
 
 ## Reset / fresh start
 

@@ -76,6 +76,7 @@ def test_character_spec_defaults_to_flash_controller_model():
 
 def test_generation_options_default_to_pro_worldgen_model():
     assert GenOptions(llm=True).model == "deepseek-v4-pro"
+    assert GenOptions(llm=True).provider == "ollama"
 
 
 async def test_instantiate_builds_the_mvp_checklist():

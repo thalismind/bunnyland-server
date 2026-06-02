@@ -338,6 +338,66 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
         assert "item/three-berries" in captured[key]
 
 
+def test_worldgen_builder_selects_openrouter_world_agent(monkeypatch):
+    import bunnyland.worldgen as worldgen
+    from bunnyland.server import worldgen as server_worldgen
+
+    captured = {}
+
+    class FakeOpenRouterWorldAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(worldgen, "OpenRouterWorldAgent", FakeOpenRouterWorldAgent)
+
+    builder = server_worldgen._builder(
+        GenOptions(
+            llm=True,
+            provider="openrouter",
+            model="openai/gpt-4.1",
+            api_key="key",
+            server_url="https://example.invalid",
+        )
+    )
+
+    assert isinstance(builder, FakeOpenRouterWorldAgent)
+    assert captured == {
+        "model": "openai/gpt-4.1",
+        "api_key": "key",
+        "server_url": "https://example.invalid",
+    }
+
+
+def test_worldgen_builder_selects_ollama_world_agent(monkeypatch):
+    import bunnyland.worldgen as worldgen
+    from bunnyland.server import worldgen as server_worldgen
+
+    captured = {}
+
+    class FakeOllamaWorldAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(worldgen, "OllamaWorldAgent", FakeOllamaWorldAgent)
+
+    builder = server_worldgen._builder(
+        GenOptions(
+            llm=True,
+            provider="ollama",
+            model="deepseek-v4-pro",
+            host="https://ollama.example",
+            api_key="key",
+        )
+    )
+
+    assert isinstance(builder, FakeOllamaWorldAgent)
+    assert captured == {
+        "model": "deepseek-v4-pro",
+        "host": "https://ollama.example",
+        "api_key": "key",
+    }
+
+
 def test_world_patch_updates_component_and_edge(scenario):
     response = apply_world_patch(
         scenario.actor,

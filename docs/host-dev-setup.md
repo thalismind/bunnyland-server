@@ -223,9 +223,8 @@ exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve
 '
 ```
 
-To use OpenRouter for character controllers on a saved world, keep
-`OPENROUTER_API_KEY` in `/etc/bunnyland/server.env` and add `--llm-provider openrouter`.
-Fresh LLM world generation still uses Ollama on this branch.
+To use OpenRouter for character controllers or world generation, keep `OPENROUTER_API_KEY`
+in `/etc/bunnyland/server.env` and add the OpenRouter provider flags.
 
 ```bash
 sudo -u bunnyland bash -lc '
@@ -234,9 +233,11 @@ set -a
 . /etc/bunnyland/server.env
 set +a
 exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve \
-  --load /var/lib/bunnyland/worlds/main.json \
   --llm \
+  --generator recursive \
   --llm-provider openrouter \
+  --worldgen-provider openrouter \
+  --worldgen-model openai/gpt-4.1 \
   --character-model openai/gpt-4.1-mini \
   --ticks 0 \
   --api-host 127.0.0.1 \

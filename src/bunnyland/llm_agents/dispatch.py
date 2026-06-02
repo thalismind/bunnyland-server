@@ -32,7 +32,7 @@ from ..core.ecs import container_of, parse_entity_id, reachable_ids
 from ..core.edges import ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
 from ..prompts.builder import PromptBuilder, render_prompt
-from .agent import Agent
+from .agent import CharacterAgent
 from .tools import REFERENCE_ARG_KEYS, ToolCall, command_from_tool_call
 
 logger = logging.getLogger("bunnyland.dispatch")
@@ -165,7 +165,7 @@ class Decision:
 class ControllerDispatch:
     """Turns agent tool calls into submitted commands for LLM-controlled characters."""
 
-    def __init__(self, actor: WorldActor, builder: PromptBuilder, agent: Agent) -> None:
+    def __init__(self, actor: WorldActor, builder: PromptBuilder, agent: CharacterAgent) -> None:
         self.actor = actor
         self.builder = builder
         self.agent = agent

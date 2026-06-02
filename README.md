@@ -35,9 +35,9 @@ echo 'OLLAMA_CLOUD_API_KEY=sk-...' > .env
 uv run bunnyland serve --llm --generator recursive --ticks 20
 ```
 
-Ollama is the default provider and is still used for LLM world generation. OpenRouter can
-drive character controllers with `--llm-provider openrouter` and `OPENROUTER_API_KEY`; see
-[Running a server](docs/running-a-server.md#connecting-an-llm).
+Ollama is the default provider. OpenRouter can drive character controllers and world
+generation with `--llm-provider openrouter`, `--worldgen-provider openrouter`, and
+`OPENROUTER_API_KEY`; see [Running a server](docs/running-a-server.md#connecting-an-llm).
 
 ## Docker Compose
 
@@ -167,6 +167,14 @@ uv run pytest
 uv run ruff check src tests
 ```
 
+Optional live LLM checks are marked and skipped by default. To exercise real Ollama and
+OpenRouter SDK calls, install the `llm` extra, set `BUNNYLAND_LIVE_LLM=1` plus
+`OLLAMA_HOST` or `OLLAMA_CLOUD_API_KEY` and/or `OPENROUTER_API_KEY`, then run:
+
+```bash
+uv run pytest -m live_llm
+```
+
 `tests/test_e2e.py` is the best place to see the whole stack exercised: generate a world,
 check it matches both the proposal and the agent's prompt, then play several rounds and
 assert each action is processed.
@@ -175,6 +183,6 @@ assert each action is processed.
 
 | Extra      | Enables                                  | Install                      |
 |------------|------------------------------------------|------------------------------|
-| `llm`      | Ollama world generation, plus Ollama/OpenRouter character agents | `uv sync --extra llm` |
+| `llm`      | Ollama/OpenRouter world generation and character agents | `uv sync --extra llm` |
 | `discord`  | the Discord player front-end             | `uv sync --extra discord`    |
 | `chroma`   | ChromaDB vector memory store             | `uv sync --extra chroma`     |

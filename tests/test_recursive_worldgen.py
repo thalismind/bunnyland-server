@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+import types
+
 from bunnyland.core import (
     CharacterComponent,
     ContainerComponent,
@@ -19,8 +22,10 @@ from bunnyland.mechanics.consumables import FoodComponent
 from bunnyland.worldgen import (
     DanglingResolution,
     GenOptions,
+    OllamaWorldAgent,
+    OpenRouterWorldAgent,
     RecursiveWorldGenerator,
-    StubRecursiveBuilder,
+    StubWorldAgent,
     oneshot_generator,
     recursive_generator,
 )
@@ -33,7 +38,7 @@ def _exits(world, room_id):
 
 async def test_bfs_respects_the_room_budget():
     actor = WorldActor()
-    gen = RecursiveWorldGenerator(actor, StubRecursiveBuilder(), max_rooms=2)
+    gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=2)
     result = await gen.generate("a quiet marsh")
 
     assert len(result.rooms) == 2
@@ -43,7 +48,7 @@ async def test_bfs_respects_the_room_budget():
 async def test_doors_are_bidirectional_unless_marked_one_way():
     actor = WorldActor()
     # Budget of 3 expands the north tunnel and the one-way slide (BFS order).
-    gen = RecursiveWorldGenerator(actor, StubRecursiveBuilder(), max_rooms=3)
+    gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=3)
     result = await gen.generate("seed")
     world = actor.world
 
@@ -65,7 +70,7 @@ async def test_dangling_doors_are_sealed_dropped_or_linked():
     actor = WorldActor()
     # Budget of 3 leaves a hidden door (seal), a two-way door with no free target
     # (drop), and a two-way door with a free target (link).
-    gen = RecursiveWorldGenerator(actor, StubRecursiveBuilder(), max_rooms=3)
+    gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=3)
     result = await gen.generate("seed")
     world = actor.world
 
@@ -84,7 +89,7 @@ async def test_dangling_doors_are_sealed_dropped_or_linked():
 
 async def test_no_duplicate_exit_overwrites_on_link():
     actor = WorldActor()
-    gen = RecursiveWorldGenerator(actor, StubRecursiveBuilder(), max_rooms=2)
+    gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=2)
     result = await gen.generate("seed")
     world = actor.world
 
@@ -96,7 +101,7 @@ async def test_no_duplicate_exit_overwrites_on_link():
 
 async def test_rooms_are_populated_with_objects_and_characters():
     actor = WorldActor()
-    gen = RecursiveWorldGenerator(actor, StubRecursiveBuilder(), max_rooms=2)
+    gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=2)
     result = await gen.generate("seed")
     world = actor.world
 
@@ -115,7 +120,7 @@ async def test_rooms_are_populated_with_objects_and_characters():
 
 async def test_recurses_into_inventory_and_containers():
     actor = WorldActor()
-    gen = RecursiveWorldGenerator(actor, StubRecursiveBuilder(), max_rooms=2)
+    gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=2)
     result = await gen.generate("seed")
     world = actor.world
 
@@ -134,7 +139,7 @@ async def test_emits_world_generated_event():
     actor = WorldActor()
     events: list[WorldGeneratedEvent] = []
     actor.bus.subscribe(WorldGeneratedEvent, events.append)
-    gen = RecursiveWorldGenerator(actor, StubRecursiveBuilder(), max_rooms=2)
+    gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=2)
     result = await gen.generate("seed")
 
     assert events
@@ -158,7 +163,7 @@ async def test_builtin_generator_functions_produce_worlds_offline():
 
 async def test_generators_record_the_dm_system_prompt():
     from bunnyland.worldgen.ollama_builder import _SYSTEM_PROMPT, OllamaWorldBuilder
-    from bunnyland.worldgen.recursive_builder import OllamaRecursiveBuilder
+    from bunnyland.worldgen.recursive_builder import OllamaWorldAgent
 
     # Offline stub builders carry no LLM prompt.
     one = await oneshot_generator(WorldActor(), "seed", GenOptions(llm=False))
@@ -169,4 +174,120 @@ async def test_generators_record_the_dm_system_prompt():
     # The LLM builders expose their literal DM system prompt (captured into metadata).
     assert OllamaWorldBuilder.system_prompt == _SYSTEM_PROMPT
     assert "world-builder" in OllamaWorldBuilder.system_prompt
-    assert "DM" in OllamaRecursiveBuilder.system_prompt
+    assert "DM" in OllamaWorldAgent.system_prompt
+
+
+class _FakeOllamaClient:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        self.calls: list[dict] = []
+
+    def chat(self, *, model, format, messages):
+        self.calls.append(
+            {
+                "model": model,
+                "format": format,
+                "messages": [dict(message) for message in messages],
+            }
+        )
+        return {
+            "message": {
+                "role": "assistant",
+                "content": '{"title":"Sky Atrium","biome":"city","indoor":true,'
+                '"light":0.8,"celsius":21,"description":"a glassy atrium"}',
+            }
+        }
+
+
+def test_ollama_world_agent_parses_json_response(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.Client = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaWorldAgent(model="deepseek-v4-pro", host="https://ollama.example", api_key="key")
+    room = agent.propose_room("seed", behind=None, known_rooms={})
+
+    assert room.title == "Sky Atrium"
+    assert agent._client.kwargs == {
+        "host": "https://ollama.example",
+        "headers": {"Authorization": "Bearer key"},
+    }
+    assert agent._client.calls[0]["model"] == "deepseek-v4-pro"
+    assert agent._client.calls[0]["format"] == "json"
+
+
+def test_ollama_world_agent_preserves_history(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.Client = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaWorldAgent(model="deepseek-v4-pro")
+    agent.propose_room("seed", behind=None, known_rooms={})
+    agent.propose_room("seed", behind=None, known_rooms={})
+
+    second = agent._client.calls[1]["messages"]
+    assert second[0]["role"] == "system"
+    assert second[1]["role"] == "user"
+    assert second[2]["role"] == "assistant"
+    assert second[3]["role"] == "user"
+
+
+class _FakeOpenRouterChat:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def send(self, *, model, messages, response_format):
+        self.calls.append(
+            {
+                "model": model,
+                "messages": [dict(message) for message in messages],
+                "response_format": response_format,
+            }
+        )
+        message = types.SimpleNamespace(
+            role="assistant",
+            content='{"title":"Sky Atrium","biome":"city","indoor":true,'
+            '"light":0.8,"celsius":21,"description":"a glassy atrium"}',
+            model_dump=lambda **_: {
+                "role": "assistant",
+                "content": '{"title":"Sky Atrium"}',
+            },
+        )
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+
+class _FakeOpenRouterClient:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.chat = _FakeOpenRouterChat()
+
+
+def test_openrouter_world_agent_parses_json_response(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterWorldAgent(model="openai/gpt-4.1", api_key="key")
+    room = agent.propose_room("seed", behind=None, known_rooms={})
+
+    assert room.title == "Sky Atrium"
+    assert agent._client.kwargs == {"api_key": "key"}
+    assert agent._client.chat.calls[0]["model"] == "openai/gpt-4.1"
+    assert agent._client.chat.calls[0]["response_format"] == {"type": "json_object"}
+
+
+def test_openrouter_world_agent_preserves_history(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterWorldAgent(model="openai/gpt-4.1", api_key="key")
+    agent.propose_room("seed", behind=None, known_rooms={})
+    agent.propose_room("seed", behind=None, known_rooms={})
+
+    second = agent._client.chat.calls[1]["messages"]
+    assert second[0]["role"] == "system"
+    assert second[1]["role"] == "user"
+    assert second[2]["role"] == "assistant"
+    assert second[3]["role"] == "user"
