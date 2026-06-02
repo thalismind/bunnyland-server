@@ -95,6 +95,24 @@ confirm() {
   esac
 }
 
+prompt_choice() {
+  local label="$1"
+  local default="$2"
+  local value
+  while true; do
+    value="$(prompt "$label" "$default")"
+    case "$value" in
+      ollama | openrouter)
+        printf '%s\n' "$value"
+        return
+        ;;
+      *)
+        printf 'Please enter ollama or openrouter.\n' >&2
+        ;;
+    esac
+  done
+}
+
 shell_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
@@ -187,21 +205,35 @@ if [[ -n "$home_domain" ]]; then
 fi
 
 full_deployment=0
-if confirm "Set up the full Bunnyland deployment with Ollama and Discord now?" "y"; then
+if confirm "Set up the full Bunnyland deployment with an LLM provider and Discord now?" "y"; then
   full_deployment=1
 else
   printf 'Continuing with a container/routing smoke test only. This is not a full Bunnyland deployment.\n'
 fi
 
 enable_llm=0
+llm_provider="ollama"
 ollama_key=""
-ollama_host="https://ollama.com"
+ollama_host=""
+openrouter_key=""
+openrouter_server_url=""
 worldgen_model="deepseek-v4-pro"
 character_model="deepseek-v4-flash"
 if [[ "$full_deployment" == "1" ]]; then
   enable_llm=1
-  ollama_key="$(prompt_secret "OLLAMA_CLOUD_API_KEY")"
-  ollama_host="$(prompt "Ollama host" "$ollama_host")"
+  llm_provider="$(prompt_choice "LLM provider for world generation and characters (ollama/openrouter)" "$llm_provider")"
+  case "$llm_provider" in
+    ollama)
+      ollama_key="$(prompt_secret "OLLAMA_CLOUD_API_KEY")"
+      ollama_host="$(prompt "Ollama endpoint override (blank for https://ollama.com)")"
+      ;;
+    openrouter)
+      openrouter_key="$(prompt_secret "OPENROUTER_API_KEY")"
+      openrouter_server_url="$(prompt "OpenRouter endpoint override (blank for SDK default)")"
+      worldgen_model="openai/gpt-4.1"
+      character_model="openai/gpt-4.1-mini"
+      ;;
+  esac
   worldgen_model="$(prompt "Worldgen model" "$worldgen_model")"
   character_model="$(prompt "Character model" "$character_model")"
 fi
@@ -239,8 +271,20 @@ if [[ -n "$home_domain" ]]; then
   write_env BUNNYLAND_HOME_DIR "$home_dir"
 fi
 if [[ "$enable_llm" == "1" ]]; then
-  write_env OLLAMA_CLOUD_API_KEY "$ollama_key"
-  write_env OLLAMA_HOST "$ollama_host"
+  write_env BUNNYLAND_LLM_PROVIDER "$llm_provider"
+  write_env BUNNYLAND_WORLDGEN_PROVIDER "$llm_provider"
+  case "$llm_provider" in
+    ollama)
+      write_env OLLAMA_CLOUD_API_KEY "$ollama_key"
+      if [[ -n "$ollama_host" ]]; then write_env OLLAMA_HOST "$ollama_host"; fi
+      ;;
+    openrouter)
+      write_env OPENROUTER_API_KEY "$openrouter_key"
+      if [[ -n "$openrouter_server_url" ]]; then
+        write_env OPENROUTER_SERVER_URL "$openrouter_server_url"
+      fi
+      ;;
+  esac
   write_env BUNNYLAND_WORLDGEN_MODEL "$worldgen_model"
   write_env BUNNYLAND_CHARACTER_MODEL "$character_model"
 fi
@@ -286,18 +330,27 @@ if [[ -n "$home_domain" ]]; then
   printf '  Homepage files    : %s\n' "$home_dir"
 fi
 if [[ "$full_deployment" == "1" ]]; then
-  printf '  Mode              : full deployment (Ollama + Discord)\n'
-  printf '  Ollama host       : %s\n' "$ollama_host"
+  printf '  Mode              : full deployment (%s + Discord)\n' "$llm_provider"
+  printf '  LLM provider      : %s\n' "$llm_provider"
+  case "$llm_provider" in
+    ollama)
+      printf '  Ollama endpoint   : %s\n' "${ollama_host:-https://ollama.com}"
+      printf '  Ollama API key    : (set)\n'
+      ;;
+    openrouter)
+      printf '  OpenRouter endpoint: %s\n' "${openrouter_server_url:-(SDK default)}"
+      printf '  OpenRouter API key: (set)\n'
+      ;;
+  esac
   printf '  Worldgen model    : %s\n' "$worldgen_model"
   printf '  Character model   : %s\n' "$character_model"
-  printf '  Ollama API key    : (set)\n'
   printf '  Discord token     : (set)\n'
   if [[ -n "$discord_user_id" ]]; then
     printf '  Discord startup   : user %s -> %s in channel %s\n' \
       "$discord_user_id" "${discord_character:-first claimable character}" "${discord_channel_id:-(none)}"
   fi
 else
-  printf '  Mode              : smoke test only (no Ollama or Discord)\n'
+  printf '  Mode              : smoke test only (no LLM provider or Discord)\n'
 fi
 printf '\nThis installs packages, adds firewall rules, and requests a real Let'\''s Encrypt\n'
 printf 'certificate (which is rate-limited), then starts the containers. If UFW is inactive,\n'
