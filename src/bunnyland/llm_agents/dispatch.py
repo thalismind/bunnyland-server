@@ -240,6 +240,7 @@ class ControllerDispatch:
             context,
             character_id=cid,
             model=controller_component.model,
+            provider=controller_component.provider,
         )
         call = await decision if inspect.isawaitable(decision) else decision
 

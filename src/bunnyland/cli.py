@@ -3,8 +3,9 @@
 ``serve`` wires plugins onto a world actor, generates a world, and runs the game loop so
 LLM-controlled characters act each tick. By default (no ``--llm``) it uses the
 deterministic stub world and a waiting agent, so the loop is runnable without the ``llm``
-extra; with ``--llm`` it generates via Ollama and drives characters with a real agent,
-reading the API key from ``OLLAMA_CLOUD_API_KEY`` (loaded from ``.env`` if present).
+extra; with ``--llm`` it generates via Ollama and drives characters with a real agent.
+The default character provider is Ollama, and OpenRouter can be enabled per controller
+with ``OPENROUTER_API_KEY``.
 """
 
 from __future__ import annotations
@@ -124,13 +125,18 @@ async def _serve(args) -> None:
     # TODO: add --auto-load-requires to include missing required plugins automatically.
 
     host = api_key = discord_token = None
+    openrouter_api_key = openrouter_server_url = None
     if args.llm or args.discord:
         load_dotenv()
     if args.llm:
-        api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
+        openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
+        openrouter_server_url = os.environ.get("OPENROUTER_SERVER_URL")
         host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
-        if not api_key:
+        api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
+        if (not args.load or args.llm_provider == "ollama") and not api_key:
             raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
+        if args.llm_provider == "openrouter" and not openrouter_api_key:
+            raise SystemExit("--llm-provider openrouter needs OPENROUTER_API_KEY")
     worldgen_model = args.worldgen_model or args.ollama_model or DEFAULT_WORLDGEN_MODEL
     character_model = args.character_model or args.ollama_model or DEFAULT_MODEL
     if args.discord:
@@ -186,10 +192,24 @@ async def _serve(args) -> None:
         )
 
     if args.llm:
-        from .llm_agents import OllamaAgent
+        from .llm_agents import OllamaAgent, OpenRouterAgent, ProviderRouterAgent
 
-        agent = OllamaAgent(model=character_model, host=host, api_key=api_key)
-        print(f"Driving characters with default Ollama model {character_model!r} at {host}.")
+        providers = {}
+        if api_key:
+            providers["ollama"] = OllamaAgent(model=character_model, host=host, api_key=api_key)
+        if openrouter_api_key:
+            providers["openrouter"] = OpenRouterAgent(
+                model=character_model,
+                api_key=openrouter_api_key,
+                server_url=openrouter_server_url,
+            )
+        if args.llm_provider not in providers:
+            raise SystemExit(f"no LLM agent configured for provider {args.llm_provider!r}")
+        agent = ProviderRouterAgent(providers, default_provider=args.llm_provider)
+        print(
+            f"Driving characters with default {args.llm_provider} model "
+            f"{character_model!r}."
+        )
     else:
         agent = ScriptedAgent([])  # offline: characters wait, the world still ticks
         print("Offline demo (no --llm): characters will wait.")
@@ -285,7 +305,13 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--plugin", action="append", default=None, help="enable a plugin id")
     serve.add_argument("--seed", default="a quiet marsh", help="world-generation seed")
     serve.add_argument(
-        "--llm", action="store_true", help="drive characters with Ollama (needs llm extra)"
+        "--llm", action="store_true", help="drive characters with an LLM (needs llm extra)"
+    )
+    serve.add_argument(
+        "--llm-provider",
+        choices=("ollama", "openrouter"),
+        default="ollama",
+        help="default LLM provider for character controllers (default: ollama)",
     )
     serve.add_argument(
         "--ollama-model",

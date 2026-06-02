@@ -21,6 +21,8 @@ from bunnyland.core import (
 )
 from bunnyland.llm_agents import (
     ControllerDispatch,
+    OpenRouterAgent,
+    ProviderRouterAgent,
     ScriptedAgent,
     ToolCall,
     command_from_tool_call,
@@ -325,6 +327,64 @@ async def test_ollama_agent_maps_legacy_default_model_to_flash(monkeypatch):
     assert agent._client.models == [DEFAULT_MODEL]
 
 
+class _FakeOpenRouterChat:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    async def send_async(self, *, model, messages, tools):
+        del tools
+        self.calls.append({"model": model, "messages": [dict(m) for m in messages]})
+        function = types.SimpleNamespace(name="wait", arguments='{"reason": "rest"}')
+        tool_call = types.SimpleNamespace(function=function)
+        message = types.SimpleNamespace(
+            role="assistant",
+            content="ok",
+            tool_calls=[tool_call],
+            model_dump=lambda **_: {
+                "role": "assistant",
+                "content": "ok",
+                "tool_calls": [
+                    {"function": {"name": "wait", "arguments": '{"reason": "rest"}'}}
+                ],
+            },
+        )
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+
+class _FakeOpenRouterClient:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.chat = _FakeOpenRouterChat()
+
+
+async def test_openrouter_agent_parses_tool_arguments_json(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key")
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert call == ToolCall("wait", {"reason": "rest"})
+    assert agent._client.kwargs == {"api_key": "key"}
+    assert agent._client.chat.calls[0]["model"] == "openai/gpt-4.1-mini"
+
+
+async def test_openrouter_agent_resends_prior_turns_as_context(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key")
+    await agent.decide("turn one", None, character_id="hazel")
+    await agent.decide("turn two", None, character_id="hazel")
+
+    second = agent._client.chat.calls[1]["messages"]
+    assert second[0] == {"role": "user", "content": "turn one"}
+    assert second[1]["role"] == "assistant"
+    assert second[2] == {"role": "user", "content": "turn two"}
+
+
 async def test_dispatch_records_wait_when_agent_passes():
     scenario = build_scenario()
     builder = PromptBuilder(scenario.actor.world)
@@ -345,6 +405,44 @@ async def test_dispatch_uses_controller_model_for_character_decision():
     await dispatch.run_once()
 
     assert agent.models == ["claude"]
+
+
+async def test_dispatch_uses_controller_provider_for_character_decision():
+    from dataclasses import replace
+
+    from bunnyland.core import replace_component
+    from bunnyland.core.controllers import LLMControllerComponent
+
+    scenario = build_scenario()
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    replace_component(
+        controller,
+        replace(controller.get_component(LLMControllerComponent), provider="openrouter"),
+    )
+    agent = _RecordingAgent([])
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    await dispatch.run_once()
+
+    assert agent.providers == ["openrouter"]
+
+
+async def test_provider_router_uses_selected_agent():
+    ollama = _RecordingAgent([])
+    openrouter = _RecordingAgent([ToolCall("wait", {})])
+    router = ProviderRouterAgent({"ollama": ollama, "openrouter": openrouter})
+
+    call = router.decide(
+        "prompt",
+        None,
+        character_id="hazel",
+        model="openai/gpt-4.1-mini",
+        provider="openrouter",
+    )
+
+    assert call == ToolCall("wait", {})
+    assert ollama.prompts == []
+    assert openrouter.models == ["openai/gpt-4.1-mini"]
 
 
 def test_resolve_reference_matches_names_case_insensitively():
@@ -404,11 +502,13 @@ class _RecordingAgent:
         self.calls = list(calls)
         self.prompts: list[str] = []
         self.models: list[str | None] = []
+        self.providers: list[str | None] = []
         self._index = 0
 
-    def decide(self, prompt, context, *, character_id, model=None):
+    def decide(self, prompt, context, *, character_id, model=None, provider=None):
         self.prompts.append(prompt)
         self.models.append(model)
+        self.providers.append(provider)
         if self._index >= len(self.calls):
             return None
         call = self.calls[self._index]

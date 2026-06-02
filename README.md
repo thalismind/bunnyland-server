@@ -5,7 +5,7 @@ an emergent ECS simulation. Built on the [Relics](https://github.com/ssube/relic
 database.
 
 Characters live in a world of rooms, items, and needs. They are driven by **controllers** —
-an Ollama-backed LLM agent, a Discord user, or a no-op "suspended" controller — and all of
+an Ollama- or OpenRouter-backed LLM agent, a Discord user, or a no-op "suspended" controller — and all of
 them act through the *same* verb surface (move, take, eat, say, take-note, …). The engine
 validates every action the same way no matter who sent it, so an LLM can't do anything a
 human couldn't, and vice versa.
@@ -34,6 +34,10 @@ uv sync --extra llm
 echo 'OLLAMA_CLOUD_API_KEY=sk-...' > .env
 uv run bunnyland serve --llm --generator recursive --ticks 20
 ```
+
+Ollama is the default provider and is still used for LLM world generation. OpenRouter can
+drive character controllers with `--llm-provider openrouter` and `OPENROUTER_API_KEY`; see
+[Running a server](docs/running-a-server.md#connecting-an-llm).
 
 ## Docker Compose
 
@@ -103,9 +107,9 @@ branch tags and `latest` for the default branch. The web repo publishes
 - **[The Vision](docs/vision.md)** — what bunnyland is trying to be, and what belongs in
   core, plugins, clients, scripts, and content libraries.
 - **[Running a server](docs/running-a-server.md)** — install, the `serve` loop, the time
-  model, and connecting an LLM.
+  model, and connecting Ollama or OpenRouter.
 - **[VPS Docker setup](docs/vps-admin-setup.md)** — Linux VPS deployment with the
-  containerized server/frontend stack, Let's Encrypt, admin auth, Ollama, and Discord bot
+  containerized server/frontend stack, Let's Encrypt, admin auth, LLM providers, and Discord bot
   wiring.
 - **[Host dev setup](docs/host-dev-setup.md)** — older non-container host setup for
   development and debugging.
@@ -171,6 +175,6 @@ assert each action is processed.
 
 | Extra      | Enables                                  | Install                      |
 |------------|------------------------------------------|------------------------------|
-| `llm`      | Ollama-backed world generation + agents  | `uv sync --extra llm`        |
+| `llm`      | Ollama world generation, plus Ollama/OpenRouter character agents | `uv sync --extra llm` |
 | `discord`  | the Discord player front-end             | `uv sync --extra discord`    |
 | `chroma`   | ChromaDB vector memory store             | `uv sync --extra chroma`     |

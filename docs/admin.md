@@ -5,7 +5,7 @@
 A **character** is a persistent entity. Who acts for it is a separate, swappable
 **controller** entity, linked by a `ControlledBy` edge. There are three kinds:
 
-- **LLM** (`LLMControllerComponent`) — an Ollama agent decides its actions.
+- **LLM** (`LLMControllerComponent`) — an Ollama or OpenRouter agent decides its actions.
 - **Discord** (`DiscordControllerComponent`) — a person drives it (see the
   [Discord bot](discord-bot.md)).
 - **Suspended** (`SuspendedControllerComponent`) — a no-op. The character still regenerates

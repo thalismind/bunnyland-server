@@ -23,6 +23,7 @@ class DiscordControllerComponent(Component):
 class LLMControllerComponent(Component):
     profile_name: str
     model: str
+    provider: str = "ollama"
     temperature: float = 0.7
     max_tokens: int = 1024
     system_style: str = "in_character"

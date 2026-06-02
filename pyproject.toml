@@ -12,7 +12,7 @@ dependencies = [
 [project.optional-dependencies]
 chroma = ["chromadb>=0.5"]
 discord = ["discord.py>=2.4"]
-llm = ["ollama>=0.3"]
+llm = ["ollama>=0.3", "openrouter>=0.9.1"]
 server = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 
 [project.scripts]

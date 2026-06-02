@@ -38,6 +38,9 @@ uv run bunnyland serve --load worlds/marsh.json --llm --save worlds/marsh.json \
   --autosave-every 20 --ticks 0
 ```
 
+If the saved world's LLM controllers should use OpenRouter, add `--llm-provider openrouter`
+and set `OPENROUTER_API_KEY`.
+
 ## Reset / fresh start
 
 There's no separate "reset" command — a reset is simply launching **without** `--load`,

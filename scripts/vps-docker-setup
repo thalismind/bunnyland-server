@@ -40,6 +40,7 @@ server_tag="${BUNNYLAND_SERVER_TAG:-main}"
 web_tag="${BUNNYLAND_WEB_TAG:-main}"
 enable_llm="${BUNNYLAND_ENABLE_LLM:-}"
 enable_discord="${BUNNYLAND_ENABLE_DISCORD:-}"
+llm_provider="${BUNNYLAND_LLM_PROVIDER:-ollama}"
 enable_tls="${BUNNYLAND_TLS:-1}"
 configure_ufw="${BUNNYLAND_CONFIGURE_FIREWALL:-1}"
 generator="${BUNNYLAND_GENERATOR:-lifesim-demo}"
@@ -48,11 +49,16 @@ time_scale="${BUNNYLAND_TIME_SCALE:-1800}"
 autosave_every="${BUNNYLAND_AUTOSAVE_EVERY:-20}"
 dry_run="${BUNNYLAND_SETUP_DRY_RUN:-0}"
 
+case "$llm_provider" in
+  ollama | openrouter) ;;
+  *) die "unsupported BUNNYLAND_LLM_PROVIDER: $llm_provider" ;;
+esac
+
 # Explicit BUNNYLAND_ENABLE_LLM=0 and BUNNYLAND_ENABLE_DISCORD=0 force the offline smoke
 # test even if Ollama/Discord secrets are present in the environment.
 full_deployment=0
 if [[ "$enable_llm" != "0" || "$enable_discord" != "0" ]]; then
-  if [[ "$enable_llm" == "1" || "$enable_discord" == "1" || -n "${OLLAMA_CLOUD_API_KEY:-}" || -n "${DISCORD_TOKEN:-}" ]]; then
+  if [[ "$enable_llm" == "1" || "$enable_discord" == "1" || -n "${OLLAMA_CLOUD_API_KEY:-}" || -n "${OPENROUTER_API_KEY:-}" || -n "${DISCORD_TOKEN:-}" ]]; then
     full_deployment=1
   fi
 fi
@@ -65,8 +71,12 @@ else
   enable_discord=0
 fi
 
-if [[ "$full_deployment" == "1" && -z "${OLLAMA_CLOUD_API_KEY:-}" ]]; then
+if [[ "$full_deployment" == "1" && "$llm_provider" == "ollama" && -z "${OLLAMA_CLOUD_API_KEY:-}" ]]; then
   die "set OLLAMA_CLOUD_API_KEY for the full Bunnyland deployment"
+fi
+
+if [[ "$full_deployment" == "1" && "$llm_provider" == "openrouter" && -z "${OPENROUTER_API_KEY:-}" ]]; then
+  die "set OPENROUTER_API_KEY for the full Bunnyland deployment"
 fi
 
 if [[ "$full_deployment" == "1" && -z "${DISCORD_TOKEN:-}" ]]; then
@@ -242,6 +252,7 @@ render_server_service() {
   printf '        exec bunnyland serve \\\n'
   if [[ "$enable_llm" == "1" ]]; then
     printf '          --llm \\\n'
+    printf '          --llm-provider %s \\\n' "$(shell_quote "$llm_provider")"
     printf '          --worldgen-model %s \\\n' "$(shell_quote "$worldgen_model")"
     printf '          --character-model %s \\\n' "$(shell_quote "$character_model")"
   fi
@@ -271,10 +282,19 @@ render_server_service() {
   printf '      BUNNYLAND_TIME_SCALE: %s\n' "$(yaml_quote "$time_scale")"
   printf '      BUNNYLAND_AUTOSAVE_EVERY: %s\n' "$(yaml_quote "$autosave_every")"
   printf '      BUNNYLAND_ENABLE_LLM: %s\n' "$(yaml_quote "$enable_llm")"
+  printf '      BUNNYLAND_LLM_PROVIDER: %s\n' "$(yaml_quote "$llm_provider")"
   printf '      BUNNYLAND_ENABLE_DISCORD: %s\n' "$(yaml_quote "$enable_discord")"
   if [[ "$enable_llm" == "1" ]]; then
-    printf '      OLLAMA_CLOUD_API_KEY: %s\n' "$(yaml_quote "$OLLAMA_CLOUD_API_KEY")"
-    printf '      OLLAMA_HOST: %s\n' "$(yaml_quote "${OLLAMA_HOST:-https://ollama.com}")"
+    if [[ "$llm_provider" == "ollama" ]]; then
+      printf '      OLLAMA_CLOUD_API_KEY: %s\n' "$(yaml_quote "$OLLAMA_CLOUD_API_KEY")"
+      printf '      OLLAMA_HOST: %s\n' "$(yaml_quote "${OLLAMA_HOST:-https://ollama.com}")"
+    fi
+    if [[ "$llm_provider" == "openrouter" ]]; then
+      printf '      OPENROUTER_API_KEY: %s\n' "$(yaml_quote "$OPENROUTER_API_KEY")"
+      if [[ -n "${OPENROUTER_SERVER_URL:-}" ]]; then
+        printf '      OPENROUTER_SERVER_URL: %s\n' "$(yaml_quote "$OPENROUTER_SERVER_URL")"
+      fi
+    fi
     printf '      BUNNYLAND_WORLDGEN_MODEL: %s\n' "$(yaml_quote "$worldgen_model")"
     printf '      BUNNYLAND_CHARACTER_MODEL: %s\n' "$(yaml_quote "$character_model")"
   fi

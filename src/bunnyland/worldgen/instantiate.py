@@ -187,7 +187,13 @@ def _wire_controller(actor: WorldActor, character_id: EntityId, spec: CharacterS
     if spec.controller == "llm":
         controller = spawn_entity(
             actor.world,
-            [LLMControllerComponent(profile_name=spec.llm_profile, model=spec.llm_model)],
+            [
+                LLMControllerComponent(
+                    profile_name=spec.llm_profile,
+                    model=spec.llm_model,
+                    provider=spec.llm_provider,
+                )
+            ],
         )
         actor.assign_controller(character_id, controller.id)
     else:  # suspended / claimable

@@ -9,7 +9,7 @@ not anyone is watching.
 
 ```bash
 uv sync                 # core only: deterministic worlds, characters that wait
-uv sync --extra llm     # add Ollama-backed generation and LLM agents
+uv sync --extra llm     # add LLM generation/agent providers
 ```
 
 ## The simplest run (offline)
@@ -60,10 +60,12 @@ For a step-by-step Linux VPS deployment, use the containerized
 ## Connecting an LLM
 
 Characters only *think* when an LLM is attached. bunnyland uses [Ollama
-Cloud](https://ollama.com) by default.
+Cloud](https://ollama.com) by default, and can also drive character controllers through
+OpenRouter.
 
 1. Install the extra: `uv sync --extra llm`
-2. Put your key in a `.env` file (it is git-ignored):
+2. Put your provider key in a `.env` file (it is git-ignored). Ollama is the default and
+   is still used for LLM world generation:
    ```
    OLLAMA_CLOUD_API_KEY=sk-...
    # optional: point at a different host (defaults to https://ollama.com)
@@ -83,6 +85,24 @@ its own conversation history, so it remembers what it has done.
 To use a local Ollama instead of the cloud, set `OLLAMA_HOST` to your local server; the API
 key may be any non-empty value for local servers that don't check it.
 
+Character controllers can also use OpenRouter. World generation still uses Ollama on this
+branch, so a fresh generated world still needs `OLLAMA_CLOUD_API_KEY`; a loaded world with
+OpenRouter-backed controllers needs `OPENROUTER_API_KEY` and `--llm-provider openrouter`.
+Set `OPENROUTER_SERVER_URL` only when pointing the SDK at a non-default endpoint.
+
+```dotenv
+OPENROUTER_API_KEY=sk-or-...
+# optional: point at a non-default OpenRouter-compatible endpoint
+# OPENROUTER_SERVER_URL=https://openrouter.ai/api/v1
+```
+
+```bash
+uv run bunnyland serve --load worlds/marsh.json --llm \
+  --llm-provider openrouter \
+  --character-model openai/gpt-4.1-mini \
+  --ticks 20
+```
+
 ## Options
 
 | Flag             | Default        | Meaning                                                        |
@@ -90,7 +110,8 @@ key may be any non-empty value for local servers that don't check it.
 | `--seed`         | `a quiet marsh`| World-generation seed (free text; flavours LLM generation).    |
 | `--generator`    | `oneshot`      | Which world generator to use. See [world creation](world-creation.md). |
 | `--max-rooms`    | `6`            | Room budget for graph-based generators (`recursive`).          |
-| `--llm`          | off            | Drive generation + characters with Ollama (needs `llm` extra). |
+| `--llm`          | off            | Drive LLM generation and character controllers (needs `llm` extra). |
+| `--llm-provider` | `ollama`       | Default provider for character controllers (`ollama` or `openrouter`). |
 | `--ollama-model` | (none)         | Shared Ollama model override for generation and characters. |
 | `--worldgen-model` | `deepseek-v4-pro` | Ollama model for world generation.                    |
 | `--character-model` | `deepseek-v4-flash` | Default Ollama model for character controllers.    |

@@ -17,7 +17,7 @@ The server repo owns the Compose files:
   `ghcr.io/thalismind/bunnyland-web` with private service ports only;
 - `compose.user.yml.template` is rendered by setup into `compose.user.yml`, which publishes
   the frontend port, sets the domain, binds the data directory, configures TLS/homepage and
-  favicon mounts, loads an existing world when requested, and injects Ollama/Discord
+  favicon mounts, loads an existing world when requested, and injects LLM/Discord
   secrets for the full deployment;
 - `deploy/nginx/frontend-tls.conf` and `deploy/nginx/frontend-tls-home.conf` are the TLS
   nginx templates mounted by the generated `compose.user.yml`.
@@ -47,7 +47,9 @@ this server:
    setup configures). **Port 80** only needs to be reachable from the internet while certbot
    issues or renews the certificate — the standalone HTTP-01 challenge binds it briefly. A
    rerun that reuses an existing certificate does not need port 80.
-4. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key and a
+4. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key for
+   fresh LLM world generation, or an OpenRouter API key for loading an existing world and
+   driving character controllers through OpenRouter. Discord deployments also need a
    Discord bot token. Creating the Discord application is described in
    [Full Bunnyland Deployment](#2-full-bunnyland-deployment) below.
 
@@ -60,6 +62,10 @@ nerdctl, or Podman with Compose support, prompts for the required values, writes
 containers are present, it asks before removing those containers. It does not delete bind
 mounts or named volumes, and the lower-level setup script backs up the selected world save
 before starting containers.
+
+The wizard prompts for the default Ollama-backed full deployment. To use OpenRouter for
+character controllers, run `scripts/vps-docker-setup` directly with
+`BUNNYLAND_LLM_PROVIDER=openrouter` as shown below.
 
 ```bash
 sudo apt-get update
@@ -77,14 +83,14 @@ scripts/vps-docker-wizard
 The rest of this section shows the same setup in copy-pasteable steps. Start with a
 container/routing smoke test if you need to isolate DNS, TLS, firewall, and admin auth.
 That smoke test is not a complete Bunnyland deployment. The full deployment requires both
-the Ollama key and the Discord bot token.
+the LLM provider key and the Discord bot token.
 
 ## 1. Container Smoke Test
 
 This starts the same server and frontend containers with deterministic/offline generation
 and waiting controllers. It is only for proving that containers, routing, TLS, admin auth,
 and persistence work before adding external services. It does not need
-`OLLAMA_CLOUD_API_KEY` or `DISCORD_TOKEN`.
+`OLLAMA_CLOUD_API_KEY`, `OPENROUTER_API_KEY`, or `DISCORD_TOKEN`.
 
 Copy this block, change the values in the first section, and paste it into the VPS:
 
@@ -188,10 +194,10 @@ Create the Discord application:
 4. Generate an OAuth2 URL with scope `bot` and permissions to read and send messages.
 5. Invite the bot to your server.
 
-Then run one full setup command with both required external service credentials. Use one
-`OLLAMA_CLOUD_API_KEY` for both world generation and LLM character controllers. World
-generation defaults to `deepseek-v4-pro`; character controllers default to
-`deepseek-v4-flash`.
+Then run one full setup command with the required external service credentials. Ollama is
+the default provider and uses one `OLLAMA_CLOUD_API_KEY` for both world generation and LLM
+character controllers. World generation defaults to `deepseek-v4-pro`; character
+controllers default to `deepseek-v4-flash`.
 
 Keep the same domain, data directory, admin credentials, and any
 world/homepage/favicon settings you used in the smoke test. The setup script formats
@@ -209,6 +215,26 @@ OLLAMA_CLOUD_API_KEY='sk-...' \
 OLLAMA_HOST='https://ollama.com' \
 BUNNYLAND_WORLDGEN_MODEL='deepseek-v4-pro' \
 BUNNYLAND_CHARACTER_MODEL='deepseek-v4-flash' \
+BUNNYLAND_ENABLE_DISCORD=1 \
+DISCORD_TOKEN='...' \
+  scripts/vps-docker-setup
+```
+
+To drive character controllers through OpenRouter, set `BUNNYLAND_LLM_PROVIDER=openrouter`
+and `OPENROUTER_API_KEY`. On this branch, world generation still uses Ollama, so OpenRouter
+setup is intended for an existing save passed with `BUNNYLAND_WORLD_SAVE`.
+
+```bash
+BUNNYLAND_DOMAIN='sandbox.example.com' \
+BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
+BUNNYLAND_WORLD_SAVE='/var/lib/bunnyland/worlds/apartment-demo.json' \
+BUNNYLAND_ADMIN_USER='editor' \
+BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_CERT_EMAIL='admin@example.com' \
+BUNNYLAND_ENABLE_LLM=1 \
+BUNNYLAND_LLM_PROVIDER='openrouter' \
+OPENROUTER_API_KEY='sk-or-...' \
+BUNNYLAND_CHARACTER_MODEL='openai/gpt-4.1-mini' \
 BUNNYLAND_ENABLE_DISCORD=1 \
 DISCORD_TOKEN='...' \
   scripts/vps-docker-setup
@@ -238,7 +264,7 @@ BUNNYLAND_DISCORD_CHARACTER='Juniper' \
 ```
 
 At this point the VPS is running the full Bunnyland deployment: web client, private server
-API, Ollama-backed worldgen/characters, and the Discord bot.
+API, LLM-backed character controllers, and optionally the Discord bot.
 
 Test through Discord:
 
@@ -263,7 +289,7 @@ The script starts the checked-in Compose files:
 - generated `compose.user.yml`, rendered from `compose.user.yml.template`.
 
 The base `compose.yml` is the basic offline web/API deployment. User-specific settings,
-secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading, Ollama, and
+secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading, LLM provider, and
 Discord are written into `compose.user.yml`.
 
 If the same frontend container also serves a static homepage, include the homepage domain
@@ -280,8 +306,9 @@ BUNNYLAND_HOME_EXPECT_TEXT='A social simulation sandbox built as an ECS graph.' 
 
 The generated `compose.user.yml` contains deployment knobs and secrets. Keep it out of
 source control. Change the public domain, admin username/password, data directory, favicon,
-homepage, world save, Ollama key, or Discord token by rerunning the wizard or setup script
-with the new value; the setup script rewrites `compose.user.yml`.
+homepage, world save, LLM provider/key, or Discord token by rerunning setup with the new
+value; OpenRouter provider changes should use `scripts/vps-docker-setup` directly. The
+setup script rewrites `compose.user.yml`.
 
 `scripts/vps-docker-setup` requires `BUNNYLAND_ADMIN_USER` and `BUNNYLAND_ADMIN_PASSWORD` on
 every run and regenerates the world-editor htpasswd from them. To rerun without resupplying
