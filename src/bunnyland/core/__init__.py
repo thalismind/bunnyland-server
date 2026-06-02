@@ -86,7 +86,7 @@ from .edges import (
     Holding,
     Wearing,
 )
-from .events import DomainEvent, EventBus, EventVisibility
+from .events import DomainEvent, EventBus, EventVisibility, WorldPauseStatusChangedEvent
 from .handlers import (
     HandlerContext,
     HandlerResult,
@@ -186,6 +186,7 @@ __all__ = [
     "WeightComponent",
     "WorldActor",
     "WorldClockComponent",
+    "WorldPauseStatusChangedEvent",
     "WritableComponent",
     "WriteHandler",
     "build_submitted_command",

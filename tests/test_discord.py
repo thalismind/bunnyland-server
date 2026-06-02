@@ -30,6 +30,7 @@ from bunnyland.discord import (
     HELP_TEXT,
     assign_discord_controller,
     did_you_mean,
+    discord_broadcast_channel_ids,
     explain_rejection,
     parse_discord_action,
     release_discord_character_to_llm,
@@ -42,6 +43,7 @@ from bunnyland.discord import (
     split_discord_text,
     suspend_discord_character,
 )
+from bunnyland.discord.bot import PAUSED_REACTION, QUEUED_REACTION, DiscordBot
 from bunnyland.discord.claim import discord_controlled_character
 from bunnyland.memory import InMemoryStore, install_memory
 
@@ -91,6 +93,25 @@ def test_render_character_list_includes_controller_statuses(scenario):
     assert "- Juniper - Discord controller" in text
     assert "- Hazel - LLM controller" in text
     assert "- Clover - free" in text
+
+
+def test_discord_broadcast_channel_ids_returns_unique_attached_channels(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=456, default_channel_id=456)],
+    )
+    spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=789, default_channel_id=0)],
+    )
+
+    assert discord_broadcast_channel_ids(scenario.actor) == (456,)
 
 
 def test_release_discord_character_reassigns_to_llm_controller(scenario):
@@ -460,3 +481,55 @@ def test_render_action_result_explains_a_gated_rejection(scenario):
     assert text.startswith("Say failed: you don't have enough action points")
     assert text.endswith(".")
     assert ".." not in text
+
+
+async def test_discord_queued_ack_uses_requested_reaction():
+    class Message:
+        def __init__(self):
+            self.reactions = []
+
+        async def add_reaction(self, reaction):
+            self.reactions.append(reaction)
+
+    class Ctx:
+        def __init__(self):
+            self.message = Message()
+
+    ctx = Ctx()
+
+    await DiscordBot._acknowledge_queued(ctx, PAUSED_REACTION)
+
+    assert ctx.message.reactions == [PAUSED_REACTION]
+
+
+async def test_discord_resume_replaces_paused_reactions_with_hourglass():
+    class Message:
+        def __init__(self):
+            self.added = []
+            self.removed = []
+
+        async def add_reaction(self, reaction):
+            self.added.append(reaction)
+
+        async def remove_reaction(self, reaction, user):
+            self.removed.append((reaction, user))
+
+    bot = object.__new__(DiscordBot)
+    bot.client = type("Client", (), {"user": "bot-user"})()
+    message = Message()
+    bot._paused_reactions = {"command-1": message}
+
+    await bot._replace_paused_reactions()
+
+    assert message.removed == [(PAUSED_REACTION, "bot-user")]
+    assert message.added == [QUEUED_REACTION]
+    assert bot._paused_reactions == {}
+
+
+def test_discord_pause_status_probe_overrides_cached_state():
+    paused = True
+    bot = object.__new__(DiscordBot)
+    bot._world_paused = False
+    bot._pause_status = lambda: paused
+
+    assert bot._is_world_paused() is True

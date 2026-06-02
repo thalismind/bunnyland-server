@@ -3,6 +3,7 @@
 from .bot import (
     assign_discord_controller,
     did_you_mean,
+    discord_broadcast_channel_ids,
     parse_discord_action,
     release_discord_character_to_llm,
     suspend_discord_character,
@@ -24,6 +25,7 @@ __all__ = [
     "HELP_TEXT",
     "assign_discord_controller",
     "did_you_mean",
+    "discord_broadcast_channel_ids",
     "explain_rejection",
     "parse_discord_action",
     "release_discord_character_to_llm",

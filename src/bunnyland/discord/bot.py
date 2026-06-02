@@ -17,11 +17,18 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
-from ..core.events import CommandExecutedEvent, CommandRejectedEvent, NotesSearchedEvent
+from ..core.controllers import DiscordControllerComponent
+from ..core.events import (
+    CommandExecutedEvent,
+    CommandRejectedEvent,
+    NotesSearchedEvent,
+    WorldPauseStatusChangedEvent,
+)
 from ..core.world_actor import WorldActor
 from ..llm_agents import DEFAULT_MODEL
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
@@ -53,6 +60,7 @@ MOVE_RESULT_TIMEOUT_SECONDS = 120.0
 
 #: Reaction added to a player's message once their command is accepted and queued.
 QUEUED_REACTION = "\N{HOURGLASS WITH FLOWING SAND}"
+PAUSED_REACTION = "\N{DOUBLE VERTICAL BAR}\N{VARIATION SELECTOR-16}"
 META_COMMANDS = frozenset({"help", "claim", "characters", "look", "release", "suspend"})
 
 
@@ -176,6 +184,20 @@ def parse_discord_action(text: str, available_commands: tuple[str, ...]) -> Disc
     raise ValueError(f"Unknown world verb `{typed}`. Use `!help verbs` to see available verbs.")
 
 
+def discord_broadcast_channel_ids(actor: WorldActor) -> tuple[int, ...]:
+    """Return unique Discord channels attached through controller defaults."""
+
+    channel_ids: set[int] = set()
+    controllers = actor.world.query().with_all([DiscordControllerComponent]).execute_entities()
+    for controller in controllers:
+        channel_id = controller.get_component(
+            DiscordControllerComponent
+        ).default_channel_id
+        if channel_id:
+            channel_ids.add(channel_id)
+    return tuple(sorted(channel_ids))
+
+
 class DiscordBot:  # pragma: no cover - needs network + extra
     """Maps Discord slash commands to character verbs for the controlling user."""
 
@@ -187,6 +209,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         allow_child_claims: bool = False,
         llm_provider: str = "ollama",
         character_model: str = DEFAULT_MODEL,
+        pause_status: Callable[[], bool] | None = None,
     ) -> None:
         discord, commands = _require_discord()
         self.actor = actor
@@ -194,12 +217,16 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         self.allow_child_claims = allow_child_claims
         self.llm_provider = llm_provider
         self.character_model = character_model
+        self._pause_status = pause_status
+        self._world_paused = pause_status() if pause_status is not None else False
         intents = discord.Intents.default()
         intents.message_content = True  # required to read "!" command text
         self.client = commands.Bot(command_prefix="!", intents=intents, help_command=None)
         self._pending: dict[str, asyncio.Future[CommandExecutedEvent | CommandRejectedEvent]] = {}
+        self._paused_reactions: dict[str, Any] = {}
         self.actor.bus.subscribe(CommandExecutedEvent, self._complete_pending)
         self.actor.bus.subscribe(CommandRejectedEvent, self._complete_pending)
+        self.actor.bus.subscribe(WorldPauseStatusChangedEvent, self._post_pause_status)
         self._register_commands()
 
     def _character_for_user(self, discord_user_id: int):
@@ -208,8 +235,49 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
     def _complete_pending(self, event: CommandExecutedEvent | CommandRejectedEvent) -> None:
         future = self._pending.pop(event.command_id, None)
+        self._paused_reactions.pop(event.command_id, None)
         if future is not None and not future.done():
             future.set_result(event)
+
+    def _is_world_paused(self) -> bool:
+        if self._pause_status is not None:
+            return self._pause_status()
+        return self._world_paused
+
+    async def _post_pause_status(self, event: WorldPauseStatusChangedEvent) -> None:
+        self._world_paused = event.paused
+        if not event.paused:
+            await self._replace_paused_reactions()
+        for channel_id in discord_broadcast_channel_ids(self.actor):
+            channel = self.client.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.client.fetch_channel(channel_id)
+                except Exception as exc:
+                    print(
+                        f"Discord pause status post failed for channel {channel_id}: {exc!r}",
+                        flush=True,
+                    )
+                    continue
+            try:
+                await channel.send(event.message)
+            except Exception as exc:
+                print(
+                    f"Discord pause status post failed for channel {channel_id}: {exc!r}",
+                    flush=True,
+                )
+
+    async def _replace_paused_reactions(self) -> None:
+        for message in tuple(self._paused_reactions.values()):
+            try:
+                await message.remove_reaction(PAUSED_REACTION, self.client.user)
+            except Exception:  # pragma: no cover - best effort, missing perms are common
+                pass
+            try:
+                await message.add_reaction(QUEUED_REACTION)
+            except Exception:  # pragma: no cover - reaction is best-effort
+                pass
+        self._paused_reactions.clear()
 
     async def _build_command(self, discord_user_id: int, action: DiscordAction):
         found = self._character_for_user(discord_user_id)
@@ -244,10 +312,10 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         return command, None
 
     @staticmethod
-    async def _acknowledge_queued(ctx) -> None:
+    async def _acknowledge_queued(ctx, reaction: str) -> None:
         """React to the player's message so they see their command was accepted."""
         try:
-            await ctx.message.add_reaction(QUEUED_REACTION)
+            await ctx.message.add_reaction(reaction)
         except Exception:  # pragma: no cover - reaction is best-effort (e.g. missing perms)
             pass
 
@@ -268,7 +336,11 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         self._pending[command.command_id] = future
         try:
             await self.actor.submit(command)
-            await self._acknowledge_queued(ctx)
+            if self._is_world_paused():
+                await self._acknowledge_queued(ctx, PAUSED_REACTION)
+                self._paused_reactions[command.command_id] = ctx.message
+            else:
+                await self._acknowledge_queued(ctx, QUEUED_REACTION)
             event = await asyncio.wait_for(future, timeout=MOVE_RESULT_TIMEOUT_SECONDS)
             if command.command_type == "remember" and isinstance(event, CommandExecutedEvent):
                 notes = await asyncio.wait_for(notes_future, timeout=1.0)
@@ -399,6 +471,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
     async def close(self) -> None:
         """Stop the Discord client when the host game loop is shutting down."""
 
+        self.actor.bus.unsubscribe(WorldPauseStatusChangedEvent, self._post_pause_status)
         await self.client.close()
 
 
@@ -407,6 +480,7 @@ __all__ = [
     "DiscordBot",
     "assign_discord_controller",
     "did_you_mean",
+    "discord_broadcast_channel_ids",
     "parse_discord_action",
     "release_discord_character_to_llm",
     "suspend_discord_character",

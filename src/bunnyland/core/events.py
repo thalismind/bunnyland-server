@@ -100,6 +100,12 @@ class ControllerChangedEvent(DomainEvent):
     controller_kind: str
 
 
+class WorldPauseStatusChangedEvent(DomainEvent):
+    paused: bool
+    state: str
+    message: str
+
+
 # --------------------------------------------------------------------------------------
 # Health / downed / death events (spec 18.3)
 # --------------------------------------------------------------------------------------
@@ -461,5 +467,6 @@ __all__ = [
     "ReflectionCreatedEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",
+    "WorldPauseStatusChangedEvent",
     "WorldGeneratedEvent",
 ]

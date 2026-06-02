@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import UTC, datetime
+from uuid import uuid4
 
+from .core.events import WorldPauseStatusChangedEvent
 from .llm_agents.dispatch import ControllerDispatch
 
 
@@ -49,11 +52,35 @@ class GameLoop:
     def paused(self) -> bool:
         return self._paused
 
-    def pause(self) -> None:
+    def pause(self) -> asyncio.Task[None] | None:
+        if self._paused:
+            return None
         self._paused = True
+        return self._publish_pause_status(paused=True)
 
-    def resume(self) -> None:
+    def resume(self) -> asyncio.Task[None] | None:
+        if not self._paused:
+            return None
         self._paused = False
+        return self._publish_pause_status(paused=False)
+
+    def _publish_pause_status(self, *, paused: bool) -> asyncio.Task[None] | None:
+        state = "paused" if paused else "resumed"
+        event = WorldPauseStatusChangedEvent(
+            event_id=uuid4().hex,
+            world_epoch=self.actor.epoch,
+            created_at=datetime.now(UTC),
+            paused=paused,
+            state=state,
+            message=f"World {state}.",
+        )
+        publish = self.actor.bus.publish(event)
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(publish)
+            return None
+        return running_loop.create_task(publish)
 
     async def run(self, max_ticks: int | None = None) -> int:
         """Run the loop. Stops after ``max_ticks`` iterations, or until ``stop()``.

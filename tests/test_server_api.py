@@ -16,6 +16,7 @@ from bunnyland.core import (
     ExitTo,
     IdentityComponent,
     RoomComponent,
+    WorldPauseStatusChangedEvent,
     spawn_entity,
 )
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
@@ -639,3 +640,32 @@ async def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypat
     assert snapshot["type"] == "snapshot"
     assert snapshot["data"]["world_epoch"] == scenario.actor.epoch
     assert heartbeat == {"type": "heartbeat", "data": {"world_epoch": scenario.actor.epoch}}
+
+
+async def test_event_stream_fans_out_pause_status_events(scenario):
+    loop = GameLoop(
+        scenario.actor,
+        ControllerDispatch(
+            scenario.actor,
+            PromptBuilder(scenario.actor.world),
+            ScriptedAgent([]),
+        ),
+    )
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe()
+    try:
+        publish = loop.pause()
+        if publish is not None:
+            await publish
+        message = await asyncio.wait_for(subscription.queue.get(), timeout=1.0)
+    finally:
+        subscription.close()
+
+    assert message["type"] == "event"
+    assert message["data"]["event_type"] == "WorldPauseStatusChangedEvent"
+    assert message["data"]["event"]["paused"] is True
+    assert message["data"]["event"]["message"] == "World paused."
+    assert any(
+        recent["data"]["event_type"] == WorldPauseStatusChangedEvent.__name__
+        for recent in stream.recent_messages()
+    )

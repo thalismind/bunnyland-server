@@ -250,6 +250,7 @@ async def _serve(args) -> None:
             allow_child_claims=args.discord_allow_child_claims,
             llm_provider=args.llm_provider,
             character_model=character_model,
+            pause_status=lambda: loop.paused,
         )
         claim_user_id = args.discord_user_id or _env_int("BUNNYLAND_DISCORD_USER_ID")
         claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from bunnyland.core import WorldActor, container_of
+from bunnyland.core import WorldActor, WorldPauseStatusChangedEvent, container_of
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
@@ -68,3 +68,26 @@ async def test_game_loop_pause_blocks_ticks_until_resumed():
     loop.resume()
     assert await asyncio.wait_for(task, timeout=1.0) == 1
     assert actor.epoch > 0
+
+
+async def test_game_loop_emits_pause_status_events_once_per_transition():
+    actor = WorldActor()
+    builder = PromptBuilder(actor.world)
+    loop = GameLoop(actor, ControllerDispatch(actor, builder, ScriptedAgent([])))
+    events = []
+    actor.bus.subscribe(WorldPauseStatusChangedEvent, events.append)
+
+    publish = loop.pause()
+    if publish is not None:
+        await publish
+    assert loop.pause() is None
+
+    publish = loop.resume()
+    if publish is not None:
+        await publish
+    assert loop.resume() is None
+
+    assert [(event.paused, event.state, event.message) for event in events] == [
+        (True, "paused", "World paused."),
+        (False, "resumed", "World resumed."),
+    ]

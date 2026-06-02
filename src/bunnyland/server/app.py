@@ -130,14 +130,18 @@ def create_app(
     async def pause_world() -> WorldRuntimeResponse:
         if loop is None:
             raise HTTPException(status_code=409, detail="server runtime is not attached")
-        loop.pause()
+        publish = loop.pause()
+        if publish is not None:
+            await publish
         return _runtime_response()
 
     @app.post("/admin/resume", response_model=WorldRuntimeResponse)
     async def resume_world() -> WorldRuntimeResponse:
         if loop is None:
             raise HTTPException(status_code=409, detail="server runtime is not attached")
-        loop.resume()
+        publish = loop.resume()
+        if publish is not None:
+            await publish
         return _runtime_response()
 
     @app.post("/world/commands", response_model=CommandResponse, status_code=202)
