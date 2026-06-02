@@ -169,12 +169,18 @@ def discord_controlled_character(actor: WorldActor, discord_user_id: int):
     return None
 
 
-def _controlled_character_entity(actor: WorldActor, discord_user_id: int):
+def _controlled_character(actor: WorldActor, discord_user_id: int):
     found = discord_controlled_character(actor, discord_user_id)
     if found is None:
         raise RuntimeError("You are not controlling a character yet.")
-    character_id, _controller_id, _generation = found
-    return actor.world.get_entity(character_id)
+    character_id, controller_id, _generation = found
+    return actor.world.get_entity(character_id), controller_id
+
+
+def _retire_discord_controller(actor: WorldActor, controller_id) -> None:
+    controller = actor.world.get_entity(controller_id)
+    if controller.has_component(DiscordControllerComponent):
+        controller.remove_component(DiscordControllerComponent)
 
 
 def release_discord_character_to_llm(
@@ -186,7 +192,7 @@ def release_discord_character_to_llm(
 ) -> str:
     """Release a Discord user's current character back to an LLM controller."""
 
-    character = _controlled_character_entity(actor, discord_user_id)
+    character, old_controller_id = _controlled_character(actor, discord_user_id)
     controller = spawn_entity(
         actor.world,
         [
@@ -198,6 +204,7 @@ def release_discord_character_to_llm(
         ],
     )
     actor.assign_controller(character.id, controller.id)
+    _retire_discord_controller(actor, old_controller_id)
     if character.has_component(SuspendedComponent):
         character.remove_component(SuspendedComponent)
     return character.get_component(IdentityComponent).name
@@ -211,9 +218,10 @@ def suspend_discord_character(
 ) -> str:
     """Suspend a Discord user's current character so it can be claimed again later."""
 
-    character = _controlled_character_entity(actor, discord_user_id)
+    character, old_controller_id = _controlled_character(actor, discord_user_id)
     controller = spawn_entity(actor.world, [SuspendedControllerComponent(reason=reason)])
     actor.suspend(character.id, controller.id, reason=reason)
+    _retire_discord_controller(actor, old_controller_id)
     return character.get_component(IdentityComponent).name
 
 

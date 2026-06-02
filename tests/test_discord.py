@@ -118,6 +118,12 @@ def test_release_discord_character_reassigns_to_llm_controller(scenario):
     assert not controller.has_component(DiscordControllerComponent)
     assert not character.has_component(SuspendedComponent)
     assert render_character_list(scenario.actor).splitlines()[1] == "- Juniper - LLM controller"
+    controllers = scenario.actor.world.query().with_all([DiscordControllerComponent])
+    assert [
+        entity
+        for entity in controllers.execute_entities()
+        if entity.get_component(DiscordControllerComponent).discord_user_id == 123
+    ] == []
 
 
 def test_suspend_discord_character_reassigns_to_suspended_controller(scenario):
@@ -145,6 +151,21 @@ def test_suspend_discord_character_reassigns_to_suspended_controller(scenario):
     assert not controller.has_component(DiscordControllerComponent)
     assert render_character_list(scenario.actor).splitlines()[1] == "- Juniper - suspended"
     assert discord_controlled_character(scenario.actor, 123) is None
+    controllers = scenario.actor.world.query().with_all([DiscordControllerComponent])
+    assert [
+        entity
+        for entity in controllers.execute_entities()
+        if entity.get_component(DiscordControllerComponent).discord_user_id == 123
+    ] == []
+
+    claimed = assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        character_name="Juniper",
+    )
+
+    assert claimed == "Juniper"
+    assert discord_controlled_character(scenario.actor, 123) is not None
 
 
 def test_help_lists_available_discord_verbs(scenario):
