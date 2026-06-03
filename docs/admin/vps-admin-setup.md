@@ -59,16 +59,6 @@ this server:
 You also choose an admin username and password during setup; these protect the world
 editor. There is no recovery if you forget them — you simply rerun setup to reset them.
 
-### Public bot traffic
-
-Assume that bots will start probing and scraping the site shortly after it has a public IP
-address or DNS record. The easiest free mitigation is usually to put the domain behind
-Cloudflare DNS in proxied mode and enable
-[Bot Fight Mode](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/). Bot
-Fight Mode protects the whole domain, so test the web client, websocket, and admin routes
-after enabling it; if it challenges legitimate API traffic, disable it or move to a more
-configurable bot-management setup.
-
 ## Setup wizard
 
 The fastest path is the setup wizard. It supports Debian and Ubuntu, detects an installed
@@ -334,14 +324,6 @@ scripts/vps-docker-restart
 The restart script pulls updated container images before applying the deployment, so this is
 the normal update path for new server/web images and checked-in deployment script changes.
 
-### Clear CDN cache
-
-If the domain is proxied through Cloudflare and a deploy appears to serve stale JavaScript,
-CSS, images, or `config.json`, clear Cloudflare's cache before debugging the containers.
-Use Cloudflare's cache purge option for the affected URL when you know the stale asset, or
-purge everything after broad frontend/static-asset changes. This clears Cloudflare's edge
-cache, but visitors may still need to refresh their browser cache.
-
 ### Reapply config changes
 
 To change LLM provider keys, optional provider endpoints, Discord token, image tags, tick
@@ -401,6 +383,24 @@ If TLS terminates somewhere else, rerun setup with `BUNNYLAND_TLS=0` and
 listener and cert mounts, publishes only `127.0.0.1:8080:80`, and you point the outer proxy
 at the frontend container. Keep the `/api/` proxy in the frontend nginx config so the
 browser always loads the web page and API from the same external origin.
+
+### Public bot traffic
+
+Assume that bots will start probing and scraping the site shortly after it has a public IP
+address or DNS record. If you want a free front-door mitigation, one common option is to put
+the domain behind Cloudflare DNS in proxied mode and enable
+[Bot Fight Mode](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/). Bot
+Fight Mode protects the whole domain, so test the web client, websocket, and admin routes
+after enabling it; if it challenges legitimate API traffic, disable it or move to a more
+configurable bot-management setup.
+
+### Clear CDN cache
+
+If the domain is proxied through Cloudflare and a deploy appears to serve stale JavaScript,
+CSS, images, or `config.json`, clear Cloudflare's cache before debugging the containers.
+Use Cloudflare's cache purge option for the affected URL when you know the stale asset, or
+purge everything after broad frontend/static-asset changes. This clears Cloudflare's edge
+cache, but visitors may still need to refresh their browser cache.
 
 ## Operating checklist
 
