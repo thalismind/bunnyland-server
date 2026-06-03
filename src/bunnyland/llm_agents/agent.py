@@ -278,6 +278,8 @@ def _provider_status_code(exc: BaseException) -> int | None:
 
 
 def _is_transient_provider_error(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
     status = _provider_status_code(exc)
     if status is not None:
         return status in TRANSIENT_STATUS_CODES or status >= 500

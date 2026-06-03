@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import types
 
+import pytest
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -35,7 +36,12 @@ from bunnyland.llm_agents import (
     tool_names,
     tool_schemas,
 )
-from bunnyland.llm_agents.agent import DEFAULT_MODEL, OllamaAgent, normalize_model
+from bunnyland.llm_agents.agent import (
+    DEFAULT_MODEL,
+    OllamaAgent,
+    _call_provider_with_retries,
+    normalize_model,
+)
 from bunnyland.prompts.builder import PromptBuilder
 
 
@@ -277,6 +283,66 @@ class _FakeProviderError(Exception):
     def __init__(self, status_code: int) -> None:
         super().__init__(f"provider failed with status code: {status_code}")
         self.status_code = status_code
+
+
+class _FakeResponseProviderError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"provider response failed with status code: {status_code}")
+        self.response = types.SimpleNamespace(status_code=status_code)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _FakeProviderError(429),
+        _FakeProviderError(502),
+        _FakeResponseProviderError(503),
+        _FakeResponseProviderError(504),
+        TimeoutError("provider timed out"),
+        ConnectionError("provider connection reset"),
+        OSError("provider network unreachable"),
+    ],
+)
+async def test_provider_retry_helper_retries_intermittent_network_errors(exc):
+    attempts = 0
+
+    async def request():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise exc
+        return "ok"
+
+    result = await _call_provider_with_retries(
+        "test-provider", request, max_retries=2, retry_delay_seconds=0
+    )
+
+    assert result == "ok"
+    assert attempts == 2
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _FakeProviderError(400),
+        _FakeResponseProviderError(403),
+        ValueError("malformed provider response"),
+    ],
+)
+async def test_provider_retry_helper_does_not_retry_non_transient_errors(exc):
+    attempts = 0
+
+    async def request():
+        nonlocal attempts
+        attempts += 1
+        raise exc
+
+    with pytest.raises(type(exc)):
+        await _call_provider_with_retries(
+            "test-provider", request, max_retries=2, retry_delay_seconds=0
+        )
+
+    assert attempts == 1
 
 
 def _fake_ollama_response():
