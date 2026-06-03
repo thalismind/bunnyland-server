@@ -334,6 +334,14 @@ scripts/vps-docker-restart
 The restart script pulls updated container images before applying the deployment, so this is
 the normal update path for new server/web images and checked-in deployment script changes.
 
+### Clear CDN cache
+
+If the domain is proxied through Cloudflare and a deploy appears to serve stale JavaScript,
+CSS, images, or `config.json`, clear Cloudflare's cache before debugging the containers.
+Use Cloudflare's cache purge option for the affected URL when you know the stale asset, or
+purge everything after broad frontend/static-asset changes. This clears Cloudflare's edge
+cache, but visitors may still need to refresh their browser cache.
+
 ### Reapply config changes
 
 To change LLM provider keys, optional provider endpoints, Discord token, image tags, tick
