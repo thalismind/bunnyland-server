@@ -59,6 +59,16 @@ this server:
 You also choose an admin username and password during setup; these protect the world
 editor. There is no recovery if you forget them — you simply rerun setup to reset them.
 
+### Public bot traffic
+
+Assume that bots will start probing and scraping the site shortly after it has a public IP
+address or DNS record. The easiest free mitigation is usually to put the domain behind
+Cloudflare DNS in proxied mode and enable
+[Bot Fight Mode](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/). Bot
+Fight Mode protects the whole domain, so test the web client, websocket, and admin routes
+after enabling it; if it challenges legitimate API traffic, disable it or move to a more
+configurable bot-management setup.
+
 ## Setup wizard
 
 The fastest path is the setup wizard. It supports Debian and Ubuntu, detects an installed
