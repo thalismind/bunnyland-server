@@ -70,6 +70,15 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - If a character can have multiple instances of something, model it as an edge with properties, or as separate entities linked by edges.
 - Example: multiple jealousies must be represented as relationship edges between the relevant characters with properties like `intensity`, not as one `JealousyComponent` on the character.
 
+## 6. Documentation Roles
+
+**Put new docs under the audience that will use them.**
+
+- `docs/player/` is for player-facing guides and gameplay workflows.
+- `docs/admin/` is for server operation, setup, deployment, moderation, and controller handoff.
+- `docs/developer/` is for engine concepts, architecture, persistence, scripting, world generation, and design notes.
+- Keep root-level docs for project entry points only, such as `README.md`, `PLAN.md`, and broad specifications.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

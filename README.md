@@ -37,7 +37,7 @@ uv run bunnyland serve --llm --generator recursive --ticks 20
 
 Ollama is the default provider. OpenRouter can drive character controllers and world
 generation with `--llm-provider openrouter`, `--worldgen-provider openrouter`, and
-`OPENROUTER_API_KEY`; see [Running a server](docs/running-a-server.md#connecting-an-llm).
+`OPENROUTER_API_KEY`; see [Running a server](docs/admin/running-a-server.md#connecting-an-llm).
 
 ## Docker Compose
 
@@ -72,7 +72,7 @@ For a real VPS deployment over HTTPS, the fastest path is the interactive
 the `BUNNYLAND_*` variables, as in the block above. Either way the setup script writes
 `compose.user.yml`, configures admin auth, obtains a Let's Encrypt certificate with certbot,
 and runs the checked-in Compose files. See the
-[VPS Docker setup guide](docs/vps-admin-setup.md) for the full walkthrough.
+[VPS Docker setup guide](docs/admin/vps-admin-setup.md) for the full walkthrough.
 
 For local image development, add the build override:
 
@@ -101,33 +101,33 @@ branch tags and `latest` for the default branch. The web repo publishes
 
 ### Player guides
 
-- **[Getting started](docs/getting-started.md)** — looking around, moving, inventory,
+- **[Getting started](docs/player/getting-started.md)** — looking around, moving, inventory,
   and talking to other characters.
-- **[Gardening and farming](docs/gardening.md)** — finding soil, planting seeds,
+- **[Gardening and farming](docs/player/gardening.md)** — finding soil, planting seeds,
   watering crops, harvesting produce, and selling it.
-- **[Life-sim homes and rent](docs/lifesim.md)** — finding or claiming a home,
+- **[Life-sim homes and rent](docs/player/lifesim.md)** — finding or claiming a home,
   joining a household, charging rent, and paying bills.
 
 ### Technical docs
 
-- **[The Vision](docs/vision.md)** — what bunnyland is trying to be, and what belongs in
+- **[The Vision](docs/developer/vision.md)** — what bunnyland is trying to be, and what belongs in
   core, plugins, clients, scripts, and content libraries.
-- **[Running a server](docs/running-a-server.md)** — install, the `serve` loop, the time
+- **[Running a server](docs/admin/running-a-server.md)** — install, the `serve` loop, the time
   model, and connecting Ollama or OpenRouter.
-- **[VPS Docker setup](docs/vps-admin-setup.md)** — Linux VPS deployment with the
+- **[VPS Docker setup](docs/admin/vps-admin-setup.md)** — Linux VPS deployment with the
   containerized server/frontend stack, Let's Encrypt, admin auth, LLM providers, and Discord bot
   wiring.
-- **[Host dev setup](docs/host-dev-setup.md)** — older non-container host setup for
+- **[Host dev setup](docs/admin/host-dev-setup.md)** — older non-container host setup for
   development and debugging.
-- **[World creation](docs/world-creation.md)** — generators (`oneshot` vs `recursive`),
+- **[World creation](docs/developer/world-creation.md)** — generators (`oneshot` vs `recursive`),
   seeds, how generation stays inside the rules, and adding your own generator.
-- **[Discord bot](docs/discord-bot.md)** — creating the bot, the token, inviting it,
+- **[Discord bot](docs/admin/discord-bot.md)** — creating the bot, the token, inviting it,
   wiring a user to a character, and the player commands.
-- **[Admin & controllers](docs/admin.md)** — claiming, suspending, and handing off
+- **[Admin & controllers](docs/admin/admin.md)** — claiming, suspending, and handing off
   characters; enabling/disabling plugins.
-- **[Saving & reloading](docs/persistence.md)** — save/autosave/reload a world, and what
+- **[Saving & reloading](docs/developer/persistence.md)** — save/autosave/reload a world, and what
   is (and isn't) persisted.
-- **[Scripting](docs/scripting.md)** — external JSON scripts for deterministic tests,
+- **[Scripting](docs/developer/scripting.md)** — external JSON scripts for deterministic tests,
   plugin scenarios, and scripted events.
 
 The full design is in [`bunnyland_specification.md`](bunnyland_specification.md); the build

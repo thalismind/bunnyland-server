@@ -82,7 +82,7 @@ behaviour is added by **plugins**; the builtins are:
 The sim packages (`bunnyland.lifesim`, `colonysim`, `gardensim`, `barbariansim`,
 `dragonsim`, `daggersim`, `voidsim`) add their own components, verbs, and a ready-to-play
 `<sim>-demo` world generator each — e.g. `serve --generator voidsim-demo`. See
-[world creation](world-creation.md) for the full list.
+[world creation](../developer/world-creation.md) for the full list.
 
 Each mechanic surfaces itself to characters where it can — needs, weather/time, and
 relationships all appear in a "Currently" block in the agent's prompt, and changes (light,
@@ -112,14 +112,14 @@ uv run bunnyland serve --module mygame.content --generator arena
 ```
 
 This is how you add your own verbs, components, mechanics, or world generators. See
-[world creation](world-creation.md) for a generator example, and
+[world creation](../developer/world-creation.md) for a generator example, and
 `src/bunnyland/plugins/builtin.py` for the builtin plugin definitions.
 
 ## Saving, autosaving, and resetting
 
 A world can be saved (with its seed and generation prompt) and reloaded; a long-running
 server can autosave every N ticks; a reset is just a fresh launch without `--load`. See
-[saving & reloading](persistence.md) for the full guide. Quick reference:
+[saving & reloading](../developer/persistence.md) for the full guide. Quick reference:
 
 ```bash
 uv run bunnyland serve --save worlds/marsh.json --autosave-every 20 --ticks 0   # run + checkpoint

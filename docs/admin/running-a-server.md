@@ -107,7 +107,7 @@ uv run bunnyland serve --llm --generator recursive \
 | Flag             | Default        | Meaning                                                        |
 |------------------|----------------|----------------------------------------------------------------|
 | `--seed`         | `a quiet marsh`| World-generation seed (free text; flavours LLM generation).    |
-| `--generator`    | `oneshot`      | Which world generator to use. See [world creation](world-creation.md). |
+| `--generator`    | `oneshot`      | Which world generator to use. See [world creation](../developer/world-creation.md). |
 | `--max-rooms`    | `6`            | Room budget for graph-based generators (`recursive`).          |
 | `--llm`          | off            | Drive LLM generation and character controllers (needs `llm` extra). |
 | `--llm-provider` | `ollama`       | Default provider for character controllers (`ollama` or `openrouter`). |
@@ -123,7 +123,7 @@ uv run bunnyland serve --llm --generator recursive \
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](admin.md). |
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](admin.md).   |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
-| `--load`         | (none)         | Resume a saved world instead of generating. See [persistence](persistence.md). |
+| `--load`         | (none)         | Resume a saved world instead of generating. See [persistence](../developer/persistence.md). |
 | `--load-paused`  | off            | Start the server tick cycle paused when used with `--load`.    |
 | `--save`         | (none)         | Save the world to this path on exit.                           |
 | `--autosave-every`| `0`           | Autosave every N ticks (needs `--save`).                       |
@@ -151,7 +151,7 @@ uv run bunnyland serve --llm --generator recursive --max-rooms 8 --ticks 0 \
 
 `--save` writes the world (and its seed/prompt/generator) on exit; `--autosave-every N`
 checkpoints it every N ticks; `--load` resumes a saved world instead of generating a new
-one. See [saving & reloading](persistence.md).
+one. See [saving & reloading](../developer/persistence.md).
 
 ## Watching it play
 
