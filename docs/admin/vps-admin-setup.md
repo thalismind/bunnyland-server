@@ -27,7 +27,7 @@ config proxies to `http://server:8765/`, which is Docker DNS for the server serv
 container images are `ghcr.io/thalismind/bunnyland-server` and
 `ghcr.io/thalismind/bunnyland-web`.
 
-## Before you start
+## Requirements
 
 Have these ready before running anything. The wizard requests a real Let's Encrypt
 certificate partway through, and that step fails if your domain does not already point at
@@ -59,6 +59,8 @@ this server:
 You also choose an admin username and password during setup; these protect the world
 editor. There is no recovery if you forget them — you simply rerun setup to reset them.
 
+## Setup wizard
+
 The fastest path is the setup wizard. It supports Debian and Ubuntu, detects an installed
 Docker, nerdctl, or Podman runtime with Compose support, prompts for the required values,
 lets you choose Ollama or OpenRouter for world generation and character controllers, writes
@@ -86,12 +88,14 @@ container/routing smoke test if you need to isolate DNS, TLS, firewall, and admi
 That smoke test is not a complete Bunnyland deployment. The full deployment requires both
 the LLM provider key and the Discord bot token.
 
-## 1. Container Smoke Test
+## Offline smoke test
 
 This starts the same server and frontend containers with deterministic/offline generation
 and waiting controllers. It is only for proving that containers, routing, TLS, admin auth,
 and persistence work before adding external services. It does not need
 `OLLAMA_CLOUD_API_KEY`, `OPENROUTER_API_KEY`, or `DISCORD_TOKEN`.
+
+### Run the smoke setup
 
 Copy this block, change the values in the first section, and paste it into the VPS:
 
@@ -123,6 +127,8 @@ BUNNYLAND_ENABLE_DISCORD=0 \
   scripts/vps-docker-setup
 ```
 
+### Optional setup inputs
+
 To start from an existing saved world, add `BUNNYLAND_WORLD_SAVE` to the setup command. If
 the file is already under `BUNNYLAND_DATA_DIR`, the script loads it in place; otherwise it
 copies the save into `$BUNNYLAND_DATA_DIR/worlds/` first. Before starting containers, the
@@ -149,6 +155,8 @@ BUNNYLAND_HOME_CERT_NAME='example.com' \
 BUNNYLAND_HOME_DIR='/opt/bunnyland/home' \
 ```
 
+### TLS and firewall behavior
+
 The script uses only Let's Encrypt for public TLS certificate issuance. It never generates
 self-signed certificates for the VPS Docker deployment. If matching certificates already
 exist under `/etc/letsencrypt/live/`, the script reuses them; otherwise it stops the
@@ -168,6 +176,8 @@ immediately; otherwise they are staged and you turn the firewall on when ready w
 session. To skip the UFW step entirely (for example when the host firewall is managed
 elsewhere), rerun setup with `BUNNYLAND_CONFIGURE_FIREWALL=0`.
 
+### Verify the smoke test
+
 After the smoke test, open `https://sandbox.example.com/`. The frontend image ships a
 default `/config.json` that points the browser at same-origin `/api/`, so the web UI and
 API proxy come up together.
@@ -185,7 +195,9 @@ The verifier checks the web client, world editor, `/config.json`, `/api/health`,
 `/api/world/snapshot`, websocket upgrades through `/api/world/updates`, admin rejection
 with bad credentials (`401`), and admin success with the supplied credentials (`200`).
 
-## 2. Full Bunnyland Deployment
+## Full deployment
+
+### Ollama provider
 
 Run one full setup command with the required external service credentials. The wizard
 prompts for the same provider choice. Ollama is the default provider and uses one
@@ -214,6 +226,8 @@ DISCORD_TOKEN='...' \
   scripts/vps-docker-setup
 ```
 
+### OpenRouter provider
+
 To drive world generation and character controllers through OpenRouter, choose OpenRouter
 in the wizard or set `BUNNYLAND_WORLDGEN_PROVIDER=openrouter`,
 `BUNNYLAND_LLM_PROVIDER=openrouter`, and `OPENROUTER_API_KEY`.
@@ -236,6 +250,8 @@ DISCORD_TOKEN='...' \
   scripts/vps-docker-setup
 ```
 
+### Discord startup assignment
+
 If you are loading an existing world, keep `BUNNYLAND_WORLD_SAVE` in that command so setup
 continues to point Compose at that save file.
 
@@ -254,6 +270,8 @@ If these are omitted, the bot still starts and users can claim from Discord with
 At this point the VPS is running the full Bunnyland deployment: web client, private server
 API, LLM-backed character controllers, and optionally the Discord bot.
 
+### Verify Discord
+
 Test through Discord:
 
 1. In the invited channel, send `!characters`.
@@ -270,6 +288,8 @@ sudo nerdctl logs bunnyland-server-1
 
 If you used Docker or Podman instead of nerdctl, use `sudo docker logs bunnyland-server-1`
 or `sudo podman logs bunnyland-server-1`.
+
+## Operations
 
 The setup script starts `compose.yml` plus generated `compose.user.yml`. User-specific
 settings, secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading,
@@ -289,6 +309,22 @@ BUNNYLAND_HOME_EXPECT_TEXT='A social simulation sandbox built as an ECS graph.' 
 
 The generated `compose.user.yml` contains deployment knobs and secrets. Keep it out of
 source control.
+
+### Update deployment
+
+To update an existing VPS deployment to the latest checked-in Compose and nginx templates,
+pull the server repo and rerun the restart script:
+
+```bash
+cd /opt/bunnyland/server
+git pull --ff-only
+scripts/vps-docker-restart
+```
+
+The restart script pulls updated container images before applying the deployment, so this is
+the normal update path for new server/web images and checked-in deployment script changes.
+
+### Reapply config changes
 
 To change LLM provider keys, optional provider endpoints, Discord token, image tags, tick
 timing, or similar settings that already exist in `compose.user.yml`, edit that file and
@@ -311,6 +347,8 @@ container configuration after secrets or environment values change. If you use D
 Podman instead of nerdctl, set
 `BUNNYLAND_CONTAINER_RUNTIME=docker` or `BUNNYLAND_CONTAINER_RUNTIME=podman`.
 
+### Rerun setup for generated files
+
 Rerun `scripts/vps-docker-setup` instead when changing values that need generated files or
 host-side setup: public domain, admin username/password, data directory, favicon, homepage,
 world save, TLS settings, or firewall setup. The setup script rewrites `compose.user.yml`.
@@ -321,6 +359,8 @@ the password and keep the existing login, set `BUNNYLAND_REUSE_ADMIN=1` and omit
 variables. Reuse keeps the stored htpasswd as-is and cannot validate it, so run
 `scripts/vps-docker-verify` afterward to confirm the admin login still works.
 
+### Renew TLS certificates
+
 To renew Let's Encrypt certificates with the same standalone method, stop the frontend
 while certbot binds port `80`, then start it again:
 
@@ -330,9 +370,13 @@ sudo certbot renew --standalone
 sudo nerdctl compose --env-file /dev/null -p bunnyland -f compose.yml -f compose.user.yml up -d frontend
 ```
 
+### Image tags
+
 The published containers are tagged by branch. For normal VPS installs, keep
 `BUNNYLAND_SERVER_TAG=main` and `BUNNYLAND_WEB_TAG=main`; use another branch name only when
 testing a branch-specific deployment.
+
+### External TLS termination
 
 If TLS terminates somewhere else, rerun setup with `BUNNYLAND_TLS=0` and
 `BUNNYLAND_HTTP_BIND=127.0.0.1:8080`. Setup then skips certbot, omits the `443`
