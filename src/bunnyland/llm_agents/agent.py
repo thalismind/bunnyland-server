@@ -10,7 +10,9 @@ command; the agent never touches the ECS and cannot bypass costs or policy (spec
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Iterable
 from collections.abc import Mapping as MappingABC
 from typing import Protocol
@@ -21,6 +23,11 @@ from .tools import ToolCall, tool_schemas
 #: Default Ollama model (https://ollama.com/library/deepseek-v4-flash).
 DEFAULT_MODEL = "deepseek-v4-flash"
 LEGACY_DEFAULT_MODEL = "llama3"
+DEFAULT_PROVIDER_RETRIES = 2
+DEFAULT_RETRY_DELAY_SECONDS = 1.0
+TRANSIENT_STATUS_CODES = frozenset({408, 409, 425, 429})
+
+logger = logging.getLogger("bunnyland.llm")
 
 
 def normalize_model(model: str | None) -> str:
@@ -88,6 +95,8 @@ class OllamaAgent:
         host: str | None = None,
         api_key: str | None = None,
         history_turns: int = 12,
+        max_retries: int = DEFAULT_PROVIDER_RETRIES,
+        retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
     ) -> None:
         try:
             import ollama
@@ -100,6 +109,8 @@ class OllamaAgent:
         self._client = client_cls(host=host, headers=headers) if host else client_cls()
         self._model = model
         self._history_turns = history_turns
+        self._max_retries = max(0, max_retries)
+        self._retry_delay_seconds = max(0.0, retry_delay_seconds)
         # character_id -> running list of {"role", "content"/"tool_calls"} messages.
         self._history: dict[str, list[dict]] = {}
 
@@ -114,15 +125,27 @@ class OllamaAgent:
     ) -> ToolCall | None:
         del context, provider
         history = self._history.setdefault(character_id, [])
-        history.append({"role": "user", "content": prompt})
+        user_message = {"role": "user", "content": prompt}
+        messages = [*history, user_message]
 
-        response = await self._client.chat(
-            model=normalize_model(model or self._model),
-            messages=history,
-            tools=tool_schemas(),
+        async def request():
+            return await self._client.chat(
+                model=normalize_model(model or self._model),
+                messages=messages,
+                tools=tool_schemas(),
+            )
+
+        response = await _call_provider_with_retries(
+            "ollama",
+            request,
+            max_retries=self._max_retries,
+            retry_delay_seconds=self._retry_delay_seconds,
         )
+        if response is None:
+            return None
         message = response["message"]
         # Persist the model's reply (including any tool_calls) for the next turn.
+        history.append(user_message)
         history.append(dict(message))
         self._trim(history)
 
@@ -149,6 +172,8 @@ class OpenRouterAgent:
         api_key: str | None = None,
         server_url: str | None = None,
         history_turns: int = 12,
+        max_retries: int = DEFAULT_PROVIDER_RETRIES,
+        retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
     ) -> None:
         try:
             from openrouter import OpenRouter
@@ -162,6 +187,8 @@ class OpenRouterAgent:
         self._client = OpenRouter(**kwargs)
         self._model = model
         self._history_turns = history_turns
+        self._max_retries = max(0, max_retries)
+        self._retry_delay_seconds = max(0.0, retry_delay_seconds)
         self._history: dict[str, list[dict]] = {}
 
     async def decide(  # pragma: no cover - needs network + extra
@@ -175,14 +202,26 @@ class OpenRouterAgent:
     ) -> ToolCall | None:
         del context, provider
         history = self._history.setdefault(character_id, [])
-        history.append({"role": "user", "content": prompt})
+        user_message = {"role": "user", "content": prompt}
+        messages = [*history, user_message]
 
-        response = await self._client.chat.send_async(
-            model=normalize_model(model or self._model),
-            messages=history,
-            tools=tool_schemas(),
+        async def request():
+            return await self._client.chat.send_async(
+                model=normalize_model(model or self._model),
+                messages=messages,
+                tools=tool_schemas(),
+            )
+
+        response = await _call_provider_with_retries(
+            "openrouter",
+            request,
+            max_retries=self._max_retries,
+            retry_delay_seconds=self._retry_delay_seconds,
         )
+        if response is None:
+            return None
         message = response.choices[0].message
+        history.append(user_message)
         history.append(_message_to_history(message))
         self._trim(history)
 
@@ -225,6 +264,59 @@ class ProviderRouterAgent:
                 f"no LLM agent configured for provider {selected!r}; available: {available}"
             )
         return agent.decide(prompt, context, character_id=character_id, model=model)
+
+
+def _provider_status_code(exc: BaseException) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    if isinstance(response_status, int):
+        return response_status
+    return None
+
+
+def _is_transient_provider_error(exc: BaseException) -> bool:
+    status = _provider_status_code(exc)
+    if status is not None:
+        return status in TRANSIENT_STATUS_CODES or status >= 500
+    module = type(exc).__module__.split(".", 1)[0]
+    return module in {"httpcore", "httpx", "ollama", "openrouter"}
+
+
+async def _call_provider_with_retries(
+    provider: str,
+    request,
+    *,
+    max_retries: int,
+    retry_delay_seconds: float,
+):
+    for attempt in range(max_retries + 1):
+        try:
+            return await request()
+        except Exception as exc:
+            if not _is_transient_provider_error(exc):
+                raise
+            if attempt >= max_retries:
+                logger.warning(
+                    "%s provider failed after %s attempt%s; character will wait: %s",
+                    provider,
+                    attempt + 1,
+                    "" if attempt == 0 else "s",
+                    exc,
+                )
+                return None
+            logger.warning(
+                "%s provider transient error on attempt %s/%s; retrying: %s",
+                provider,
+                attempt + 1,
+                max_retries + 1,
+                exc,
+            )
+            if retry_delay_seconds > 0:
+                await asyncio.sleep(retry_delay_seconds)
+    return None
 
 
 def _message_to_history(message) -> dict:
