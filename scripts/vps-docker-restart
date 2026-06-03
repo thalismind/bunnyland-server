@@ -59,5 +59,6 @@ run_compose() {
 select_container_runtime
 printf 'Reapplying Bunnyland deployment with %s compose.\n' "$selected_runtime"
 run_compose config --quiet
+run_compose pull
 run_compose up -d
 run_compose ps

@@ -78,7 +78,8 @@ jobs:
   vps-setup:
     name: VPS Docker setup smoke test
     runs-on: ubuntu-latest
-    needs: test
+    needs:
+      - container
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 15
 
@@ -93,9 +94,6 @@ jobs:
           sudo docker version
           sudo docker compose version
 
-      - name: Build local server image
-        run: docker build --pull -t ghcr.io/thalismind/bunnyland-server:ci .
-
       - name: Validate wizard-rendered Compose config
         env:
           BUNNYLAND_CONTAINER_RUNTIME: docker
@@ -108,7 +106,7 @@ jobs:
           BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth-dry-run
           BUNNYLAND_ADMIN_USER: editor
           BUNNYLAND_ADMIN_PASSWORD: local
-          BUNNYLAND_SERVER_TAG: ci
+          BUNNYLAND_SERVER_TAG: main
           BUNNYLAND_ENABLE_LLM: "0"
           BUNNYLAND_ENABLE_DISCORD: "0"
         run: |
@@ -126,7 +124,7 @@ jobs:
           BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth
           BUNNYLAND_ADMIN_USER: editor
           BUNNYLAND_ADMIN_PASSWORD: local
-          BUNNYLAND_SERVER_TAG: ci
+          BUNNYLAND_SERVER_TAG: main
           BUNNYLAND_ENABLE_LLM: "0"
           BUNNYLAND_ENABLE_DISCORD: "0"
         run: scripts/vps-docker-setup
