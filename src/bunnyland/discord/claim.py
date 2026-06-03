@@ -107,6 +107,18 @@ def _claimable_characters(characters, *, allow_child_claims: bool):
     ]
 
 
+def _discord_controller_for(actor: WorldActor, discord_user_id: int, default_channel_id: int):
+    controllers = actor.world.query().with_all([DiscordControllerComponent])
+    for entity in sorted(controllers.execute_entities(), key=lambda item: str(item.id)):
+        controller = entity.get_component(DiscordControllerComponent)
+        if (
+            controller.discord_user_id == discord_user_id
+            and controller.default_channel_id == default_channel_id
+        ):
+            return entity
+    return None
+
+
 def assign_discord_controller(
     actor: WorldActor,
     *,
@@ -139,15 +151,21 @@ def assign_discord_controller(
             raise RuntimeError("no suspended claimable character exists in the world")
         character = suspended[0]
 
-    controller = spawn_entity(
-        actor.world,
-        [
-            DiscordControllerComponent(
-                discord_user_id=discord_user_id,
-                default_channel_id=default_channel_id,
-            )
-        ],
-    )
+    controller = _discord_controller_for(actor, discord_user_id, default_channel_id)
+    if controller is None:
+        controller = spawn_entity(
+            actor.world,
+            [
+                DiscordControllerComponent(
+                    discord_user_id=discord_user_id,
+                    default_channel_id=default_channel_id,
+                )
+            ],
+        )
+    else:
+        for _edge, controller_id in character.get_relationships(ControlledBy):
+            if controller_id == controller.id:
+                return character.get_component(IdentityComponent).name
     actor.assign_controller(character.id, controller.id)
     if character.has_component(SuspendedComponent):
         character.remove_component(SuspendedComponent)

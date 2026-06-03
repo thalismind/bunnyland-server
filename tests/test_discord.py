@@ -95,6 +95,38 @@ def test_render_character_list_includes_controller_statuses(scenario):
     assert "- Clover - free" in text
 
 
+def test_assign_discord_controller_reuses_existing_user_channel_controller(scenario):
+    assigned = assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    first_edge, first_controller_id = character.get_relationships(ControlledBy)[0]
+
+    reassigned = assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+
+    second_edge, second_controller_id = character.get_relationships(ControlledBy)[0]
+    controllers = scenario.actor.world.query().with_all([DiscordControllerComponent])
+    matching_controllers = [
+        entity.id
+        for entity in controllers.execute_entities()
+        if entity.get_component(DiscordControllerComponent).discord_user_id == 123
+        and entity.get_component(DiscordControllerComponent).default_channel_id == 456
+    ]
+    assert assigned == "Juniper"
+    assert reassigned == "Juniper"
+    assert second_controller_id == first_controller_id
+    assert second_edge.generation == first_edge.generation
+    assert matching_controllers == [first_controller_id]
+
+
 def test_discord_broadcast_channel_ids_returns_unique_attached_channels(scenario):
     assign_discord_controller(
         scenario.actor,
