@@ -53,8 +53,8 @@ this server:
    guide. Do not rely on the older Ubuntu `docker.io` package for this setup.
 5. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key, an
    OpenRouter API key, or both, depending on the LLM providers you choose. Discord
-   deployments also need a Discord bot token. Creating the Discord application is described in
-   [Full Bunnyland Deployment](#2-full-bunnyland-deployment) below.
+   deployments also need a Discord bot token; create and invite the bot with the
+   [Discord bot guide](discord-bot.md#2-create-the-bot-in-discord).
 
 You also choose an admin username and password during setup; these protect the world
 editor. There is no recovery if you forget them — you simply rerun setup to reset them.
@@ -187,16 +187,7 @@ with bad credentials (`401`), and admin success with the supplied credentials (`
 
 ## 2. Full Bunnyland Deployment
 
-Create the Discord application:
-
-1. Open the Discord Developer Portal and create an application.
-2. Open the **Bot** tab, use **Reset Token**, and copy the new token.
-3. Enable **Message Content Intent**.
-4. Generate an OAuth2 URL with scope `bot` and permissions **View Channels**,
-   **Read Message History**, and **Send Messages**.
-5. Invite the bot to your server.
-
-Then run one full setup command with the required external service credentials. The wizard
+Run one full setup command with the required external service credentials. The wizard
 prompts for the same provider choice. Ollama is the default provider and uses one
 `OLLAMA_CLOUD_API_KEY` for both world generation and LLM character controllers. World
 generation defaults to `deepseek-v4-pro`; character controllers default to
@@ -248,25 +239,17 @@ DISCORD_TOKEN='...' \
 If you are loading an existing world, keep `BUNNYLAND_WORLD_SAVE` in that command so setup
 continues to point Compose at that save file.
 
-To assign a Discord user to a character at startup, add the numeric user id, channel id,
-and character name to the same full setup command. If these are omitted, the bot still
-starts and users can claim from Discord with `!claim`.
+Both full setup examples start the Discord bot with `DISCORD_TOKEN`. To assign a Discord
+user to a character at startup, add the numeric user id, channel id, and character name to
+the same setup command:
 
 ```bash
-BUNNYLAND_DOMAIN='sandbox.example.com' \
-BUNNYLAND_DATA_DIR='/var/lib/bunnyland' \
-BUNNYLAND_ADMIN_USER='editor' \
-BUNNYLAND_ADMIN_PASSWORD='change-this' \
-BUNNYLAND_CERT_EMAIL='admin@example.com' \
-BUNNYLAND_ENABLE_LLM=1 \
-OLLAMA_CLOUD_API_KEY='sk-...' \
-BUNNYLAND_ENABLE_DISCORD=1 \
-DISCORD_TOKEN='...' \
 BUNNYLAND_DISCORD_USER_ID='123' \
 BUNNYLAND_DISCORD_CHANNEL_ID='456' \
 BUNNYLAND_DISCORD_CHARACTER='Juniper' \
-  scripts/vps-docker-setup
 ```
+
+If these are omitted, the bot still starts and users can claim from Discord with `!claim`.
 
 At this point the VPS is running the full Bunnyland deployment: web client, private server
 API, LLM-backed character controllers, and optionally the Discord bot.
@@ -288,14 +271,9 @@ sudo nerdctl logs bunnyland-server-1
 If you used Docker or Podman instead of nerdctl, use `sudo docker logs bunnyland-server-1`
 or `sudo podman logs bunnyland-server-1`.
 
-The script starts the checked-in Compose files:
-
-- `compose.yml`;
-- generated `compose.user.yml`, rendered from `compose.user.yml.template`.
-
-The base `compose.yml` is the basic offline web/API deployment. User-specific settings,
-secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading, LLM
-provider, and Discord are written into `compose.user.yml`.
+The setup script starts `compose.yml` plus generated `compose.user.yml`. User-specific
+settings, secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading,
+LLM provider, and Discord are written into `compose.user.yml`.
 
 If the same frontend container also serves a static homepage, include the homepage domain
 and expected text:
@@ -326,10 +304,11 @@ Set `BUNNYLAND_CONTAINER_RUNTIME` if you want to force the same runtime used dur
 BUNNYLAND_CONTAINER_RUNTIME=nerdctl scripts/vps-docker-restart
 ```
 
-The restart script validates `compose.user.yml` and runs Compose `up -d` with the checked-in
-`compose.yml` plus the generated `compose.user.yml`. It intentionally does not run a plain
-Compose `restart`, because `restart` can keep old container configuration after secrets or
-environment values change. If you use Docker or Podman instead of nerdctl, set
+The restart script validates `compose.user.yml`, pulls updated images, and runs Compose
+`up -d` with the checked-in `compose.yml` plus the generated `compose.user.yml`. It
+intentionally does not run a plain Compose `restart`, because `restart` can keep old
+container configuration after secrets or environment values change. If you use Docker or
+Podman instead of nerdctl, set
 `BUNNYLAND_CONTAINER_RUNTIME=docker` or `BUNNYLAND_CONTAINER_RUNTIME=podman`.
 
 Rerun `scripts/vps-docker-setup` instead when changing values that need generated files or

@@ -181,24 +181,9 @@ The example nginx config below serves this at `https://example.com/` and redirec
 
 By default, `bunnyland serve` loads every builtin plugin whose `default_enabled` flag is
 set. To restrict the surface, pass every plugin you want with repeated `--plugin` flags.
-Required dependencies are checked and ordered, but they are not auto-loaded yet.
-
-Common builtin plugin ids:
-
-| Plugin id               | Use it for                                      |
-|-------------------------|-------------------------------------------------|
-| `bunnyland.core_verbs`  | movement, items, speech, sleeping, writing      |
-| `bunnyland.worldgen`    | `oneshot` and `recursive` world generators      |
-| `bunnyland.lifesim`     | hunger, thirst, relationships, pregnancy, birth |
-| `bunnyland.memory`      | private notes and recall                        |
-| `bunnyland.environment` | calendar, time of day, weather                  |
-| `bunnyland.social`      | social bond updates from speech                 |
-| `bunnyland.policy`      | boundaries and consent checks                   |
-| `bunnyland.persona`     | traits, preferences, goals                      |
-| `bunnyland.colonysim`   | jobs, reservations, ownership, crafting         |
-| `bunnyland.barbariansim` | combat and fortification                       |
-| `bunnyland.gardensim`   | crops, watering, fertilizer, harvesting         |
-| `bunnyland.dragonsim`   | quests, factions, discovery                     |
+Required dependencies are checked and ordered, but they are not auto-loaded yet. See
+[admin & controllers](./#plugins) for the canonical plugin list and
+[world creation](../developer/world-creation.md) for generator names.
 
 Create a new long-running world with the defaults:
 

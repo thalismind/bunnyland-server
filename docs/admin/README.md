@@ -117,14 +117,9 @@ This is how you add your own verbs, components, mechanics, or world generators. 
 
 ## Saving, autosaving, and resetting
 
-A world can be saved (with its seed and generation prompt) and reloaded; a long-running
-server can autosave every N ticks; a reset is just a fresh launch without `--load`. See
-[saving & reloading](../developer/persistence.md) for the full guide. Quick reference:
-
-```bash
-uv run bunnyland serve --save worlds/marsh.json --autosave-every 20 --ticks 0   # run + checkpoint
-uv run bunnyland serve --load worlds/marsh.json --save worlds/marsh.json --ticks 0  # resume
-```
+A world can be saved, autosaved, and reloaded with the server CLI. A reset is just a fresh
+launch without `--load`. See [saving & reloading](../developer/persistence.md) for the full
+persistence behavior and command examples.
 
 ## Observing the world
 

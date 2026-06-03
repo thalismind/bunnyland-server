@@ -132,5 +132,5 @@ Then load and select it:
 uv run bunnyland serve --module mygame.worldgen --generator arena
 ```
 
-See [admin & controllers](../admin/admin.md) for how `--module` and `--plugin` load external plugins.
+See [admin & controllers](../admin/) for how `--module` and `--plugin` load external plugins.
 The two builtins in `src/bunnyland/worldgen/generators.py` are worked examples.

@@ -123,7 +123,7 @@ branch tags and `latest` for the default branch. The web repo publishes
   seeds, how generation stays inside the rules, and adding your own generator.
 - **[Discord bot](docs/admin/discord-bot.md)** — creating the bot, the token, inviting it,
   wiring a user to a character, and the player commands.
-- **[Admin & controllers](docs/admin/admin.md)** — claiming, suspending, and handing off
+- **[Admin & controllers](docs/admin/)** — claiming, suspending, and handing off
   characters; enabling/disabling plugins.
 - **[Saving & reloading](docs/developer/persistence.md)** — save/autosave/reload a world, and what
   is (and isn't) persisted.

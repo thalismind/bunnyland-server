@@ -120,8 +120,8 @@ uv run bunnyland serve --llm --generator recursive \
 | `--time-scale`   | `3600.0`       | Game seconds that pass per round.                              |
 | `--api-host`     | `127.0.0.1`    | Host for the optional HTTP/websocket client API.                |
 | `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
-| `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](admin.md). |
-| `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](admin.md).   |
+| `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
+| `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](./).   |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
 | `--load`         | (none)         | Resume a saved world instead of generating. See [persistence](../developer/persistence.md). |
 | `--load-paused`  | off            | Start the server tick cycle paused when used with `--load`.    |

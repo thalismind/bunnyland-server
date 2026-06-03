@@ -39,7 +39,7 @@ DISCORD_TOKEN=...
 
 A Discord user controls a character through a controller entity carrying a
 `DiscordControllerComponent`. You assign it the same way any controller is assigned (see
-[admin & controllers](admin.md)):
+[admin & controllers](./)):
 
 ```python
 from bunnyland.core import SuspendedComponent, WorldActor, spawn_entity
