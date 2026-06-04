@@ -116,6 +116,13 @@ async def _run_with_optional_discord(
 
 
 async def _serve(args) -> None:
+    if args.discord and args.discord_playtest:
+        raise SystemExit(
+            "--discord-playtest uses a mocked Discord adapter; do not combine it with --discord"
+        )
+    if args.api_port is not None and args.discord_playtest:
+        raise SystemExit("--discord-playtest cannot be combined with --api-port yet")
+
     try:
         plugins = select_plugins(args.module, args.plugin)
         ordered_plugins = resolve_order(plugins)
@@ -148,6 +155,11 @@ async def _serve(args) -> None:
         discord_token = os.environ.get("DISCORD_TOKEN")
         if not discord_token:
             raise SystemExit("--discord needs DISCORD_TOKEN (set it in .env or the environment)")
+    discord_playtest = None
+    if args.discord_playtest:
+        from .discord.playtest import load_discord_playtest
+
+        discord_playtest = load_discord_playtest(args.discord_playtest)
 
     if args.load:
         try:
@@ -270,8 +282,25 @@ async def _serve(args) -> None:
             print("Discord bot enabled without a startup character claim.")
 
     max_ticks = args.ticks if args.ticks > 0 else None
-    print(f"Running game loop ({'forever' if max_ticks is None else f'{max_ticks} ticks'})...")
-    if args.api_port is None:
+    display_ticks = (
+        discord_playtest.resolved_ticks(max_ticks)
+        if discord_playtest is not None
+        else max_ticks
+    )
+    print(
+        f"Running game loop "
+        f"({'forever' if display_ticks is None else f'{display_ticks} ticks'})..."
+    )
+    if discord_playtest is not None:
+        from .discord.playtest import run_discord_playtest
+
+        result = await run_discord_playtest(loop, discord_playtest, max_ticks=max_ticks)
+        ticks = result.ticks
+        print(
+            f"Discord playtest passed: {len(result.inputs)} input(s), "
+            f"{len(result.messages)} message(s)."
+        )
+    elif args.api_port is None:
         ticks = await _run_with_optional_discord(loop.run(max_ticks=max_ticks), loop, discord_bot)
     else:
         from .server.runtime import run_loop_with_api
@@ -429,6 +458,11 @@ def main(argv: list[str] | None = None) -> int:
         "--discord-allow-child-claims",
         action="store_true",
         help="allow Discord users to claim child life-stage characters",
+    )
+    serve.add_argument(
+        "--discord-playtest",
+        default=None,
+        help="run a JSON playtest through a mocked Discord adapter instead of Discord",
     )
 
     args = parser.parse_args(argv)

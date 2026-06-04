@@ -372,6 +372,81 @@ class DiscordBot:  # pragma: no cover - needs network + extra
             if index < len(chunks) - 1:
                 await asyncio.sleep(0.25)
 
+    async def _handle_meta_command(self, ctx, head: str, rest: str) -> bool:
+        if head == "claim":
+            if self._character_for_user(ctx.author.id) is not None:
+                await self._reply(ctx, "You are already controlling a character.")
+                return True
+            try:
+                claimed = assign_discord_controller(
+                    self.actor,
+                    discord_user_id=ctx.author.id,
+                    default_channel_id=ctx.channel.id,
+                    character_name=rest or None,
+                    allow_child_claims=self.allow_child_claims,
+                )
+            except RuntimeError as exc:
+                await self._reply(ctx, str(exc))
+                return True
+            await self._reply(ctx, f"You are now controlling {claimed}.")
+            return True
+
+        if head == "characters":
+            await self._send_help(ctx, render_character_list(self.actor))
+            return True
+
+        if head == "release":
+            try:
+                released = release_discord_character_to_llm(
+                    self.actor,
+                    discord_user_id=ctx.author.id,
+                    model=self.character_model,
+                    provider=self.llm_provider,
+                )
+            except RuntimeError as exc:
+                await self._reply(ctx, str(exc))
+                return True
+            await self._reply(ctx, f"{released} is now controlled by the LLM.")
+            return True
+
+        if head == "suspend":
+            try:
+                suspended = suspend_discord_character(
+                    self.actor, discord_user_id=ctx.author.id
+                )
+            except RuntimeError as exc:
+                await self._reply(ctx, str(exc))
+                return True
+            await self._reply(ctx, f"{suspended} is suspended until someone claims them.")
+            return True
+
+        if head == "look":
+            await ctx.send(render_look(self.actor, ctx.author.id))
+            return True
+
+        if head == "help":
+            await self._send_help(ctx, render_help(rest or None, self.actor))
+            return True
+
+        return False
+
+    async def handle_text_command(self, ctx, text: str) -> None:
+        """Handle one Discord command body after the leading ``!`` has been removed."""
+        stripped = text.strip()
+        if not stripped:
+            return
+        head, _, rest = stripped.partition(" ")
+        head = head.lower()
+        rest = rest.strip()
+        if head in META_COMMANDS and await self._handle_meta_command(ctx, head, rest):
+            return
+        try:
+            action = parse_discord_action(stripped, self.actor.available_command_types())
+        except ValueError as exc:
+            await self._reply(ctx, str(exc))
+            return
+        await self._reply(ctx, await self._submit_action(ctx, action))
+
     def _register_commands(self) -> None:
         discord, commands = _require_discord()
 
@@ -439,18 +514,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
             if message.author.bot or not message.content.startswith("!"):
                 return
             ctx = await self.client.get_context(message)
-            head = message.content[1:].strip().split(maxsplit=1)[0].lower()
-            if ctx.valid and head in META_COMMANDS:
-                await self.client.process_commands(message)
-                return
-            try:
-                action = parse_discord_action(
-                    message.content[1:].strip(), self.actor.available_command_types()
-                )
-            except ValueError as exc:
-                await self._reply(ctx, str(exc))
-                return
-            await self._reply(ctx, await self._submit_action(ctx, action))
+            await self.handle_text_command(ctx, message.content[1:])
 
         @self.client.event
         async def on_command_error(ctx, error):

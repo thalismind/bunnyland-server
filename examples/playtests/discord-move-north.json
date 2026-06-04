@@ -1,0 +1,17 @@
+{
+  "ticks": 2,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {
+      "tick": 0,
+      "content": "!claim Juniper",
+      "expect": ["You are now controlling Juniper."]
+    },
+    {
+      "epoch": 3600,
+      "content": "!move north",
+      "expect": ["You are now in North Tunnel"]
+    }
+  ]
+}

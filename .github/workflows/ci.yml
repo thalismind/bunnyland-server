@@ -38,6 +38,9 @@ jobs:
       - name: Test
         run: uv run pytest
 
+      - name: E2E and playtests
+        run: uv run pytest tests/test_e2e.py tests/test_discord_playtest.py
+
   container:
     name: Build container
     runs-on: ubuntu-latest

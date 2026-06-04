@@ -1,0 +1,47 @@
+{
+  "ticks": 33,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {
+      "tick": 0,
+      "content": "!claim Juniper",
+      "expect": ["You are now controlling Juniper."]
+    },
+    {
+      "tick": 1,
+      "content": "!claim-ownership garden bed",
+      "expect": ["Done: claim ownership."]
+    },
+    {
+      "tick": 2,
+      "content": "!till garden bed",
+      "expect": ["Done: till."]
+    },
+    {
+      "tick": 3,
+      "content": "!plant soil_id=\"garden bed\" seed_id=\"radish seeds\"",
+      "expect": ["Done: plant."]
+    },
+    {
+      "tick": 4,
+      "content": "!water-crop garden bed",
+      "expect": ["Done: water crop."]
+    },
+    {
+      "tick": 30,
+      "content": "!harvest-crop garden bed",
+      "expect": ["Done: harvest crop."]
+    },
+    {
+      "tick": 31,
+      "content": "!open-business name=\"Juniper Farm Stand\" default_price=8",
+      "expect": ["Done: open business."]
+    },
+    {
+      "tick": 32,
+      "content": "!sell-item item_id=\"radish x2\" customer_id=Marigold price=8",
+      "expect": ["Done: sell item."]
+    }
+  ]
+}
