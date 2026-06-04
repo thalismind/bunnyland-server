@@ -15,7 +15,7 @@ Nearby crop: turnip in garden bed (stage 2).
 You can garden any reachable soil bed. For gardening commands, reachable means the bed is in your current room or inventory. Ownership is optional bookkeeping, not a gardening requirement. If the world supports colony-sim ownership and you want to mark the bed as yours, claim it first:
 
 ```text
-claim garden bed
+claim-ownership garden bed
 ```
 
 That maps to `claim-ownership`. It fails if the bed is not reachable or someone else already owns it. Home and room claims are separate life-sim commands and are not required for farming.
@@ -47,7 +47,7 @@ till garden bed
 Then plant a seed packet in that bed:
 
 ```text
-plant turnip seeds in garden bed
+plant soil_id="garden bed" seed_id="turnip seeds"
 ```
 
 Planting requires prepared soil and a plantable seed. The seed is consumed when planted. A bed can hold only one crop at a time.
@@ -65,13 +65,13 @@ Fertilizer is consumed and its multiplier affects crop growth on that soil.
 Water the bed:
 
 ```text
-water garden bed
+water-crop garden bed
 ```
 
 Watering lasts one in-game day. Crops only gain growth progress while watered, so keep watering and waiting until the crop becomes ready. A one-day crop usually needs one watered day to mature:
 
 ```text
-water garden bed
+water-crop garden bed
 wait
 ```
 
@@ -82,7 +82,7 @@ Crop state appears in nearby context as stages, `ready`, or `dead`. If the envir
 When the crop is ready, harvest the bed:
 
 ```text
-harvest garden bed
+harvest-crop garden bed
 ```
 
 Harvesting fails if the crop is missing, dead, or not ready. A successful harvest removes the crop from the soil and puts the produce in your inventory. If the yield is more than one, the item name includes the quantity, such as `radish x2`.
@@ -94,13 +94,13 @@ The bed stays tilled after harvest, so you can plant another seed in it.
 Selling produce uses the life-sim business system. First open a business or farm stand:
 
 ```text
-open business Hazel's Farm Stand
+open-business name="Hazel's Farm Stand" default_price=8
 ```
 
 Then sell the harvested item to a reachable customer:
 
 ```text
-sell radish x2 to Marigold
+sell-item item_id="radish x2" customer_id=Marigold price=8
 ```
 
 Selling requires:
@@ -118,15 +118,15 @@ If the sale succeeds, the item leaves your inventory, your household funds incre
 One verified end-to-end cycle looks like this:
 
 ```text
-buy radish seeds from Marigold
-claim garden bed
+claim-ownership garden bed
 till garden bed
-plant radish seeds in garden bed
-water garden bed
+fertilize garden bed with speed fertilizer
+plant soil_id="garden bed" seed_id="radish seeds"
+water-crop garden bed
 wait
-open business Hazel's Farm Stand
-harvest garden bed
-sell radish x2 to Marigold
+harvest-crop garden bed
+open-business name="Hazel's Farm Stand" default_price=8
+sell-item item_id="radish x2" customer_id=Marigold price=8
 ```
 
 The claim step is optional for crop mechanics, but it is useful in shared colony-style worlds where players want the prompt context to show who owns a bed.

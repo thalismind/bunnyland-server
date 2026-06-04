@@ -4,14 +4,32 @@ import json
 from pathlib import Path
 
 from bunnyland.core import (
+    ButtonComponent,
     CharacterComponent,
+    ContainerComponent,
     ContainmentMode,
     Contains,
+    DoorComponent,
     ExitTo,
     HealthComponent,
     IdentityComponent,
+    KeyComponent,
+    LockableComponent,
+    MemoryProfileComponent,
     PortableComponent,
+    PutHandler,
+    ReadableComponent,
     RoomComponent,
+    SayHandler,
+    SleepHandler,
+    SleepingComponent,
+    TakeHandler,
+    TellHandler,
+    UseHandler,
+    WaitHandler,
+    WakeHandler,
+    WritableComponent,
+    WriteHandler,
     container_of,
     parse_entity_id,
     spawn_entity,
@@ -21,6 +39,9 @@ from bunnyland.core.events import (
     CharacterPickpocketedEvent,
     CommandRejectedEvent,
     ItemCraftedEvent,
+    ItemDroppedEvent,
+    ItemPutEvent,
+    ItemTakenEvent,
     JobAssignedEvent,
     JobCompletedEvent,
     OwnershipClaimedEvent,
@@ -42,11 +63,25 @@ from bunnyland.mechanics import dragonsim as dragon
 from bunnyland.mechanics import lifesim as life
 from bunnyland.mechanics import voidsim as void
 from bunnyland.mechanics.colonysim import ClaimOwnershipHandler, Owns
+from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
+from bunnyland.mechanics.eat_drink import DrinkHandler, EatHandler
+from bunnyland.mechanics.environment import (
+    ExtinguishHandler,
+    FireComponent,
+    FireExtinguishedEvent,
+    FireStartedEvent,
+    FlammableComponent,
+    IgniteHandler,
+    install_environment,
+)
 from bunnyland.mechanics.gardensim import (
     CropComponent,
     CropGrowthConsequence,
     CropHarvestedEvent,
     CropReadyEvent,
+    FertilizeHandler,
+    FertilizerAppliedEvent,
+    FertilizerComponent,
     HarvestableComponent,
     HarvestCropHandler,
     PlantHandler,
@@ -64,7 +99,26 @@ from bunnyland.mechanics.lifesim import (
     RoomClaimComponent,
     SellItemHandler,
 )
+from bunnyland.mechanics.mechanisms import (
+    ButtonResetEvent,
+    DoorAutoClosedEvent,
+    install_mechanisms,
+)
+from bunnyland.mechanics.meter import Meter
+from bunnyland.mechanics.needs import HungerComponent, HungerSystem, ThirstComponent, ThirstSystem
 from bunnyland.mechanics.policy import BoundaryTag, install_policy
+from bunnyland.mechanics.social import bond_between, install_social
+from bunnyland.mechanics.storyteller import (
+    IncidentBudgetComponent,
+    IncidentComponent,
+    IncidentResolvedEvent,
+    IncidentStartedEvent,
+    ResolveIncidentHandler,
+    StorytellerComponent,
+    install_storyteller,
+)
+from bunnyland.memory import InMemoryStore, install_memory
+from bunnyland.memory.store import MemoryEntry
 from bunnyland.prompts.builder import PromptBuilder
 
 PLAYTEST_DIR = Path(__file__).resolve().parents[1] / "examples" / "playtests"
@@ -82,6 +136,7 @@ def _loop(actor) -> GameLoop:
 def _install_gardening_playtest(actor) -> None:
     actor.register_handler(ClaimOwnershipHandler())
     actor.register_handler(TillHandler())
+    actor.register_handler(FertilizeHandler())
     actor.register_handler(PlantHandler())
     actor.register_handler(WaterCropHandler())
     actor.register_handler(HarvestCropHandler())
@@ -128,7 +183,16 @@ def _add_garden_market(scenario):
         ],
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), seeds.id)
-    return soil.id, merchant.id
+    fertilizer = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="speed compost", kind="fertilizer"),
+            PortableComponent(can_pick_up=True),
+            FertilizerComponent(kind="speed", growth_multiplier=2.0, quality_bonus=0.1),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), fertilizer.id)
+    return soil.id, merchant.id, fertilizer.id
 
 
 def _run_path(name: str) -> Path:
@@ -161,6 +225,168 @@ def _collect_rejections(actor) -> list[CommandRejectedEvent]:
     rejected: list[CommandRejectedEvent] = []
     actor.bus.subscribe(CommandRejectedEvent, rejected.append)
     return rejected
+
+
+class _DeterministicMemoryStore(InMemoryStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self._next = 1
+
+    def add(
+        self,
+        collection: str,
+        *,
+        text: str,
+        tags: tuple[str, ...] = (),
+        created_at_epoch: int = 0,
+        source: str = "manual",
+    ) -> MemoryEntry:
+        entry = MemoryEntry(
+            id=f"note-{self._next}",
+            text=text,
+            tags=tuple(tags),
+            created_at_epoch=created_at_epoch,
+            source=source,
+        )
+        self._next += 1
+        self._collections[collection].append(entry)
+        return entry
+
+
+def _install_core_actions_playtest(actor) -> None:
+    for handler in (
+        TakeHandler(),
+        PutHandler(),
+        UseHandler(),
+        SayHandler(),
+        TellHandler(),
+        SleepHandler(),
+        WakeHandler(),
+        WaitHandler(),
+        WriteHandler(),
+    ):
+        actor.register_handler(handler)
+    install_social(actor)
+
+
+def _add_core_actions_world(scenario):
+    basket_id = _room_content(
+        scenario,
+        "woven basket",
+        "container",
+        [ContainerComponent(open=True, transparent=True)],
+    )
+    key_id = _room_content(
+        scenario,
+        "brass key",
+        "key",
+        [PortableComponent(can_pick_up=True), KeyComponent(key_name="burrow")],
+    )
+    pebble_id = _room_content(
+        scenario,
+        "smooth pebble",
+        "item",
+        [PortableComponent(can_pick_up=True)],
+    )
+    sign_id = _room_content(
+        scenario,
+        "blank sign",
+        "sign",
+        [ReadableComponent(title="blank sign"), WritableComponent(remaining_space=100)],
+    )
+    door_id = _room_content(
+        scenario,
+        "burrow door",
+        "door",
+        [DoorComponent(open=False), LockableComponent(locked=True, key_name="burrow")],
+    )
+    hazel_id = _room_content(
+        scenario,
+        "Hazel",
+        "character",
+        [CharacterComponent(species="bunny")],
+    )
+    return basket_id, key_id, pebble_id, sign_id, door_id, hazel_id
+
+
+def _install_needs_memory_playtest(actor):
+    actor.register_handler(EatHandler())
+    actor.register_handler(DrinkHandler())
+    actor.register_handler(WaitHandler())
+    actor.world.register_system(HungerSystem())
+    actor.world.register_system(ThirstSystem())
+    return install_memory(actor, _DeterministicMemoryStore())
+
+
+def _add_needs_memory_world(scenario):
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HungerComponent(meter=Meter(value=60.0), metabolism=6.0))
+    character.add_component(ThirstComponent(meter=Meter(value=55.0), hydration_loss_rate=6.0))
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-memory"))
+    food_id = _add_inventory_item(
+        scenario,
+        "berry tart",
+        kind="food",
+        components=[
+            FoodComponent(nutrition=12.0, satiety=25.0),
+            ConsumableComponent(current_uses=1, max_uses=1),
+        ],
+    )
+    water_id = _room_content(
+        scenario,
+        "stone basin",
+        "water",
+        [DrinkableComponent(hydration=20.0, purity=1.0)],
+    )
+    return food_id, water_id
+
+
+def _install_environment_mechanisms_playtest(actor) -> None:
+    actor.register_handler(UseHandler())
+    actor.register_handler(IgniteHandler())
+    actor.register_handler(ExtinguishHandler())
+    install_environment(actor)
+    install_mechanisms(actor)
+
+
+def _add_environment_mechanisms_world(scenario):
+    door_id = _room_content(
+        scenario,
+        "green door",
+        "door",
+        [DoorComponent(open=False, auto_close_after_ticks=1)],
+    )
+    button_id = _room_content(
+        scenario,
+        "round button",
+        "button",
+        [ButtonComponent(active=True, toggle=False, reset_after_ticks=1)],
+    )
+    kindling_id = _room_content(
+        scenario,
+        "dry kindling",
+        "item",
+        [FlammableComponent(fuel=3.0)],
+    )
+    return door_id, button_id, kindling_id
+
+
+def _install_storyteller_playtest(actor) -> None:
+    actor.register_handler(ResolveIncidentHandler())
+    install_storyteller(actor)
+
+
+def _add_storyteller_world(scenario):
+    storyteller = spawn_entity(
+        scenario.actor.world,
+        [
+            StorytellerComponent(
+                enabled=True, interval_seconds=24 * 3600, next_incident_epoch=3600
+            ),
+            IncidentBudgetComponent(points=2.0, points_per_day=0.0, last_updated_epoch=0),
+        ],
+    )
+    return storyteller.id
 
 
 def _install_colonysim_playtest(actor) -> None:
@@ -330,11 +556,17 @@ def _install_lifesim_playtest(actor) -> None:
         life.StudySkillHandler(),
         life.FindJobHandler(),
         life.GoToWorkHandler(),
+        life.AssessTaxHandler(),
+        life.PayBillHandler(),
         life.OpenBusinessHandler(),
         life.SellItemHandler(),
+        life.PromoteBusinessHandler(),
         life.JoinHouseholdHandler(),
         life.ClaimHomeHandler(),
         life.ClaimRoomHandler(),
+        life.SetRoutineHandler(),
+        life.SetRelationshipStatusHandler(),
+        life.SpreadGossipHandler(),
         life.StartPartnershipHandler(),
         life.StartPregnancyHandler(),
         life.ResolveBirthHandler(),
@@ -384,6 +616,7 @@ def _install_daggersim_playtest(actor) -> None:
         dagger.CompleteGeneratedQuestHandler(),
         dagger.OpenBankAccountHandler(),
         dagger.DepositHandler(),
+        dagger.WithdrawHandler(),
         dagger.TakeLoanHandler(),
         dagger.RepayLoanHandler(),
         dagger.CommitCrimeHandler(),
@@ -810,16 +1043,131 @@ async def test_discord_playtest_character_claims_current_room(scenario):
     assert claim.claimed_at_epoch == scenario.actor.epoch
 
 
+async def test_discord_playtest_core_actions_loop(scenario):
+    _install_core_actions_playtest(scenario.actor)
+    basket_id, _key_id, pebble_id, sign_id, door_id, hazel_id = _add_core_actions_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    taken: list[ItemTakenEvent] = []
+    put: list[ItemPutEvent] = []
+    dropped: list[ItemDroppedEvent] = []
+    scenario.actor.bus.subscribe(ItemTakenEvent, taken.append)
+    scenario.actor.bus.subscribe(ItemPutEvent, put.append)
+    scenario.actor.bus.subscribe(ItemDroppedEvent, dropped.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-core-actions.json")),
+    )
+
+    sign = scenario.actor.world.get_entity(sign_id)
+    door = scenario.actor.world.get_entity(door_id)
+    hazel_bond = bond_between(scenario.actor.world, scenario.character, hazel_id)
+    pebble = scenario.actor.world.get_entity(pebble_id)
+    assert rejected == []
+    assert result.ticks == 15
+    assert len(result.inputs) == 15
+    assert taken and put and dropped
+    assert container_of(pebble) == scenario.room_a
+    assert put[0].to_container_id == str(basket_id)
+    assert sign.get_component(ReadableComponent).text == "Meet at dawn"
+    assert door.get_component(DoorComponent).open is True
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(SleepingComponent)
+    assert hazel_bond is not None
+    assert hazel_bond.affinity > 0
+    assert hazel_bond.familiarity > 0
+
+
+async def test_discord_playtest_needs_and_memory_loop(scenario):
+    _install_needs_memory_playtest(scenario.actor)
+    food_id, water_id = _add_needs_memory_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-needs-memory.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert rejected == []
+    assert result.ticks == 8
+    assert len(result.inputs) == 8
+    assert not scenario.actor.world.has_entity(food_id)
+    assert scenario.actor.world.has_entity(water_id)
+    assert character.get_component(HungerComponent).meter.value > 35.0
+    assert character.get_component(ThirstComponent).meter.value > 35.0
+    assert character.get_component(MemoryProfileComponent).last_reflection_epoch > 0
+
+
+async def test_discord_playtest_environment_and_mechanisms_loop(scenario):
+    _install_environment_mechanisms_playtest(scenario.actor)
+    door_id, button_id, kindling_id = _add_environment_mechanisms_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    closed: list[DoorAutoClosedEvent] = []
+    reset: list[ButtonResetEvent] = []
+    started: list[FireStartedEvent] = []
+    extinguished: list[FireExtinguishedEvent] = []
+    scenario.actor.bus.subscribe(DoorAutoClosedEvent, closed.append)
+    scenario.actor.bus.subscribe(ButtonResetEvent, reset.append)
+    scenario.actor.bus.subscribe(FireStartedEvent, started.append)
+    scenario.actor.bus.subscribe(FireExtinguishedEvent, extinguished.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-environment-mechanisms.json")),
+    )
+
+    door = scenario.actor.world.get_entity(door_id)
+    button = scenario.actor.world.get_entity(button_id)
+    kindling = scenario.actor.world.get_entity(kindling_id)
+    assert rejected == []
+    assert result.ticks == 7
+    assert len(result.inputs) == 5
+    assert door.get_component(DoorComponent).open is False
+    assert button.get_component(ButtonComponent).pressed is False
+    assert not kindling.has_component(FireComponent)
+    assert closed and closed[0].door_id == str(door_id)
+    assert reset and reset[0].button_id == str(button_id)
+    assert started and extinguished
+
+
+async def test_discord_playtest_storyteller_incident_loop(scenario):
+    _install_storyteller_playtest(scenario.actor)
+    _add_storyteller_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    started: list[IncidentStartedEvent] = []
+    resolved: list[IncidentResolvedEvent] = []
+    scenario.actor.bus.subscribe(IncidentStartedEvent, started.append)
+    scenario.actor.bus.subscribe(IncidentResolvedEvent, resolved.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-storyteller-incidents.json")),
+    )
+
+    incidents = list(
+        scenario.actor.world.query().with_all([IncidentComponent]).execute_entities()
+    )
+    assert rejected == []
+    assert result.ticks == 3
+    assert len(result.inputs) == 3
+    assert len(incidents) == 1
+    assert incidents[0].get_component(IncidentComponent).resolved_at_epoch is not None
+    assert started and started[0].kind == "resource_drop"
+    assert resolved and resolved[0].kind == "resource_drop"
+
+
 async def test_discord_playtest_character_gardens_claimed_land_end_to_end(scenario):
     _install_gardening_playtest(scenario.actor)
-    soil_id, merchant_id = _add_garden_market(scenario)
+    soil_id, merchant_id, fertilizer_id = _add_garden_market(scenario)
     rejected: list[CommandRejectedEvent] = []
     ready: list[CropReadyEvent] = []
     harvested: list[CropHarvestedEvent] = []
+    fertilized: list[FertilizerAppliedEvent] = []
     sold: list[BusinessSaleEvent] = []
     scenario.actor.bus.subscribe(CommandRejectedEvent, rejected.append)
     scenario.actor.bus.subscribe(CropReadyEvent, ready.append)
     scenario.actor.bus.subscribe(CropHarvestedEvent, harvested.append)
+    scenario.actor.bus.subscribe(FertilizerAppliedEvent, fertilized.append)
     scenario.actor.bus.subscribe(BusinessSaleEvent, sold.append)
     spec = load_discord_playtest(PLAYTEST_DIR / "discord-gardening.json")
 
@@ -830,9 +1178,12 @@ async def test_discord_playtest_character_gardens_claimed_land_end_to_end(scenar
     soil = scenario.actor.world.get_entity(soil_id)
     harvested_item = scenario.actor.world.get_entity(parse_entity_id(harvested[0].item_id))
     assert rejected == []
-    assert result.ticks == 33
-    assert len(result.inputs) == 8
+    assert result.ticks == 34
+    assert len(result.inputs) == 9
     assert character.has_relationship(Owns, soil_id)
+    assert len(fertilized) == 1
+    assert fertilized[0].fertilizer_id == str(fertilizer_id)
+    assert container_of(scenario.actor.world.get_entity(fertilizer_id)) is None
     assert len(ready) == 1
     assert ready[0].soil_id == str(soil_id)
     assert len(harvested) == 1
@@ -993,6 +1344,54 @@ async def test_discord_playtest_lifesim_core_loop(scenario):
     assert character.get_component(life.HouseholdFundsComponent).balance == 39
 
 
+async def test_discord_playtest_lifesim_billing_business_routine_social_loop(scenario):
+    _install_lifesim_playtest(scenario.actor)
+    partner_id, _child_id, _item_id, _customer_id = _add_lifesim_loop_world(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(life.HouseholdFundsComponent(balance=50))
+    rejected = _collect_rejections(scenario.actor)
+    paid: list = []
+    promoted: list = []
+    routines: list = []
+    due: list = []
+    statuses: list = []
+    gossip: list = []
+    scenario.actor.bus.subscribe(life.BillPaidEvent, paid.append)
+    scenario.actor.bus.subscribe(life.BusinessPromotedEvent, promoted.append)
+    scenario.actor.bus.subscribe(life.RoutineSetEvent, routines.append)
+    scenario.actor.bus.subscribe(life.RoutineDueEvent, due.append)
+    scenario.actor.bus.subscribe(life.RelationshipStatusChangedEvent, statuses.append)
+    scenario.actor.bus.subscribe(life.GossipSpreadEvent, gossip.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-lifesim-economy-routine-social.json")),
+    )
+
+    businesses = [
+        scenario.actor.world.get_entity(target_id)
+        for _edge, target_id in character.get_relationships(life.OwnsBusiness)
+    ]
+    bills = [
+        scenario.actor.world.get_entity(target_id)
+        for _edge, target_id in character.get_relationships(life.HasBill)
+    ]
+    assert rejected == []
+    assert result.ticks == 9
+    assert len(result.inputs) == 8
+    assert paid and paid[0].amount == 7
+    assert character.get_component(life.HouseholdFundsComponent).balance == 43
+    assert businesses[0].get_component(life.BusinessOwnerComponent).promoted is True
+    assert bills[0].get_component(life.BillComponent).paid_at_epoch is not None
+    assert routines and routines[0].activity == "water crops"
+    assert due and due[0].activity == "water crops"
+    assert statuses and statuses[0].status == "friend"
+    assert gossip and gossip[0].target_id == str(partner_id)
+    assert scenario.actor.world.get_entity(partner_id).get_component(
+        life.ReputationComponent
+    ).known_for == ("keeps the rent ledger tidy",)
+
+
 async def test_discord_playtest_daggersim_rumor_travel_loop(scenario):
     _install_daggersim_playtest(scenario.actor)
     site_id, rumor_id = _add_daggersim_rumor_world(scenario)
@@ -1024,9 +1423,11 @@ async def test_discord_playtest_daggersim_economy_loop(scenario):
     generated: list = []
     completed: list = []
     repaid: list = []
+    withdrawn: list = []
     paid: list = []
     scenario.actor.bus.subscribe(dagger.QuestGeneratedEvent, generated.append)
     scenario.actor.bus.subscribe(dagger.QuestCompletedEvent, completed.append)
+    scenario.actor.bus.subscribe(dagger.WithdrawalMadeEvent, withdrawn.append)
     scenario.actor.bus.subscribe(dagger.LoanRepaidEvent, repaid.append)
     scenario.actor.bus.subscribe(dagger.FinePaidEvent, paid.append)
 
@@ -1044,16 +1445,16 @@ async def test_discord_playtest_daggersim_economy_loop(scenario):
         if entity.get_component(dagger.BankAccountComponent).bank_id == str(bank_id)
     )
     assert rejected == []
-    assert result.ticks == 12
-    assert len(result.inputs) == 12
+    assert result.ticks == 13
+    assert len(result.inputs) == 13
     assert character.has_relationship(dagger.MemberOfInstitution, institution_id)
     assert any(
         entity.get_component(IdentityComponent).name == "moss road map"
         for _edge, target_id in character.get_relationships(Contains)
         if (entity := scenario.actor.world.get_entity(target_id)).has_component(IdentityComponent)
     )
-    assert generated and completed and repaid and paid
-    assert account.get_component(dagger.BankAccountComponent).balance == 5
+    assert generated and completed and withdrawn and repaid and paid
+    assert account.get_component(dagger.BankAccountComponent).balance == 0
     assert all(
         not entity.has_component(dagger.BountyComponent)
         for entity in scenario.actor.world.query()

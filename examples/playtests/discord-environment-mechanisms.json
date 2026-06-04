@@ -1,0 +1,12 @@
+{
+  "ticks": 7,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!use green door", "expect": ["Item used: item green door; affordance door_opened."]},
+    {"tick": 2, "content": "!use round button", "expect": ["Item used: item round button; affordance button_pressed."]},
+    {"tick": 3, "content": "!ignite target_id=\"dry kindling\"", "expect": ["Fire started: target dry kindling; intensity 1.0."]},
+    {"tick": 4, "content": "!extinguish target_id=\"dry kindling\"", "expect": ["Fire extinguished: dry kindling."]}
+  ]
+}

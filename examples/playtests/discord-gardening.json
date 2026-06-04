@@ -1,5 +1,5 @@
 {
-  "ticks": 33,
+  "ticks": 34,
   "default_user_id": 123,
   "default_channel_id": 456,
   "inputs": [
@@ -20,26 +20,31 @@
     },
     {
       "tick": 3,
+      "content": "!fertilize garden bed with speed compost",
+      "expect": ["Fertilizer applied: soil garden bed; fertilizer speed compost; kind speed."]
+    },
+    {
+      "tick": 4,
       "content": "!plant soil_id=\"garden bed\" seed_id=\"radish seeds\"",
       "expect": ["Seed planted: soil garden bed; seed radish seeds; crop type radish."]
     },
     {
-      "tick": 4,
+      "tick": 5,
       "content": "!water-crop garden bed",
-      "expect": ["Crop watered: soil garden bed; expires at epoch 104400."]
+      "expect": ["Crop watered: soil garden bed; expires at epoch 108000."]
     },
     {
-      "tick": 30,
+      "tick": 31,
       "content": "!harvest-crop garden bed",
       "expect": ["Crop harvested: soil garden bed; crop type radish; item radish x2; quantity 2."]
     },
     {
-      "tick": 31,
+      "tick": 32,
       "content": "!open-business name=\"Juniper Farm Stand\" default_price=8",
       "expect": ["Business opened: business name Juniper Farm Stand."]
     },
     {
-      "tick": 32,
+      "tick": 33,
       "content": "!sell-item item_id=\"radish x2\" customer_id=Marigold price=8",
       "expect": ["Business sale: business name Juniper Farm Stand; item radish x2; customer Marigold; price 8; balance 18."]
     }

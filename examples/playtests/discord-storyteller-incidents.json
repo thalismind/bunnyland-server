@@ -1,0 +1,10 @@
+{
+  "ticks": 3,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!look", "expect": ["Mosslit Burrow", "resource drop", "supply bundle"]},
+    {"tick": 2, "content": "!resolve-incident incident_id=\"resource drop\"", "expect": ["Incident resolved: incident resource drop; kind resource_drop."]}
+  ]
+}

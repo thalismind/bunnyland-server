@@ -1,0 +1,48 @@
+# How to handle social play and boundaries
+
+Social state comes from explicit commands and from speech. Boundaries are world policy:
+they decide which sensitive mechanics are enabled and who must opt in.
+
+## Build relationships through speech
+
+Say something to everyone awake in the room:
+
+```text
+!say thank you Hazel
+```
+
+Tell one present character:
+
+```text
+!tell Hazel please guard the basket
+```
+
+Speech records text, inferred intent, and the final interpretation. Praise, apologies,
+requests, promises, insults, and threats can shift social bonds when the social mechanic is
+enabled.
+
+## Use explicit relationship commands in life-sim
+
+Some durable relationship state is command-driven:
+
+```text
+!set-relationship-status target_id=Hazel status=friend
+!start-partnership target_id=Hazel
+```
+
+Family commands are also explicit:
+
+```text
+!start-pregnancy co_parent_id=Hazel due_in_seconds=1
+!resolve-birth child_name=Fern
+!adopt-child Clover
+```
+
+## Respect world boundaries
+
+World policy can disable or restrict categories such as romance, pregnancy, PvP, and
+pickpocketing. If a command says a mechanic is disabled or someone has not consented, use
+ordinary speech or another non-restricted action instead.
+
+Prose alone does not create sensitive state. Say what your character means, then use the
+explicit command when the world allows that mechanic.

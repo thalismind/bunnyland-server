@@ -54,6 +54,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "fertilizer_id",
         "faction_id",
         "grid_id",
+        "incident_id",
         "institution_id",
         "item_id",
         "job_id",

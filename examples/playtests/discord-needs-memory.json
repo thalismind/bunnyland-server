@@ -1,0 +1,15 @@
+{
+  "ticks": 8,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!eat berry tart", "expect": ["Food eaten: satiety 25.0.", "Hunger changed: value 47.0; band warning."]},
+    {"tick": 2, "content": "!drink stone basin", "expect": ["Drink consumed: source stone basin; hydration 20.0."]},
+    {"tick": 3, "content": "!take-note trust the blue door", "expect": ["Note taken: text trust the blue door; scope private; collection juniper-memory."]},
+    {"tick": 4, "content": "!remember trust", "expect": ["Notes for 'trust':", "`note-1` trust the blue door"]},
+    {"tick": 5, "content": "!reflect query=trust mode=keyword", "expect": ["Reflection created: text Reflection: trust the blue door."]},
+    {"tick": 6, "content": "!forget note-1", "expect": ["Note forgotten: scope private; collection juniper-memory."]},
+    {"tick": 7, "content": "!wait", "expect": ["Wait complete for Juniper in Mosslit Burrow."]}
+  ]
+}

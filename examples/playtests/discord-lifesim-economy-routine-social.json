@@ -1,0 +1,15 @@
+{
+  "ticks": 9,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!assess-tax amount=7 reason=\"garden tax\" due_epoch=7200", "expect": ["Tax assessed: bill", "amount 7; reason garden tax.", "Bill created: bill", "amount 7; reason garden tax; due epoch 7200."]},
+    {"tick": 2, "content": "!pay-bill", "expect": ["Bill paid: bill", "amount 7; balance 43."]},
+    {"tick": 3, "content": "!open-business name=\"Juniper Ledger\" default_price=6", "expect": ["Business opened: business name Juniper Ledger."]},
+    {"tick": 4, "content": "!promote-business", "expect": ["Business promoted: business name Juniper Ledger."]},
+    {"tick": 5, "content": "!set-routine activity=\"water crops\" interval_seconds=3600 next_due_epoch=21600", "expect": ["Routine set: activity water crops; next due epoch 21600."]},
+    {"tick": 6, "content": "!set-relationship-status target_id=Hazel status=friend", "expect": ["Relationship status changed: target Hazel; status friend."]},
+    {"tick": 7, "content": "!spread-gossip target_id=Hazel text=\"keeps the rent ledger tidy\" reputation_delta=0.5", "expect": ["Gossip spread: target Hazel; text keeps the rent ledger tidy; reputation delta 0.5."]}
+  ]
+}

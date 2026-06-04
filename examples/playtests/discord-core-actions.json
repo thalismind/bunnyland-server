@@ -1,0 +1,22 @@
+{
+  "ticks": 15,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!look", "expect": ["Mosslit Burrow", "woven basket", "blank sign", "Hazel"]},
+    {"tick": 2, "content": "!take brass key", "expect": ["Item taken: item brass key; from container Mosslit Burrow."]},
+    {"tick": 3, "content": "!take smooth pebble", "expect": ["Item taken: item smooth pebble; from container Mosslit Burrow."]},
+    {"tick": 4, "content": "!put smooth pebble in woven basket", "expect": ["Item put: item smooth pebble; to container woven basket."]},
+    {"tick": 5, "content": "!take smooth pebble", "expect": ["Item taken: item smooth pebble; from container woven basket."]},
+    {"tick": 6, "content": "!drop smooth pebble", "expect": ["Item dropped: item smooth pebble; room id dropped Mosslit Burrow."]},
+    {"tick": 7, "content": "!write Meet at dawn on blank sign", "expect": ["Physical write: item blank sign; text Meet at dawn."]},
+    {"tick": 8, "content": "!use burrow door with brass key", "expect": ["Item used: item burrow door; affordance unlocked; tool brass key."]},
+    {"tick": 9, "content": "!use burrow door", "expect": ["Item used: item burrow door; affordance door_opened."]},
+    {"tick": 10, "content": "!say text=\"thank you Hazel\" intent=praise", "expect": ["Speech said: text thank you Hazel; author intent praise; inferred intent praise; final interpretation praise."]},
+    {"tick": 11, "content": "!tell target_id=Hazel text=\"please guard the basket\" intent=request", "expect": ["Speech told: text please guard the basket; author intent request; inferred intent request; final interpretation request."]},
+    {"tick": 12, "content": "!sleep", "expect": ["Sleep complete for Juniper in Mosslit Burrow."]},
+    {"tick": 13, "content": "!wake", "expect": ["Wake complete for Juniper in Mosslit Burrow."]},
+    {"tick": 14, "content": "!wait", "expect": ["Wait complete for Juniper in Mosslit Burrow."]}
+  ]
+}

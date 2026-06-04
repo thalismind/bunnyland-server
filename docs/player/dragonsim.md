@@ -1,0 +1,68 @@
+# Dragon-sim exploration and quests
+
+Dragon-sim adds open-world adventure structure: discovering locations, accepting quests,
+completing objectives, earning rewards, and joining or leaving factions.
+
+In Discord, prefix these commands with `!`.
+
+## Discover locations
+
+Discover a reachable point of interest:
+
+```text
+discover-location old watchtower
+```
+
+Discovery marks that location as known and adds adventure context such as the location
+type and region.
+
+## Accept quests
+
+Accept a reachable quest:
+
+```text
+accept-quest quest_id="Find the Lost Ring"
+```
+
+The quest becomes active for your character. Quest context can include a title, status,
+objectives, and rewards.
+
+## Complete objectives
+
+Complete a reachable objective:
+
+```text
+complete-objective objective_id="lost ring objective"
+```
+
+Completing the last required objective can complete the quest and grant its reward. Reward
+items are moved into your inventory when the quest reward is claimed by completion.
+
+## Factions
+
+Join a faction:
+
+```text
+join-faction faction_id="Moss Wardens" rank=scout
+```
+
+Leave it later:
+
+```text
+leave-faction Moss Wardens
+```
+
+Faction membership is durable world state. It can affect prompts, reputation, available
+work, and server-side story rules.
+
+## Core loop
+
+A simple adventure loop:
+
+```text
+discover-location old watchtower
+accept-quest quest_id="Find the Lost Ring"
+complete-objective objective_id="lost ring objective"
+join-faction faction_id="Moss Wardens" rank=scout
+leave-faction Moss Wardens
+```

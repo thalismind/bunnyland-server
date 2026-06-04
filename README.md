@@ -103,10 +103,30 @@ branch tags and `latest` for the default branch. The web repo publishes
 
 - **[Getting started](docs/player/getting-started.md)** — looking around, moving, inventory,
   and talking to other characters.
+- **[Core actions](docs/player/core-actions.md)** — how to look, move, carry items, use
+  objects, write, rest, and talk.
+- **[Needs and memory](docs/player/needs-and-memory.md)** — how to eat, drink, take notes,
+  remember, reflect, and forget.
+- **[Environment and mechanisms](docs/player/environment-and-mechanisms.md)** — how to use
+  doors/buttons and handle fire.
+- **[Social play and boundaries](docs/player/social-and-boundaries.md)** — how speech,
+  relationships, and policy boundaries affect play.
+- **[Storyteller incidents](docs/player/storyteller-incidents.md)** — how to notice and
+  resolve active incidents.
 - **[Gardening and farming](docs/player/gardening.md)** — finding soil, planting seeds,
   watering crops, harvesting produce, and selling it.
-- **[Life-sim homes and rent](docs/player/lifesim.md)** — finding or claiming a home,
-  joining a household, charging rent, and paying bills.
+- **[Colony-sim work and ownership](docs/player/colonysim.md)** — reservations, resources,
+  crafting, jobs, and durable ownership.
+- **[Barbarian-sim combat and survival](docs/player/barbariansim.md)** — challenges,
+  attacks, repairs, fortifications, poison, corruption, and pickpocketing.
+- **[Dragon-sim exploration and quests](docs/player/dragonsim.md)** — discovering
+  locations, completing quests, and joining factions.
+- **[Life-sim homes, work, and family](docs/player/lifesim.md)** — aspirations, skills,
+  jobs, businesses, households, homes, room claims, rent, and family.
+- **[Dagger-sim frontier play](docs/player/daggersim.md)** — rumors, travel, institutions,
+  banking, law, magic, afflictions, and dungeons.
+- **[Void-sim ships and space travel](docs/player/voidsim.md)** — airlocks, life support,
+  power, docking, fuel, sensors, orbit, landing, and jumps.
 
 ### Technical docs
 
