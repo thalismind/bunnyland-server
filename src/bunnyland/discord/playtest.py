@@ -10,12 +10,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+import os
+import re
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, is_dataclass
+from enum import Enum
 from pathlib import Path
+from typing import Any
 
-from ..core.events import CommandExecutedEvent, CommandRejectedEvent
+from pydantic import BaseModel
+
+from ..core.commands import SubmittedCommand
+from ..core.events import CommandExecutedEvent, CommandRejectedEvent, DomainEvent
 from ..engine import GameLoop
 from ..llm_agents import DEFAULT_MODEL
+from ..persistence import WorldMeta, save_world
 from .bot import DiscordBot
 
 
@@ -61,6 +70,7 @@ class DiscordPlaytest:
     allow_child_claims: bool = False
     llm_provider: str = "ollama"
     character_model: str = DEFAULT_MODEL
+    name: str = "discord-playtest"
 
     def resolved_ticks(self, fallback: int | None) -> int:
         if self.ticks is not None:
@@ -78,6 +88,20 @@ class PlaytestResult:
     ticks: int
     messages: tuple[PlaytestMessage, ...]
     inputs: tuple[PlaytestInputResult, ...]
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, BaseModel):
+        return _jsonable(value.model_dump(mode="json"))
+    if is_dataclass(value) and not isinstance(value, type):
+        return _jsonable(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(item) for item in value]
+    return value
 
 
 class _FakeAuthor:
@@ -145,6 +169,9 @@ class DiscordPlaytestHarness:
         self.spec = spec
         self.messages: list[PlaytestMessage] = []
         self.results: list[PlaytestInputResult] = []
+        self.received_messages: list[dict[str, Any]] = []
+        self.commands: list[dict[str, Any]] = []
+        self.events: list[dict[str, Any]] = []
         self._scheduled: set[int] = set()
         self._tasks: dict[int, asyncio.Task[PlaytestInputResult]] = {}
         self._bot = object.__new__(DiscordBot)
@@ -156,17 +183,39 @@ class DiscordPlaytestHarness:
         self._bot._world_paused = loop.paused
         self._bot._pending = {}
         self._bot._paused_reactions = {}
+        self._bot._build_command = self._traced_build_command
         loop.actor.bus.subscribe(CommandExecutedEvent, self._bot._complete_pending)
         loop.actor.bus.subscribe(CommandRejectedEvent, self._bot._complete_pending)
+        loop.actor.bus.subscribe(DomainEvent, self._trace_event)
 
     async def close(self) -> None:
         self.loop.actor.bus.unsubscribe(CommandExecutedEvent, self._bot._complete_pending)
         self.loop.actor.bus.unsubscribe(CommandRejectedEvent, self._bot._complete_pending)
+        self.loop.actor.bus.unsubscribe(DomainEvent, self._trace_event)
         for task in self._tasks.values():
             if not task.done():
                 task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+
+    async def _traced_build_command(
+        self, discord_user_id: int, action
+    ) -> tuple[SubmittedCommand | None, str | None]:
+        command, error = await DiscordBot._build_command(self._bot, discord_user_id, action)
+        self.commands.append(
+            {
+                "discord_user_id": discord_user_id,
+                "action": _jsonable(action),
+                "command": _jsonable(command) if command is not None else None,
+                "error": error,
+            }
+        )
+        return command, error
+
+    def _trace_event(self, event: DomainEvent) -> None:
+        self.events.append(
+            {"event_type": event.__class__.__name__, **event.model_dump(mode="json")}
+        )
 
     async def before_tick(self, tick: int) -> None:
         epoch = self.loop.actor.epoch
@@ -229,6 +278,16 @@ class DiscordPlaytestHarness:
             user_id=item.user_id,
             channel_id=item.channel_id,
         )
+        self.received_messages.append(
+            {
+                "input_index": index,
+                "tick": tick,
+                "epoch": epoch,
+                "user_id": item.user_id,
+                "channel_id": item.channel_id,
+                "content": content,
+            }
+        )
         await self._bot.handle_text_command(ctx, content[1:])
         sent = tuple(message.content for message in self.messages[start:])
         rendered = "\n".join(sent)
@@ -247,6 +306,44 @@ class DiscordPlaytestHarness:
             reactions=tuple(ctx.message.reactions),
         )
 
+    def write_trace(
+        self, trace_dir: str | Path, *, ticks: int, status: str, error: str = ""
+    ) -> None:
+        trace_dir = Path(trace_dir)
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        stem = _safe_trace_stem(self.spec.name)
+        trace_path = trace_dir / f"{stem}.trace.json"
+        world_path = trace_dir / f"{stem}.world.json"
+        save_world(
+            self.loop.actor,
+            world_path,
+            meta=WorldMeta(seed=self.spec.name, generator="discord-playtest"),
+        )
+        final_world = json.loads(world_path.read_text())
+        trace = {
+            "name": self.spec.name,
+            "status": status,
+            "error": error,
+            "ticks": ticks,
+            "final_epoch": self.loop.actor.epoch,
+            "spec": _jsonable(self.spec),
+            "received_messages": _jsonable(self.received_messages),
+            "sent_messages": _jsonable(self.messages),
+            "inputs": _jsonable(tuple(sorted(self.results, key=lambda result: result.input_index))),
+            "commands": _jsonable(self.commands),
+            "events": _jsonable(self.events),
+            "final_world_path": world_path.name,
+            "final_world": final_world,
+        }
+        trace_path.write_text(json.dumps(trace, indent=2, default=str))
+
+
+def _safe_trace_stem(name: str) -> str:
+    current_test = os.environ.get("PYTEST_CURRENT_TEST", "").split(" ")[0]
+    raw = "--".join(part for part in (current_test, name) if part)
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-")
+    return cleaned or "discord-playtest"
+
 
 def _expect_tuple(value) -> tuple[str, ...]:
     if value is None:
@@ -257,7 +354,8 @@ def _expect_tuple(value) -> tuple[str, ...]:
 
 
 def load_discord_playtest(path: str | Path) -> DiscordPlaytest:
-    data = json.loads(Path(path).read_text())
+    path = Path(path)
+    data = json.loads(path.read_text())
     default_user_id = int(data.get("default_user_id", data.get("user_id", 1)))
     default_channel_id = int(data.get("default_channel_id", data.get("channel_id", 1)))
     inputs = []
@@ -286,6 +384,7 @@ def load_discord_playtest(path: str | Path) -> DiscordPlaytest:
         allow_child_claims=bool(data.get("allow_child_claims", False)),
         llm_provider=str(data.get("llm_provider", "ollama")),
         character_model=str(data.get("character_model", DEFAULT_MODEL)),
+        name=str(data.get("name", path.stem)),
     )
 
 
@@ -297,6 +396,8 @@ async def run_discord_playtest(
 ) -> PlaytestResult:
     ticks = spec.resolved_ticks(max_ticks)
     harness = DiscordPlaytestHarness(loop, spec)
+    trace_dir = os.environ.get("BUNNYLAND_PLAYTEST_TRACE_DIR")
+    trace_error = ""
     try:
         loop._running = True
         for tick in range(ticks):
@@ -317,8 +418,18 @@ async def run_discord_playtest(
             messages=tuple(harness.messages),
             inputs=tuple(sorted(harness.results, key=lambda result: result.input_index)),
         )
+    except BaseException as exc:
+        trace_error = repr(exc)
+        raise
     finally:
         loop._running = False
+        if trace_dir:
+            harness.write_trace(
+                trace_dir,
+                ticks=ticks,
+                status="failed" if trace_error else "passed",
+                error=trace_error,
+            )
         await harness.close()
 
 

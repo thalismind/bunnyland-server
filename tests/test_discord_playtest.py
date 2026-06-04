@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from bunnyland.core import (
@@ -718,6 +719,52 @@ async def test_discord_playtest_schedules_inputs_by_tick(scenario):
     assert scenario.character_room() == scenario.room_b
     assert result.inputs[1].reactions
     assert "You are now in North Tunnel" in result.inputs[1].messages[0]
+
+
+async def test_discord_playtest_writes_trace_artifacts(scenario, tmp_path, monkeypatch):
+    monkeypatch.setenv("BUNNYLAND_PLAYTEST_TRACE_DIR", str(tmp_path))
+    spec = DiscordPlaytest(
+        name="trace-smoke",
+        ticks=2,
+        inputs=(
+            PlaytestInput(
+                tick=0,
+                user_id=123,
+                channel_id=456,
+                content="!claim Juniper",
+                expect=("You are now controlling Juniper.",),
+            ),
+            PlaytestInput(
+                tick=1,
+                user_id=123,
+                channel_id=456,
+                content="!move north",
+                expect=("You are now in North Tunnel",),
+            ),
+        ),
+    )
+
+    await run_discord_playtest(_loop(scenario.actor), spec)
+
+    trace_path = next(tmp_path.glob("*.trace.json"))
+    world_path = next(tmp_path.glob("*.world.json"))
+    trace = json.loads(trace_path.read_text())
+    assert trace["status"] == "passed"
+    assert trace["received_messages"][0]["content"] == "!claim Juniper"
+    assert trace["sent_messages"][0]["content"] == "<@123> You are now controlling Juniper."
+    assert trace["inputs"][1]["content"] == "!move north"
+    assert trace["inputs"][1]["messages"] == [
+        "<@123> You are now in North Tunnel\nHere: Juniper.\nExits: south."
+    ]
+    assert any(item["command"]["command_type"] == "move" for item in trace["commands"])
+    assert any(
+        item["event_type"] == "CommandExecutedEvent" and item["command_type"] == "move"
+        for item in trace["events"]
+    )
+    assert trace["final_world_path"] == world_path.name
+    assert trace["final_epoch"] == scenario.actor.epoch
+    assert trace["final_world"]["bunnyland"]["saved_at_epoch"] == scenario.actor.epoch
+    assert trace["final_world"] == json.loads(world_path.read_text())
 
 
 async def test_discord_playtest_schedules_inputs_by_starting_epoch(scenario):
