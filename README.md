@@ -113,7 +113,7 @@ branch tags and `latest` for the default branch. The web repo publishes
   relationships, and policy boundaries affect play.
 - **[Storyteller incidents](docs/player/storyteller-incidents.md)** — how to notice and
   resolve active incidents.
-- **[Gardening and farming](docs/player/gardening.md)** — finding soil, planting seeds,
+- **[Garden-sim farming](docs/player/gardensim.md)** — finding soil, planting seeds,
   watering crops, harvesting produce, and selling it.
 - **[Colony-sim work and ownership](docs/player/colonysim.md)** — reservations, resources,
   crafting, jobs, and durable ownership.

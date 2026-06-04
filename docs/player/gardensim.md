@@ -1,6 +1,6 @@
-# Gardening and farming
+# Garden-sim farming
 
-Gardening is the crop loop provided by the `bunnyland.gardensim` plugin. The full farm-to-sale path also uses `bunnyland.lifesim` for money, customers, and businesses, and can use `bunnyland.colonysim` ownership if you want to mark a bed as yours.
+Garden-sim is the crop loop provided by the `bunnyland.gardensim` plugin. The full farm-to-sale path also uses `bunnyland.lifesim` for money, customers, and businesses, and can use `bunnyland.colonysim` ownership if you want to mark a bed as yours.
 
 ## Find a plot
 
