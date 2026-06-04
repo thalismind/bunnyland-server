@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm
 
 WORKDIR /app
@@ -13,12 +15,14 @@ RUN apt-get update \
 # Install dependencies first, without the project itself, so this layer is
 # cached and only rebuilt when pyproject.toml / uv.lock change.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --extra server --extra llm --extra discord --extra chroma --no-dev --no-install-project
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv,sharing=locked \
+    uv sync --frozen --extra server --extra llm --extra discord --extra chroma --no-dev --no-install-project
 
 # Then add the source and install the project on top of the cached deps.
 COPY README.md ./
 COPY src ./src
-RUN uv sync --frozen --extra server --extra llm --extra discord --extra chroma --no-dev
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv,sharing=locked \
+    uv sync --frozen --extra server --extra llm --extra discord --extra chroma --no-dev
 
 EXPOSE 8765
 
