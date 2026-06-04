@@ -1,0 +1,23 @@
+{
+  "ticks": 17,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!choose-aspiration {\"name\":\"Cozy Homemaker\",\"milestones\":[\"meet a friend\"]}", "expect": ["Aspiration chosen: aspiration Cozy Homemaker."]},
+    {"tick": 2, "content": "!complete-milestone milestone=\"meet a friend\" reward_name=\"woven keepsake\"", "expect": ["Milestone completed: aspiration Cozy Homemaker; milestone meet a friend; reward item woven keepsake."]},
+    {"tick": 3, "content": "!practice-skill skill=cooking xp=60", "expect": ["Skill x p changed: character Juniper; skill cooking; xp 60.0; level 0."]},
+    {"tick": 4, "content": "!study-skill skill=cooking xp=50", "expect": ["Skill leveled: character Juniper; skill cooking; level 1."]},
+    {"tick": 5, "content": "!find-job title=\"Burrow Barista\" hourly_pay=12 shift_duration_seconds=7200 shift_interval_seconds=3600 next_shift_epoch=0", "expect": ["Career started: title Burrow Barista."]},
+    {"tick": 6, "content": "!go-to-work performance_gain=1", "expect": ["Work shift completed: title Burrow Barista; earned 24; balance 24."]},
+    {"tick": 7, "content": "!open-business name=\"Juniper Table\" default_price=10", "expect": ["Business opened: business name Juniper Table."]},
+    {"tick": 8, "content": "!sell-item item_id=\"berry tart\" customer_id=Marigold price=15", "expect": ["Business sale: business name Juniper Table; item berry tart; customer Marigold; price 15; balance 39."]},
+    {"tick": 9, "content": "!join-household household_id=burrow-1 name=\"Moss Burrow\"", "expect": ["Household joined: household name Moss Burrow."]},
+    {"tick": 10, "content": "!claim-home Mosslit Burrow", "expect": ["Home claimed: Mosslit Burrow."]},
+    {"tick": 11, "content": "!claim-room North Tunnel", "expect": ["Room claimed: North Tunnel."]},
+    {"tick": 12, "content": "!start-partnership target_id=Hazel", "expect": ["Partnership started: Hazel."]},
+    {"tick": 13, "content": "!start-pregnancy co_parent_id=Hazel due_in_seconds=1", "expect": ["Pregnancy started: pregnant Juniper; co parent Hazel; due at epoch 50401."]},
+    {"tick": 15, "content": "!resolve-birth child_name=Fern", "expect": ["Birth resolved: child Fern; parent Juniper, Hazel."]},
+    {"tick": 16, "content": "!adopt-child Clover", "expect": ["Adoption completed: child Clover; parent Juniper."]}
+  ]
+}

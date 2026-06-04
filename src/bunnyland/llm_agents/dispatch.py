@@ -28,7 +28,7 @@ from ..core.components import (
     SuspendedComponent,
 )
 from ..core.controllers import LLMControllerComponent
-from ..core.ecs import container_of, parse_entity_id, reachable_ids
+from ..core.ecs import container_of, contents, parse_entity_id, reachable_ids
 from ..core.edges import ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
 from ..prompts.builder import PromptBuilder, render_prompt
@@ -44,8 +44,12 @@ def name_candidates(world: World, character: Entity) -> list[tuple[str, EntityId
     ids = reachable_ids(world, character)
     room_id = container_of(character)
     if room_id is not None:
+        ids.add(room_id)
         for _edge, target in world.get_entity(room_id).get_relationships(ExitTo):
             ids.add(target)
+    for entity_id in tuple(ids):
+        if world.has_entity(entity_id):
+            ids.update(contents(world.get_entity(entity_id)))
 
     candidates: list[tuple[str, EntityId]] = []
     for entity_id in ids:

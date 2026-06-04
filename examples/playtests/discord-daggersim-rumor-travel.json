@@ -1,0 +1,12 @@
+{
+  "ticks": 7,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!ask-rumor rumor_id=\"carrot vault rumor\"", "expect": ["Rumor heard: rumor carrot vault rumor; text The old carrot vault beneath Rain Garden still exists.."]},
+    {"tick": 2, "content": "!investigate-rumor rumor_id=\"carrot vault rumor\"", "expect": ["Rumor became expansion: rumor carrot vault rumor; site Rain Garden Hamlet."]},
+    {"tick": 3, "content": "!expand-site site_id=\"Rain Garden Hamlet\"", "expect": ["Generated site instantiated: site Rain Garden Hamlet; site type hamlet; detail level instantiated."]},
+    {"tick": 4, "content": "!plan-travel destination_id=\"North Tunnel\"", "expect": ["Travel started: destination North Tunnel; arrive at epoch 25200; mode foot."]}
+  ]
+}

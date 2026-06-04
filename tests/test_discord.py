@@ -453,7 +453,7 @@ def test_render_action_result_confirms_non_move_success(scenario):
 
     text = render_action_result(scenario.actor, 123, "say", event)
 
-    assert text == "Done: say."
+    assert text == "Say complete for Juniper in Mosslit Burrow."
 
 
 def test_render_action_result_reports_non_move_rejection(scenario):

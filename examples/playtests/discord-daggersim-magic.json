@@ -1,0 +1,14 @@
+{
+  "ticks": 7,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!create-custom-class template_id=\"Moonlit Forager template\" class_name=\"Rainpath Scout\" primary_skills=foraging,stealth,weather", "expect": ["Custom class created: class name Rainpath Scout; primary skills foraging, stealth, weather; major skills cooking, animal speech, memory; minor skills etiquette, knife, weather lore."]},
+    {"tick": 2, "content": "!create-spell template_id=\"mend sprout formula\" spell_name=\"Mend Moss\"", "expect": ["Spell created: spell Mend Moss; spell name Mend Moss; effect type heal; magnitude 4.0."]},
+    {"tick": 3, "content": "!cast-spell spell_id=\"Mend Moss\"", "expect": ["Spell cast: spell Mend Moss; spell name Mend Moss; target Juniper; effect type heal; magnitude 4.0; target health 7.0."]},
+    {"tick": 4, "content": "!attempt-pacify target_id=\"moon moth\" language=Mothwing", "expect": ["Creature pacified: target moon moth; language Mothwing."]},
+    {"tick": 5, "content": "!contract-affliction affliction_type=\"moon-form\"", "expect": ["Affliction contracted: affliction type moon-form."]},
+    {"tick": 6, "content": "!transform form_name=\"moon hare\"", "expect": ["Transformation started: affliction type moon-form; form name moon hare."]}
+  ]
+}

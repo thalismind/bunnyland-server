@@ -1,0 +1,19 @@
+{
+  "ticks": 13,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!dock ship_id=\"Burrow Runner\" station_id=\"Moss Station\"", "expect": ["Docking completed: ship Burrow Runner; station Moss Station; docked True."]},
+    {"tick": 2, "content": "!undock ship_id=\"Burrow Runner\" station_id=\"Moss Station\"", "expect": ["Docking completed: ship Burrow Runner; station Moss Station; docked False."]},
+    {"tick": 3, "content": "!refuel ship_id=\"Burrow Runner\"", "expect": ["Fuel changed: ship Burrow Runner; level 100.0; maximum 100.0."]},
+    {"tick": 4, "content": "!scan ship_id=\"Burrow Runner\"", "expect": ["Signal detected: signal mayday beacon; text Hull breach, send aid.."]},
+    {"tick": 5, "content": "!answer-distress-signal signal_id=\"mayday beacon\"", "expect": ["Answer distress signal complete: mayday beacon."]},
+    {"tick": 6, "content": "!enter-orbit ship_id=\"Burrow Runner\" body_id=\"Moss Moon\"", "expect": ["Orbit entered: ship Burrow Runner; body Moss Moon."]},
+    {"tick": 7, "content": "!land ship_id=\"Burrow Runner\"", "expect": ["Landing completed: ship Burrow Runner; body Moss Moon."]},
+    {"tick": 8, "content": "!launch ship_id=\"Burrow Runner\"", "expect": ["Launch complete: Burrow Runner."]},
+    {"tick": 9, "content": "!leave-orbit ship_id=\"Burrow Runner\"", "expect": ["Leave orbit complete: Burrow Runner."]},
+    {"tick": 10, "content": "!plot-course ship_id=\"Burrow Runner\" destination_id=\"North Tunnel\"", "expect": ["Course plotted: ship Burrow Runner; destination North Tunnel; fuel cost 10.0."]},
+    {"tick": 11, "content": "!jump ship_id=\"Burrow Runner\"", "expect": ["Jump started: ship Burrow Runner; destination North Tunnel; arrive at epoch 43201."]}
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "ticks": 10,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!request-dungeon dungeon_id=\"Carrot Vault\"", "expect": ["Dungeon requested: theme ruin."]},
+    {"tick": 2, "content": "!enter-dungeon dungeon_id=\"Carrot Vault\"", "expect": ["Dungeon entered: Vault Antechamber."]},
+    {"tick": 3, "content": "!search-room", "expect": ["Secret door found: door cracked tiles; hint a draft behind the tiles."]},
+    {"tick": 4, "content": "!open-secret-door door_id=\"cracked tiles\"", "expect": ["Dungeon room discovered: dungeon room Inner Vault; depth 1."]},
+    {"tick": 5, "content": "!mark-path", "expect": ["Mark path complete for Juniper in Vault Antechamber."]},
+    {"tick": 6, "content": "!view-map", "expect": ["View map complete for Juniper in Vault Antechamber."]},
+    {"tick": 7, "content": "!set-recall", "expect": ["Recall anchor set: Vault Antechamber."]},
+    {"tick": 8, "content": "!rest", "expect": ["Rest complete for Juniper in Vault Antechamber."]},
+    {"tick": 9, "content": "!leave-dungeon dungeon_id=\"Carrot Vault\"", "expect": ["Dungeon exited."]}
+  ]
+}

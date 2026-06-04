@@ -6,13 +6,26 @@ from bunnyland.core import (
     CharacterComponent,
     ContainmentMode,
     Contains,
+    ExitTo,
+    HealthComponent,
     IdentityComponent,
     PortableComponent,
+    RoomComponent,
     container_of,
     parse_entity_id,
     spawn_entity,
 )
-from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.events import (
+    CharacterAttackedEvent,
+    CharacterPickpocketedEvent,
+    CommandRejectedEvent,
+    ItemCraftedEvent,
+    JobAssignedEvent,
+    JobCompletedEvent,
+    OwnershipClaimedEvent,
+    OwnershipReleasedEvent,
+    ResourceGatheredEvent,
+)
 from bunnyland.discord.playtest import (
     DiscordPlaytest,
     PlaytestInput,
@@ -21,6 +34,12 @@ from bunnyland.discord.playtest import (
 )
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
+from bunnyland.mechanics import barbariansim as barb
+from bunnyland.mechanics import colonysim as colony
+from bunnyland.mechanics import daggersim as dagger
+from bunnyland.mechanics import dragonsim as dragon
+from bunnyland.mechanics import lifesim as life
+from bunnyland.mechanics import voidsim as void
 from bunnyland.mechanics.colonysim import ClaimOwnershipHandler, Owns
 from bunnyland.mechanics.gardensim import (
     CropComponent,
@@ -44,6 +63,7 @@ from bunnyland.mechanics.lifesim import (
     RoomClaimComponent,
     SellItemHandler,
 )
+from bunnyland.mechanics.policy import BoundaryTag, install_policy
 from bunnyland.prompts.builder import PromptBuilder
 
 PLAYTEST_DIR = Path(__file__).resolve().parents[1] / "examples" / "playtests"
@@ -108,6 +128,567 @@ def _add_garden_market(scenario):
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), seeds.id)
     return soil.id, merchant.id
+
+
+def _run_path(name: str) -> Path:
+    return PLAYTEST_DIR / name
+
+
+def _add_inventory_item(scenario, name: str, *, kind: str = "item", components=()):
+    item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name=name, kind=kind), PortableComponent(can_pick_up=True), *components],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), item.id
+    )
+    return item.id
+
+
+def _room_content(scenario, name: str, kind: str, components=()):
+    entity = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name=name, kind=kind), *components],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
+    )
+    return entity.id
+
+
+def _collect_rejections(actor) -> list[CommandRejectedEvent]:
+    rejected: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(CommandRejectedEvent, rejected.append)
+    return rejected
+
+
+def _install_colonysim_playtest(actor) -> None:
+    actor.register_handler(colony.ReserveHandler())
+    actor.register_handler(colony.ReleaseReservationHandler())
+    actor.register_handler(colony.GatherResourceHandler())
+    actor.register_handler(colony.CraftHandler())
+    actor.register_handler(colony.AssignJobHandler())
+    actor.register_handler(colony.CompleteJobHandler())
+    actor.register_handler(colony.ClaimOwnershipHandler())
+    actor.register_handler(colony.ReleaseOwnershipHandler())
+    actor.world.register_system(colony.ResourceRegenSystem())
+
+
+def _add_colonysim_loop_world(scenario):
+    node_id = _room_content(
+        scenario,
+        "wood patch",
+        "resource_node",
+        [colony.ResourceNodeComponent(resource_type="wood", current=4, maximum=4)],
+    )
+    job_id = _room_content(
+        scenario,
+        "haul job",
+        "job",
+        [colony.JobComponent(job_type="haul", priority=5)],
+    )
+    _room_content(
+        scenario,
+        "Workbench",
+        "workstation",
+        [colony.WorkstationComponent(station_type="bench")],
+    )
+    recipe = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="club recipe", kind="recipe"),
+            colony.RecipeComponent(
+                recipe_id="club",
+                inputs={"wood": 2},
+                outputs={"club": 1},
+                required_station="bench",
+            ),
+        ],
+    )
+    return node_id, job_id, recipe.id
+
+
+def _install_barbariansim_playtest(actor) -> None:
+    install_policy(actor, enabled=frozenset({BoundaryTag.PVP, BoundaryTag.PICKPOCKETING}))
+    barb.install_barbariansim(actor)
+    actor.register_handler(barb.AttackHandler())
+    actor.register_handler(barb.SparHandler())
+    actor.register_handler(barb.DefendHandler())
+    actor.register_handler(barb.ChallengeHandler())
+    actor.register_handler(barb.FortifyHandler())
+    actor.register_handler(barb.RaidHandler())
+    actor.register_handler(barb.RepairItemHandler())
+    actor.register_handler(barb.PoisonCharacterHandler())
+    actor.register_handler(barb.TreatPoisonHandler())
+    actor.register_handler(barb.GainCorruptionHandler())
+    actor.register_handler(barb.CleanseCorruptionHandler())
+    actor.register_handler(barb.PickpocketHandler())
+
+
+def _add_barbariansim_loop_world(scenario):
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=20.0, maximum=20.0))
+    character.add_component(barb.StaminaComponent(current=20.0, maximum=20.0, regen_per_hour=5.0))
+    target_id = _room_content(
+        scenario,
+        "Ash",
+        "character",
+        [
+            CharacterComponent(species="bunny"),
+            HealthComponent(current=20.0, maximum=20.0),
+        ],
+    )
+    weapon_id = _add_inventory_item(
+        scenario,
+        "Axe",
+        kind="weapon",
+        components=[
+            barb.WeaponComponent(damage=6.0, damage_type="slash", lethal_capable=True),
+            barb.DurabilityComponent(current=1.0, maximum=2.0),
+        ],
+    )
+    coin_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Coin", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    scenario.actor.world.get_entity(target_id).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), coin_id.id
+    )
+    palisade_id = _room_content(scenario, "wooden palisade", "fortification")
+    return target_id, weapon_id, coin_id.id, palisade_id
+
+
+def _install_dragonsim_playtest(actor) -> None:
+    actor.register_handler(dragon.DiscoverLocationHandler())
+    actor.register_handler(dragon.AcceptQuestHandler())
+    actor.register_handler(dragon.CompleteObjectiveHandler())
+    actor.register_handler(dragon.JoinFactionHandler())
+    actor.register_handler(dragon.LeaveFactionHandler())
+
+
+def _add_dragonsim_loop_world(scenario):
+    poi_id = _room_content(
+        scenario,
+        "old watchtower",
+        "location",
+        [dragon.PointOfInterestComponent(location_type="ruin", region="north meadow")],
+    )
+    quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Find the Lost Ring", kind="quest"),
+            dragon.QuestComponent(quest_id="lost-ring", title="Find the Lost Ring"),
+        ],
+    )
+    objective = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="lost ring objective", kind="objective"),
+            dragon.QuestObjectiveComponent(
+                quest_id="lost-ring",
+                description="Recover the ring from the watchtower",
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), quest.id
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), objective.id
+    )
+    reward_item = _room_content(scenario, "silver carrot", "item", [PortableComponent()])
+    reward = spawn_entity(
+        scenario.actor.world,
+        [
+            dragon.QuestRewardComponent(
+                quest_id="lost-ring",
+                description="A silver carrot",
+                item_ids=(str(reward_item),),
+            )
+        ],
+    )
+    faction_id = _room_content(
+        scenario,
+        "Moss Wardens",
+        "faction",
+        [dragon.FactionComponent(name="Moss Wardens", ideology="protect the burrow")],
+    )
+    return poi_id, quest.id, objective.id, reward.id, reward_item, faction_id
+
+
+def _install_lifesim_playtest(actor) -> None:
+    install_policy(
+        actor,
+        enabled=frozenset({BoundaryTag.ROMANCE, BoundaryTag.ADULT, BoundaryTag.PREGNANCY}),
+    )
+    life.install_lifesim(actor)
+    for handler in (
+        life.ChooseAspirationHandler(),
+        life.CompleteMilestoneHandler(),
+        life.PracticeSkillHandler(),
+        life.StudySkillHandler(),
+        life.FindJobHandler(),
+        life.GoToWorkHandler(),
+        life.OpenBusinessHandler(),
+        life.SellItemHandler(),
+        life.JoinHouseholdHandler(),
+        life.ClaimHomeHandler(),
+        life.ClaimRoomHandler(),
+        life.StartPartnershipHandler(),
+        life.StartPregnancyHandler(),
+        life.ResolveBirthHandler(),
+        life.AdoptChildHandler(),
+    ):
+        actor.register_handler(handler)
+
+
+def _add_lifesim_loop_world(scenario):
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(life.ReproductiveComponent(can_be_pregnant=True))
+    partner_id = _room_content(
+        scenario,
+        "Hazel",
+        "character",
+        [
+            CharacterComponent(species="bunny"),
+            life.ReproductiveComponent(can_cause_pregnancy=True),
+        ],
+    )
+    child_id = _room_content(
+        scenario,
+        "Clover",
+        "character",
+        [CharacterComponent(species="bunny"), life.LifeStageComponent(stage="child")],
+    )
+    item_id = _add_inventory_item(scenario, "berry tart")
+    customer_id = _room_content(
+        scenario,
+        "Marigold",
+        "character",
+        [CharacterComponent(species="bunny"), life.CustomerComponent(budget=30)],
+    )
+    return partner_id, child_id, item_id, customer_id
+
+
+def _install_daggersim_playtest(actor) -> None:
+    for handler in (
+        dagger.ExpandSiteHandler(),
+        dagger.AskRumorHandler(),
+        dagger.InvestigateRumorHandler(),
+        dagger.PlanTravelHandler(),
+        dagger.JoinInstitutionHandler(),
+        dagger.UseInstitutionServiceHandler(),
+        dagger.AskForWorkHandler(),
+        dagger.AcceptGeneratedQuestHandler(),
+        dagger.CompleteGeneratedQuestHandler(),
+        dagger.OpenBankAccountHandler(),
+        dagger.DepositHandler(),
+        dagger.TakeLoanHandler(),
+        dagger.RepayLoanHandler(),
+        dagger.CommitCrimeHandler(),
+        dagger.PayFineHandler(),
+        dagger.CreateCustomClassHandler(),
+        dagger.CreateSpellHandler(),
+        dagger.CastSpellHandler(),
+        dagger.AttemptPacifyHandler(),
+        dagger.ContractAfflictionHandler(),
+        dagger.TransformHandler(),
+        dagger.RequestDungeonHandler(),
+        dagger.EnterDungeonHandler(),
+        dagger.SearchRoomHandler(),
+        dagger.OpenSecretDoorHandler(),
+        dagger.MarkPathHandler(),
+        dagger.ViewMapHandler(),
+        dagger.SetRecallHandler(),
+        dagger.UseRecallHandler(),
+        dagger.RestHandler(),
+        dagger.LeaveDungeonHandler(),
+    ):
+        actor.register_handler(handler)
+    actor.register_consequence(dagger.TravelCompletionConsequence())
+    actor.register_consequence(dagger.QuestDeadlineConsequence())
+    actor.register_consequence(dagger.LoanDueConsequence())
+    actor.register_consequence(dagger.FeedingNeedConsequence())
+
+
+def _add_daggersim_rumor_world(scenario):
+    site_id = _room_content(
+        scenario,
+        "Rain Garden Hamlet",
+        "settlement",
+        [
+            dagger.ProceduralSiteComponent(site_type="hamlet", seed="rain-garden"),
+            dagger.UnrealizedLocationComponent(
+                summary="a damp trading stop at the edge of the moss road",
+                region_id="moss-road",
+            ),
+            dagger.ExpansionHookComponent(
+                trigger="rumor", generator_plugin_id="worldgen.recursive"
+            ),
+        ],
+    )
+    rumor_id = _room_content(
+        scenario,
+        "carrot vault rumor",
+        "rumor",
+        [
+            dagger.RumorComponent(text="The old carrot vault beneath Rain Garden still exists."),
+            dagger.RumorReliabilityComponent(score=1.0),
+            dagger.RumorTargetComponent(target_id=str(site_id)),
+        ],
+    )
+    origin = scenario.actor.world.get_entity(scenario.room_a)
+    destination = scenario.actor.world.get_entity(scenario.room_b)
+    origin.add_component(dagger.TravelHubComponent(name="Mosslit Burrow", region_id="moss-road"))
+    destination.add_component(dagger.TravelHubComponent(name="North Tunnel", region_id="moss-road"))
+    origin.add_relationship(
+        dagger.TravelRoute(travel_seconds=2 * 3600, label="moss road"),
+        scenario.room_b,
+    )
+    return site_id, rumor_id
+
+
+def _add_daggersim_economy_world(scenario):
+    institution = _room_content(
+        scenario,
+        "Burrow Cartographers",
+        "institution",
+        [dagger.InstitutionComponent(name="Burrow Cartographers", institution_type="guild")],
+    )
+    service = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="local map service", kind="service"),
+            dagger.InstitutionServiceComponent(
+                service_name="local map",
+                required_rank="member",
+                output_item_name="moss road map",
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(institution).add_relationship(
+        Contains(mode=ContainmentMode.CONTAINER), service.id
+    )
+    template = _room_content(
+        scenario,
+        "ratcatcher errand",
+        "quest-template",
+        [
+            dagger.QuestTemplateComponent(
+                title="Clear the North Tunnel",
+                objective="Drive the rats away from the old milestone.",
+                reward_item_name="guild writ",
+                duration_seconds=10 * 3600,
+            )
+        ],
+    )
+    bank = _room_content(
+        scenario,
+        "Carrot Factors Bank",
+        "bank",
+        [dagger.BankComponent(name="Carrot Factors Bank", region_id="moss-road")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_component(
+        dagger.LawRegionComponent(region_id="moss-road", fines={"trespass": 15, "default": 10})
+    )
+    return institution, service.id, template, bank
+
+
+def _add_daggersim_magic_world(scenario):
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=3.0, maximum=10.0))
+    class_template = _room_content(
+        scenario,
+        "Moonlit Forager template",
+        "class-template",
+        [
+            dagger.ClassTemplateComponent(
+                class_name="Moonlit Forager",
+                primary_skills=("foraging", "stealth", "gardening"),
+                major_skills=("cooking", "animal speech", "memory"),
+                minor_skills=("etiquette", "knife", "weather lore"),
+                advantages=("night vision",),
+                disadvantages=("heat weakness",),
+            )
+        ],
+    )
+    spell_template = _room_content(
+        scenario,
+        "mend sprout formula",
+        "spell-template",
+        [dagger.SpellTemplateComponent(spell_name="Mend Sprout", effect_type="heal", magnitude=4)],
+    )
+    creature = _room_content(
+        scenario,
+        "moon moth",
+        "creature",
+        [
+            dagger.CreatureLanguageComponent(language="Mothwing", pacification_difficulty=2),
+            dagger.HostilityComponent(hostile=True),
+        ],
+    )
+    character.add_component(dagger.LanguageSkillComponent(languages={"Mothwing": 2}))
+    return class_template, spell_template, creature
+
+
+def _add_daggersim_dungeon_world(scenario):
+    entry = spawn_entity(
+        scenario.actor.world,
+        [RoomComponent(title="Vault Antechamber"), dagger.DungeonRoomComponent("carrot-vault", 0)],
+    )
+    deeper = spawn_entity(
+        scenario.actor.world,
+        [RoomComponent(title="Inner Vault"), dagger.DungeonRoomComponent("carrot-vault", 1)],
+    )
+    dungeon = _room_content(
+        scenario,
+        "Carrot Vault",
+        "dungeon",
+        [
+            dagger.DungeonComponent(
+                dungeon_id="carrot-vault",
+                theme="ruin",
+                seed="cv-1",
+                entry_room_id=str(entry.id),
+                generated=False,
+            ),
+            dagger.ExpansionHookComponent(
+                trigger="quest", generator_plugin_id="worldgen.recursive"
+            ),
+        ],
+    )
+    door = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="cracked tiles", kind="secret-door"),
+            dagger.SecretDoorComponent(
+                target_room_id=str(deeper.id),
+                direction="down",
+                hint="a draft behind the tiles",
+            ),
+        ],
+    )
+    objective = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="the carrot reliquary", kind="objective"),
+            dagger.DungeonObjectiveComponent(
+                objective_kind="relic",
+                description="the lost reliquary",
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(entry.id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), door.id
+    )
+    scenario.actor.world.get_entity(entry.id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), objective.id
+    )
+    scenario.actor.world.get_entity(entry.id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), dungeon
+    )
+    return dungeon, entry.id, deeper.id, door.id, objective.id
+
+
+def _install_voidsim_playtest(actor) -> None:
+    for handler in (
+        void.OpenAirlockHandler(),
+        void.CycleAirlockHandler(),
+        void.SealBulkheadHandler(),
+        void.RepairSystemHandler(),
+        void.ReroutePowerHandler(),
+        void.InspectShipSystemHandler(),
+        void.DockHandler(),
+        void.UndockHandler(),
+        void.EvacuateModuleHandler(),
+        void.PlotCourseHandler(),
+        void.JumpHandler(),
+        void.ScanHandler(),
+        void.AnswerDistressSignalHandler(),
+        void.RefuelHandler(),
+        void.EnterOrbitHandler(),
+        void.LeaveOrbitHandler(),
+        void.LandHandler(),
+        void.LaunchHandler(),
+    ):
+        actor.register_handler(handler)
+    actor.register_consequence(void.LifeSupportConsequence())
+    actor.register_consequence(void.JumpTravelConsequence())
+
+
+def _add_voidsim_systems_world(scenario):
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(void.HabitatModuleComponent(module_type="bridge"))
+    room.add_component(void.PressurizedComponent(pressure=1.0))
+    room.add_component(void.OxygenComponent(level=10.0, maximum=100.0))
+    room.add_component(void.LifeSupportComponent(online=False, oxygen_per_hour=100.0))
+    airlock = _room_content(
+        scenario,
+        "port airlock",
+        "airlock",
+        [void.AirlockComponent(module_id=str(scenario.room_a), exposes_vacuum=True)],
+    )
+    bulkhead = _room_content(scenario, "aft bulkhead", "bulkhead", [void.BulkheadComponent()])
+    grid = _room_content(
+        scenario,
+        "main bus",
+        "power-grid",
+        [void.PowerGridComponent(available=100.0)],
+    )
+    system = _room_content(
+        scenario,
+        "life support unit",
+        "ship-system",
+        [void.ShipSystemComponent(system_type="life-support", integrity=40.0, online=False)],
+    )
+    other = _room_content(
+        scenario,
+        "Ensign Clover",
+        "character",
+        [CharacterComponent(species="bunny")],
+    )
+    return airlock, bulkhead, grid, system, other
+
+
+def _add_voidsim_navigation_world(scenario):
+    scenario.actor.world.get_entity(scenario.room_a).add_component(void.StarSystemComponent("Sol"))
+    scenario.actor.world.get_entity(scenario.room_b).add_component(
+        void.StarSystemComponent("Proxima")
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        void.JumpRoute(fuel_cost=10.0, hazard="none", jump_seconds=1, label="moss lane"),
+        scenario.room_b,
+    )
+    ship = _room_content(
+        scenario,
+        "Burrow Runner",
+        "ship",
+        [
+            void.ShipComponent(name="Burrow Runner"),
+            void.FuelComponent(level=20.0, maximum=100.0),
+            void.JumpDriveComponent(),
+            void.SensorComponent(),
+        ],
+    )
+    station = _room_content(
+        scenario,
+        "Moss Station",
+        "station",
+        [void.StationComponent(name="Moss Station")],
+    )
+    signal = _room_content(
+        scenario,
+        "mayday beacon",
+        "signal",
+        [void.DistressSignalComponent(text="Hull breach, send aid.")],
+    )
+    body = _room_content(
+        scenario,
+        "Moss Moon",
+        "orbital-body",
+        [void.OrbitalBodyComponent(body_type="moon", landable=True)],
+    )
+    return ship, station, signal, body
 
 
 async def test_discord_playtest_schedules_inputs_by_tick(scenario):
@@ -177,7 +758,7 @@ async def test_discord_playtest_character_claims_current_room(scenario):
     claim = room.get_component(RoomClaimComponent)
     assert result.ticks == 2
     assert result.inputs[1].reactions
-    assert "Done: claim room." in result.inputs[1].messages[0]
+    assert "Room claimed: Mosslit Burrow" in result.inputs[1].messages[0]
     assert claim.claimed_by_id == str(scenario.character)
     assert claim.claimed_at_epoch == scenario.actor.epoch
 
@@ -217,3 +798,335 @@ async def test_discord_playtest_character_gardens_claimed_land_end_to_end(scenar
     assert character.get_component(HouseholdFundsComponent).balance == 18
     assert merchant.get_component(HouseholdFundsComponent).balance == 0
     assert merchant.get_component(CustomerComponent).budget == 12
+
+
+async def test_discord_playtest_colonysim_core_loop(scenario):
+    _install_colonysim_playtest(scenario.actor)
+    node_id, job_id, _recipe_id = _add_colonysim_loop_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    gathered: list[ResourceGatheredEvent] = []
+    crafted: list = []
+    assigned: list = []
+    completed: list = []
+    claimed: list = []
+    released: list = []
+    scenario.actor.bus.subscribe(ResourceGatheredEvent, gathered.append)
+    scenario.actor.bus.subscribe(ItemCraftedEvent, crafted.append)
+    scenario.actor.bus.subscribe(JobAssignedEvent, assigned.append)
+    scenario.actor.bus.subscribe(JobCompletedEvent, completed.append)
+    scenario.actor.bus.subscribe(OwnershipClaimedEvent, claimed.append)
+    scenario.actor.bus.subscribe(OwnershipReleasedEvent, released.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-colonysim-core.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    node = scenario.actor.world.get_entity(node_id)
+    job = scenario.actor.world.get_entity(job_id)
+    assert rejected == []
+    assert result.ticks == 9
+    assert len(result.inputs) == 9
+    assert node.get_component(colony.ResourceNodeComponent).current == 2
+    assert len(gathered) == 1
+    assert len(crafted) == 1
+    crafted_item = scenario.actor.world.get_entity(parse_entity_id(crafted[0].output_ids[0]))
+    assert crafted_item.get_component(colony.ResourceStackComponent).resource_type == "club"
+    assert container_of(crafted_item) == scenario.character
+    assert job.get_component(colony.JobComponent).completed is True
+    assert assigned and completed
+    assert claimed and released
+    assert not node.has_relationship(colony.ReservedBy, scenario.character)
+    assert not character.has_relationship(Owns, node_id)
+
+
+async def test_discord_playtest_barbariansim_core_loop(scenario):
+    _install_barbariansim_playtest(scenario.actor)
+    target_id, weapon_id, coin_id, palisade_id = _add_barbariansim_loop_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    attacked: list = []
+    repaired: list = []
+    poisoned: list = []
+    treated: list = []
+    pickpocketed: list = []
+    scenario.actor.bus.subscribe(CharacterAttackedEvent, attacked.append)
+    scenario.actor.bus.subscribe(barb.ItemRepairedEvent, repaired.append)
+    scenario.actor.bus.subscribe(barb.CharacterPoisonedEvent, poisoned.append)
+    scenario.actor.bus.subscribe(barb.PoisonTreatedEvent, treated.append)
+    scenario.actor.bus.subscribe(CharacterPickpocketedEvent, pickpocketed.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-barbariansim-core.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    target = scenario.actor.world.get_entity(target_id)
+    weapon = scenario.actor.world.get_entity(weapon_id)
+    palisade = scenario.actor.world.get_entity(palisade_id)
+    assert rejected == []
+    assert result.ticks == 13
+    assert len(result.inputs) == 13
+    assert target.get_component(HealthComponent).current < 20.0
+    assert not target.has_component(barb.PoisonComponent)
+    assert not character.has_component(barb.CorruptionComponent)
+    assert weapon.get_component(barb.DurabilityComponent).current > 0
+    assert palisade.get_component(barb.FortificationComponent).durability < 10.0
+    assert container_of(scenario.actor.world.get_entity(coin_id)) == scenario.character
+    assert len(attacked) >= 2
+    assert repaired and poisoned and treated and pickpocketed
+
+
+async def test_discord_playtest_dragonsim_core_loop(scenario):
+    _install_dragonsim_playtest(scenario.actor)
+    poi_id, quest_id, objective_id, reward_id, reward_item_id, faction_id = (
+        _add_dragonsim_loop_world(scenario)
+    )
+    rejected = _collect_rejections(scenario.actor)
+    completed_quests: list = []
+    scenario.actor.bus.subscribe(dragon.QuestCompletedEvent, completed_quests.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-dragonsim-core.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    poi = scenario.actor.world.get_entity(poi_id)
+    quest = scenario.actor.world.get_entity(quest_id)
+    objective = scenario.actor.world.get_entity(objective_id)
+    reward = scenario.actor.world.get_entity(reward_id)
+    assert rejected == []
+    assert result.ticks == 6
+    assert len(result.inputs) == 6
+    assert poi.get_component(dragon.PointOfInterestComponent).discovered is True
+    assert quest.get_component(dragon.QuestComponent).status == "completed"
+    assert objective.get_component(dragon.QuestObjectiveComponent).completed is True
+    assert reward.get_component(dragon.QuestRewardComponent).claimed is True
+    assert container_of(scenario.actor.world.get_entity(reward_item_id)) == scenario.character
+    assert not character.has_relationship(dragon.MemberOf, faction_id)
+    assert completed_quests
+
+
+async def test_discord_playtest_lifesim_core_loop(scenario):
+    _install_lifesim_playtest(scenario.actor)
+    partner_id, child_id, item_id, customer_id = _add_lifesim_loop_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    births: list = []
+    sales: list = []
+    scenario.actor.bus.subscribe(life.BirthResolvedEvent, births.append)
+    scenario.actor.bus.subscribe(life.BusinessSaleEvent, sales.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-lifesim-core.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    partner = scenario.actor.world.get_entity(partner_id)
+    assert rejected == []
+    assert result.ticks == 17
+    assert len(result.inputs) == 16
+    assert character.get_component(life.AspirationComponent).completed == ("meet a friend",)
+    assert character.get_component(life.SkillSetComponent).levels["cooking"] == 1
+    assert character.get_component(life.CareerComponent).level == 2
+    assert scenario.actor.world.get_entity(scenario.room_a).has_component(life.HomeComponent)
+    assert scenario.actor.world.get_entity(scenario.room_b).has_component(life.RoomClaimComponent)
+    assert character.has_relationship(life.PartnerOf, partner_id)
+    assert partner.has_relationship(life.PartnerOf, scenario.character)
+    assert character.has_relationship(life.ParentOf, child_id)
+    assert births and sales
+    assert not character.has_component(life.PregnancyComponent)
+    assert container_of(scenario.actor.world.get_entity(item_id)) is None
+    assert (
+        scenario.actor.world.get_entity(customer_id).get_component(life.CustomerComponent).budget
+        == 15
+    )
+    assert character.get_component(life.HouseholdFundsComponent).balance == 39
+
+
+async def test_discord_playtest_daggersim_rumor_travel_loop(scenario):
+    _install_daggersim_playtest(scenario.actor)
+    site_id, rumor_id = _add_daggersim_rumor_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    completed: list = []
+    scenario.actor.bus.subscribe(dagger.TravelCompletedEvent, completed.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-daggersim-rumor-travel.json")),
+    )
+
+    site = scenario.actor.world.get_entity(site_id)
+    rumor = scenario.actor.world.get_entity(rumor_id)
+    assert rejected == []
+    assert result.ticks == 7
+    assert len(result.inputs) == 5
+    assert rumor.get_component(dagger.RumorComponent).state == "verified"
+    assert site.get_component(dagger.ProceduralSiteComponent).generated is True
+    assert site.get_component(dagger.UnrealizedLocationComponent).detail_level == "instantiated"
+    assert scenario.character_room() == scenario.room_b
+    assert completed
+
+
+async def test_discord_playtest_daggersim_economy_loop(scenario):
+    _install_daggersim_playtest(scenario.actor)
+    institution_id, _service_id, _template_id, bank_id = _add_daggersim_economy_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    generated: list = []
+    completed: list = []
+    repaid: list = []
+    paid: list = []
+    scenario.actor.bus.subscribe(dagger.QuestGeneratedEvent, generated.append)
+    scenario.actor.bus.subscribe(dagger.QuestCompletedEvent, completed.append)
+    scenario.actor.bus.subscribe(dagger.LoanRepaidEvent, repaid.append)
+    scenario.actor.bus.subscribe(dagger.FinePaidEvent, paid.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-daggersim-economy.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    account = next(
+        entity
+        for entity in scenario.actor.world.query()
+        .with_all([dagger.BankAccountComponent])
+        .execute_entities()
+        if entity.get_component(dagger.BankAccountComponent).bank_id == str(bank_id)
+    )
+    assert rejected == []
+    assert result.ticks == 12
+    assert len(result.inputs) == 12
+    assert character.has_relationship(dagger.MemberOfInstitution, institution_id)
+    assert any(
+        entity.get_component(IdentityComponent).name == "moss road map"
+        for _edge, target_id in character.get_relationships(Contains)
+        if (entity := scenario.actor.world.get_entity(target_id)).has_component(IdentityComponent)
+    )
+    assert generated and completed and repaid and paid
+    assert account.get_component(dagger.BankAccountComponent).balance == 5
+    assert all(
+        not entity.has_component(dagger.BountyComponent)
+        for entity in scenario.actor.world.query()
+        .with_all([dagger.CrimeRecordComponent])
+        .execute_entities()
+    )
+
+
+async def test_discord_playtest_daggersim_magic_loop(scenario):
+    _install_daggersim_playtest(scenario.actor)
+    _class_template, _spell_template, creature_id = _add_daggersim_magic_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    pacified: list = []
+    transformed: list = []
+    scenario.actor.bus.subscribe(dagger.CreaturePacifiedEvent, pacified.append)
+    scenario.actor.bus.subscribe(dagger.TransformationStartedEvent, transformed.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-daggersim-magic.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    creature = scenario.actor.world.get_entity(creature_id)
+    assert rejected == []
+    assert result.ticks == 7
+    assert len(result.inputs) == 7
+    assert character.get_component(dagger.CustomClassComponent).class_name == "Rainpath Scout"
+    assert character.get_component(HealthComponent).current == 7.0
+    assert creature.get_component(dagger.HostilityComponent).hostile is False
+    assert creature.has_component(dagger.PacifiedComponent)
+    assert character.has_component(dagger.SupernaturalAfflictionComponent)
+    assert character.has_component(dagger.WereformComponent)
+    assert pacified and transformed
+
+
+async def test_discord_playtest_daggersim_dungeon_loop(scenario):
+    _install_daggersim_playtest(scenario.actor)
+    dungeon_id, entry_id, deeper_id, door_id, objective_id = _add_daggersim_dungeon_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    exited: list = []
+    scenario.actor.bus.subscribe(dagger.DungeonExitedEvent, exited.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-daggersim-dungeon.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    dungeon = scenario.actor.world.get_entity(dungeon_id)
+    door = scenario.actor.world.get_entity(door_id)
+    objective = scenario.actor.world.get_entity(objective_id)
+    assert rejected == []
+    assert result.ticks == 10
+    assert len(result.inputs) == 10
+    assert dungeon.get_component(dagger.DungeonComponent).entered is False
+    assert door.get_component(dagger.SecretDoorComponent).opened is True
+    assert objective.get_component(dagger.DungeonObjectiveComponent).found is True
+    discovered_exits = [
+        target_id
+        for _edge, target_id in scenario.actor.world.get_entity(entry_id).get_relationships(
+            ExitTo
+        )
+    ]
+    assert deeper_id in discovered_exits
+    assert container_of(character) == entry_id
+    assert str(entry_id) in character.get_component(dagger.AutomapComponent).marked_rooms
+    assert exited
+
+
+async def test_discord_playtest_voidsim_ship_systems_loop(scenario):
+    _install_voidsim_playtest(scenario.actor)
+    airlock_id, bulkhead_id, grid_id, system_id, other_id = _add_voidsim_systems_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    failures: list = []
+    scenario.actor.bus.subscribe(void.LifeSupportFailedEvent, failures.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-voidsim-ship-systems.json")),
+    )
+
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    airlock = scenario.actor.world.get_entity(airlock_id)
+    bulkhead = scenario.actor.world.get_entity(bulkhead_id)
+    grid = scenario.actor.world.get_entity(grid_id)
+    system = scenario.actor.world.get_entity(system_id)
+    assert rejected == []
+    assert result.ticks == 9
+    assert len(result.inputs) == 8
+    assert airlock.get_component(void.AirlockComponent).state == "sealed"
+    assert bulkhead.get_component(void.BulkheadComponent).sealed is True
+    assert system.get_component(void.ShipSystemComponent).integrity == 100.0
+    assert system.get_component(void.ShipSystemComponent).online is True
+    assert grid.get_component(void.PowerGridComponent).available == 70.0
+    assert container_of(scenario.actor.world.get_entity(other_id)) == scenario.room_b
+    assert room.get_component(void.OxygenComponent).failed is True
+    assert failures
+
+
+async def test_discord_playtest_voidsim_navigation_loop(scenario):
+    _install_voidsim_playtest(scenario.actor)
+    ship_id, station_id, signal_id, body_id = _add_voidsim_navigation_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    completed: list = []
+    scenario.actor.bus.subscribe(void.JumpCompletedEvent, completed.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-voidsim-navigation.json")),
+    )
+
+    ship = scenario.actor.world.get_entity(ship_id)
+    signal = scenario.actor.world.get_entity(signal_id)
+    assert rejected == []
+    assert result.ticks == 13
+    assert len(result.inputs) == 12
+    assert not list(ship.get_relationships(void.DockedTo))
+    assert container_of(ship) == scenario.room_b
+    assert ship.get_component(void.FuelComponent).level == 90.0
+    assert signal.get_component(void.DistressSignalComponent).answered is True
+    assert not ship.has_component(void.OrbitComponent)
+    assert completed

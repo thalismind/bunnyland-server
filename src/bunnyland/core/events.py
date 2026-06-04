@@ -14,9 +14,9 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import StrEnum
-from typing import TypeVar
+from typing import Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EventVisibility(StrEnum):
@@ -73,6 +73,8 @@ class CommandQueuedEvent(DomainEvent):
 class CommandExecutedEvent(DomainEvent):
     command_id: str
     command_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    result_events: tuple[dict[str, Any], ...] = ()
 
 
 class CommandExpiredEvent(DomainEvent):

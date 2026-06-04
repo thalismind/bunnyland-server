@@ -1,0 +1,15 @@
+{
+  "ticks": 9,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!open-airlock airlock_id=\"port airlock\"", "expect": ["Airlock cycled: airlock port airlock; state open."]},
+    {"tick": 2, "content": "!cycle-airlock airlock_id=\"port airlock\"", "expect": ["Airlock cycled: airlock port airlock; state cycled."]},
+    {"tick": 3, "content": "!seal-bulkhead bulkhead_id=\"aft bulkhead\"", "expect": ["Seal bulkhead complete: aft bulkhead."]},
+    {"tick": 4, "content": "!repair-system system_id=\"life support unit\"", "expect": ["Ship system repaired: system life support unit; system type life-support."]},
+    {"tick": 5, "content": "!reroute-power grid_id=\"main bus\" system_id=\"life support unit\" amount=30", "expect": ["Power rerouted: system life support unit; amount 30.0."]},
+    {"tick": 6, "content": "!inspect-ship-system system_id=\"life support unit\"", "expect": ["Inspect ship system complete: life support unit."]},
+    {"tick": 7, "content": "!evacuate-module module_id=\"Mosslit Burrow\" destination_id=\"North Tunnel\"", "expect": ["Module evacuated: module Mosslit Burrow; evacuee Juniper, Ensign Clover."]}
+  ]
+}

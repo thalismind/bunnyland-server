@@ -1,0 +1,16 @@
+{
+  "ticks": 9,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!reserve target_id=\"wood patch\"", "expect": ["Reservation created: wood patch."]},
+    {"tick": 2, "content": "!release-reservation target_id=\"wood patch\"", "expect": ["Reservation released: wood patch."]},
+    {"tick": 3, "content": "!gather-resource node_id=\"wood patch\" quantity=2", "expect": ["Resource gathered: node wood patch; resource type wood; quantity 2; stack wood x2."]},
+    {"tick": 4, "content": "!craft recipe_id=club", "expect": ["Item crafted: club x1."]},
+    {"tick": 5, "content": "!assign-job job_id=\"haul job\"", "expect": ["Job assigned: haul job."]},
+    {"tick": 6, "content": "!complete-job job_id=\"haul job\"", "expect": ["Job completed: haul job."]},
+    {"tick": 7, "content": "!claim-ownership target_id=\"wood patch\"", "expect": ["Ownership claimed: wood patch."]},
+    {"tick": 8, "content": "!release-ownership target_id=\"wood patch\"", "expect": ["Ownership released: wood patch."]}
+  ]
+}

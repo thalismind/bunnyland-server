@@ -1,0 +1,13 @@
+{
+  "ticks": 6,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!discover-location old watchtower", "expect": ["Location discovered: location old watchtower; location type ruin; region north meadow."]},
+    {"tick": 2, "content": "!accept-quest quest_id=\"Find the Lost Ring\"", "expect": ["Quest accepted: quest Find the Lost Ring; quest key lost-ring; title Find the Lost Ring."]},
+    {"tick": 3, "content": "!complete-objective objective_id=\"lost ring objective\"", "expect": ["Quest completed: quest Find the Lost Ring; quest key lost-ring; title Find the Lost Ring."]},
+    {"tick": 4, "content": "!join-faction faction_id=\"Moss Wardens\" rank=scout", "expect": ["Faction joined: faction Moss Wardens; faction name Moss Wardens; rank scout."]},
+    {"tick": 5, "content": "!leave-faction Moss Wardens", "expect": ["Faction left: faction Moss Wardens; faction name Moss Wardens."]}
+  ]
+}

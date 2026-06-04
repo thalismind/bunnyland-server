@@ -11,37 +11,37 @@
     {
       "tick": 1,
       "content": "!claim-ownership garden bed",
-      "expect": ["Done: claim ownership."]
+      "expect": ["Ownership claimed: garden bed."]
     },
     {
       "tick": 2,
       "content": "!till garden bed",
-      "expect": ["Done: till."]
+      "expect": ["Soil tilled: garden bed."]
     },
     {
       "tick": 3,
       "content": "!plant soil_id=\"garden bed\" seed_id=\"radish seeds\"",
-      "expect": ["Done: plant."]
+      "expect": ["Seed planted: soil garden bed; seed radish seeds; crop type radish."]
     },
     {
       "tick": 4,
       "content": "!water-crop garden bed",
-      "expect": ["Done: water crop."]
+      "expect": ["Crop watered: soil garden bed; expires at epoch 104400."]
     },
     {
       "tick": 30,
       "content": "!harvest-crop garden bed",
-      "expect": ["Done: harvest crop."]
+      "expect": ["Crop harvested: soil garden bed; crop type radish; item radish x2; quantity 2."]
     },
     {
       "tick": 31,
       "content": "!open-business name=\"Juniper Farm Stand\" default_price=8",
-      "expect": ["Done: open business."]
+      "expect": ["Business opened: business name Juniper Farm Stand."]
     },
     {
       "tick": 32,
       "content": "!sell-item item_id=\"radish x2\" customer_id=Marigold price=8",
-      "expect": ["Done: sell item."]
+      "expect": ["Business sale: business name Juniper Farm Stand; item radish x2; customer Marigold; price 8; balance 18."]
     }
   ]
 }

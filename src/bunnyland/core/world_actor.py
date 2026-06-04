@@ -264,6 +264,7 @@ class WorldActor:
                         actor_id=character_id,
                         command_id=command.command_id,
                         command_type=command.command_type,
+                        payload=dict(command.payload),
                     )
                 )
             )
@@ -350,6 +351,10 @@ class WorldActor:
             await self._reject(command, result.reason or "rejected by handler")
             return _LaneOutcome(executed=False, stop_lane=False)
 
+        result_events = tuple(
+            {"event_type": event.__class__.__name__, **event.model_dump(mode="json")}
+            for event in result.events
+        )
         await self._spend(character, command)
         await self._publish(
             CommandExecutedEvent(
@@ -357,6 +362,8 @@ class WorldActor:
                     actor_id=character_id,
                     command_id=command.command_id,
                     command_type=command.command_type,
+                    payload=dict(command.payload),
+                    result_events=result_events,
                 )
             )
         )

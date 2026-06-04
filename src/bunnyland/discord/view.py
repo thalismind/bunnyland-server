@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from ..core.ecs import container_of
+from typing import Any
+
+from ..core.components import IdentityComponent, RoomComponent
+from ..core.ecs import container_of, parse_entity_id
 from ..core.events import CommandExecutedEvent, CommandRejectedEvent, NotesSearchedEvent
 from ..core.world_actor import WorldActor
 from ..llm_agents.tools import tool_schemas
@@ -253,6 +256,116 @@ def render_move_result(
     return "You are now in " + render_look(actor, discord_user_id)
 
 
+def _entity_name(actor: WorldActor, raw_id: object) -> str | None:
+    entity_id = parse_entity_id(str(raw_id))
+    if entity_id is None or not actor.world.has_entity(entity_id):
+        return None
+    entity = actor.world.get_entity(entity_id)
+    if entity.has_component(IdentityComponent):
+        return entity.get_component(IdentityComponent).name
+    if entity.has_component(RoomComponent):
+        return entity.get_component(RoomComponent).title
+    return str(entity_id)
+
+
+def _display_value(actor: WorldActor, value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_display_value(actor, item) for item in value)
+    name = _entity_name(actor, value)
+    if name is not None:
+        return name
+    return str(value)
+
+
+def _display_key(key: str) -> str:
+    label = key.removesuffix("_ids").removesuffix("_id")
+    return label.replace("_", " ")
+
+
+def _payload_summary(actor: WorldActor, payload: dict[str, Any]) -> str:
+    items = [(key, value) for key, value in payload.items() if value not in (None, "")]
+    if len(items) == 1:
+        key, value = items[0]
+        if key.endswith("_id") or key.endswith("_ids") or _entity_name(actor, value) is not None:
+            return _display_value(actor, value)
+    parts = [f"{_display_key(key)} {_display_value(actor, value)}" for key, value in items]
+    return "; ".join(parts)
+
+
+def _actor_context(actor: WorldActor, event: CommandExecutedEvent) -> str:
+    actor_name = _entity_name(actor, event.actor_id) or "character"
+    actor_id = parse_entity_id(event.actor_id or "")
+    if actor_id is None or not actor.world.has_entity(actor_id):
+        return actor_name
+    room_id = container_of(actor.world.get_entity(actor_id))
+    room_name = _entity_name(actor, room_id) if room_id is not None else None
+    if room_name:
+        return f"{actor_name} in {room_name}"
+    return actor_name
+
+
+def _humanize_event_type(event_type: str) -> str:
+    name = event_type.removesuffix("Event")
+    words: list[str] = []
+    current = ""
+    for char in name:
+        if char.isupper() and current:
+            words.append(current)
+            current = char
+        else:
+            current += char
+    if current:
+        words.append(current)
+    return " ".join(words).capitalize()
+
+
+_DOMAIN_EVENT_SKIP_KEYS = frozenset(
+    {
+        "actor_id",
+        "causation_id",
+        "correlation_id",
+        "created_at",
+        "event_id",
+        "event_type",
+        "room_id",
+        "target_ids",
+        "visibility",
+        "world_epoch",
+    }
+)
+
+
+def _render_domain_event(actor: WorldActor, event: dict[str, Any]) -> str:
+    label = _humanize_event_type(str(event.get("event_type", "GameEvent")))
+    details = _payload_summary(
+        actor,
+        {
+            key: value
+            for key, value in event.items()
+            if key not in _DOMAIN_EVENT_SKIP_KEYS
+            and value not in (None, "", (), [])
+            and not (key.endswith("_id") and _entity_name(actor, value) is None)
+            and not (
+                key.endswith("_ids")
+                and all(_entity_name(actor, item) is None for item in value)
+            )
+        },
+    )
+    if details:
+        return f"{label}: {details}."
+    return f"{label}."
+
+
+def _render_success(actor: WorldActor, event: CommandExecutedEvent) -> str:
+    if event.result_events:
+        return "\n".join(_render_domain_event(actor, item) for item in event.result_events)
+    label = event.command_type.replace("-", " ")
+    if event.payload:
+        details = _payload_summary(actor, event.payload)
+        return f"{label.capitalize()} complete: {details}."
+    return f"{label.capitalize()} complete for {_actor_context(actor, event)}."
+
+
 def render_action_result(
     actor: WorldActor,
     discord_user_id: int,
@@ -266,7 +379,7 @@ def render_action_result(
     label = tool.replace("_", " ")
     if isinstance(event, CommandRejectedEvent):
         return f"{label.capitalize()} failed: {explain_rejection(event.reason)}."
-    return f"Done: {label}."
+    return _render_success(actor, event)
 
 
 def render_notes_search_result(event: NotesSearchedEvent) -> str:

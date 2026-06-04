@@ -11,7 +11,7 @@
     {
       "epoch": 3600,
       "content": "!claim-room",
-      "expect": ["Done: claim room."]
+      "expect": ["Room claimed: Mosslit Burrow."]
     }
   ]
 }

@@ -1,0 +1,19 @@
+{
+  "ticks": 12,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!join-institution institution_id=\"Burrow Cartographers\"", "expect": ["Institution joined: institution Burrow Cartographers; institution name Burrow Cartographers; rank member."]},
+    {"tick": 2, "content": "!use-institution-service service_id=\"local map service\"", "expect": ["Institution service used: institution Burrow Cartographers; service local map service; service name local map; output item moss road map."]},
+    {"tick": 3, "content": "!ask-for-work template_id=\"ratcatcher errand\"", "expect": ["Quest generated: quest Clear the North Tunnel; title Clear the North Tunnel; due at epoch 50400."]},
+    {"tick": 4, "content": "!accept-generated-quest quest_id=\"Clear the North Tunnel\"", "expect": ["Quest accepted: quest Clear the North Tunnel; title Clear the North Tunnel."]},
+    {"tick": 5, "content": "!complete-generated-quest quest_id=\"Clear the North Tunnel\"", "expect": ["Quest completed: quest Clear the North Tunnel; title Clear the North Tunnel; reward item guild writ."]},
+    {"tick": 6, "content": "!open-bank-account bank_id=\"Carrot Factors Bank\"", "expect": ["Account opened: bank Carrot Factors Bank; account Carrot Factors Bank account; balance 0."]},
+    {"tick": 7, "content": "!deposit bank_id=\"Carrot Factors Bank\" amount=20", "expect": ["Deposit made: account Carrot Factors Bank account; amount 20; balance 20."]},
+    {"tick": 8, "content": "!take-loan bank_id=\"Carrot Factors Bank\" amount=25", "expect": ["Loan issued: bank Carrot Factors Bank; loan bank loan; amount 25; due at epoch 637200."]},
+    {"tick": 9, "content": "!repay-loan loan_id=\"bank loan\" amount=25", "expect": ["Loan repaid: loan bank loan; amount 25; balance 0."]},
+    {"tick": 10, "content": "!commit-crime crime_type=trespass", "expect": ["Crime committed: crime trespass charge; crime type trespass; fine 15."]},
+    {"tick": 11, "content": "!pay-fine crime_id=\"trespass charge\"", "expect": ["Fine paid: crime trespass charge; amount 15."]}
+  ]
+}
