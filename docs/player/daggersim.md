@@ -11,25 +11,25 @@ In Discord, prefix these commands with `!`.
 Ask about a reachable rumor:
 
 ```text
-ask-rumor rumor_id="carrot vault rumor"
+!ask-rumor rumor_id="carrot vault rumor"
 ```
 
 Investigate it:
 
 ```text
-investigate-rumor rumor_id="carrot vault rumor"
+!investigate-rumor rumor_id="carrot vault rumor"
 ```
 
 Verified rumors can become expansion hooks. Expand the site when the world exposes one:
 
 ```text
-expand-site site_id="Rain Garden Hamlet"
+!expand-site site_id="Rain Garden Hamlet"
 ```
 
 Plan travel to a known travel hub:
 
 ```text
-plan-travel destination_id="North Tunnel"
+!plan-travel destination_id="North Tunnel"
 ```
 
 Travel starts immediately and completes after its route duration. Until it completes, your
@@ -40,26 +40,26 @@ character is still subject to normal world time.
 Join a reachable institution:
 
 ```text
-join-institution institution_id="Burrow Cartographers"
+!join-institution institution_id="Burrow Cartographers"
 ```
 
 Use an institution service:
 
 ```text
-use-institution-service service_id="local map service"
+!use-institution-service service_id="local map service"
 ```
 
 Ask for generated work from a template:
 
 ```text
-ask-for-work template_id="ratcatcher errand"
+!ask-for-work template_id="ratcatcher errand"
 ```
 
 Then accept and complete the generated quest:
 
 ```text
-accept-generated-quest quest_id="Clear the North Tunnel"
-complete-generated-quest quest_id="Clear the North Tunnel"
+!accept-generated-quest quest_id="Clear the North Tunnel"
+!complete-generated-quest quest_id="Clear the North Tunnel"
 ```
 
 Services and generated work can create items, quest records, rewards, deadlines, and
@@ -70,33 +70,33 @@ institution context.
 Open an account at a reachable bank:
 
 ```text
-open-bank-account bank_id="Carrot Factors Bank"
+!open-bank-account bank_id="Carrot Factors Bank"
 ```
 
 Deposit money:
 
 ```text
-deposit bank_id="Carrot Factors Bank" amount=20
+!deposit bank_id="Carrot Factors Bank" amount=20
 ```
 
 Withdraw money:
 
 ```text
-withdraw bank_id="Carrot Factors Bank" amount=5
+!withdraw bank_id="Carrot Factors Bank" amount=5
 ```
 
 Take and repay a loan:
 
 ```text
-take-loan bank_id="Carrot Factors Bank" amount=25
-repay-loan loan_id="bank loan" amount=25
+!take-loan bank_id="Carrot Factors Bank" amount=25
+!repay-loan loan_id="bank loan" amount=25
 ```
 
 Some regions track crimes and fines:
 
 ```text
-commit-crime crime_type=trespass
-pay-fine crime_id="trespass charge"
+!commit-crime crime_type=trespass
+!pay-fine crime_id="trespass charge"
 ```
 
 Unpaid loans and fines are durable state. They can appear in prompts and can be used by
@@ -107,27 +107,27 @@ story or law systems.
 Create a custom class from a reachable template:
 
 ```text
-create-custom-class template_id="Moonlit Forager template" class_name="Rainpath Scout" primary_skills=foraging,stealth,weather
+!create-custom-class template_id="Moonlit Forager template" class_name="Rainpath Scout" primary_skills=foraging,stealth,weather
 ```
 
 Create and cast a spell:
 
 ```text
-create-spell template_id="mend sprout formula" spell_name="Mend Moss"
-cast-spell spell_id="Mend Moss"
+!create-spell template_id="mend sprout formula" spell_name="Mend Moss"
+!cast-spell spell_id="Mend Moss"
 ```
 
 Pacify a creature using a language your character knows:
 
 ```text
-attempt-pacify target_id="moon moth" language=Mothwing
+!attempt-pacify target_id="moon moth" language=Mothwing
 ```
 
 Contract an affliction and transform:
 
 ```text
-contract-affliction affliction_type="moon-form"
-transform form_name="moon hare"
+!contract-affliction affliction_type="moon-form"
+!transform form_name="moon hare"
 ```
 
 ## Dungeons
@@ -135,30 +135,30 @@ transform form_name="moon hare"
 Request a dungeon from a reachable dungeon hook:
 
 ```text
-request-dungeon dungeon_id="Carrot Vault"
+!request-dungeon dungeon_id="Carrot Vault"
 ```
 
 Enter it:
 
 ```text
-enter-dungeon dungeon_id="Carrot Vault"
+!enter-dungeon dungeon_id="Carrot Vault"
 ```
 
 Explore the current dungeon room:
 
 ```text
-search-room
-open-secret-door door_id="cracked tiles"
-mark-path
-view-map
+!search-room
+!open-secret-door door_id="cracked tiles"
+!mark-path
+!view-map
 ```
 
 Set a recall anchor, rest, and leave:
 
 ```text
-set-recall
-rest
-leave-dungeon dungeon_id="Carrot Vault"
+!set-recall
+!rest
+!leave-dungeon dungeon_id="Carrot Vault"
 ```
 
 Dungeon exploration records discovered rooms, secret doors, objectives, map marks, and

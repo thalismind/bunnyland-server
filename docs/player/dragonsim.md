@@ -10,7 +10,7 @@ In Discord, prefix these commands with `!`.
 Discover a reachable point of interest:
 
 ```text
-discover-location old watchtower
+!discover-location old watchtower
 ```
 
 Discovery marks that location as known and adds adventure context such as the location
@@ -21,7 +21,7 @@ type and region.
 Accept a reachable quest:
 
 ```text
-accept-quest quest_id="Find the Lost Ring"
+!accept-quest quest_id="Find the Lost Ring"
 ```
 
 The quest becomes active for your character. Quest context can include a title, status,
@@ -32,7 +32,7 @@ objectives, and rewards.
 Complete a reachable objective:
 
 ```text
-complete-objective objective_id="lost ring objective"
+!complete-objective objective_id="lost ring objective"
 ```
 
 Completing the last required objective can complete the quest and grant its reward. Reward
@@ -43,13 +43,13 @@ items are moved into your inventory when the quest reward is claimed by completi
 Join a faction:
 
 ```text
-join-faction faction_id="Moss Wardens" rank=scout
+!join-faction faction_id="Moss Wardens" rank=scout
 ```
 
 Leave it later:
 
 ```text
-leave-faction Moss Wardens
+!leave-faction Moss Wardens
 ```
 
 Faction membership is durable world state. It can affect prompts, reputation, available
@@ -60,9 +60,9 @@ work, and server-side story rules.
 A simple adventure loop:
 
 ```text
-discover-location old watchtower
-accept-quest quest_id="Find the Lost Ring"
-complete-objective objective_id="lost ring objective"
-join-faction faction_id="Moss Wardens" rank=scout
-leave-faction Moss Wardens
+!discover-location old watchtower
+!accept-quest quest_id="Find the Lost Ring"
+!complete-objective objective_id="lost ring objective"
+!join-faction faction_id="Moss Wardens" rank=scout
+!leave-faction Moss Wardens
 ```

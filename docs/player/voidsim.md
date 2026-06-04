@@ -11,13 +11,13 @@ In Discord, prefix these commands with `!`.
 Open an airlock:
 
 ```text
-open-airlock airlock_id="port airlock"
+!open-airlock airlock_id="port airlock"
 ```
 
 Cycle it:
 
 ```text
-cycle-airlock airlock_id="port airlock"
+!cycle-airlock airlock_id="port airlock"
 ```
 
 Opening an airlock can change module pressure. Cycling can move the airlock through its
@@ -26,7 +26,7 @@ state machine.
 Seal a bulkhead:
 
 ```text
-seal-bulkhead bulkhead_id="aft bulkhead"
+!seal-bulkhead bulkhead_id="aft bulkhead"
 ```
 
 Bulkheads are useful for isolating damage, pressure loss, or unsafe modules.
@@ -36,19 +36,19 @@ Bulkheads are useful for isolating damage, pressure loss, or unsafe modules.
 Repair a ship system:
 
 ```text
-repair-system system_id="life support unit"
+!repair-system system_id="life support unit"
 ```
 
 Reroute power to it:
 
 ```text
-reroute-power grid_id="main bus" system_id="life support unit" amount=30
+!reroute-power grid_id="main bus" system_id="life support unit" amount=30
 ```
 
 Inspect a system:
 
 ```text
-inspect-ship-system system_id="life support unit"
+!inspect-ship-system system_id="life support unit"
 ```
 
 Ship systems track integrity and online state. Power grids track available power.
@@ -58,7 +58,7 @@ Ship systems track integrity and online state. Power grids track available power
 Move characters out of a module:
 
 ```text
-evacuate-module module_id="Mosslit Burrow" destination_id="North Tunnel"
+!evacuate-module module_id="Mosslit Burrow" destination_id="North Tunnel"
 ```
 
 The destination must be reachable and safe enough for the world rules in play.
@@ -68,26 +68,26 @@ The destination must be reachable and safe enough for the world rules in play.
 Dock with a station:
 
 ```text
-dock ship_id="Burrow Runner" station_id="Moss Station"
+!dock ship_id="Burrow Runner" station_id="Moss Station"
 ```
 
 Undock when ready:
 
 ```text
-undock ship_id="Burrow Runner" station_id="Moss Station"
+!undock ship_id="Burrow Runner" station_id="Moss Station"
 ```
 
 Refuel and scan:
 
 ```text
-refuel ship_id="Burrow Runner"
-scan ship_id="Burrow Runner"
+!refuel ship_id="Burrow Runner"
+!scan ship_id="Burrow Runner"
 ```
 
 Answer a detected distress signal:
 
 ```text
-answer-distress-signal signal_id="mayday beacon"
+!answer-distress-signal signal_id="mayday beacon"
 ```
 
 ## Orbit, landing, launch, and jumps
@@ -95,27 +95,27 @@ answer-distress-signal signal_id="mayday beacon"
 Enter orbit around a known body:
 
 ```text
-enter-orbit ship_id="Burrow Runner" body_id="Moss Moon"
+!enter-orbit ship_id="Burrow Runner" body_id="Moss Moon"
 ```
 
 Land and launch:
 
 ```text
-land ship_id="Burrow Runner"
-launch ship_id="Burrow Runner"
+!land ship_id="Burrow Runner"
+!launch ship_id="Burrow Runner"
 ```
 
 Leave orbit:
 
 ```text
-leave-orbit ship_id="Burrow Runner"
+!leave-orbit ship_id="Burrow Runner"
 ```
 
 Plot a course and jump:
 
 ```text
-plot-course ship_id="Burrow Runner" destination_id="North Tunnel"
-jump ship_id="Burrow Runner"
+!plot-course ship_id="Burrow Runner" destination_id="North Tunnel"
+!jump ship_id="Burrow Runner"
 ```
 
 Jumps consume fuel and complete after their route duration. The ship arrives at the plotted

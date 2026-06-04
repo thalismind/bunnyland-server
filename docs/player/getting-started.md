@@ -37,9 +37,8 @@ If something is not shown in the room summary or your inventory, your character 
 Move through an exit by direction:
 
 ```text
-go north
-move south
-north
+!go north
+!move south
 ```
 
 Movement follows an exit from your current room to the destination room. It fails if there is no matching exit, or if your character is not currently in a room.
@@ -51,21 +50,21 @@ Moving creates an in-world movement event and a short-lived movement noise in th
 Pick up portable items from the current room, your inventory, or an open reachable container:
 
 ```text
-take a scrap of paper
-get three berries
-pick up brass key
+!take a scrap of paper
+!get three berries
+!pick up brass key
 ```
 
 Drop an item from your inventory into the current room:
 
 ```text
-drop a scrap of paper
+!drop a scrap of paper
 ```
 
 Put an inventory item into a reachable open container:
 
 ```text
-put a scrap of paper in an oak chest
+!put a scrap of paper in an oak chest
 ```
 
 Inventory rules:
@@ -80,16 +79,16 @@ Inventory rules:
 Speak to everyone awake and active in the room:
 
 ```text
-say Hello, burrow.
+!say Hello, burrow.
 ```
 
 Talk directly to one present character:
 
 ```text
-tell Juniper Meet me outside.
+!tell Juniper Meet me outside.
 ```
 
-`say` records room-scoped speech. `tell` records directed speech and requires the target to be in the same room and able to hear you.
+`!say` records room-scoped speech. `!tell` records directed speech and requires the target to be in the same room and able to hear you.
 
 Speech has an inferred intent. Questions, apologies, requests, praise, and promises can be interpreted differently by social systems, while plain speech is neutral.
 
@@ -99,11 +98,13 @@ A simple first play sequence looks like this:
 
 ```text
 !look
-say Hello.
-take three berries
-go north
+!say Hello.
+!take three berries
+!go north
 !look
-drop three berries
+!drop three berries
 ```
 
-In Discord, prefix world commands with `!`, such as `!say Hello` or `!move north`. In clients or scripts that submit natural commands directly, use the command text without the Discord prefix.
+Player-facing examples in these guides use Discord message syntax. Engine notation omits
+the `!` because Discord has already stripped the prefix before dispatch; for example,
+engine logs or tests may show `say Hello` for the Discord message `!say Hello`.

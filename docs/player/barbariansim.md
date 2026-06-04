@@ -12,13 +12,13 @@ In Discord, prefix these commands with `!`.
 Start a non-lethal contest by issuing a challenge:
 
 ```text
-challenge target_id=Ash terms="first touch"
+!challenge target_id=Ash terms="first touch"
 ```
 
 Spar with a reachable target:
 
 ```text
-spar target_id=Ash
+!spar target_id=Ash
 ```
 
 Sparring still creates combat events and injuries, but it is marked as sparring so other
@@ -29,13 +29,13 @@ systems can treat it differently from a real attack.
 Defend to spend stamina and reduce incoming harm:
 
 ```text
-defend reduction=2
+!defend reduction=2
 ```
 
 Attack a reachable target, optionally with a weapon in your inventory:
 
 ```text
-attack target_id=Ash weapon_id=Axe
+!attack target_id=Ash weapon_id=Axe
 ```
 
 Attacks cost stamina, damage the target, and can create injury events. A weapon with
@@ -46,7 +46,7 @@ durability can wear down as it is used.
 Repair a damaged item:
 
 ```text
-repair-item item_id=Axe amount=1
+!repair-item item_id=Axe amount=1
 ```
 
 Repairing raises durability up to the item's maximum. It is useful before a raid or after
@@ -57,13 +57,13 @@ repeated attacks.
 Build or strengthen a reachable fortification:
 
 ```text
-fortify target_id="wooden palisade" strength=2
+!fortify target_id="wooden palisade" strength=2
 ```
 
 Raid that target:
 
 ```text
-raid target_id="wooden palisade" intensity=5
+!raid target_id="wooden palisade" intensity=5
 ```
 
 Fortifications track durability. Raids apply damage against that durability.
@@ -73,20 +73,20 @@ Fortifications track durability. Raids apply damage against that durability.
 Poison a reachable character:
 
 ```text
-poison-character target_id=Ash severity=2
+!poison-character target_id=Ash severity=2
 ```
 
 Treat poison:
 
 ```text
-treat-poison target_id=Ash
+!treat-poison target_id=Ash
 ```
 
 Some worlds also track corruption:
 
 ```text
-gain-corruption amount=3
-cleanse-corruption
+!gain-corruption amount=3
+!cleanse-corruption
 ```
 
 ## Pickpocketing
@@ -94,7 +94,7 @@ cleanse-corruption
 If pickpocketing is enabled, steal a reachable item from another character:
 
 ```text
-pickpocket target_id=Ash item_id=Coin
+!pickpocket target_id=Ash item_id=Coin
 ```
 
 The item must be in the target's inventory and reachable through the normal name
@@ -105,11 +105,11 @@ resolution rules.
 A simple conflict loop:
 
 ```text
-challenge target_id=Ash terms="first touch"
-defend reduction=2
-spar target_id=Ash
-attack target_id=Ash weapon_id=Axe
-repair-item item_id=Axe amount=1
-fortify target_id="wooden palisade" strength=2
-raid target_id="wooden palisade" intensity=5
+!challenge target_id=Ash terms="first touch"
+!defend reduction=2
+!spar target_id=Ash
+!attack target_id=Ash weapon_id=Axe
+!repair-item item_id=Axe amount=1
+!fortify target_id="wooden palisade" strength=2
+!raid target_id="wooden palisade" intensity=5
 ```

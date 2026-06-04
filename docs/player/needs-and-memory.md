@@ -30,7 +30,7 @@ drink again:
 
 ## Take private notes
 
-Use `take-note` for private memory:
+Use `!take-note` for private memory:
 
 ```text
 !take-note trust the blue door
