@@ -139,6 +139,24 @@ class WorldEventGenerationRequest(BaseModel):
     prompt: str = ""
 
 
+class WorldGeneratorInfo(BaseModel):
+    name: str
+    description: str = ""
+
+
+class WorldGeneratorListResponse(BaseModel):
+    ok: bool = True
+    generators: list[WorldGeneratorInfo] = Field(default_factory=list)
+
+
+class WorldGenerateRequest(BaseModel):
+    seed: str | None = None
+    generator: str | None = None
+    max_rooms: int | None = Field(default=None, ge=1)
+    confirm_reset: bool = False
+    save: bool = False
+
+
 class WorldPatchResponse(BaseModel):
     ok: bool = True
     world_epoch: int
@@ -184,6 +202,16 @@ class WorldSaveResponse(BaseModel):
     saved_at: str | None = None
 
 
+class WorldGenerateResponse(BaseModel):
+    ok: bool = True
+    world_epoch: int
+    seed: str
+    generator: str
+    rooms: int
+    characters: int
+    saved: WorldSaveResponse | None = None
+
+
 class WorldRuntimeResponse(BaseModel):
     ok: bool = True
     world_epoch: int
@@ -220,6 +248,10 @@ __all__ = [
     "WorldCharacterGenerationResponse",
     "WorldEventGenerationRequest",
     "WorldEventGenerationResponse",
+    "WorldGenerateRequest",
+    "WorldGenerateResponse",
+    "WorldGeneratorInfo",
+    "WorldGeneratorListResponse",
     "WorldItemGenerationRequest",
     "WorldItemGenerationResponse",
     "WorldRoomGenerationRequest",

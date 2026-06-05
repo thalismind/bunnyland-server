@@ -117,9 +117,11 @@ This is how you add your own verbs, components, mechanics, or world generators. 
 
 ## Saving, autosaving, and resetting
 
-A world can be saved, autosaved, and reloaded with the server CLI. A reset is just a fresh
-launch without `--load`. See [saving & reloading](../developer/persistence.md) for the full
-persistence behavior and command examples.
+A world can be saved, autosaved, and reloaded with the server CLI. A reset can be a fresh
+launch without `--load`, or an authenticated admin replacement through
+`POST /admin/world/generate`. See [generating worlds](generating-worlds.md) for the web/API
+flow and [saving & reloading](../developer/persistence.md) for the full persistence
+behavior.
 
 ## Observing the world
 

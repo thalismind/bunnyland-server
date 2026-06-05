@@ -51,7 +51,11 @@ The API exposes:
 - `POST /world/commands` to submit a command envelope into the world actor.
 - `WS /world/updates` for an initial snapshot followed by typed domain events.
 - `GET /admin/runtime`, `POST /admin/pause`, and `POST /admin/resume` for
-  server-level tick control; protect `/admin/*` at your reverse proxy.
+  server-level tick control.
+- `GET /admin/world/generators` and `POST /admin/world/generate` for listing enabled
+  generators and replacing the running world.
+
+Protect `/admin/*` at your reverse proxy.
 
 For a step-by-step Linux VPS deployment, use the containerized
 [VPS Docker setup guide](vps-admin-setup.md). The older host-level setup is kept in

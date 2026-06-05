@@ -324,6 +324,7 @@ async def _serve(args) -> None:
                         server_url=openrouter_server_url,
                         max_rooms=args.max_rooms,
                     ),
+                    plugins=plugins,
                     max_ticks=max_ticks,
                 ),
                 loop,

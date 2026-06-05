@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..content import load_content_library
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
-from .admin import save_configured_world
+from ..worldgen import GenOptions, collect_generators
+from .admin import generate_replacement_world, save_configured_world
 from .models import (
     CommandRequest,
     CommandResponse,
@@ -17,6 +19,10 @@ from .models import (
     WorldCharacterGenerationResponse,
     WorldEventGenerationRequest,
     WorldEventGenerationResponse,
+    WorldGenerateRequest,
+    WorldGenerateResponse,
+    WorldGeneratorInfo,
+    WorldGeneratorListResponse,
     WorldItemGenerationRequest,
     WorldItemGenerationResponse,
     WorldPatchRequest,
@@ -42,7 +48,7 @@ WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 
 if TYPE_CHECKING:
     from ..engine import GameLoop
-    from ..worldgen import GenOptions
+    from ..plugins.model import Plugin
     from .subscriptions import EventSubscription
 
 # Imported at module scope (not inside ``create_app``) so that FastAPI can resolve the
@@ -75,6 +81,7 @@ def create_app(
     loop: GameLoop | None = None,
     save_path: str | Path | None = None,
     worldgen_options: GenOptions | None = None,
+    plugins: list[Plugin] | None = None,
     title: str = "bunnyland",
 ):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
@@ -92,6 +99,8 @@ def create_app(
         allow_headers=["*"],
     )
     stream = EventStream(actor)
+    meta = meta or WorldMeta()
+    generator_registry = collect_generators(plugins or ())
 
     @app.get("/health")
     async def health() -> dict:
@@ -169,6 +178,57 @@ def create_app(
                 },
             }
         )
+        return response
+
+    @app.get("/admin/world/generators", response_model=WorldGeneratorListResponse)
+    async def list_world_generators() -> WorldGeneratorListResponse:
+        return WorldGeneratorListResponse(
+            generators=[
+                WorldGeneratorInfo(name=generator.name, description=generator.description)
+                for generator in sorted(generator_registry.values(), key=lambda item: item.name)
+            ]
+        )
+
+    @app.post("/admin/world/generate", response_model=WorldGenerateResponse)
+    async def generate_world(request: WorldGenerateRequest) -> WorldGenerateResponse:
+        if not request.confirm_reset:
+            raise HTTPException(status_code=400, detail="confirm_reset must be true")
+        if not plugins:
+            raise HTTPException(
+                status_code=409,
+                detail="server was not started with a world generator registry",
+            )
+
+        generator_name = (request.generator or meta.generator or "oneshot").strip()
+        generator = generator_registry.get(generator_name)
+        if generator is None:
+            names = ", ".join(sorted(generator_registry)) or "(none)"
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown generator {generator_name!r}; available: {names}",
+            )
+
+        options = worldgen_options or GenOptions()
+        if request.max_rooms is not None:
+            options = replace(options, max_rooms=request.max_rooms)
+        seed = (request.seed or meta.seed or "a quiet marsh").strip() or "a quiet marsh"
+        try:
+            response = await generate_replacement_world(
+                actor,
+                plugins=plugins,
+                generator=generator,
+                seed=seed,
+                options=options,
+                meta=meta,
+                save_path=save_path,
+                save=request.save,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
         return response
 
     @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)

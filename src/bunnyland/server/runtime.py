@@ -12,6 +12,7 @@ from ..persistence import WorldMeta
 from .app import create_app
 
 if TYPE_CHECKING:
+    from ..plugins.model import Plugin
     from ..worldgen import GenOptions
 
 
@@ -24,6 +25,7 @@ async def run_loop_with_api(
     port: int,
     save_path: str | Path | None = None,
     worldgen_options: GenOptions | None = None,
+    plugins: list[Plugin] | None = None,
     max_ticks: int | None = None,
 ) -> int:
     """Run uvicorn and the game loop until either one stops."""
@@ -41,6 +43,7 @@ async def run_loop_with_api(
         loop=loop,
         save_path=save_path,
         worldgen_options=worldgen_options,
+        plugins=plugins,
     )
     server = uvicorn.Server(
         uvicorn.Config(app, host=host, port=port, log_level="info")

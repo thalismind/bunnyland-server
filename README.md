@@ -103,6 +103,8 @@ branch tags and `latest` for the default branch. The web repo publishes
 
 - **[Getting started](docs/player/getting-started.md)** — looking around, moving, inventory,
   and talking to other characters.
+- **[Running your own game](docs/player/running-your-own-game.md)** — running a private,
+  semi-single-player server, saving it, and generating a fresh world.
 - **[Core actions](docs/player/core-actions.md)** — how to look, move, carry items, use
   objects, write, rest, and talk.
 - **[Needs and memory](docs/player/needs-and-memory.md)** — how to eat, drink, take notes,
@@ -134,6 +136,8 @@ branch tags and `latest` for the default branch. The web repo publishes
   core, plugins, clients, scripts, and content libraries.
 - **[Running a server](docs/admin/running-a-server.md)** — install, the `serve` loop, the time
   model, and connecting Ollama or OpenRouter.
+- **[Generating worlds](docs/admin/generating-worlds.md)** — choosing generators, using the
+  web generator page, and replacing a running world through the admin API.
 - **[VPS Docker setup](docs/admin/vps-admin-setup.md)** — Linux VPS deployment with the
   containerized server/frontend stack, Let's Encrypt, admin auth, LLM providers, and Discord bot
   wiring.

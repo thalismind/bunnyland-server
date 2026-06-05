@@ -460,7 +460,12 @@ from ..worldgen.examples import (
     LIFESIM_DEMO,
     VOIDSIM_DEMO,
 )
-from ..worldgen.generators import WorldGenerator, oneshot_generator, recursive_generator
+from ..worldgen.generators import (
+    WorldGenerator,
+    empty_generator,
+    oneshot_generator,
+    recursive_generator,
+)
 from .model import (
     CommandContribution,
     ContentContribution,
@@ -729,6 +734,9 @@ def worldgen_plugin() -> Plugin:
         name="World Generators",
         content=ContentContribution(
             world_generators=(
+                WorldGenerator(
+                    "empty", empty_generator, "blank ECS world with only the world clock"
+                ),
                 WorldGenerator(
                     "oneshot", oneshot_generator, "single LLM proposal, instantiated at once"
                 ),

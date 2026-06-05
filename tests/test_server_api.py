@@ -25,14 +25,16 @@ from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.mechanics.storyteller import IncidentComponent
 from bunnyland.persistence import WorldMeta, load_world
+from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
 from bunnyland.server import app as server_app
-from bunnyland.server.admin import save_configured_world
+from bunnyland.server.admin import generate_replacement_world, save_configured_world
 from bunnyland.server.app import create_app, next_websocket_update
 from bunnyland.server.models import (
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
+    WorldGenerateRequest,
     WorldItemGenerationRequest,
     WorldPatchRequest,
     WorldRoomGenerationRequest,
@@ -53,6 +55,7 @@ from bunnyland.worldgen import (
     RoomContentsProposal,
     RoomNodeProposal,
     StoryEventProposal,
+    collect_generators,
 )
 
 
@@ -180,6 +183,8 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
     assert "/admin/world" in paths
+    assert "/admin/world/generators" in paths
+    assert "/admin/world/generate" in paths
     assert "/admin/world/generate-room" in paths
     assert "/admin/world/generate-character" in paths
     assert "/admin/world/generate-item" in paths
@@ -207,6 +212,65 @@ def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):
     assert reloaded.epoch == scenario.actor.epoch
     assert meta.seed == "moss"
 
+
+async def test_admin_world_generate_replaces_world_and_updates_metadata(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+    meta = WorldMeta(seed="old seed", generator="oneshot")
+    request = WorldGenerateRequest(seed="crystal cellar", generator="oneshot")
+
+    assert request.confirm_reset is False
+
+    response = await generate_replacement_world(
+        scenario.actor,
+        plugins=plugins,
+        generator=registry["oneshot"],
+        seed=request.seed,
+        options=GenOptions(),
+        meta=meta,
+    )
+
+    assert response.seed == "crystal cellar"
+    assert response.generator == "oneshot"
+    assert response.rooms == 2
+    assert response.characters == 2
+    assert meta.seed == "crystal cellar"
+    assert meta.generator == "oneshot"
+    assert meta.plugins == ("bunnyland.worldgen",)
+    assert not scenario.actor.world.has_entity(scenario.room_a)
+    assert len(list(scenario.actor.world.query().with_all([RoomComponent]).execute_entities())) == 2
+
+
+async def test_admin_world_generate_can_create_empty_world(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+    meta = WorldMeta(seed="old seed", generator="oneshot")
+
+    response = await generate_replacement_world(
+        scenario.actor,
+        plugins=plugins,
+        generator=registry["empty"],
+        seed="blank slate",
+        options=GenOptions(),
+        meta=meta,
+    )
+
+    assert response.seed == "blank slate"
+    assert response.generator == "empty"
+    assert response.rooms == 0
+    assert response.characters == 0
+    assert scenario.actor.epoch == 0
+    assert len(list(scenario.actor.world.query().execute_entities())) == 1
+
+
+def test_admin_world_generators_lists_enabled_generators(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+    app = create_app(scenario.actor, plugins=plugins)
+    paths = {route.path for route in app.routes}
+
+    assert "/admin/world/generators" in paths
+    assert {"empty", "oneshot", "recursive"} <= set(registry)
 
 def test_world_schema_includes_available_types_and_live_usage(scenario):
     schema = world_schema(scenario.actor)

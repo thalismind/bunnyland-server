@@ -23,7 +23,13 @@ World generators are **named strategies contributed by plugins**, selected with
 uv run bunnyland serve --generator recursive --max-rooms 8
 ```
 
-Two are built in (from the `bunnyland.worldgen` plugin):
+Three are built in (from the `bunnyland.worldgen` plugin):
+
+### `empty`
+
+Creates a blank ECS world with only the world clock. This is an administrative reset target,
+not a playable generated world. Use it before patching in a hand-authored world or when you
+need to clear a server cleanly.
 
 ### `oneshot` (default)
 
@@ -81,7 +87,8 @@ An unknown `--generator` name lists what the enabled plugins actually provide:
 
 ```
 unknown generator 'maze'; available: apartment-demo, barbariansim-demo, colonysim-demo,
-daggersim-demo, dragonsim-demo, gardensim-demo, lifesim-demo, oneshot, recursive, voidsim-demo
+daggersim-demo, dragonsim-demo, empty, gardensim-demo, lifesim-demo, oneshot, recursive,
+voidsim-demo
 ```
 
 ## Seeds
@@ -92,6 +99,24 @@ DM builds:
 ```bash
 uv run bunnyland serve --llm --generator recursive --seed "a flooded clockwork cathedral"
 ```
+
+## Replacing a running world
+
+When the optional server API is enabled, admins can generate a replacement world without
+restarting the process:
+
+```bash
+curl -fsS -u editor:YOUR_PASSWORD \
+  -H 'Content-Type: application/json' \
+  -X POST https://sandbox.example.com/api/admin/world/generate \
+  -d '{"seed":"a flooded clockwork cathedral","generator":"recursive","max_rooms":8,"confirm_reset":true}'
+```
+
+The endpoint uses the same enabled plugin generator registry as the CLI, clears volatile
+command queues, updates world metadata, and broadcasts a fresh websocket snapshot. The web
+client's `world-generator.html` page wraps this endpoint with generator selection, seed
+entry, snapshot polling, and highlighting for newly appearing entity ids. See
+[generating worlds](../admin/generating-worlds.md) for the player/admin workflow.
 
 ## What a generated world contains
 

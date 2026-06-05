@@ -10,6 +10,7 @@ from .generators import (
     GenOptions,
     WorldGenerator,
     collect_generators,
+    empty_generator,
     oneshot_generator,
     recursive_generator,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "WorldGenerator",
     "WorldProposal",
     "collect_generators",
+    "empty_generator",
     "instantiate",
     "oneshot_generator",
     "recursive_generator",

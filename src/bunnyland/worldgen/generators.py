@@ -4,9 +4,10 @@ A world generator is a named strategy for turning a seed into an instantiated wo
 are contributed by plugins (``ContentContribution.world_generators``) and chosen at runtime
 by name, so a plugin can add a new generation strategy without touching the CLI.
 
-Each generator is ``async generate(actor, seed, options) -> InstantiatedWorld``. The two
-builtins wrap the existing paths: ``oneshot`` (one big proposal) and ``recursive``
-(breadth-first graph). LLM generation uses a DM/world agent selected from ``options.llm``.
+Each generator is ``async generate(actor, seed, options) -> InstantiatedWorld``. The
+builtins include ``empty`` (only the world clock), ``oneshot`` (one big proposal), and
+``recursive`` (breadth-first graph). LLM generation uses a DM/world agent selected from
+``options.llm``.
 """
 
 from __future__ import annotations
@@ -48,6 +49,15 @@ class WorldGenerator:
     name: str
     generate: GenerateFn
     description: str = ""
+
+
+async def empty_generator(
+    actor: WorldActor, seed: str, options: GenOptions
+) -> InstantiatedWorld:
+    """Leave only the actor's default world clock in place."""
+
+    del actor, seed, options
+    return InstantiatedWorld()
 
 
 async def oneshot_generator(actor: WorldActor, seed: str, options: GenOptions) -> InstantiatedWorld:
@@ -105,6 +115,7 @@ def collect_generators(plugins: Iterable) -> dict[str, WorldGenerator]:
 __all__ = [
     "GenOptions",
     "DEFAULT_WORLDGEN_MODEL",
+    "empty_generator",
     "GenerateFn",
     "WorldGenerator",
     "collect_generators",
