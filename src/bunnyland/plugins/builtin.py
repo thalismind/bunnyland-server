@@ -466,6 +466,7 @@ from ..worldgen.generators import (
     empty_generator,
     oneshot_generator,
     recursive_generator,
+    waiting_room_generator,
 )
 from .model import (
     CommandContribution,
@@ -740,6 +741,12 @@ def worldgen_plugin() -> Plugin:
                     "empty",
                     empty_generator,
                     "blank ECS world with only the world clock",
+                    uses_seed=False,
+                ),
+                WorldGenerator(
+                    "waiting-room",
+                    waiting_room_generator,
+                    "a single stark white room with one red chair",
                     uses_seed=False,
                 ),
                 WorldGenerator(

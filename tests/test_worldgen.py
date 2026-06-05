@@ -9,10 +9,14 @@ from bunnyland.core import (
     CommandCost,
     ContainerComponent,
     ControlledBy,
+    IdentityComponent,
     Lane,
+    LightComponent,
     MemoryProfileComponent,
+    PortableComponent,
     RoomComponent,
     SuspendedComponent,
+    TemperatureComponent,
     WorldActor,
     build_submitted_command,
     container_of,
@@ -31,6 +35,7 @@ from bunnyland.worldgen import (
     WorldProposal,
     instantiate,
     validate_proposal,
+    waiting_room_generator,
 )
 
 HOUR = 3600.0
@@ -77,6 +82,31 @@ def test_character_spec_defaults_to_flash_controller_model():
 def test_generation_options_default_to_pro_worldgen_model():
     assert GenOptions(llm=True).model == "deepseek-v4-pro"
     assert GenOptions(llm=True).provider == "ollama"
+
+
+async def test_waiting_room_generator_builds_single_white_room_with_red_chair():
+    actor = WorldActor()
+
+    result = await waiting_room_generator(actor, "ignored seed", GenOptions())
+
+    assert set(result.rooms) == {"waiting_room"}
+    assert set(result.objects) == {"red_chair"}
+    assert result.characters == {}
+
+    room = actor.world.get_entity(result.rooms["waiting_room"])
+    room_component = room.get_component(RoomComponent)
+    assert room_component.title == "Waiting Room"
+    assert room_component.biome == "white-room"
+    assert room_component.indoor is True
+    assert room.get_component(LightComponent).level == 1.0
+    assert room.get_component(TemperatureComponent).celsius == 20.0
+
+    chair = actor.world.get_entity(result.objects["red_chair"])
+    identity = chair.get_component(IdentityComponent)
+    assert identity.name == "a red chair"
+    assert identity.kind == "chair"
+    assert not chair.has_component(PortableComponent)
+    assert container_of(chair) == result.rooms["waiting_room"]
 
 
 async def test_instantiate_builds_the_mvp_checklist():

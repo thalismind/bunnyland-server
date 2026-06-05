@@ -5,9 +5,9 @@ are contributed by plugins (``ContentContribution.world_generators``) and chosen
 by name, so a plugin can add a new generation strategy without touching the CLI.
 
 Each generator is ``async generate(actor, seed, options) -> InstantiatedWorld``. The
-builtins include ``empty`` (only the world clock), ``oneshot`` (one big proposal), and
-``recursive`` (breadth-first graph). LLM generation uses a DM/world agent selected from
-``options.llm``.
+builtins include ``empty`` (only the world clock), ``waiting-room`` (one static room),
+``oneshot`` (one big proposal), and ``recursive`` (breadth-first graph). LLM generation
+uses a DM/world agent selected from ``options.llm``.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from .builder import StubWorldBuilder
 from .defaults import DEFAULT_WORLDGEN_MODEL
 from .instantiate import InstantiatedWorld, instantiate
+from .proposal import ObjectSpec, RoomSpec, WorldProposal
 from .recursive import RecursiveWorldGenerator
 from .recursive_builder import StubWorldAgent
 
@@ -60,6 +61,37 @@ async def empty_generator(
 
     del actor, seed, options
     return InstantiatedWorld()
+
+
+async def waiting_room_generator(
+    actor: WorldActor, seed: str, options: GenOptions
+) -> InstantiatedWorld:
+    """Generate a single bright white room with one red chair."""
+
+    del options
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(
+                key="waiting_room",
+                title="Waiting Room",
+                biome="white-room",
+                indoor=True,
+                light=1.0,
+                celsius=20.0,
+            )
+        ],
+        objects=[
+            ObjectSpec(
+                key="red_chair",
+                room_key="waiting_room",
+                name="a red chair",
+                kind="chair",
+                portable=False,
+            )
+        ],
+    )
+    return await instantiate(actor, proposal)
 
 
 async def oneshot_generator(actor: WorldActor, seed: str, options: GenOptions) -> InstantiatedWorld:
@@ -124,4 +156,5 @@ __all__ = [
     "collect_generators",
     "oneshot_generator",
     "recursive_generator",
+    "waiting_room_generator",
 ]
