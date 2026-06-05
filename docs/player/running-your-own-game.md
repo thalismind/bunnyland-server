@@ -1,7 +1,7 @@
 # Running your own game
 
 This guide is for semi-single-player Bunnyland: you run a private server, open the web
-client, and play in your own world instead of joining a shared community server. Start with
+client, and explore your own world instead of joining a shared community server. Start with
 the demo world first; once that works, generate a custom world from the browser.
 
 ## Start the demo world
@@ -28,13 +28,13 @@ Use the `Server` field if you need to enter `http://127.0.0.1:8765` manually.
 Try a short first session:
 
 1. Open the world view and connect live.
-2. Pick a character in the entities list.
+2. Pick a character or room in the entities list.
 3. Look at the character's current room, inventory, needs, and nearby exits.
-4. Use the live command controls to `look`, `take` a portable item, or `move` through an
-   exit.
+4. Watch the event feed while the server ticks.
 
 The demo is useful because it proves the server, API, web client, and basic game loop work
-before you spend time tuning a custom world.
+before you spend time tuning a custom world. You do not need to claim a character for this
+first check.
 
 ## Generate your own world
 
@@ -92,5 +92,6 @@ uv run --extra server --extra llm bunnyland serve --llm \
 
 Set `OLLAMA_CLOUD_API_KEY` or `OPENROUTER_API_KEY` in your environment first. With `--llm`,
 world generation can use a stronger worldgen model while characters use a cheaper
-controller model. See [running a server](../admin/running-a-server.md#connecting-an-llm)
+controller model. See
+[running a server](https://github.com/thalismind/bunnyland-server/blob/main/docs/admin/running-a-server.md#connecting-an-llm)
 for provider options.
