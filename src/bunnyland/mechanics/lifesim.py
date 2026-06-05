@@ -23,6 +23,7 @@ from ..core.components import (
     DownedComponent,
     IdentityComponent,
     RoomComponent,
+    SleepingComponent,
     SuspendedComponent,
 )
 from ..core.controllers import LLMControllerComponent
@@ -48,6 +49,11 @@ from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .policy import BoundaryTag, PolicyGate
 
 DEFAULT_PREGNANCY_SECONDS = 3 * 24 * 60 * 60
+
+# Sleeping in a room you own or claim earns a temporary "well-rested" buff (spec 20.5).
+WELL_RESTED_BONUS = 0.25  # fractional boost to skill xp gains while rested
+MIN_RESTFUL_SLEEP_SECONDS = 60 * 60  # must sleep at least this long at home to benefit
+MAX_WELL_RESTED_SECONDS = 8 * 60 * 60  # the buff lasts at most this long after waking
 
 
 @dataclass(frozen=True)
@@ -128,6 +134,30 @@ class HomeComponent(Component):
 class RoomClaimComponent(Component):
     claimed_by_id: str
     claimed_at_epoch: int
+
+
+@dataclass(frozen=True)
+class HomeRestComponent(Component):
+    """Marks an in-progress rest while a character sleeps in a room they own or claim.
+
+    RestfulSleepConsequence adds it while the character sleeps at home and converts it
+    into a WellRestedComponent buff once they wake (spec 20.5).
+    """
+
+    asleep_since_epoch: int
+    room_id: str
+
+
+@dataclass(frozen=True)
+class WellRestedComponent(Component):
+    """Buff from waking after a long-enough sleep in your own home (spec 20.5).
+
+    While active (``expires_at_epoch`` still in the future) it raises skill xp gains by
+    ``bonus``, a fraction of the base amount.
+    """
+
+    expires_at_epoch: int
+    bonus: float = WELL_RESTED_BONUS
 
 
 @dataclass(frozen=True)
@@ -306,6 +336,12 @@ class RoomClaimedEvent(DomainEvent):
     room_id_claimed: str
 
 
+class WellRestedEvent(DomainEvent):
+    room_id: str
+    slept_seconds: int
+    expires_at_epoch: int
+
+
 class RoutineSetEvent(DomainEvent):
     activity: str
     next_due_epoch: int
@@ -362,6 +398,14 @@ def _skill_state(entity: Entity) -> SkillSetComponent:
     return SkillSetComponent()
 
 
+def _well_rested_bonus(entity: Entity, epoch: int) -> float:
+    """Active well-rested fractional bonus for ``entity``, or 0 if absent/expired."""
+    if not entity.has_component(WellRestedComponent):
+        return 0.0
+    buff = entity.get_component(WellRestedComponent)
+    return buff.bonus if buff.expires_at_epoch > epoch else 0.0
+
+
 def _add_skill_xp(
     ctx: HandlerContext,
     entity: Entity,
@@ -372,6 +416,8 @@ def _add_skill_xp(
     visibility: EventVisibility = EventVisibility.PRIVATE,
     target_ids: tuple[str, ...] = (),
 ) -> list[DomainEvent]:
+    # A character well-rested from sleeping in their own home learns faster (spec 20.5).
+    amount *= 1.0 + _well_rested_bonus(entity, ctx.epoch)
     state = _skill_state(entity)
     levels = dict(state.levels)
     xp_by_skill = dict(state.xp)
@@ -451,6 +497,17 @@ def _event_room(world: World, entity_id: EntityId) -> str | None:
 
 def _same_room(world: World, left_id: EntityId, right_id: EntityId) -> bool:
     return container_of(world.get_entity(left_id)) == container_of(world.get_entity(right_id))
+
+
+def _owns_or_claims_room(character_id: EntityId, room: Entity) -> bool:
+    """True if ``room`` is the character's claimed home or a room they claim."""
+    cid = str(character_id)
+    if room.has_component(HomeComponent) and room.get_component(HomeComponent).owner_id == cid:
+        return True
+    return (
+        room.has_component(RoomClaimComponent)
+        and room.get_component(RoomClaimComponent).claimed_by_id == cid
+    )
 
 
 def _event_base(epoch: int, **kwargs) -> dict[str, Any]:
@@ -1804,6 +1861,71 @@ class RoutineDueConsequence:
         return events
 
 
+class RestfulSleepConsequence:
+    """Reward sleeping in a room you own or claim with a temporary well-rested buff.
+
+    While a character sleeps in their own home or a claimed room, a HomeRestComponent
+    tracks the rest in progress. On waking, a long-enough rest becomes a
+    WellRestedComponent buff that boosts skill learning; the marker is cleared. Sleeping
+    elsewhere grants nothing, and expired buffs are removed (spec 20.5).
+    """
+
+    def process(self, world: World, epoch: int):
+        events = []
+        # Track in-progress home rest for characters currently asleep at home.
+        sleeping = (
+            world.query()
+            .with_all([SleepingComponent, CharacterComponent])
+            .with_none([SuspendedComponent, DeadComponent, DownedComponent])
+        )
+        for entity in sleeping.execute_entities():
+            room_id = container_of(entity)
+            at_home = (
+                room_id is not None
+                and world.has_entity(room_id)
+                and _owns_or_claims_room(entity.id, world.get_entity(room_id))
+            )
+            if at_home and not entity.has_component(HomeRestComponent):
+                started = entity.get_component(SleepingComponent).started_at_epoch
+                entity.add_component(
+                    HomeRestComponent(asleep_since_epoch=started, room_id=str(room_id))
+                )
+            elif not at_home and entity.has_component(HomeRestComponent):
+                # Moved out of their home while asleep: the rest no longer counts.
+                entity.remove_component(HomeRestComponent)
+
+        # Convert finished home rest into a buff for characters who have since woken.
+        for entity in world.query().with_all([HomeRestComponent]).execute_entities():
+            if entity.has_component(SleepingComponent):
+                continue
+            rest = entity.get_component(HomeRestComponent)
+            entity.remove_component(HomeRestComponent)
+            slept = epoch - rest.asleep_since_epoch
+            if slept < MIN_RESTFUL_SLEEP_SECONDS:
+                continue
+            expires = epoch + min(slept, MAX_WELL_RESTED_SECONDS)
+            replace_component(entity, WellRestedComponent(expires_at_epoch=expires))
+            events.append(
+                WellRestedEvent(
+                    **_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(entity.id),
+                        room_id=rest.room_id,
+                        slept_seconds=int(slept),
+                        expires_at_epoch=expires,
+                    )
+                )
+            )
+
+        # Drop buffs whose window has elapsed.
+        for entity in world.query().with_all([WellRestedComponent]).execute_entities():
+            if entity.get_component(WellRestedComponent).expires_at_epoch <= epoch:
+                entity.remove_component(WellRestedComponent)
+
+        return events
+
+
 def lifesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     if character.has_component(LifeStageComponent):
@@ -1857,6 +1979,8 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
             claimed_rooms.append(room.get_component(RoomComponent).title)
     if claimed_rooms:
         lines.append("Rooms you claim: " + ", ".join(sorted(claimed_rooms)) + ".")
+    if character.has_component(WellRestedComponent):
+        lines.append("You are well-rested after sleeping in your own home.")
     for _edge, routine_id in character.get_relationships(HasRoutine):
         if not world.has_entity(routine_id):
             continue
@@ -1941,6 +2065,7 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
 def install_lifesim(actor) -> None:
     actor.register_consequence(PregnancyDueConsequence())
     actor.register_consequence(RoutineDueConsequence())
+    actor.register_consequence(RestfulSleepConsequence())
     actor.register_gate(PolicyGate((romance_classifier, adult_classifier, pregnancy_classifier)))
 
 
@@ -1975,6 +2100,7 @@ __all__ = [
     "HasRoutine",
     "HomeClaimedEvent",
     "HomeComponent",
+    "HomeRestComponent",
     "HouseholdComponent",
     "HouseholdFundsComponent",
     "HouseholdJoinedEvent",
@@ -2003,6 +2129,7 @@ __all__ = [
     "ReputationComponent",
     "RentChargedEvent",
     "ResolveBirthHandler",
+    "RestfulSleepConsequence",
     "RoomClaimComponent",
     "RoomClaimedEvent",
     "RoutineComponent",
@@ -2023,6 +2150,8 @@ __all__ = [
     "SellItemHandler",
     "TaxAssessedEvent",
     "WagePaidEvent",
+    "WellRestedComponent",
+    "WellRestedEvent",
     "WorkShiftCompletedEvent",
     "WitnessRomanceHandler",
     "adult_classifier",

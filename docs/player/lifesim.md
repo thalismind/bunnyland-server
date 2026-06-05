@@ -189,11 +189,21 @@ Implemented benefits:
 
 - persistent ECS state showing your household, home, and claimed rooms;
 - prompt context that reminds the character where they live and which rooms they claim;
-- a rent/bill loop for charging rent, showing unpaid bills, paying them, and transferring funds.
+- a rent/bill loop for charging rent, showing unpaid bills, paying them, and transferring funds;
+- **restful sleep:** sleeping in your own home or a room you claim leaves you well-rested.
+
+### Restful sleep
+
+When your character `sleep`s in a room they have claimed — either their `claim home` room
+or any `claim room` space — they wake up well-rested. A short nap does nothing; you have to
+sleep at least an hour at home for the rest to count. The well-rested buff lasts up to eight
+hours after waking (longer sleeps give a longer buff) and makes skills you `practice`,
+`study`, or are mentored in progress faster while it is active. Sleeping anywhere you do not
+own or claim grants no bonus.
 
 Not implemented yet:
 
 - automatic eviction or lease expiration;
 - rent schedules;
 - access control or protection from other players;
-- sleep, spawn, storage, or stat bonuses tied to a home.
+- spawn, storage, or stat bonuses tied to a home.
