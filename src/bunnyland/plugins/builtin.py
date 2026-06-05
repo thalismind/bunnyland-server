@@ -468,6 +468,7 @@ from ..worldgen.generators import (
     holiday_generator,
     oneshot_generator,
     recursive_generator,
+    tower_debate_generator,
     waiting_room_generator,
 )
 from .model import (
@@ -761,6 +762,12 @@ def worldgen_plugin() -> Plugin:
                     "holiday",
                     holiday_generator,
                     "a snowy holiday workshop, stable, and field with festive props",
+                    uses_seed=False,
+                ),
+                WorldGenerator(
+                    "tower-debate",
+                    tower_debate_generator,
+                    "a locked tower room where an angel and devil debate forever",
                     uses_seed=False,
                 ),
                 WorldGenerator(

@@ -15,6 +15,7 @@ from .generators import (
     holiday_generator,
     oneshot_generator,
     recursive_generator,
+    tower_debate_generator,
     waiting_room_generator,
 )
 from .instantiate import InstantiatedWorld, instantiate, validate_proposal
@@ -77,6 +78,7 @@ __all__ = [
     "instantiate",
     "oneshot_generator",
     "recursive_generator",
+    "tower_debate_generator",
     "validate_proposal",
     "waiting_room_generator",
 ]

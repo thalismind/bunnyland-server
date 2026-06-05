@@ -287,6 +287,146 @@ async def holiday_generator(
     return await instantiate(actor, proposal)
 
 
+async def tower_debate_generator(
+    actor: WorldActor, seed: str, options: GenOptions
+) -> InstantiatedWorld:
+    """Generate a locked tower room for an endless philosophical debate."""
+
+    del options
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(
+                key="tower_room",
+                title="Locked Tower Room",
+                biome="tower",
+                indoor=True,
+                light=0.6,
+                celsius=17.0,
+            ),
+            RoomSpec(
+                key="stair_landing",
+                title="Tower Stair Landing",
+                biome="tower",
+                indoor=True,
+                light=0.2,
+                celsius=12.0,
+            ),
+        ],
+        exits=[
+            ExitSpec(from_key="tower_room", direction="down", to_key="stair_landing", locked=True),
+            ExitSpec(from_key="stair_landing", direction="up", to_key="tower_room", locked=True),
+        ],
+        objects=[
+            ObjectSpec(
+                key="arched_window",
+                room_key="tower_room",
+                name="a narrow arched window",
+                kind="window",
+                portable=False,
+            ),
+            ObjectSpec(
+                key="debate_table",
+                room_key="tower_room",
+                name="a scarred round table",
+                kind="table",
+                portable=False,
+            ),
+            ObjectSpec(
+                key="angel_chair",
+                room_key="tower_room",
+                name="a white lacquer chair",
+                kind="chair",
+                portable=False,
+            ),
+            ObjectSpec(
+                key="devil_chair",
+                room_key="tower_room",
+                name="a black iron chair",
+                kind="chair",
+                portable=False,
+            ),
+            ObjectSpec(
+                key="narrow_bed",
+                room_key="tower_room",
+                name="a narrow bed nobody uses",
+                kind="bed",
+                portable=False,
+            ),
+            ObjectSpec(
+                key="cool_prisoners_print",
+                room_key="tower_room",
+                name="a framed print reading COOL ETERNAL PRISONERS LIVE HERE",
+                kind="art",
+                portable=False,
+            ),
+            ObjectSpec(
+                key="great_day_print",
+                room_key="tower_room",
+                name="a framed print reading MAKE EVERY DAY THE SAME ARGUMENT",
+                kind="art",
+                portable=False,
+            ),
+            ObjectSpec(
+                key="higher_force_plaque",
+                room_key="tower_room",
+                name="a brass plaque about the unknown higher force",
+                kind="art",
+                portable=False,
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="angel",
+                name="Seraphine",
+                room_key="tower_room",
+                species="angel",
+                controller="llm",
+                llm_profile="condemned-angel",
+                traits=("luminous", "exhausted", "precise"),
+                goals=("prove that life has meaning", "continue the debate forever"),
+            ),
+            CharacterSpec(
+                key="devil",
+                name="Malphas",
+                room_key="tower_room",
+                species="devil",
+                controller="llm",
+                llm_profile="condemned-devil",
+                traits=("acerbic", "patient", "trapped"),
+                goals=("prove that life has no meaning", "continue the debate forever"),
+            ),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    from ..core.components import ReadableComponent
+
+    readable_text = {
+        "cool_prisoners_print": (
+            "Cool Eternal Prisoners Live Here",
+            "A cheerful block-letter print insists that the angel and devil are exactly "
+            "where they belong: in this locked room, being interesting forever.",
+        ),
+        "great_day_print": (
+            "Make Every Day The Same Argument",
+            "The pastel slogan promises renewal, then clarifies that renewal means waking "
+            "into the same debate about meaning, judged by something unseen above the tower.",
+        ),
+        "higher_force_plaque": (
+            "House Rule",
+            "By order of the unknown higher force, neither occupant may leave until the "
+            "meaning of life is settled to everyone's dissatisfaction.",
+        ),
+    }
+    async with actor._lock:
+        for object_key, (title, text) in readable_text.items():
+            actor.world.get_entity(world.objects[object_key]).add_component(
+                ReadableComponent(title=title, text=text)
+            )
+    return world
+
+
 async def oneshot_generator(actor: WorldActor, seed: str, options: GenOptions) -> InstantiatedWorld:
     if options.llm:
         if options.provider != "ollama":
@@ -351,5 +491,6 @@ __all__ = [
     "collect_generators",
     "oneshot_generator",
     "recursive_generator",
+    "tower_debate_generator",
     "waiting_room_generator",
 ]

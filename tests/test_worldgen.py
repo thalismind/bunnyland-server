@@ -22,7 +22,7 @@ from bunnyland.core import (
     build_submitted_command,
     container_of,
 )
-from bunnyland.core.components import WritableComponent
+from bunnyland.core.components import ReadableComponent, WritableComponent
 from bunnyland.core.events import WorldGeneratedEvent
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
@@ -37,6 +37,7 @@ from bunnyland.worldgen import (
     halloween_generator,
     holiday_generator,
     instantiate,
+    tower_debate_generator,
     validate_proposal,
     waiting_room_generator,
 )
@@ -172,6 +173,58 @@ async def test_seasonal_generators_build_playable_demo_worlds(generate, expected
 
     water = actor.world.get_entity(result.objects[expected["water"]])
     assert water.has_component(DrinkableComponent)
+
+
+async def test_tower_debate_generator_builds_locked_philosophy_room():
+    actor = WorldActor()
+
+    result = await tower_debate_generator(actor, "ignored seed", GenOptions())
+
+    assert set(result.rooms) == {"tower_room", "stair_landing"}
+    assert set(result.objects) == {
+        "arched_window",
+        "debate_table",
+        "angel_chair",
+        "devil_chair",
+        "narrow_bed",
+        "cool_prisoners_print",
+        "great_day_print",
+        "higher_force_plaque",
+    }
+    assert set(result.characters) == {"angel", "devil"}
+
+    tower_room = actor.world.get_entity(result.rooms["tower_room"])
+    room_component = tower_room.get_component(RoomComponent)
+    assert room_component.title == "Locked Tower Room"
+    assert room_component.indoor is True
+    exits = {
+        edge.direction: (edge, target)
+        for edge, target in tower_room.get_relationships(ExitTo)
+    }
+    down_edge, down_target = exits["down"]
+    assert down_edge.locked is True
+    assert down_target == result.rooms["stair_landing"]
+
+    angel = actor.world.get_entity(result.characters["angel"])
+    devil = actor.world.get_entity(result.characters["devil"])
+    assert angel.get_component(CharacterComponent).species == "angel"
+    assert devil.get_component(CharacterComponent).species == "devil"
+    assert not angel.has_component(SuspendedComponent)
+    assert not devil.has_component(SuspendedComponent)
+    assert angel.get_relationships(ControlledBy)
+    assert devil.get_relationships(ControlledBy)
+    assert container_of(angel) == result.rooms["tower_room"]
+    assert container_of(devil) == result.rooms["tower_room"]
+
+    window = actor.world.get_entity(result.objects["arched_window"])
+    assert window.get_component(IdentityComponent).kind == "window"
+    assert not window.has_component(PortableComponent)
+
+    art = actor.world.get_entity(result.objects["great_day_print"])
+    readable = art.get_component(ReadableComponent)
+    assert readable.title == "Make Every Day The Same Argument"
+    assert "same debate about meaning" in readable.text
+    assert "unseen above the tower" in readable.text
 
 
 async def test_instantiate_builds_the_mvp_checklist():
