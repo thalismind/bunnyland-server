@@ -11,6 +11,9 @@ services:
         if [ "$${BUNNYLAND_ENABLE_DISCORD:-0}" = "1" ]; then
           set -- "$$@" --discord
         fi
+        if [ "$${BUNNYLAND_ENABLE_MCP:-0}" = "1" ]; then
+          set -- "$$@" --mcp
+        fi
         exec "$$@" \
           --load "$${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}" \
           --ticks 0 \

@@ -14,6 +14,9 @@ services:
         if [ "$${BUNNYLAND_ENABLE_DISCORD:-0}" = "1" ]; then
           set -- "$$@" --discord
         fi
+        if [ "$${BUNNYLAND_ENABLE_MCP:-0}" = "1" ]; then
+          set -- "$$@" --mcp
+        fi
         exec "$$@" \
           --generator "$${BUNNYLAND_GENERATOR:-lifesim-demo}" \
           --ticks 0 \
@@ -31,6 +34,10 @@ services:
       BUNNYLAND_TICK_SECONDS: ${BUNNYLAND_TICK_SECONDS:-30}
       BUNNYLAND_TIME_SCALE: ${BUNNYLAND_TIME_SCALE:-1800}
       BUNNYLAND_AUTOSAVE_EVERY: ${BUNNYLAND_AUTOSAVE_EVERY:-20}
+      BUNNYLAND_ENABLE_LLM: ${BUNNYLAND_ENABLE_LLM:-0}
+      BUNNYLAND_ENABLE_DISCORD: ${BUNNYLAND_ENABLE_DISCORD:-0}
+      BUNNYLAND_ENABLE_MCP: ${BUNNYLAND_ENABLE_MCP:-0}
+      BUNNYLAND_MCP_ADMIN_TOKEN: ${BUNNYLAND_MCP_ADMIN_TOKEN:-}
     expose:
       - "8765"
     restart: unless-stopped

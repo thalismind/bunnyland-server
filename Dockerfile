@@ -16,13 +16,13 @@ RUN apt-get update \
 # cached and only rebuilt when pyproject.toml / uv.lock change.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv,sharing=locked \
-    uv sync --frozen --extra server --extra llm --extra discord --extra chroma --no-dev --no-install-project
+    uv sync --frozen --extra server --extra llm --extra discord --extra chroma --extra mcp --no-dev --no-install-project
 
 # Then add the source and install the project on top of the cached deps.
 COPY README.md ./
 COPY src ./src
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv,sharing=locked \
-    uv sync --frozen --extra server --extra llm --extra discord --extra chroma --no-dev
+    uv sync --frozen --extra server --extra llm --extra discord --extra chroma --extra mcp --no-dev
 
 EXPOSE 8765
 

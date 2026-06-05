@@ -17,8 +17,8 @@ The server repo owns the Compose files:
   `ghcr.io/thalismind/bunnyland-web` with private service ports only;
 - `compose.user.yml.template` is rendered by setup into `compose.user.yml`, which publishes
   the frontend port, sets the domain, binds the data directory, configures TLS/homepage and
-  favicon mounts, loads an existing world when requested, and injects LLM/Discord
-  secrets for the full deployment;
+  favicon mounts, loads an existing world when requested, and injects LLM, Discord, and
+  optional MCP secrets for the full deployment;
 - `deploy/nginx/frontend-tls.conf` and `deploy/nginx/frontend-tls-home.conf` are the TLS
   nginx templates mounted by the generated `compose.user.yml`.
 
@@ -270,6 +270,33 @@ If these are omitted, the bot still starts and users can claim from Discord with
 At this point the VPS is running the full Bunnyland deployment: web client, private server
 API, LLM-backed character controllers, and optionally the Discord bot.
 
+### Optional MCP endpoint
+
+The MCP server is disabled by default. To expose it on the VPS, set both the enable flag
+and a strong MCP admin token when running setup:
+
+```bash
+BUNNYLAND_ENABLE_MCP=1 \
+BUNNYLAND_MCP_ADMIN_TOKEN='change-this-long-random-token' \
+  scripts/vps-docker-setup
+```
+
+The setup wizard can also prompt for these values. When enabled, setup writes
+`BUNNYLAND_ENABLE_MCP=1` and `BUNNYLAND_MCP_ADMIN_TOKEN` into the private
+`compose.user.yml`, starts `bunnyland serve` with `--mcp`, and keeps the server on the
+same private `8765` service port.
+
+The public MCP URL is:
+
+```text
+https://sandbox.example.com/api/mcp
+```
+
+The checked-in nginx templates protect `/api/mcp` with the same htpasswd file as the world
+editor before proxying to the backend `/mcp` endpoint. MCP admin tools still require the
+MCP admin token as a tool argument. See [MCP server](mcp-server.md) for client setup,
+tools, resources, and event notifications.
+
 ### Verify Discord
 
 Test through Discord:
@@ -293,7 +320,7 @@ or `sudo podman logs bunnyland-server-1`.
 
 The setup script starts `compose.yml` plus generated `compose.user.yml`. User-specific
 settings, secrets, image tags, bind mounts, TLS/homepage/favicon settings, world loading,
-LLM provider, and Discord are written into `compose.user.yml`.
+LLM provider, Discord, and MCP settings are written into `compose.user.yml`.
 
 If the same frontend container also serves a static homepage, include the homepage domain
 and expected text:
@@ -326,9 +353,9 @@ the normal update path for new server/web images and checked-in deployment scrip
 
 ### Reapply config changes
 
-To change LLM provider keys, optional provider endpoints, Discord token, image tags, tick
-timing, or similar settings that already exist in `compose.user.yml`, edit that file and
-then reapply the Compose deployment:
+To change LLM provider keys, optional provider endpoints, Discord token, MCP token, image
+tags, tick timing, or similar settings that already exist in `compose.user.yml`, edit that
+file and then reapply the Compose deployment:
 
 ```bash
 scripts/vps-docker-restart

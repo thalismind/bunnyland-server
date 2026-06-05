@@ -40,6 +40,8 @@ server_tag="${BUNNYLAND_SERVER_TAG:-main}"
 web_tag="${BUNNYLAND_WEB_TAG:-main}"
 enable_llm="${BUNNYLAND_ENABLE_LLM:-}"
 enable_discord="${BUNNYLAND_ENABLE_DISCORD:-}"
+enable_mcp="${BUNNYLAND_ENABLE_MCP:-0}"
+mcp_admin_token="${BUNNYLAND_MCP_ADMIN_TOKEN:-}"
 llm_provider="${BUNNYLAND_LLM_PROVIDER:-ollama}"
 worldgen_provider="${BUNNYLAND_WORLDGEN_PROVIDER:-$llm_provider}"
 enable_tls="${BUNNYLAND_TLS:-1}"
@@ -87,6 +89,15 @@ fi
 
 if [[ "$full_deployment" == "1" && -z "${DISCORD_TOKEN:-}" ]]; then
   die "set DISCORD_TOKEN for the full Bunnyland deployment"
+fi
+
+case "$enable_mcp" in
+  0 | 1) ;;
+  *) die "BUNNYLAND_ENABLE_MCP must be 0 or 1" ;;
+esac
+
+if [[ "$enable_mcp" == "1" && -z "$mcp_admin_token" ]]; then
+  die "set BUNNYLAND_MCP_ADMIN_TOKEN when BUNNYLAND_ENABLE_MCP=1"
 fi
 
 install_nerdctl() {
@@ -266,6 +277,9 @@ render_server_service() {
   if [[ "$enable_discord" == "1" ]]; then
     printf '          --discord \\\n'
   fi
+  if [[ "$enable_mcp" == "1" ]]; then
+    printf '          --mcp \\\n'
+  fi
   if [[ "$load_existing_world" == "1" ]]; then
     printf '          --load %s \\\n' "$(shell_quote "$container_world_file")"
   else
@@ -292,6 +306,10 @@ render_server_service() {
   printf '      BUNNYLAND_LLM_PROVIDER: %s\n' "$(yaml_quote "$llm_provider")"
   printf '      BUNNYLAND_WORLDGEN_PROVIDER: %s\n' "$(yaml_quote "$worldgen_provider")"
   printf '      BUNNYLAND_ENABLE_DISCORD: %s\n' "$(yaml_quote "$enable_discord")"
+  printf '      BUNNYLAND_ENABLE_MCP: %s\n' "$(yaml_quote "$enable_mcp")"
+  if [[ "$enable_mcp" == "1" ]]; then
+    printf '      BUNNYLAND_MCP_ADMIN_TOKEN: %s\n' "$(yaml_quote "$mcp_admin_token")"
+  fi
   if [[ "$enable_llm" == "1" ]]; then
     if [[ "$llm_provider" == "ollama" || "$worldgen_provider" == "ollama" ]]; then
       printf '      OLLAMA_CLOUD_API_KEY: %s\n' "$(yaml_quote "$OLLAMA_CLOUD_API_KEY")"

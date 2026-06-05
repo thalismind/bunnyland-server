@@ -47,6 +47,8 @@ There are two auth layers to think about:
 - MCP admin tools require `--mcp-admin-token` or `BUNNYLAND_MCP_ADMIN_TOKEN`.
 - The ordinary HTTP admin API under `/admin/*` should still be protected at the reverse
   proxy, as described in the server and VPS docs.
+- On the VPS Docker deployment, `/api/mcp` is protected by the same nginx htpasswd file as
+  the world editor before it reaches the backend MCP endpoint.
 
 The MCP token is passed as a tool argument named `admin_token` for admin tools. Player
 tools do not require it.
@@ -65,6 +67,11 @@ exact config shape depends on the client, but the important values are:
   "url": "http://127.0.0.1:8765/mcp"
 }
 ```
+
+For the VPS public URL, configure the client to send HTTP Basic auth credentials for the
+world-editor user because nginx protects `/api/mcp` before requests reach Bunnyland. If
+the client does not have dedicated username/password fields, use its custom-header support
+for the `Authorization` header.
 
 The server uses stateful Streamable HTTP so it can deliver MCP resource-update
 notifications. If your client calls the transport `http` rather than `streamable_http`,
