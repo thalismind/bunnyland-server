@@ -32,6 +32,7 @@ from bunnyland.plugins.builtin import (
     ENVIRONMENT,
     GARDENSIM,
     LIFESIM,
+    MCP,
     MECHANISMS,
     MEMORY,
     PERSONA,
@@ -47,7 +48,7 @@ def test_builtin_plugins_declared():
     ids = {p.id for p in bunnyland_plugins()}
     assert ids == {
         BARBARIANSIM, COLONYSIM, CORE_VERBS, LIFESIM, MEMORY, WORLDGEN, ENVIRONMENT,
-        MECHANISMS, SOCIAL, POLICY, PERSONA, GARDENSIM, DRAGONSIM, DAGGERSIM,
+        MECHANISMS, SOCIAL, POLICY, PERSONA, GARDENSIM, DRAGONSIM, DAGGERSIM, MCP,
         VOIDSIM, STORYTELLER,
     }
 
