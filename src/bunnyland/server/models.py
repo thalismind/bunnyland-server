@@ -204,11 +204,23 @@ class WorldSaveResponse(BaseModel):
 
 class WorldGenerateResponse(BaseModel):
     ok: bool = True
-    world_epoch: int
+    job_id: str
+    status: str
     seed: str
     generator: str
-    rooms: int
-    characters: int
+    world_epoch: int
+
+
+class WorldGenerationStatusResponse(BaseModel):
+    ok: bool = True
+    job_id: str | None = None
+    status: str = "idle"
+    seed: str | None = None
+    generator: str | None = None
+    world_epoch: int
+    rooms: int = 0
+    characters: int = 0
+    error: str | None = None
     saved: WorldSaveResponse | None = None
 
 
@@ -250,6 +262,7 @@ __all__ = [
     "WorldEventGenerationResponse",
     "WorldGenerateRequest",
     "WorldGenerateResponse",
+    "WorldGenerationStatusResponse",
     "WorldGeneratorInfo",
     "WorldGeneratorListResponse",
     "WorldItemGenerationRequest",

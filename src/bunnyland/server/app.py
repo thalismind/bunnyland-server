@@ -11,7 +11,7 @@ from ..content import load_content_library
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
 from ..worldgen import GenOptions, collect_generators
-from .admin import generate_replacement_world, save_configured_world
+from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .models import (
     CommandRequest,
     CommandResponse,
@@ -21,6 +21,7 @@ from .models import (
     WorldEventGenerationResponse,
     WorldGenerateRequest,
     WorldGenerateResponse,
+    WorldGenerationStatusResponse,
     WorldGeneratorInfo,
     WorldGeneratorListResponse,
     WorldItemGenerationRequest,
@@ -101,6 +102,7 @@ def create_app(
     stream = EventStream(actor)
     meta = meta or WorldMeta()
     generator_registry = collect_generators(plugins or ())
+    generation_job = None
 
     @app.get("/health")
     async def health() -> dict:
@@ -189,8 +191,15 @@ def create_app(
             ]
         )
 
+    @app.get("/admin/world/generation", response_model=WorldGenerationStatusResponse)
+    async def world_generation_status() -> WorldGenerationStatusResponse:
+        if generation_job is None:
+            return idle_generation_status(actor)
+        return generation_job.status_response(actor)
+
     @app.post("/admin/world/generate", response_model=WorldGenerateResponse)
     async def generate_world(request: WorldGenerateRequest) -> WorldGenerateResponse:
+        nonlocal generation_job
         if not request.confirm_reset:
             raise HTTPException(status_code=400, detail="confirm_reset must be true")
         if not plugins:
@@ -198,6 +207,8 @@ def create_app(
                 status_code=409,
                 detail="server was not started with a world generator registry",
             )
+        if generation_job is not None and generation_job.status == "running":
+            raise HTTPException(status_code=409, detail="world generation is already running")
 
         generator_name = (request.generator or meta.generator or "oneshot").strip()
         generator = generator_registry.get(generator_name)
@@ -213,7 +224,7 @@ def create_app(
             options = replace(options, max_rooms=request.max_rooms)
         seed = (request.seed or meta.seed or "a quiet marsh").strip() or "a quiet marsh"
         try:
-            response = await generate_replacement_world(
+            generation_job = await start_world_generation(
                 actor,
                 plugins=plugins,
                 generator=generator,
@@ -229,7 +240,7 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
-        return response
+        return generation_job.response(actor)
 
     @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)
     async def generate_room(request: WorldRoomGenerationRequest) -> WorldRoomGenerationResponse:

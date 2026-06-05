@@ -375,6 +375,27 @@ class WorldGeneratedEvent(DomainEvent):
     character_count: int
 
 
+class WorldGenerationStartedEvent(DomainEvent):
+    job_id: str
+    seed: str
+    generator: str
+
+
+class WorldGenerationCompletedEvent(DomainEvent):
+    job_id: str
+    seed: str
+    generator: str
+    room_count: int
+    character_count: int
+
+
+class WorldGenerationFailedEvent(DomainEvent):
+    job_id: str
+    seed: str
+    generator: str
+    error: str
+
+
 # --------------------------------------------------------------------------------------
 # Event bus
 # --------------------------------------------------------------------------------------
@@ -470,5 +491,8 @@ __all__ = [
     "SpeechSaidEvent",
     "SpeechToldEvent",
     "WorldPauseStatusChangedEvent",
+    "WorldGenerationCompletedEvent",
+    "WorldGenerationFailedEvent",
+    "WorldGenerationStartedEvent",
     "WorldGeneratedEvent",
 ]

@@ -20,7 +20,11 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
-from bunnyland.core.events import ActorMovedEvent
+from bunnyland.core.events import (
+    ActorMovedEvent,
+    WorldGenerationCompletedEvent,
+    WorldGenerationStartedEvent,
+)
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.mechanics.storyteller import IncidentComponent
@@ -29,7 +33,11 @@ from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
 from bunnyland.server import app as server_app
-from bunnyland.server.admin import generate_replacement_world, save_configured_world
+from bunnyland.server.admin import (
+    generate_replacement_world,
+    save_configured_world,
+    start_world_generation,
+)
 from bunnyland.server.app import create_app, next_websocket_update
 from bunnyland.server.models import (
     WorldCharacterGenerationRequest,
@@ -232,13 +240,22 @@ async def test_admin_world_generate_replaces_world_and_updates_metadata(scenario
 
     assert response.seed == "crystal cellar"
     assert response.generator == "oneshot"
-    assert response.rooms == 2
-    assert response.characters == 2
+    assert response.status == "succeeded"
     assert meta.seed == "crystal cellar"
     assert meta.generator == "oneshot"
     assert meta.plugins == ("bunnyland.worldgen",)
     assert not scenario.actor.world.has_entity(scenario.room_a)
     assert len(list(scenario.actor.world.query().with_all([RoomComponent]).execute_entities())) == 2
+    assert (
+        len(
+            list(
+                scenario.actor.world.query()
+                .with_all([CharacterComponent])
+                .execute_entities()
+            )
+        )
+        == 2
+    )
 
 
 async def test_admin_world_generate_can_create_empty_world(scenario):
@@ -257,10 +274,42 @@ async def test_admin_world_generate_can_create_empty_world(scenario):
 
     assert response.seed == "blank slate"
     assert response.generator == "empty"
-    assert response.rooms == 0
-    assert response.characters == 0
+    assert response.status == "succeeded"
     assert scenario.actor.epoch == 0
     assert len(list(scenario.actor.world.query().execute_entities())) == 1
+
+
+async def test_admin_world_generation_job_starts_and_publishes_completion(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+    meta = WorldMeta(seed="old seed", generator="oneshot")
+    started: list[WorldGenerationStartedEvent] = []
+    completed: list[WorldGenerationCompletedEvent] = []
+    scenario.actor.bus.subscribe(WorldGenerationStartedEvent, started.append)
+    scenario.actor.bus.subscribe(WorldGenerationCompletedEvent, completed.append)
+
+    job = await start_world_generation(
+        scenario.actor,
+        plugins=plugins,
+        generator=registry["recursive"],
+        seed="slow moss",
+        options=GenOptions(max_rooms=3),
+        meta=meta,
+    )
+
+    assert job.status == "running"
+    assert job.response(scenario.actor).status == "running"
+    assert started and started[0].job_id == job.job_id
+    assert len(list(scenario.actor.world.query().execute_entities())) == 1
+
+    assert job.task is not None
+    await job.task
+
+    assert job.status == "succeeded"
+    assert job.rooms == 3
+    assert job.characters == 2
+    assert completed and completed[-1].job_id == job.job_id
+    assert job.status_response(scenario.actor).status == "succeeded"
 
 
 def test_admin_world_generators_lists_enabled_generators(scenario):
@@ -270,6 +319,7 @@ def test_admin_world_generators_lists_enabled_generators(scenario):
     paths = {route.path for route in app.routes}
 
     assert "/admin/world/generators" in paths
+    assert "/admin/world/generation" in paths
     assert {"empty", "oneshot", "recursive"} <= set(registry)
 
 def test_world_schema_includes_available_types_and_live_usage(scenario):

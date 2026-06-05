@@ -52,8 +52,9 @@ The API exposes:
 - `WS /world/updates` for an initial snapshot followed by typed domain events.
 - `GET /admin/runtime`, `POST /admin/pause`, and `POST /admin/resume` for
   server-level tick control.
-- `GET /admin/world/generators` and `POST /admin/world/generate` for listing enabled
-  generators and replacing the running world.
+- `GET /admin/world/generators`, `POST /admin/world/generate`, and
+  `GET /admin/world/generation` for listing enabled generators, starting async world
+  replacement, and checking generation status.
 
 Protect `/admin/*` at your reverse proxy.
 

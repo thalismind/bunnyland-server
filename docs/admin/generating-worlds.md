@@ -58,13 +58,13 @@ The page:
 - accepts a seed/prompt and room budget;
 - requires an explicit reset checkbox before replacing the live world;
 - can request a save after generation when the server was started with `--save`;
-- keeps a websocket open and polls snapshots while generation is running;
+- starts generation as a background job, then watches status and polls snapshots;
 - highlights entity ids that were not present in the previous snapshot.
 
-The current reset endpoint swaps in the generated world when generation completes. The web
-page still shows the replacement snapshot immediately and highlights new entities. More
-granular per-phase streaming can be added later by emitting generator progress events while
-rooms, objects, and characters are spawned.
+The reset endpoint clears the current world immediately and returns a job id. The
+generator then adds entities while the page watches `/world/snapshot`, websocket domain
+events, and `GET /admin/world/generation`. Completion is announced with
+`WorldGenerationCompletedEvent`; failures are announced with `WorldGenerationFailedEvent`.
 
 ## Generate through the admin API
 
@@ -78,7 +78,7 @@ curl -fsS -u editor:YOUR_PASSWORD \
   https://sandbox.example.com/api/admin/world/generators
 ```
 
-Replace the running world:
+Start replacing the running world:
 
 ```bash
 curl -fsS -u editor:YOUR_PASSWORD \
@@ -94,9 +94,17 @@ curl -fsS -u editor:YOUR_PASSWORD \
 ```
 
 `confirm_reset` must be `true`. The endpoint clears the current ECS world and volatile
-command queues, generates the replacement with the same enabled plugins, updates world
-metadata, broadcasts a fresh snapshot on the websocket, and saves if `save` is true and the
-server has a configured save path.
+command queues, updates world metadata, starts an async generation job, broadcasts a fresh
+snapshot on the websocket, and returns immediately. While the job runs, poll:
+
+```bash
+curl -fsS -u editor:YOUR_PASSWORD \
+  https://sandbox.example.com/api/admin/world/generation
+```
+
+The status endpoint reports `running`, `succeeded`, `failed`, or `idle`. If `save` is true
+and the server has a configured save path, the completed generated world is saved before
+the status flips to `succeeded`.
 
 ## After generation
 

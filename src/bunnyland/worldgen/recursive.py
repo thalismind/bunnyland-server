@@ -16,8 +16,10 @@ validates structurally (guarding against duplicate edges) and performs every spa
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import deque
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -83,47 +85,71 @@ class RecursiveWorldGenerator:
         return self.actor.world
 
     async def generate(self, seed: str) -> InstantiatedWorld:
-        async with self.actor._lock:
-            self._build_rooms(seed)
-            self._populate_rooms()
-            self._fill_containment()
-            await self.actor.bus.publish(
-                WorldGeneratedEvent(
-                    event_id=uuid4().hex,
-                    world_epoch=self.actor.epoch,
-                    created_at=datetime.now(UTC),
-                    seed=seed,
-                    room_count=len(self.result.rooms),
-                    character_count=len(self.result.characters),
-                )
+        await self._build_rooms(seed)
+        await self._populate_rooms()
+        await self._fill_containment()
+        await self.actor.bus.publish(
+            WorldGeneratedEvent(
+                event_id=uuid4().hex,
+                world_epoch=self.actor.epoch,
+                created_at=datetime.now(UTC),
+                seed=seed,
+                room_count=len(self.result.rooms),
+                character_count=len(self.result.characters),
             )
+        )
         logger.info("recursive worldgen: %s", self.stats)
         return self.result
 
     # -- phase 1-3: rooms -------------------------------------------------------------
 
-    def _build_rooms(self, seed: str) -> None:
-        root = self.builder.propose_room(seed, behind=None, known_rooms={})
-        root_key = self._spawn_room("room_0", root)
-        frontier: deque[tuple[str, DoorProposal]] = deque(
-            (root_key, door) for door in self.builder.propose_doors(root)
+    async def _build_rooms(self, seed: str) -> None:
+        root = await asyncio.to_thread(
+            self.builder.propose_room, seed, behind=None, known_rooms={}
         )
+        async with self.actor._lock:
+            root_key = self._spawn_room("room_0", root)
+        await asyncio.sleep(0)
+        frontier: deque[tuple[str, DoorProposal]] = deque(
+            (root_key, door) for door in await asyncio.to_thread(self.builder.propose_doors, root)
+        )
+        await asyncio.sleep(0)
 
         counter = 1
         while frontier and len(self.result.rooms) < self.max_rooms:
             source_key, door = frontier.popleft()
-            spec = self.builder.propose_room(
-                seed, behind=door, known_rooms=dict(self._descriptions)
+            spec = await asyncio.to_thread(
+                self.builder.propose_room,
+                seed,
+                behind=door,
+                known_rooms=dict(self._descriptions),
             )
-            new_key = self._spawn_room(f"room_{counter}", spec)
-            counter += 1
-            self._connect(source_key, new_key, door)
-            frontier.extend((new_key, d) for d in self.builder.propose_doors(spec))
+            async with self.actor._lock:
+                new_key = self._spawn_room(f"room_{counter}", spec)
+                counter += 1
+                self._connect(source_key, new_key, door)
+            await asyncio.sleep(0)
+            doors = await asyncio.to_thread(self.builder.propose_doors, spec)
+            frontier.extend((new_key, d) for d in doors)
+            await asyncio.sleep(0)
 
         # Budget spent: close every remaining door.
         while frontier:
             source_key, door = frontier.popleft()
-            self._resolve_dangling(source_key, door)
+            candidates = {
+                key: self._descriptions[key]
+                for key in self.result.rooms
+                if key != source_key and not self._connected(source_key, key)
+            }
+            resolution = await asyncio.to_thread(
+                self.builder.resolve_dangling_door,
+                door,
+                room=self._room_specs[source_key],
+                candidates=candidates,
+            )
+            async with self.actor._lock:
+                self._resolve_dangling(source_key, door, candidates, resolution)
+            await asyncio.sleep(0)
 
     def _spawn_room(self, key: str, spec: RoomNodeProposal) -> str:
         components = [RoomComponent(title=spec.title, biome=spec.biome, indoor=spec.indoor)]
@@ -158,15 +184,13 @@ class RecursiveWorldGenerator:
                 self.result.rooms[source_key],
             )
 
-    def _resolve_dangling(self, source_key: str, door: DoorProposal) -> None:
-        candidates = {
-            key: self._descriptions[key]
-            for key in self.result.rooms
-            if key != source_key and not self._connected(source_key, key)
-        }
-        resolution = self.builder.resolve_dangling_door(
-            door, room=self._room_specs[source_key], candidates=candidates
-        )
+    def _resolve_dangling(
+        self,
+        source_key: str,
+        door: DoorProposal,
+        candidates: Mapping[str, str],
+        resolution,
+    ) -> None:
         if resolution.action == "link" and resolution.target_room_key in candidates:
             self._connect(source_key, resolution.target_room_key, door)
             self.stats["linked"] += 1
@@ -191,20 +215,24 @@ class RecursiveWorldGenerator:
 
     # -- phase 4: contents ------------------------------------------------------------
 
-    def _populate_rooms(self) -> None:
+    async def _populate_rooms(self) -> None:
         char_counter = 0
         for room_key, room_id in list(self.result.rooms.items()):
-            contents = self.builder.propose_contents(
-                self._room_specs[room_key], known_rooms=dict(self._descriptions)
+            contents = await asyncio.to_thread(
+                self.builder.propose_contents,
+                self._room_specs[room_key],
+                known_rooms=dict(self._descriptions),
             )
-            for index, item in enumerate(contents.objects):
-                self._spawn_object(
-                    room_id, f"{room_key}_obj{index}", item, ContainmentMode.ROOM_CONTENT
-                )
-            for character in contents.characters:
-                character.key = f"char_{char_counter}"
-                char_counter += 1
-                self._spawn_character(room_id, character)
+            async with self.actor._lock:
+                for index, item in enumerate(contents.objects):
+                    self._spawn_object(
+                        room_id, f"{room_key}_obj{index}", item, ContainmentMode.ROOM_CONTENT
+                    )
+                for character in contents.characters:
+                    character.key = f"char_{char_counter}"
+                    char_counter += 1
+                    self._spawn_character(room_id, character)
+            await asyncio.sleep(0)
 
     def _spawn_object(
         self, container_id, key: str, item: ItemProposal, mode: ContainmentMode
@@ -224,27 +252,37 @@ class RecursiveWorldGenerator:
 
     # -- phase 5: recurse into inventory and containers -------------------------------
 
-    def _fill_containment(self) -> None:
+    async def _fill_containment(self) -> None:
         for key, character_id in list(self.result.characters.items()):
-            entity = self.world.get_entity(character_id)
-            identity = entity.get_component(IdentityComponent)
-            character = entity.get_component(CharacterComponent)
-            items = self.builder.propose_inventory(name=identity.name, species=character.species)
-            for index, item in enumerate(items):
-                self._spawn_object(
-                    character_id, f"{key}_inv{index}", item, ContainmentMode.INVENTORY
-                )
+            async with self.actor._lock:
+                entity = self.world.get_entity(character_id)
+                identity = entity.get_component(IdentityComponent)
+                character = entity.get_component(CharacterComponent)
+                name = identity.name
+                species = character.species
+            items = await asyncio.to_thread(
+                self.builder.propose_inventory, name=name, species=species
+            )
+            async with self.actor._lock:
+                for index, item in enumerate(items):
+                    self._spawn_object(
+                        character_id, f"{key}_inv{index}", item, ContainmentMode.INVENTORY
+                    )
+            await asyncio.sleep(0)
 
         for key, object_id in list(self.result.objects.items()):
-            entity = self.world.get_entity(object_id)
-            if not entity.has_component(ContainerComponent):
-                continue
-            name = entity.get_component(IdentityComponent).name
-            items = self.builder.propose_container_contents(name=name)
-            for index, item in enumerate(items):
-                self._spawn_object(
-                    object_id, f"{key}_contains{index}", item, ContainmentMode.CONTAINER
-                )
+            async with self.actor._lock:
+                entity = self.world.get_entity(object_id)
+                if not entity.has_component(ContainerComponent):
+                    continue
+                name = entity.get_component(IdentityComponent).name
+            items = await asyncio.to_thread(self.builder.propose_container_contents, name=name)
+            async with self.actor._lock:
+                for index, item in enumerate(items):
+                    self._spawn_object(
+                        object_id, f"{key}_contains{index}", item, ContainmentMode.CONTAINER
+                    )
+            await asyncio.sleep(0)
 
 
 __all__ = ["RecursiveWorldGenerator"]

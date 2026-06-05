@@ -48,8 +48,10 @@ From the CLI, a reset is launching **without** `--load`, which generates a fresh
 discard a save, delete the file or point `--save` at a new path to keep the old one.
 
 With the server API enabled, admins can also replace the live world through
-`POST /admin/world/generate` or the web client's `world-generator.html` page. If the request
-uses `"save": true`, the replacement is written to the configured `--save` path.
+`POST /admin/world/generate` or the web client's `world-generator.html` page. That request
+starts an async generation job; `GET /admin/world/generation` reports when it has finished.
+If the request uses `"save": true`, the completed replacement is written to the configured
+`--save` path.
 
 ## What is and isn't persisted
 
