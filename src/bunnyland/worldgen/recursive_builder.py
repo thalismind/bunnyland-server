@@ -302,6 +302,7 @@ class OllamaWorldAgent:
         known_rooms: Mapping[str, str],
         schema_context: str = "",
     ) -> RoomNodeProposal:
+        existing = "; ".join(known_rooms.values()) or "(none)"
         if behind is None:
             instruction = (
                 f"Seed: {seed}. Describe the starting room as JSON with keys "
@@ -310,9 +311,9 @@ class OllamaWorldAgent:
         else:
             instruction = (
                 f"Through the {behind.direction} door ({behind.beyond_hint!r}) lies a new room. "
+                f"Existing room titles: {existing}. Choose a title that is not already used. "
                 "Describe it as JSON with keys title, biome, indoor, light, celsius, description."
             )
-        del known_rooms
         return RoomNodeProposal.model_validate(
             self._ask(self._with_schema_context(instruction, schema_context))
         )

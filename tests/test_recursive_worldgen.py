@@ -10,6 +10,7 @@ from bunnyland.core import (
     ContainerComponent,
     ControlledBy,
     DoorComponent,
+    RoomComponent,
     SuspendedComponent,
     WorldActor,
     container_of,
@@ -21,10 +22,12 @@ from bunnyland.core.events import WorldGeneratedEvent
 from bunnyland.mechanics.consumables import FoodComponent
 from bunnyland.worldgen import (
     DanglingResolution,
+    DoorProposal,
     GenOptions,
     OllamaWorldAgent,
     OpenRouterWorldAgent,
     RecursiveWorldGenerator,
+    RoomNodeProposal,
     StubWorldAgent,
     oneshot_generator,
     recursive_generator,
@@ -97,6 +100,47 @@ async def test_no_duplicate_exit_overwrites_on_link():
     for room_id in result.rooms.values():
         for _edge, target in world.get_entity(room_id).get_relationships(ExitTo):
             assert world.has_entity(target)
+
+
+class _DuplicateRoomTitleAgent(StubWorldAgent):
+    def __init__(self) -> None:
+        self._door_calls = 0
+
+    def propose_room(self, *args, **kwargs) -> RoomNodeProposal:
+        return RoomNodeProposal(
+            title="Neon Platform, Midnight Rain",
+            biome="city",
+            indoor=False,
+            description="a rain-slick platform under neon billboards",
+        )
+
+    def propose_doors(self, *args, **kwargs):
+        self._door_calls += 1
+        if self._door_calls == 1:
+            return [
+                DoorProposal(direction="north", beyond_hint="Transit Stairs"),
+                DoorProposal(direction="east", beyond_hint="Signal Canopy"),
+            ]
+        return []
+
+
+async def test_room_titles_are_unique_during_recursive_generation():
+    actor = WorldActor()
+    gen = RecursiveWorldGenerator(actor, _DuplicateRoomTitleAgent(), max_rooms=3)
+    result = await gen.generate("neon rain")
+    world = actor.world
+
+    titles = [
+        world.get_entity(room_id).get_component(RoomComponent).title
+        for room_id in result.rooms.values()
+    ]
+
+    assert titles == [
+        "Neon Platform, Midnight Rain",
+        "Neon Platform, Midnight Rain 2",
+        "Neon Platform, Midnight Rain 3",
+    ]
+    assert [spec.title for spec in gen._room_specs.values()] == titles
 
 
 async def test_rooms_are_populated_with_objects_and_characters():

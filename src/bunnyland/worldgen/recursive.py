@@ -62,6 +62,10 @@ _OPPOSITES = {
 }
 
 
+def _normalize_room_title(title: str) -> str:
+    return " ".join(title.casefold().split())
+
+
 def _opposite(direction: str) -> str:
     return _OPPOSITES.get(direction.lower(), "back")
 
@@ -79,6 +83,7 @@ class RecursiveWorldGenerator:
         self.stats = {"rooms": 0, "sealed": 0, "dropped": 0, "linked": 0}
         self._room_specs: dict[str, RoomNodeProposal] = {}
         self._descriptions: dict[str, str] = {}
+        self._room_titles: dict[str, str] = {}
 
     @property
     def world(self):
@@ -122,7 +127,7 @@ class RecursiveWorldGenerator:
                 self.builder.propose_room,
                 seed,
                 behind=door,
-                known_rooms=dict(self._descriptions),
+                known_rooms=dict(self._room_titles),
             )
             async with self.actor._lock:
                 new_key = self._spawn_room(f"room_{counter}", spec)
@@ -137,7 +142,7 @@ class RecursiveWorldGenerator:
         while frontier:
             source_key, door = frontier.popleft()
             candidates = {
-                key: self._descriptions[key]
+                key: self._room_titles[key]
                 for key in self.result.rooms
                 if key != source_key and not self._connected(source_key, key)
             }
@@ -152,6 +157,7 @@ class RecursiveWorldGenerator:
             await asyncio.sleep(0)
 
     def _spawn_room(self, key: str, spec: RoomNodeProposal) -> str:
+        spec = self._with_unique_room_title(key, spec)
         components = [RoomComponent(title=spec.title, biome=spec.biome, indoor=spec.indoor)]
         if spec.light is not None:
             components.append(LightComponent(level=spec.light))
@@ -160,8 +166,25 @@ class RecursiveWorldGenerator:
         self.result.rooms[key] = spawn_entity(self.world, components).id
         self._room_specs[key] = spec
         self._descriptions[key] = spec.description or spec.title
+        self._room_titles[key] = spec.title
         self.stats["rooms"] += 1
         return key
+
+    def _with_unique_room_title(
+        self, key: str, spec: RoomNodeProposal
+    ) -> RoomNodeProposal:
+        used = {_normalize_room_title(title) for title in self._room_titles.values()}
+        base = spec.title.strip() or key.replace("_", " ").title()
+        if _normalize_room_title(base) not in used:
+            return spec.model_copy(update={"title": base})
+
+        index = 2
+        while True:
+            title = f"{base} {index}"
+            if _normalize_room_title(title) not in used:
+                logger.warning("renaming duplicate room title %r to %r", spec.title, title)
+                return spec.model_copy(update={"title": title})
+            index += 1
 
     def _connected(self, source_key: str, dest_key: str) -> bool:
         source = self.world.get_entity(self.result.rooms[source_key])
@@ -221,7 +244,7 @@ class RecursiveWorldGenerator:
             contents = await asyncio.to_thread(
                 self.builder.propose_contents,
                 self._room_specs[room_key],
-                known_rooms=dict(self._descriptions),
+                known_rooms=dict(self._room_titles),
             )
             async with self.actor._lock:
                 for index, item in enumerate(contents.objects):
