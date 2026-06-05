@@ -13,6 +13,7 @@ dependencies = [
 chroma = ["chromadb>=0.5"]
 discord = ["discord.py>=2.4"]
 llm = ["ollama>=0.3", "openrouter>=0.9.1"]
+mcp = ["mcp>=1.10"]
 server = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 
 [project.scripts]

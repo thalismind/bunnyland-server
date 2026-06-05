@@ -66,6 +66,7 @@ from .components import (
 from .controllers import (
     DiscordControllerComponent,
     LLMControllerComponent,
+    MCPControllerComponent,
     SuspendedControllerComponent,
 )
 from .ecs import (
@@ -151,6 +152,7 @@ __all__ = [
     "LifecycleComponent",
     "LightComponent",
     "LockableComponent",
+    "MCPControllerComponent",
     "MemoryProfileComponent",
     "NoiseComponent",
     "MoveCommand",

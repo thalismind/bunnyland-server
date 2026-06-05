@@ -32,6 +32,7 @@ from .plugins import (
     resolve_order,
     select,
 )
+from .plugins.builtin import MCP
 from .prompts.builder import PromptBuilder
 from .worldgen import DEFAULT_WORLDGEN_MODEL, GenOptions, collect_generators
 
@@ -53,11 +54,25 @@ def load_dotenv(path: str | Path = ".env") -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
-def select_plugins(modules: list[str], enabled_ids: list[str] | None) -> list:
+def select_plugins(
+    modules: list[str],
+    enabled_ids: list[str] | None,
+    extra_enabled_ids: tuple[str, ...] = (),
+) -> list:
     """Collect builtin + requested plugins and select which are enabled."""
     plugins = list(bunnyland_plugins())
     plugins.extend(load_modules(modules))
-    return select(plugins, enabled_ids)
+    if not extra_enabled_ids:
+        return select(plugins, enabled_ids)
+    if enabled_ids is not None:
+        return select(plugins, [*enabled_ids, *extra_enabled_ids])
+    selected = select(plugins, None)
+    selected_ids = {plugin.id for plugin in selected}
+    for plugin in select(plugins, extra_enabled_ids):
+        if plugin.id not in selected_ids:
+            selected.append(plugin)
+            selected_ids.add(plugin.id)
+    return selected
 
 
 def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[WorldActor, list]:
@@ -122,9 +137,15 @@ async def _serve(args) -> None:
         )
     if args.api_port is not None and args.discord_playtest:
         raise SystemExit("--discord-playtest cannot be combined with --api-port yet")
+    if args.mcp and args.api_port is None:
+        raise SystemExit("--mcp mounts on the HTTP API and needs --api-port")
 
     try:
-        plugins = select_plugins(args.module, args.plugin)
+        plugins = select_plugins(
+            args.module,
+            args.plugin,
+            extra_enabled_ids=(MCP,) if args.mcp else (),
+        )
         ordered_plugins = resolve_order(plugins)
     except PluginError as exc:
         logging.getLogger(__name__).error("plugin loading failed: %s", exc)
@@ -133,7 +154,7 @@ async def _serve(args) -> None:
 
     host = api_key = worldgen_api_key = discord_token = None
     openrouter_api_key = openrouter_server_url = None
-    if args.llm or args.discord:
+    if args.llm or args.discord or args.mcp:
         load_dotenv()
     if args.llm:
         openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -310,6 +331,8 @@ async def _serve(args) -> None:
         from .server.runtime import run_loop_with_api
 
         print(f"Serving client API at http://{args.api_host}:{args.api_port}.")
+        if args.mcp:
+            print(f"Serving MCP at http://{args.api_host}:{args.api_port}/mcp.")
         try:
             ticks = await _run_with_optional_discord(
                 run_loop_with_api(
@@ -329,6 +352,8 @@ async def _serve(args) -> None:
                         max_rooms=args.max_rooms,
                     ),
                     plugins=plugins,
+                    mcp_admin_token=args.mcp_admin_token
+                    or os.environ.get("BUNNYLAND_MCP_ADMIN_TOKEN"),
                     max_ticks=max_ticks,
                 ),
                 loop,
@@ -468,6 +493,16 @@ def main(argv: list[str] | None = None) -> int:
         "--discord-playtest",
         default=None,
         help="run a JSON playtest through a mocked Discord adapter instead of Discord",
+    )
+    serve.add_argument(
+        "--mcp",
+        action="store_true",
+        help="mount the HTTP MCP server on the existing API port (needs mcp and server extras)",
+    )
+    serve.add_argument(
+        "--mcp-admin-token",
+        default=None,
+        help="admin token required by MCP world mutation tools (or BUNNYLAND_MCP_ADMIN_TOKEN)",
     )
 
     args = parser.parse_args(argv)

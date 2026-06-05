@@ -44,6 +44,7 @@ from .consequences import (
 from .controllers import (
     DiscordControllerComponent,
     LLMControllerComponent,
+    MCPControllerComponent,
     SuspendedControllerComponent,
 )
 from .ecs import ensure_blank_prefab, parse_entity_id, replace_component, spawn_entity
@@ -470,6 +471,8 @@ class WorldActor:
             return "discord"
         if controller.has_component(LLMControllerComponent):
             return "llm"
+        if controller.has_component(MCPControllerComponent):
+            return "mcp"
         if controller.has_component(SuspendedControllerComponent):
             return "suspended"
         return "unknown"

@@ -26,6 +26,7 @@ async def run_loop_with_api(
     save_path: str | Path | None = None,
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
+    mcp_admin_token: str | None = None,
     max_ticks: int | None = None,
 ) -> int:
     """Run uvicorn and the game loop until either one stops."""
@@ -44,6 +45,7 @@ async def run_loop_with_api(
         save_path=save_path,
         worldgen_options=worldgen_options,
         plugins=plugins,
+        mcp_admin_token=mcp_admin_token,
     )
     server = uvicorn.Server(
         uvicorn.Config(app, host=host, port=port, log_level="info")

@@ -3,11 +3,13 @@
 ## Controllers
 
 A **character** is a persistent entity. Who acts for it is a separate, swappable
-**controller** entity, linked by a `ControlledBy` edge. There are three kinds:
+**controller** entity, linked by a `ControlledBy` edge. The built-in controller kinds are:
 
 - **LLM** (`LLMControllerComponent`) — an Ollama or OpenRouter agent decides its actions.
 - **Discord** (`DiscordControllerComponent`) — a person drives it (see the
   [Discord bot](discord-bot.md)).
+- **MCP** (`MCPControllerComponent`) — an agentic MCP client drives it through the
+  [MCP server](mcp-server.md).
 - **Suspended** (`SuspendedControllerComponent`) — a no-op. The character still regenerates
   and is affected by the world, but takes no actions. A freshly generated "claimable"
   character starts suspended.
@@ -78,6 +80,7 @@ behaviour is added by **plugins**; the builtins are:
 | `bunnyland.mechanisms`  | door auto-close and momentary-button reset timers             |
 | `bunnyland.social`      | social bonds that grow through speech (affinity/trust/fear)   |
 | `bunnyland.policy`      | boundary/consent gate (flirting etc.); denied always wins     |
+| `bunnyland.mcp`         | optional HTTP MCP endpoint for agentic clients                |
 
 The sim packages (`bunnyland.lifesim`, `colonysim`, `gardensim`, `barbariansim`,
 `dragonsim`, `daggersim`, `voidsim`) add their own components, verbs, and a ready-to-play
@@ -102,6 +105,10 @@ missing requirements are logged as errors and the server exits. Recommended plug
 logged as warnings and the server continues. A future `--auto-load-requires` flag may add
 missing requirements automatically. A verb whose plugin isn't loaded simply has no handler,
 and commands for it are rejected — disabling a plugin cleanly removes its surface.
+
+The MCP plugin is disabled by default. Prefer `--mcp` when running the HTTP API; it adds
+`bunnyland.mcp` to the selected plugin set and mounts the MCP app on the same FastAPI
+server under `/mcp`.
 
 ### Loading external plugins
 

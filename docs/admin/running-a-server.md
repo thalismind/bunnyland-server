@@ -58,6 +58,26 @@ The API exposes:
 
 Protect `/admin/*` at your reverse proxy.
 
+## Optional MCP endpoint
+
+The MCP server is mounted into the same FastAPI app as the HTTP/websocket API. It does
+not start a second process or listen on a second port.
+
+```bash
+BUNNYLAND_MCP_ADMIN_TOKEN=change-me \
+uv run --extra server --extra mcp bunnyland serve \
+  --ticks 0 \
+  --api-host 127.0.0.1 \
+  --api-port 8765 \
+  --mcp
+```
+
+This exposes the MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
+Agent tools can list and claim characters, inspect snapshots, and queue normal world
+commands. World patching and generation tools require the MCP admin token.
+
+See [MCP server](mcp-server.md) for tool details.
+
 For a step-by-step Linux VPS deployment, use the containerized
 [VPS Docker setup guide](vps-admin-setup.md). The older host-level setup is kept in
 [host dev setup](host-dev-setup.md) for development and debugging.
@@ -125,6 +145,8 @@ uv run bunnyland serve --llm --generator recursive \
 | `--time-scale`   | `3600.0`       | Game seconds that pass per round.                              |
 | `--api-host`     | `127.0.0.1`    | Host for the optional HTTP/websocket client API.                |
 | `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
+| `--mcp`          | off            | Mount the MCP endpoint at `/mcp` on the existing API server.    |
+| `--mcp-admin-token` | env         | Token required by MCP admin tools; defaults to `BUNNYLAND_MCP_ADMIN_TOKEN`. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](./).   |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |

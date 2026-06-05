@@ -8,6 +8,7 @@ surface and mechanics so disabling one removes its components/systems/verbs.
 
 from __future__ import annotations
 
+from ..core.controllers import MCPControllerComponent
 from ..core.handlers import (
     MoveHandler,
     PutHandler,
@@ -491,6 +492,7 @@ DRAGONSIM = "bunnyland.dragonsim"
 DAGGERSIM = "bunnyland.daggersim"
 VOIDSIM = "bunnyland.voidsim"
 STORYTELLER = "bunnyland.storyteller"
+MCP = "bunnyland.mcp"
 
 
 def _install_affect(actor) -> None:
@@ -1187,6 +1189,15 @@ def storyteller_plugin() -> Plugin:
     )
 
 
+def mcp_plugin() -> Plugin:
+    return Plugin(
+        id=MCP,
+        name="MCP Server",
+        default_enabled=False,
+        ecs=EcsContribution(components=(MCPControllerComponent,)),
+    )
+
+
 def bunnyland_plugins() -> list[Plugin]:
     return [
         core_verbs_plugin(),
@@ -1205,6 +1216,7 @@ def bunnyland_plugins() -> list[Plugin]:
         daggersim_plugin(),
         voidsim_plugin(),
         storyteller_plugin(),
+        mcp_plugin(),
     ]
 
 
@@ -1217,6 +1229,7 @@ __all__ = [
     "ENVIRONMENT",
     "GARDENSIM",
     "LIFESIM",
+    "MCP",
     "MECHANISMS",
     "MEMORY",
     "PERSONA",
@@ -1237,6 +1250,7 @@ __all__ = [
     "lifesim_plugin",
     "mechanisms_plugin",
     "memory_plugin",
+    "mcp_plugin",
     "persona_plugin",
     "policy_plugin",
     "social_plugin",

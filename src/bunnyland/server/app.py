@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING
 
 from ..content import load_content_library
 from ..core.world_actor import WorldActor
+from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
 from ..persistence import WorldMeta
+from ..plugins import collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .models import (
@@ -83,6 +85,7 @@ def create_app(
     save_path: str | Path | None = None,
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
+    mcp_admin_token: str | None = None,
     title: str = "bunnyland",
 ):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
@@ -133,36 +136,12 @@ def create_app(
             running=loop.running,
         )
 
-    @app.get("/admin/runtime", response_model=WorldRuntimeResponse)
-    async def runtime_status() -> WorldRuntimeResponse:
-        return _runtime_response()
-
-    @app.post("/admin/pause", response_model=WorldRuntimeResponse)
-    async def pause_world() -> WorldRuntimeResponse:
-        if loop is None:
-            raise HTTPException(status_code=409, detail="server runtime is not attached")
-        publish = loop.pause()
-        if publish is not None:
-            await publish
-        return _runtime_response()
-
-    @app.post("/admin/resume", response_model=WorldRuntimeResponse)
-    async def resume_world() -> WorldRuntimeResponse:
-        if loop is None:
-            raise HTTPException(status_code=409, detail="server runtime is not attached")
-        publish = loop.resume()
-        if publish is not None:
-            await publish
-        return _runtime_response()
-
-    @app.post("/world/commands", response_model=CommandResponse, status_code=202)
-    async def submit_command(request: CommandRequest) -> CommandResponse:
+    async def _submit_command_request(request: CommandRequest) -> CommandResponse:
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
         await actor.submit(command)
         return CommandResponse(queued=True, command_id=command.command_id)
 
-    @app.patch("/admin/world", response_model=WorldPatchResponse)
-    async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:
+    async def _patch_world_request(request: WorldPatchRequest) -> WorldPatchResponse:
         try:
             async with actor._lock:
                 response = apply_world_patch(actor, request)
@@ -182,8 +161,7 @@ def create_app(
         )
         return response
 
-    @app.get("/admin/world/generators", response_model=WorldGeneratorListResponse)
-    async def list_world_generators() -> WorldGeneratorListResponse:
+    def _list_world_generators_response() -> WorldGeneratorListResponse:
         return WorldGeneratorListResponse(
             generators=[
                 WorldGeneratorInfo(
@@ -195,14 +173,12 @@ def create_app(
             ]
         )
 
-    @app.get("/admin/world/generation", response_model=WorldGenerationStatusResponse)
-    async def world_generation_status() -> WorldGenerationStatusResponse:
+    async def _world_generation_status_response() -> WorldGenerationStatusResponse:
         if generation_job is None:
             return idle_generation_status(actor)
         return generation_job.status_response(actor)
 
-    @app.post("/admin/world/generate", response_model=WorldGenerateResponse)
-    async def generate_world(request: WorldGenerateRequest) -> WorldGenerateResponse:
+    async def _generate_world_request(request: WorldGenerateRequest) -> WorldGenerateResponse:
         nonlocal generation_job
         if not request.confirm_reset:
             raise HTTPException(status_code=400, detail="confirm_reset must be true")
@@ -250,8 +226,9 @@ def create_app(
         stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
         return generation_job.response(actor)
 
-    @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)
-    async def generate_room(request: WorldRoomGenerationRequest) -> WorldRoomGenerationResponse:
+    def _generate_room_request(
+        request: WorldRoomGenerationRequest,
+    ) -> WorldRoomGenerationResponse:
         try:
             return generate_room_patch(actor, request, options=worldgen_options)
         except WorldPatchError as exc:
@@ -259,11 +236,7 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    @app.post(
-        "/admin/world/generate-character",
-        response_model=WorldCharacterGenerationResponse,
-    )
-    async def generate_character(
+    def _generate_character_request(
         request: WorldCharacterGenerationRequest,
     ) -> WorldCharacterGenerationResponse:
         try:
@@ -273,8 +246,9 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    @app.post("/admin/world/generate-item", response_model=WorldItemGenerationResponse)
-    async def generate_item(request: WorldItemGenerationRequest) -> WorldItemGenerationResponse:
+    def _generate_item_request(
+        request: WorldItemGenerationRequest,
+    ) -> WorldItemGenerationResponse:
         try:
             return generate_item_patch(actor, request, options=worldgen_options)
         except WorldPatchError as exc:
@@ -282,8 +256,7 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    @app.post("/admin/world/generate-event", response_model=WorldEventGenerationResponse)
-    async def generate_event(
+    def _generate_event_request(
         request: WorldEventGenerationRequest,
     ) -> WorldEventGenerationResponse:
         try:
@@ -292,6 +265,71 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/admin/runtime", response_model=WorldRuntimeResponse)
+    async def runtime_status() -> WorldRuntimeResponse:
+        return _runtime_response()
+
+    @app.post("/admin/pause", response_model=WorldRuntimeResponse)
+    async def pause_world() -> WorldRuntimeResponse:
+        if loop is None:
+            raise HTTPException(status_code=409, detail="server runtime is not attached")
+        publish = loop.pause()
+        if publish is not None:
+            await publish
+        return _runtime_response()
+
+    @app.post("/admin/resume", response_model=WorldRuntimeResponse)
+    async def resume_world() -> WorldRuntimeResponse:
+        if loop is None:
+            raise HTTPException(status_code=409, detail="server runtime is not attached")
+        publish = loop.resume()
+        if publish is not None:
+            await publish
+        return _runtime_response()
+
+    @app.post("/world/commands", response_model=CommandResponse, status_code=202)
+    async def submit_command(request: CommandRequest) -> CommandResponse:
+        return await _submit_command_request(request)
+
+    @app.patch("/admin/world", response_model=WorldPatchResponse)
+    async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:
+        return await _patch_world_request(request)
+
+    @app.get("/admin/world/generators", response_model=WorldGeneratorListResponse)
+    async def list_world_generators() -> WorldGeneratorListResponse:
+        return _list_world_generators_response()
+
+    @app.get("/admin/world/generation", response_model=WorldGenerationStatusResponse)
+    async def world_generation_status() -> WorldGenerationStatusResponse:
+        return await _world_generation_status_response()
+
+    @app.post("/admin/world/generate", response_model=WorldGenerateResponse)
+    async def generate_world(request: WorldGenerateRequest) -> WorldGenerateResponse:
+        return await _generate_world_request(request)
+
+    @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)
+    async def generate_room(request: WorldRoomGenerationRequest) -> WorldRoomGenerationResponse:
+        return _generate_room_request(request)
+
+    @app.post(
+        "/admin/world/generate-character",
+        response_model=WorldCharacterGenerationResponse,
+    )
+    async def generate_character(
+        request: WorldCharacterGenerationRequest,
+    ) -> WorldCharacterGenerationResponse:
+        return _generate_character_request(request)
+
+    @app.post("/admin/world/generate-item", response_model=WorldItemGenerationResponse)
+    async def generate_item(request: WorldItemGenerationRequest) -> WorldItemGenerationResponse:
+        return _generate_item_request(request)
+
+    @app.post("/admin/world/generate-event", response_model=WorldEventGenerationResponse)
+    async def generate_event(
+        request: WorldEventGenerationRequest,
+    ) -> WorldEventGenerationResponse:
+        return _generate_event_request(request)
 
     @app.post("/admin/world/save", response_model=WorldSaveResponse)
     async def save_world_now() -> WorldSaveResponse:
@@ -315,6 +353,49 @@ def create_app(
             pass
         finally:
             subscription.close()
+
+    if mcp_enabled(plugins):
+        mcp_app = create_bunnyland_mcp_app(
+            actor=actor,
+            meta=meta,
+            loop=loop,
+            admin_token=mcp_admin_token,
+            patch_world=_patch_world_request,
+            generate_world=_generate_world_request,
+            generation_status=_world_generation_status_response,
+            generate_room=_generate_room_request,
+            generate_character=_generate_character_request,
+            generate_item=_generate_item_request,
+            generate_event=_generate_event_request,
+            fragment_providers=collect_prompt_fragments(plugins or ()),
+            worldgen_options=worldgen_options,
+        )
+        mcp_session_manager = getattr(mcp_app, "bunnyland_mcp_session_manager", None)
+        mcp_event_bridge = getattr(mcp_app, "bunnyland_mcp_event_bridge", None)
+        mcp_session_context = None
+
+        if mcp_session_manager is not None:
+
+            @app.on_event("startup")
+            async def start_mcp_session_manager() -> None:
+                nonlocal mcp_session_context
+                mcp_session_context = mcp_session_manager.run()
+                await mcp_session_context.__aenter__()
+
+            @app.on_event("shutdown")
+            async def stop_mcp_session_manager() -> None:
+                nonlocal mcp_session_context
+                if mcp_session_context is not None:
+                    await mcp_session_context.__aexit__(None, None, None)
+                    mcp_session_context = None
+                if mcp_event_bridge is not None:
+                    mcp_event_bridge.close()
+
+        app.mount(
+            MCP_MOUNT_PATH,
+            mcp_app,
+            name="mcp",
+        )
 
     return app
 

@@ -147,6 +147,8 @@ branch tags and `latest` for the default branch. The web repo publishes
   seeds, how generation stays inside the rules, and adding your own generator.
 - **[Discord bot](docs/admin/discord-bot.md)** — creating the bot, the token, inviting it,
   wiring a user to a character, and the player commands.
+- **[MCP server](docs/admin/mcp-server.md)** — mounting the HTTP MCP endpoint on the
+  existing API port for agentic clients.
 - **[Admin & controllers](docs/admin/)** — claiming, suspending, and handing off
   characters; enabling/disabling plugins.
 - **[Saving & reloading](docs/developer/persistence.md)** — save/autosave/reload a world, and what
@@ -222,4 +224,5 @@ assert each action is processed.
 |------------|------------------------------------------|------------------------------|
 | `llm`      | Ollama/OpenRouter world generation and character agents | `uv sync --extra llm` |
 | `discord`  | the Discord player front-end             | `uv sync --extra discord`    |
+| `mcp`      | HTTP MCP endpoint for agentic clients    | `uv sync --extra mcp`        |
 | `chroma`   | ChromaDB vector memory store             | `uv sync --extra chroma`     |

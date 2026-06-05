@@ -20,6 +20,12 @@ class DiscordControllerComponent(Component):
 
 
 @dataclass(frozen=True)
+class MCPControllerComponent(Component):
+    agent_id: str
+    label: str = ""
+
+
+@dataclass(frozen=True)
 class LLMControllerComponent(Component):
     profile_name: str
     model: str
@@ -43,5 +49,6 @@ class SuspendedControllerComponent(Component):
 __all__ = [
     "DiscordControllerComponent",
     "LLMControllerComponent",
+    "MCPControllerComponent",
     "SuspendedControllerComponent",
 ]

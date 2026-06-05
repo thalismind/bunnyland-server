@@ -178,12 +178,15 @@ class PromptBuilder:
             from ..core.controllers import (
                 DiscordControllerComponent,
                 LLMControllerComponent,
+                MCPControllerComponent,
             )
 
             if controller.has_component(DiscordControllerComponent):
                 kind = "controlled by a human"
             elif controller.has_component(LLMControllerComponent):
                 kind = "controlled by an agent"
+            elif controller.has_component(MCPControllerComponent):
+                kind = "controlled by an MCP agent"
             else:
                 kind = "suspended"
             break
