@@ -77,6 +77,9 @@ def test_worldgen_plugin_contributes_named_generators():
     assert "empty" not in without and "oneshot" not in without and "recursive" not in without
     # each sim plugin also contributes its own example world, tied to that plugin
     assert "voidsim-demo" in registry
+    assert registry["empty"].uses_seed is False
+    assert registry["recursive"].uses_seed is True
+    assert registry["voidsim-demo"].uses_seed is False
     without_void = collect_generators([p for p in bunnyland_plugins() if p.id != VOIDSIM])
     assert "voidsim-demo" not in without_void
 

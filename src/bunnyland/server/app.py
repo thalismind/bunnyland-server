@@ -186,7 +186,11 @@ def create_app(
     async def list_world_generators() -> WorldGeneratorListResponse:
         return WorldGeneratorListResponse(
             generators=[
-                WorldGeneratorInfo(name=generator.name, description=generator.description)
+                WorldGeneratorInfo(
+                    name=generator.name,
+                    description=generator.description,
+                    uses_seed=generator.uses_seed,
+                )
                 for generator in sorted(generator_registry.values(), key=lambda item: item.name)
             ]
         )
@@ -210,7 +214,8 @@ def create_app(
         if generation_job is not None and generation_job.status == "running":
             raise HTTPException(status_code=409, detail="world generation is already running")
 
-        generator_name = (request.generator or meta.generator or "oneshot").strip()
+        default_generator = "recursive" if "recursive" in generator_registry else "oneshot"
+        generator_name = (request.generator or default_generator).strip()
         generator = generator_registry.get(generator_name)
         if generator is None:
             names = ", ".join(sorted(generator_registry)) or "(none)"
@@ -222,7 +227,10 @@ def create_app(
         options = worldgen_options or GenOptions()
         if request.max_rooms is not None:
             options = replace(options, max_rooms=request.max_rooms)
-        seed = (request.seed or meta.seed or "a quiet marsh").strip() or "a quiet marsh"
+        if generator.uses_seed:
+            seed = (request.seed or meta.seed or "a quiet marsh").strip() or "a quiet marsh"
+        else:
+            seed = generator.name
         try:
             generation_job = await start_world_generation(
                 actor,

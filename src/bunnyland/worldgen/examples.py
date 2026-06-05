@@ -498,25 +498,32 @@ async def voidsim_example(actor, seed: str, options: GenOptions) -> Instantiated
 
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
-    description="The Sims: a married couple with careers, skills, money, and aspirations.")
+    description="The Sims: a married couple with careers, skills, money, and aspirations.",
+    uses_seed=False)
 GARDENSIM_DEMO = WorldGenerator(
     name="gardensim-demo", generate=gardensim_example,
-    description="Stardew Valley: a farm with tilled soil, a growing crop, and seeds.")
+    description="Stardew Valley: a farm with tilled soil, a growing crop, and seeds.",
+    uses_seed=False)
 COLONYSIM_DEMO = WorldGenerator(
     name="colonysim-demo", generate=colonysim_example,
-    description="RimWorld: a camp with resources, a workstation, a recipe, and a job.")
+    description="RimWorld: a camp with resources, a workstation, a recipe, and a job.",
+    uses_seed=False)
 BARBARIANSIM_DEMO = WorldGenerator(
     name="barbariansim-demo", generate=barbariansim_example,
-    description="Conan Exiles: a frozen ridge, a sheltered cave, gear, and corruption.")
+    description="Conan Exiles: a frozen ridge, a sheltered cave, gear, and corruption.",
+    uses_seed=False)
 DRAGONSIM_DEMO = WorldGenerator(
     name="dragonsim-demo", generate=dragonsim_example,
-    description="Skyrim: a village, an undiscovered barrow, a faction, and a quest.")
+    description="Skyrim: a village, an undiscovered barrow, a faction, and a quest.",
+    uses_seed=False)
 DAGGERSIM_DEMO = WorldGenerator(
     name="daggersim-demo", generate=daggersim_example,
-    description="Daggerfall: a town with a bank, guild, rumor, travel, and a frontier site.")
+    description="Daggerfall: a town with a bank, guild, rumor, travel, and a frontier site.",
+    uses_seed=False)
 VOIDSIM_DEMO = WorldGenerator(
     name="voidsim-demo", generate=voidsim_example,
-    description="FTL: a ship of habitat modules with life support, power, and a damaged reactor.")
+    description="FTL: a ship of habitat modules with life support, power, and a damaged reactor.",
+    uses_seed=False)
 
 
 __all__ = [

@@ -392,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
         help=f"default Ollama model for character controllers (default: {DEFAULT_MODEL})",
     )
     serve.add_argument(
-        "--generator", default="oneshot", help="world generator to use (e.g. oneshot, recursive)"
+        "--generator", default="recursive", help="world generator to use (e.g. oneshot, recursive)"
     )
     serve.add_argument(
         "--max-rooms", type=int, default=6, help="room budget for graph-based generators"

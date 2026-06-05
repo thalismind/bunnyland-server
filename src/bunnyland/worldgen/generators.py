@@ -50,6 +50,7 @@ class WorldGenerator:
     name: str
     generate: GenerateFn
     description: str = ""
+    uses_seed: bool = True
 
 
 async def empty_generator(

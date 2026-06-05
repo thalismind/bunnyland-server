@@ -514,7 +514,8 @@ async def apartment_example(actor, seed: str, options: GenOptions) -> Instantiat
 APARTMENT_DEMO = WorldGenerator(
     name="apartment-demo", generate=apartment_example,
     description="A quirky NYC apartment building: nine eccentric tenants with backstories, "
-                "homes, and daily routines, a rat-man below, and a few hidden corners.")
+                "homes, and daily routines, a rat-man below, and a few hidden corners.",
+    uses_seed=False)
 
 
 __all__ = ["APARTMENT_DEMO", "apartment_example"]

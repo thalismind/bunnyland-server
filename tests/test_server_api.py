@@ -317,10 +317,29 @@ def test_admin_world_generators_lists_enabled_generators(scenario):
     registry = collect_generators(plugins)
     app = create_app(scenario.actor, plugins=plugins)
     paths = {route.path for route in app.routes}
+    route = next(route for route in app.routes if route.path == "/admin/world/generators")
+    response = asyncio.run(route.endpoint())
+    generators = {item.name: item for item in response.generators}
 
     assert "/admin/world/generators" in paths
     assert "/admin/world/generation" in paths
     assert {"empty", "oneshot", "recursive"} <= set(registry)
+    assert generators["empty"].uses_seed is False
+    assert generators["oneshot"].uses_seed is True
+    assert generators["recursive"].uses_seed is True
+
+
+async def test_admin_world_generate_defaults_to_recursive_when_available(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    meta = WorldMeta(seed="old seed", generator="oneshot")
+    app = create_app(scenario.actor, meta=meta, plugins=plugins)
+    route = next(route for route in app.routes if route.path == "/admin/world/generate")
+
+    response = await route.endpoint(
+        WorldGenerateRequest(confirm_reset=True, seed="rain port")
+    )
+
+    assert response.generator == "recursive"
 
 def test_world_schema_includes_available_types_and_live_usage(scenario):
     schema = world_schema(scenario.actor)

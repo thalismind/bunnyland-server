@@ -142,6 +142,7 @@ class WorldEventGenerationRequest(BaseModel):
 class WorldGeneratorInfo(BaseModel):
     name: str
     description: str = ""
+    uses_seed: bool = True
 
 
 class WorldGeneratorListResponse(BaseModel):

@@ -735,7 +735,10 @@ def worldgen_plugin() -> Plugin:
         content=ContentContribution(
             world_generators=(
                 WorldGenerator(
-                    "empty", empty_generator, "blank ECS world with only the world clock"
+                    "empty",
+                    empty_generator,
+                    "blank ECS world with only the world clock",
+                    uses_seed=False,
                 ),
                 WorldGenerator(
                     "oneshot", oneshot_generator, "single LLM proposal, instantiated at once"
