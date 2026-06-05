@@ -268,16 +268,20 @@ async def _serve(args) -> None:
         claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0
         claim_character = args.discord_character or os.environ.get("BUNNYLAND_DISCORD_CHARACTER")
         if claim_user_id is not None:
-            claimed = assign_discord_controller(
-                actor,
-                discord_user_id=claim_user_id,
-                default_channel_id=claim_channel_id,
-                character_name=claim_character,
-                allow_child_claims=args.discord_allow_child_claims,
-            )
-            print(f"Assigned Discord user {claim_user_id} to {claimed!r}.")
-            if args.save:
-                save_world(actor, args.save, meta=meta)
+            try:
+                claimed = assign_discord_controller(
+                    actor,
+                    discord_user_id=claim_user_id,
+                    default_channel_id=claim_channel_id,
+                    character_name=claim_character,
+                    allow_child_claims=args.discord_allow_child_claims,
+                )
+            except RuntimeError as exc:
+                print(f"Skipped startup Discord claim for user {claim_user_id}: {exc}")
+            else:
+                print(f"Assigned Discord user {claim_user_id} to {claimed!r}.")
+                if args.save:
+                    save_world(actor, args.save, meta=meta)
         else:
             print("Discord bot enabled without a startup character claim.")
 
