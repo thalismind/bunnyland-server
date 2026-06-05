@@ -36,7 +36,7 @@ def _augment(actor, entity_id, *components):
 
 
 # --------------------------------------------------------------------------------------
-# life-sim — The Sims: needs, careers, money, relationships, aspirations
+# life-sim — needs, careers, money, relationships, aspirations
 # --------------------------------------------------------------------------------------
 
 
@@ -100,7 +100,7 @@ async def lifesim_example(actor, seed: str, options: GenOptions) -> Instantiated
 
 
 # --------------------------------------------------------------------------------------
-# garden-sim — Stardew Valley: soil, planting, crop growth, seeds
+# garden-sim — soil, planting, crop growth, seeds
 # --------------------------------------------------------------------------------------
 
 
@@ -159,7 +159,7 @@ async def gardensim_example(actor, seed: str, options: GenOptions) -> Instantiat
 
 
 # --------------------------------------------------------------------------------------
-# colony-sim — RimWorld: resource nodes, stockpiles, workstations, recipes, jobs
+# colony-sim — resource nodes, stockpiles, workstations, recipes, jobs
 # --------------------------------------------------------------------------------------
 
 
@@ -223,7 +223,7 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
 
 
 # --------------------------------------------------------------------------------------
-# barbarian-sim — Conan Exiles: harsh cold, stamina, gear, corruption, shelter
+# barbarian-sim — harsh cold, stamina, gear, corruption, shelter
 # --------------------------------------------------------------------------------------
 
 
@@ -282,7 +282,7 @@ async def barbariansim_example(actor, seed: str, options: GenOptions) -> Instant
 
 
 # --------------------------------------------------------------------------------------
-# dragon-sim — Skyrim: discovery, factions, radiant quests, reputation
+# dragon-sim — discovery, factions, radiant quests, reputation
 # --------------------------------------------------------------------------------------
 
 
@@ -340,7 +340,7 @@ async def dragonsim_example(actor, seed: str, options: GenOptions) -> Instantiat
 
 
 # --------------------------------------------------------------------------------------
-# dagger-sim — Daggerfall: towns, guilds, banks, rumors, travel, expandable frontier
+# dagger-sim — towns, guilds, banks, rumors, travel, expandable frontier
 # --------------------------------------------------------------------------------------
 
 
@@ -413,7 +413,7 @@ async def daggersim_example(actor, seed: str, options: GenOptions) -> Instantiat
 
 
 # --------------------------------------------------------------------------------------
-# void-sim — FTL: ships, habitat modules, life support, power, repair, hazards
+# void-sim — ships, habitat modules, life support, power, repair, hazards
 # --------------------------------------------------------------------------------------
 
 
@@ -498,31 +498,31 @@ async def voidsim_example(actor, seed: str, options: GenOptions) -> Instantiated
 
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
-    description="The Sims: a married couple with careers, skills, money, and aspirations.",
+    description="A household with careers, skills, money, relationships, and aspirations.",
     uses_seed=False)
 GARDENSIM_DEMO = WorldGenerator(
     name="gardensim-demo", generate=gardensim_example,
-    description="Stardew Valley: a farm with tilled soil, a growing crop, and seeds.",
+    description="A farm with tilled soil, a growing crop, and seeds.",
     uses_seed=False)
 COLONYSIM_DEMO = WorldGenerator(
     name="colonysim-demo", generate=colonysim_example,
-    description="RimWorld: a camp with resources, a workstation, a recipe, and a job.",
+    description="A work camp with resources, a workstation, a recipe, and a job.",
     uses_seed=False)
 BARBARIANSIM_DEMO = WorldGenerator(
     name="barbariansim-demo", generate=barbariansim_example,
-    description="Conan Exiles: a frozen ridge, a sheltered cave, gear, and corruption.",
+    description="A frozen ridge with a sheltered cave, gear, and corruption pressure.",
     uses_seed=False)
 DRAGONSIM_DEMO = WorldGenerator(
     name="dragonsim-demo", generate=dragonsim_example,
-    description="Skyrim: a village, an undiscovered barrow, a faction, and a quest.",
+    description="A village with an undiscovered barrow, a faction, and a quest.",
     uses_seed=False)
 DAGGERSIM_DEMO = WorldGenerator(
     name="daggersim-demo", generate=daggersim_example,
-    description="Daggerfall: a town with a bank, guild, rumor, travel, and a frontier site.",
+    description="A town with a bank, guild, rumor, travel, and a frontier site.",
     uses_seed=False)
 VOIDSIM_DEMO = WorldGenerator(
     name="voidsim-demo", generate=voidsim_example,
-    description="FTL: a ship of habitat modules with life support, power, and a damaged reactor.",
+    description="A modular ship with life support, power, and a damaged reactor.",
     uses_seed=False)
 
 
