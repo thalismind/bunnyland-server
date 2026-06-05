@@ -149,6 +149,8 @@ branch tags and `latest` for the default branch. The web repo publishes
   wiring a user to a character, and the player commands.
 - **[MCP server](docs/admin/mcp-server.md)** — mounting the HTTP MCP endpoint on the
   existing API port for agentic clients.
+- **[MCP local coding-agent setup](docs/admin/mcp-local-agent.md)** — enabling MCP on a
+  local or VPS server, configuring a workstation agent, and validating the claim/play/release loop.
 - **[Admin & controllers](docs/admin/)** — claiming, suspending, and handing off
   characters; enabling/disabling plugins.
 - **[Saving & reloading](docs/developer/persistence.md)** — save/autosave/reload a world, and what

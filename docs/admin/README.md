@@ -9,7 +9,8 @@ A **character** is a persistent entity. Who acts for it is a separate, swappable
 - **Discord** (`DiscordControllerComponent`) — a person drives it (see the
   [Discord bot](discord-bot.md)).
 - **MCP** (`MCPControllerComponent`) — an agentic MCP client drives it through the
-  [MCP server](mcp-server.md).
+  [MCP server](mcp-server.md). For workstation clients, see the
+  [local coding-agent setup](mcp-local-agent.md).
 - **Suspended** (`SuspendedControllerComponent`) — a no-op. The character still regenerates
   and is affected by the world, but takes no actions. A freshly generated "claimable"
   character starts suspended.
