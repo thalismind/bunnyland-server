@@ -160,22 +160,26 @@ on. Each sim package adds its own components, verbs, systems, and prompt fragmen
 touching the others — emergence comes from small systems reacting to shared events. The
 full catalogue is in [`bunnyland_mechanics.md`](bunnyland_mechanics.md).
 
-| Package         | Inspired by      | Key mechanics it introduces |
-|-----------------|------------------|-----------------------------|
-| **Life Sim**    | The Sims         | Needs, moods/thoughts, social bonds and jealousy, romance, family and pregnancy, skill progression, careers and household economy |
-| **Colony Sim**  | RimWorld         | Work priorities and jobs, resource gathering, crafting recipes and workstations, ownership and reservations |
-| **Garden Sim**  | Stardew Valley   | Soil and tilling, planting/watering/fertilizing, seasonal crop growth, and harvesting |
-| **Barbarian Sim** | Conan Exiles   | Survival combat, stamina, temperature exposure, gear durability, poison and corruption |
-| **Dragon Sim**  | Skyrim           | Open-world discovery, radiant quests and objectives, factions and reputation |
-| **Dagger Sim**  | Daggerfall       | Procedural frontier expansion, rumors, travel logistics, guilds/institutions and services, banking and debt, civic law and fines, custom classes and spells, language pacification, supernatural afflictions, procedural dungeons, etiquette and social approach |
-| **Void Sim**    | FTL              | Ships, stations and habitat modules, life support, pressure and airlocks, power grids, ship-system repair, and docking |
+| Package         | Status      | Inspired by      | Key mechanics it introduces |
+|-----------------|-------------|------------------|-----------------------------|
+| **Life Sim**    | Implemented | The Sims         | Needs, moods/thoughts, social bonds and jealousy, romance, family and pregnancy, skill progression, careers and household economy |
+| **Colony Sim**  | Implemented | RimWorld         | Work priorities and jobs, resource gathering, crafting recipes and workstations, ownership and reservations |
+| **Garden Sim**  | Implemented | Stardew Valley   | Soil and tilling, planting/watering/fertilizing, seasonal crop growth, and harvesting |
+| **Barbarian Sim** | Implemented | Conan Exiles   | Survival combat, stamina, temperature exposure, gear durability, poison and corruption |
+| **Dragon Sim**  | Implemented | Skyrim           | Open-world discovery, radiant quests and objectives, factions and reputation |
+| **Dagger Sim**  | Implemented | Daggerfall       | Procedural frontier expansion, rumors, travel logistics, guilds/institutions and services, banking and debt, civic law and fines, custom classes and spells, language pacification, supernatural afflictions, procedural dungeons, etiquette and social approach |
+| **Void Sim**    | Implemented | FTL              | Ships, stations and habitat modules, life support, pressure and airlocks, power grids, ship-system repair, and docking |
+| **Neon Sim**    | Planned     | Deus Ex, Watch Dogs, Cyberpunk 2077 | Cyberpunk districts, usable surveillance, ECS hacking, fixer missions, corporate intrigue, street economy, wanted levels, reputation, and cybernetics |
+| **Dino Sim**    | Planned     | Jurassic Park, ARK, Dino Crisis | Dangerous creature ranching, eggs, taming, training, enclosures, escapes, apex predators, kaiju incidents, and survival farming |
+| **Fortress Sim** | Planned    | Dwarf Fortress   | Deep materials, world history, civilizations, artifacts, nobles, justice, institutions, tantrum spirals, and multi-site worlds |
 
 Foundational plugins back these up: **Environment** (time, weather, fire), **Mechanisms**
 (doors, buttons), **Social Bonds**, **Policy & Boundaries**, **Persona**, **Storyteller**
 (paced incidents), **Memory** (private notes and recall), and **World Generators**.
 
-Each sim package ships a ready-to-play example world that shows off its mechanics (and the
-life-sim needs every character shares). Spin one up with its `<sim>-demo` generator:
+Each implemented sim package ships a ready-to-play example world that shows off its
+mechanics (and the life-sim needs every character shares). Spin one up with its
+`<sim>-demo` generator:
 
 ```bash
 uv run bunnyland serve --generator voidsim-demo --ticks 5
@@ -185,6 +189,8 @@ The demos are `lifesim-demo`, `gardensim-demo`, `colonysim-demo`, `barbariansim-
 `dragonsim-demo`, `daggersim-demo`, and `voidsim-demo`. There is also a larger life-sim
 showcase, `apartment-demo`: a quirky NYC apartment building of eccentric tenants with
 backstories, homes, and daily routines, a rat-man in the warren below, and hidden corners.
+The `neonsim`, `dinosim`, and `fortresssim` packages are planned catalogue packages and do
+not have plugins or demo generators yet.
 
 ## Development
 

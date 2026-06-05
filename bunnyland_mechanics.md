@@ -11,11 +11,13 @@ The inspirations break down cleanly:
 | Conan Exiles   | `barbarian-sim`   | harsh survival, weather, combat, crafting, thralls, bases, raids                    |
 | Stardew Valley | `garden-sim`      | seasons, crops, animals, gifts, villagers, festivals, cozy production chains        |
 | Skyrim         | `dragon-sim`      | open-world exploration, quests, factions, skills-by-use, dungeons, dragons, shouts  |
-| Dwarf Fortress | `fortress-sim`    | deep settlement simulation, materials, history, disasters, artifacts, absurd detail |
 | Daggerfall     | `dagger-sim`      | procedural realm expands through rumors, guilds, banks, law, travel, and dungeons   |
 | FTL            | `void-sim`        | crews survive ships, stations, planets, alien contact, tech, contracts, and hazards |
+| Deus Ex / Watch Dogs / Cyberpunk 2077 | `neon-sim` | hackers, surveillance, street economies, corporate intrigue, cybernetics, reputation |
+| Jurassic Park / ARK / Dino Crisis | `dino-sim` | dangerous creature ranching, eggs, taming, training, escapes, and kaiju-scale disasters |
+| Dwarf Fortress | `fortress-sim`    | deep settlement simulation, materials, history, disasters, artifacts, absurd detail |
 
-For source grounding: The Sims uses traits, emotions, whims, aspirations, skills, careers, crafting hobbies, and life-state systems; RimWorld centers on colonist moods, needs, wounds, illnesses, addictions, social bonds, storyteller incidents, work priorities, and mental breaks; Conan Exiles emphasizes survival, building, thralls, weather, temperature, hunger/thirst, PvP/siege, mounts, pets, purges, and world bosses; Stardew Valley revolves around seasonal crops, fertilizer, skills, villagers, gifts, friendship, farming, fishing, mining, and festivals; Skyrim’s replay loop is open-world exploration, factions, skills, combat, magic, stealth, followers, crafting, dragons, and shouts; Daggerfall contributes procedural scale, guilds, banks, services, law, travel, generated quests, and generated dungeons; FTL contributes crewed-ship pressure, subsystem damage, sector travel, distress signals, resource scarcity, and cascading emergencies; Dwarf Fortress goes deeper than all of these with generated worlds, histories, fortress management, geology, migrants, nobles, justice, strange moods, artifacts, tantrum spirals, and many more systems. ([Electronic Arts Inc.][1])
+For source grounding: The Sims uses traits, emotions, whims, aspirations, skills, careers, crafting hobbies, and life-state systems; RimWorld centers on colonist moods, needs, wounds, illnesses, addictions, social bonds, storyteller incidents, work priorities, and mental breaks; Conan Exiles emphasizes survival, building, thralls, weather, temperature, hunger/thirst, PvP/siege, mounts, pets, purges, and world bosses; Stardew Valley revolves around seasonal crops, fertilizer, skills, villagers, gifts, friendship, farming, fishing, mining, and festivals; Skyrim’s replay loop is open-world exploration, factions, skills, combat, magic, stealth, followers, crafting, dragons, and shouts; Daggerfall contributes procedural scale, guilds, banks, services, law, travel, generated quests, and generated dungeons; FTL contributes crewed-ship pressure, subsystem damage, sector travel, distress signals, resource scarcity, and cascading emergencies; Dwarf Fortress goes deeper than all of these with generated worlds, histories, fortress management, geology, migrants, nobles, justice, strange moods, artifacts, tantrum spirals, and many more systems; Deus Ex, Watch Dogs, and Cyberpunk 2077 contribute cyberpunk infiltration, hacking, surveillance, corporate power, street economies, cybernetics, and reputation pressure; Jurassic Park, ARK, and Dino Crisis contribute dangerous animals, eggs, taming, escapes, containment failure, and monster-scale emergency response. ([Electronic Arts Inc.][1])
 
 ---
 
@@ -5153,11 +5155,1036 @@ ship mortgage default -> creditor faction pressure -> bounty/impound event -> le
 
 ---
 
-# 9. `fortresssim` package — Dwarf Fortress-inspired mechanics
+# 9. `neonsim` package — Deus Ex / Watch Dogs / Cyberpunk 2077-inspired cyberpunk mechanics
+
+`neon-sim` is the cyberpunk city package. The internal package name should be `neonsim`,
+matching the existing no-hyphen Python package style while the public-facing package label
+uses the same hyphenated style as `void-sim`, `dragon-sim`, and `dagger-sim`.
+
+Its main inspirations are **Deus Ex**, **Watch Dogs**, and **Cyberpunk 2077**: corporate
+systems, surveillance, street-level access, hacking as actionable interaction with devices,
+consequences for being seen, cybernetics, fixers, gangs, and missions that can be solved
+through infiltration, social pressure, economics, violence, or data. The tone should land
+near Blade Runner and Cyberpunk 2077: rain, debt, neon, corporate shadow power, dangerous
+bargains, and people trying to survive inside systems that record everything.
+
+The first implementation should keep hacking in ECS actions and consequences. Minigames
+can exist later as client-side or script-driven presentation over the same actions.
+
+## 9.1 Cyberpunk districts, sites, and access
+
+### Mechanics
+
+```text
+district
+street market
+corp campus
+arcology
+nightclub
+clinic
+data center
+transit hub
+checkpoint
+safehouse
+back alley
+restricted area
+public/private access
+security clearance
+```
+
+### Components
+
+```python
+DistrictComponent
+CyberpunkSiteComponent
+SecurityZoneComponent
+AccessLevelComponent
+CheckpointComponent
+SafehouseComponent
+PublicAccessComponent
+RestrictedAreaComponent
+```
+
+### Systems
+
+```text
+DistrictStatusSystem
+AccessControlSystem
+CheckpointSystem
+SafehouseSystem
+SecurityZoneSystem
+TrespassDetectionSystem
+```
+
+### Actions
+
+```text
+enter district
+show credentials
+bribe guard
+sneak through checkpoint
+claim safehouse
+case location
+```
+
+### Events
+
+```text
+DistrictEnteredEvent
+AccessGrantedEvent
+AccessDeniedEvent
+CheckpointPassedEvent
+TrespassDetectedEvent
+SafehouseClaimedEvent
+```
+
+---
+
+## 9.2 Devices, networks, and surveillance
+
+### Mechanics
+
+```text
+camera
+door lock
+terminal
+server
+sensor
+drone
+traffic system
+comms tower
+mesh network
+device ownership
+surveillance coverage
+recorded evidence
+blind spot
+```
+
+### Components
+
+```python
+DeviceComponent
+NetworkNodeComponent
+CameraComponent
+SensorComponent
+DroneComponent
+TerminalComponent
+ServerComponent
+LockComponent
+SurveillanceCoverageComponent
+RecordedEvidenceComponent
+BlindSpotComponent
+```
+
+### Systems
+
+```text
+DeviceStateSystem
+NetworkTopologySystem
+SurveillanceSystem
+EvidenceRecordingSystem
+CameraCoverageSystem
+DronePatrolSystem
+BlindSpotSystem
+```
+
+### Actions
+
+```text
+inspect device
+disable camera
+loop camera
+unlock door
+access terminal
+trace network
+jam sensor
+deploy drone
+wipe evidence
+```
+
+### Events
+
+```text
+DeviceInspectedEvent
+CameraDisabledEvent
+CameraLoopedEvent
+DoorUnlockedEvent
+TerminalAccessedEvent
+NetworkTracedEvent
+SensorJammedEvent
+EvidenceRecordedEvent
+EvidenceWipedEvent
+```
+
+---
+
+## 9.3 Hacking, credentials, and intrusion
+
+### Mechanics
+
+```text
+credential
+access token
+exploit
+backdoor
+privilege escalation
+trace timer
+alarm
+data theft
+system sabotage
+remote control
+counter-intrusion
+```
+
+### Components
+
+```python
+CredentialComponent
+AccessTokenComponent
+ExploitComponent
+BackdoorComponent
+IntrusionComponent
+TraceTimerComponent
+AlarmComponent
+DataPayloadComponent
+SabotageComponent
+CounterIntrusionComponent
+```
+
+### Systems
+
+```text
+CredentialValidationSystem
+HackAttemptSystem
+PrivilegeEscalationSystem
+TraceTimerSystem
+AlarmSystem
+DataExfiltrationSystem
+SystemSabotageSystem
+CounterIntrusionSystem
+```
+
+### Actions
+
+```text
+scan network
+use credential
+run exploit
+install backdoor
+escalate privileges
+exfiltrate data
+sabotage system
+spoof identity
+evade trace
+```
+
+### Events
+
+```text
+NetworkScannedEvent
+CredentialUsedEvent
+HackSucceededEvent
+HackFailedEvent
+BackdoorInstalledEvent
+PrivilegesEscalatedEvent
+TraceStartedEvent
+TraceEvadedEvent
+DataExfiltratedEvent
+SystemSabotagedEvent
+AlarmRaisedEvent
+```
+
+---
+
+## 9.4 Fixers, missions, and corporate intrigue
+
+### Mechanics
+
+```text
+fixer
+handler
+corporation
+shell company
+blackmail file
+dead drop
+runner contract
+data broker
+asset extraction
+corporate sabotage
+whistleblower
+double cross
+```
+
+### Components
+
+```python
+FixerComponent
+HandlerComponent
+CorporationComponent
+ShellCompanyComponent
+BlackmailFileComponent
+DeadDropComponent
+RunnerContractComponent
+DataBrokerComponent
+AssetExtractionComponent
+CorporateSabotageComponent
+WhistleblowerComponent
+DoubleCrossComponent
+```
+
+### Systems
+
+```text
+FixerJobSystem
+CorporateIntrigueSystem
+DeadDropSystem
+BlackmailSystem
+DataBrokerSystem
+AssetExtractionSystem
+DoubleCrossSystem
+ContractPayoutSystem
+```
+
+### Actions
+
+```text
+take fixer job
+meet handler
+deliver data
+plant evidence
+extract asset
+leak file
+blackmail target
+collect payout
+burn contact
+```
+
+### Events
+
+```text
+FixerJobAcceptedEvent
+HandlerMetEvent
+DataDeliveredEvent
+EvidencePlantedEvent
+AssetExtractedEvent
+FileLeakedEvent
+BlackmailAppliedEvent
+PayoutCollectedEvent
+ContactBurnedEvent
+DoubleCrossRevealedEvent
+```
+
+---
+
+## 9.5 Street economy, reputation, and wanted levels
+
+### Mechanics
+
+```text
+street vendor
+black market
+contraband
+corporate scrip
+debt
+favor
+reputation
+heat
+wanted level
+warrant
+bounty
+informant
+law response
+```
+
+### Components
+
+```python
+StreetVendorComponent
+BlackMarketComponent
+ContrabandComponent
+CorporateScripComponent
+DebtComponent
+FavorComponent
+ReputationComponent
+HeatComponent
+WantedLevelComponent
+WarrantComponent
+BountyComponent
+InformantComponent
+```
+
+### Systems
+
+```text
+StreetEconomySystem
+ContrabandSystem
+DebtSystem
+FavorSystem
+ReputationSystem
+HeatSystem
+WantedLevelSystem
+WarrantSystem
+BountySystem
+InformantSystem
+LawResponseSystem
+```
+
+### Actions
+
+```text
+buy contraband
+sell data
+call in favor
+pay debt
+hide from law
+clear warrant
+post bounty
+turn informant
+```
+
+### Events
+
+```text
+ContrabandBoughtEvent
+DataSoldEvent
+FavorCalledEvent
+DebtPaidEvent
+ReputationChangedEvent
+HeatChangedEvent
+WantedLevelChangedEvent
+WarrantIssuedEvent
+BountyPostedEvent
+InformantTurnedEvent
+```
+
+---
+
+## 9.6 Cybernetics, implants, and tradeoffs
+
+### Mechanics
+
+```text
+implant
+augmentation slot
+clinic
+street surgeon
+license
+maintenance
+power draw
+side effect
+medical risk
+identity risk
+illegal implant
+implant exploit
+```
+
+### Components
+
+```python
+ImplantComponent
+AugmentationSlotComponent
+ClinicComponent
+StreetSurgeonComponent
+ImplantLicenseComponent
+MaintenanceNeedComponent
+PowerDrawComponent
+SideEffectComponent
+MedicalRiskComponent
+IdentityRiskComponent
+IllegalImplantComponent
+ImplantExploitComponent
+```
+
+### Systems
+
+```text
+ImplantInstallationSystem
+ImplantMaintenanceSystem
+PowerDrawSystem
+SideEffectSystem
+MedicalRiskSystem
+IdentityRiskSystem
+ImplantLegalitySystem
+ImplantExploitSystem
+```
+
+### Actions
+
+```text
+install implant
+remove implant
+service implant
+license implant
+overclock implant
+disable implant
+scan implant
+exploit implant
+```
+
+### Events
+
+```text
+ImplantInstalledEvent
+ImplantRemovedEvent
+ImplantServicedEvent
+ImplantLicensedEvent
+ImplantOverclockedEvent
+ImplantDisabledEvent
+ImplantScannedEvent
+ImplantExploitedEvent
+SideEffectTriggeredEvent
+```
+
+Cybernetics should not have one universal penalty. Each implant type should define its own
+tradeoff: money, maintenance, heat, health, identity exposure, legality, power use, social
+stigma, or vulnerability to hacking.
+
+---
+
+## 9.7 How `neonsim` uses other packages
+
+`neonsim` should compose heavily with existing systems rather than becoming a second core.
+
+```text
+dagger-sim law/reputation -> cyberpunk warrants, institutions, services, debt, and bounties
+void-sim tech/hacking -> terminals, drones, data salvage, and cybernetics
+colonysim jobs/reservations -> crew work, safehouse logistics, crafting, and black-market production
+lifesim relationships -> contacts, jealousy, blackmail, favors, household risk, and private memory
+barbariansim combat/policy -> street fights, raids, PvP boundaries, and weapon legality
+```
+
+`neonsim` should use worldgen for city expansion:
+
+```text
+fixer rumor -> generated corp site -> access challenge -> surveillance/evidence -> payout/reputation/heat
+black-market lead -> generated vendor -> contraband offer -> warrant risk -> debt/favor consequences
+data leak -> generated shell company -> terminal network -> blackmail file -> faction reaction
+```
+
+---
+
+# 10. `dinosim` package — Jurassic Park / ARK / Dino Crisis-inspired creature ranching
+
+`dino-sim` is the dangerous creature-ranching package. The internal package name should be
+`dinosim`, matching the existing no-hyphen Python package style while the public-facing
+package label uses the same hyphenated style as `garden-sim`, `void-sim`, and `neon-sim`.
+
+Its main inspirations are **Jurassic Park**, **ARK**, and **Dino Crisis**: eggs, taming,
+training, caretaking, tracking, dangerous escapes, and the moment when a managed animal
+becomes an emergency. This is not a park-management package. It is survival farming with
+pulp battles: Jurassic Park with a hint of Pacific Rim, where creatures can be livestock,
+companions, or enemies depending on species, training, hunger, enclosure state, and recent
+events.
+
+Genetic engineering should be left out at first. Eggs, heredity, species traits, breeding,
+hatching, training, and containment are enough for the initial package.
+
+## 10.1 Species, ecology, and creature needs
+
+### Mechanics
+
+```text
+dinosaur species
+size class
+diet
+territory
+herd
+pack
+nest
+threat posture
+temperament
+stress
+hunger
+injury
+sleep
+migration
+predator/prey pressure
+```
+
+### Components
+
+```python
+DinosaurComponent
+SpeciesComponent
+SizeClassComponent
+DietComponent
+TerritoryComponent
+HerdComponent
+PackComponent
+NestComponent
+ThreatPostureComponent
+TemperamentComponent
+CreatureStressComponent
+CreatureNeedComponent
+PredatorComponent
+PreyComponent
+MigrationComponent
+```
+
+### Systems
+
+```text
+CreatureNeedSystem
+TerritorySystem
+HerdBehaviorSystem
+PackBehaviorSystem
+PredatorPreySystem
+MigrationSystem
+ThreatPostureSystem
+CreatureStressSystem
+```
+
+### Actions
+
+```text
+observe creature
+feed creature
+water creature
+calm creature
+mark territory
+track herd
+study tracks
+```
+
+### Events
+
+```text
+CreatureObservedEvent
+CreatureFedEvent
+CreatureCalmedEvent
+TerritoryMarkedEvent
+HerdTrackedEvent
+TracksStudiedEvent
+CreatureNeedChangedEvent
+CreatureStressChangedEvent
+```
+
+---
+
+## 10.2 Eggs, breeding, hatching, and raising
+
+### Mechanics
+
+```text
+egg
+clutch
+nesting site
+incubation
+temperature
+brooding
+hatching
+juvenile
+growth stage
+imprinting
+parent bond
+caretaking
+```
+
+### Components
+
+```python
+EggComponent
+ClutchComponent
+NestingSiteComponent
+IncubationComponent
+BroodingComponent
+HatchingComponent
+JuvenileComponent
+GrowthStageComponent
+ImprintComponent
+ParentBondComponent
+CaretakingComponent
+```
+
+### Systems
+
+```text
+BreedingSystem
+NestSelectionSystem
+IncubationSystem
+TemperatureIncubationSystem
+HatchingSystem
+GrowthStageSystem
+ImprintingSystem
+ParentBondSystem
+CaretakingSystem
+```
+
+### Actions
+
+```text
+pair creatures
+prepare nest
+collect egg
+incubate egg
+warm egg
+cool egg
+hatch egg
+imprint hatchling
+care for juvenile
+```
+
+### Events
+
+```text
+CreaturesPairedEvent
+NestPreparedEvent
+EggLaidEvent
+EggCollectedEvent
+IncubationChangedEvent
+EggHatchedEvent
+HatchlingImprintedEvent
+JuvenileCaredForEvent
+GrowthStageChangedEvent
+```
+
+---
+
+## 10.3 Tracking, taming, training, and companions
+
+### Mechanics
+
+```text
+tracks
+scent
+call
+bait
+tranquilizer
+taming progress
+trust
+fear
+command
+mount
+companion role
+guard behavior
+hunt behavior
+recall
+```
+
+### Components
+
+```python
+TrackComponent
+ScentComponent
+BaitComponent
+TranquilizerComponent
+TamingComponent
+TrustComponent
+FearComponent
+TrainingComponent
+CommandComponent
+MountComponent
+CompanionComponent
+GuardBehaviorComponent
+HuntBehaviorComponent
+RecallComponent
+```
+
+### Systems
+
+```text
+TrackingSystem
+BaitSystem
+TranquilizerSystem
+TamingSystem
+TrustSystem
+FearSystem
+TrainingSystem
+CompanionCommandSystem
+MountSystem
+RecallSystem
+```
+
+### Actions
+
+```text
+track creature
+set bait
+tranquilize creature
+approach creature
+tame creature
+train command
+mount creature
+command companion
+recall creature
+```
+
+### Events
+
+```text
+CreatureTrackedEvent
+BaitSetEvent
+CreatureTranquilizedEvent
+TamingProgressedEvent
+CreatureTamedEvent
+CommandTrainedEvent
+CreatureMountedEvent
+CompanionCommandedEvent
+CreatureRecalledEvent
+```
+
+---
+
+## 10.4 Enclosures, containment, and escapes
+
+### Mechanics
+
+```text
+enclosure
+fence
+gate
+lock
+reinforcement
+feeding pen
+quarantine pen
+escape risk
+breach
+stampede
+panic
+containment protocol
+```
+
+### Components
+
+```python
+EnclosureComponent
+FenceComponent
+GateComponent
+ReinforcementComponent
+FeedingPenComponent
+QuarantinePenComponent
+EscapeRiskComponent
+BreachComponent
+StampedeComponent
+ContainmentProtocolComponent
+```
+
+### Systems
+
+```text
+EnclosureIntegritySystem
+GateControlSystem
+ReinforcementSystem
+EscapeRiskSystem
+BreachSystem
+StampedeSystem
+PanicSystem
+ContainmentProtocolSystem
+```
+
+### Actions
+
+```text
+build enclosure
+repair fence
+reinforce gate
+lock pen
+open pen
+trigger containment
+recapture creature
+hide from creature
+evacuate room
+```
+
+### Events
+
+```text
+EnclosureBuiltEvent
+FenceRepairedEvent
+GateReinforcedEvent
+PenLockedEvent
+ContainmentTriggeredEvent
+CreatureEscapedEvent
+CreatureRecapturedEvent
+StampedeStartedEvent
+RoomEvacuatedEvent
+```
+
+---
+
+## 10.5 Dangerous encounters, battles, and kaiju incidents
+
+### Mechanics
+
+```text
+territorial attack
+ambush
+roar
+charge
+grapple
+tail swipe
+trample
+armor plates
+weak point
+pack hunt
+apex predator
+kaiju arrival
+army response
+settlement damage
+```
+
+### Components
+
+```python
+CreatureAttackComponent
+RoarComponent
+ChargeComponent
+GrappleComponent
+TrampleComponent
+ArmorPlateComponent
+WeakPointComponent
+PackHuntComponent
+ApexPredatorComponent
+KaijuComponent
+ArmyResponseComponent
+SettlementDamageComponent
+```
+
+### Systems
+
+```text
+CreatureCombatSystem
+RoarFearSystem
+ChargeAttackSystem
+GrappleSystem
+TrampleSystem
+WeakPointSystem
+PackHuntSystem
+ApexPredatorSystem
+KaijuIncidentSystem
+ArmyResponseSystem
+SettlementDamageSystem
+```
+
+### Actions
+
+```text
+dodge creature
+hide from creature
+fight creature
+target weak point
+drive off predator
+call for help
+signal army
+repair damage
+```
+
+### Events
+
+```text
+CreatureAttackedEvent
+CreatureRoaredEvent
+CreatureChargedEvent
+CreatureTrampledEvent
+WeakPointHitEvent
+ApexPredatorAppearedEvent
+KaijuArrivedEvent
+ArmyCalledEvent
+SettlementDamagedEvent
+PredatorDrivenOffEvent
+```
+
+---
+
+## 10.6 Ranch production and survival farming
+
+### Mechanics
+
+```text
+feed stores
+meat
+eggs
+hide
+bone
+toxin
+milk
+fertilizer
+labor animal
+mount work
+guard animal
+ranch reputation
+danger premium
+```
+
+### Components
+
+```python
+FeedStoreComponent
+CreatureProductComponent
+HideComponent
+BoneComponent
+ToxinComponent
+CreatureMilkComponent
+RanchLaborComponent
+GuardAnimalComponent
+RanchReputationComponent
+DangerPremiumComponent
+```
+
+### Systems
+
+```text
+FeedStoreSystem
+CreatureProductSystem
+RanchLaborSystem
+GuardAnimalSystem
+RanchReputationSystem
+DangerPremiumSystem
+```
+
+### Actions
+
+```text
+stock feed
+collect egg
+harvest product
+assign ranch work
+assign guard
+sell creature product
+```
+
+### Events
+
+```text
+FeedStockedEvent
+CreatureProductCollectedEvent
+RanchWorkAssignedEvent
+GuardAssignedEvent
+CreatureProductSoldEvent
+RanchReputationChangedEvent
+```
+
+---
+
+## 10.7 How `dinosim` uses other packages
+
+`dinosim` should build on the existing survival and farming surface without turning into a
+theme-park management game.
+
+```text
+garden-sim crops/seasons -> feed production, nesting conditions, forage, and ranch labor
+barbarian-sim combat/survival -> dangerous encounters, armor, weapons, downing, and recovery
+colonysim jobs/reservations -> enclosure repair, feeding jobs, resource hauling, and assigned handlers
+lifesim relationships -> trust, imprinting, companion bonds, household risk, and grief after losses
+storyteller incidents -> escapes, apex predators, kaiju arrivals, stampedes, and containment failures
+void-sim emergency logic -> alarms, evacuation, quarantine pens, and system-like containment protocols
+```
+
+`dinosim` should use worldgen for dangerous creature discovery:
+
+```text
+strange tracks -> generated nesting site -> egg/clutch -> parent threat -> ranching or survival consequence
+storm damage -> enclosure breach -> escaped creature -> tracking/taming/battle -> settlement aftermath
+legend rumor -> generated apex lair -> kaiju incident -> army response -> reputation and repair costs
+```
+
+---
+
+# 11. `fortresssim` package — Dwarf Fortress-inspired mechanics
 
 Dwarf Fortress is the “mother of all sims” here, but it is intentionally not practical to exhaustively scope. The useful direction for bunnyland is to borrow *depth patterns*: generated world history, materials, geology, settlement logistics, strange moods, artifacts, nobles, justice, taverns, libraries, hospitals, sieges, migrants, trade caravans, tantrum spirals, and the fact that the world continues beyond any one character. Dwarf Fortress includes generated worlds and histories, fortress mode, adventure mode, legends mode, geology, z-level digging, farming, migrants, caravans, nobles, mandates, justice, vampires, strange moods, artifacts, and fortress-ending spirals. ([Wikipedia][8])
 
-## 9.1 World generation and history
+## 11.1 World generation and history
 
 ### Mechanics
 
@@ -5209,7 +6236,7 @@ LegendRecordedEvent
 
 ---
 
-## 9.2 Materials and item specificity
+## 11.2 Materials and item specificity
 
 ### Mechanics
 
@@ -5262,7 +6289,7 @@ ItemDamagedEvent
 
 ---
 
-## 9.3 Workshops and production chains
+## 11.3 Workshops and production chains
 
 ### Mechanics
 
@@ -5311,7 +6338,7 @@ StockCountUpdatedEvent
 
 ---
 
-## 9.4 Strange moods and artifacts
+## 11.4 Strange moods and artifacts
 
 ### Mechanics
 
@@ -5356,7 +6383,7 @@ StrangeMoodFailedEvent
 
 ---
 
-## 9.5 Nobles, mandates, justice
+## 11.5 Nobles, mandates, justice
 
 ### Mechanics
 
@@ -5406,7 +6433,7 @@ PunishmentAppliedEvent
 
 ---
 
-## 9.6 Tantrum spirals and social collapse
+## 11.6 Tantrum spirals and social collapse
 
 ### Mechanics
 
@@ -5449,7 +6476,7 @@ ColonyCollapseWarningEvent
 
 ---
 
-## 9.7 Taverns, temples, libraries, hospitals
+## 11.7 Taverns, temples, libraries, hospitals
 
 ### Mechanics
 
@@ -5506,11 +6533,11 @@ InstitutionReputationChangedEvent
 
 ---
 
-# 10. Cross-package mechanics we should expect
+# 12. Cross-package mechanics we should expect
 
 These are not one game’s feature. They are the glue that makes all packages interact.
 
-## 10.1 Perception, attention, and stimuli
+## 12.1 Perception, attention, and stimuli
 
 ### Mechanics
 
@@ -5561,7 +6588,7 @@ CharacterDetectedEvent
 
 ---
 
-## 10.2 Notes, memory, and reflection
+## 12.2 Notes, memory, and reflection
 
 ### Mechanics
 
@@ -5624,7 +6651,7 @@ ReadableTextReadEvent
 
 ---
 
-## 10.3 Economy, value, trade, and ownership
+## 12.3 Economy, value, trade, and ownership
 
 ### Mechanics
 
@@ -5699,7 +6726,7 @@ BillPaidEvent
 
 ---
 
-## 10.4 Crafting, recipes, tools, and workstations
+## 12.4 Crafting, recipes, tools, and workstations
 
 ### Components
 
@@ -5740,7 +6767,7 @@ dismantle
 
 ---
 
-## 10.5 Construction and world modification
+## 12.5 Construction and world modification
 
 ### Components
 
@@ -5778,7 +6805,7 @@ decorate
 
 ---
 
-## 10.6 Resource nodes and regeneration
+## 12.6 Resource nodes and regeneration
 
 ### Components
 
@@ -5802,7 +6829,7 @@ SeasonalResourceSystem
 
 ---
 
-## 10.7 Animals, wildlife, monsters
+## 12.7 Animals, wildlife, monsters
 
 ### Components
 
@@ -5830,7 +6857,7 @@ AnimalNeedsSystem
 
 ---
 
-## 10.8 Fire, fluids, weather hazards
+## 12.8 Fire, fluids, weather hazards
 
 ### Components
 
@@ -5856,7 +6883,7 @@ StructuralDamageSystem
 
 ---
 
-## 10.9 Policies and boundaries
+## 12.9 Policies and boundaries
 
 ### Components
 
@@ -5891,11 +6918,11 @@ Suspended characters cannot die.
 
 ---
 
-# 11. Package-level class inventory
+# 13. Package-level class inventory
 
 This is the class taxonomy I would expect in the codebase.
 
-## 11.1 Component classes
+## 13.1 Component classes
 
 ```text
 IdentityComponent
@@ -5933,9 +6960,21 @@ QuestComponent
 FactionComponent
 MemoryProfileComponent
 NoteEntryComponent
+DeviceComponent
+NetworkNodeComponent
+SurveillanceCoverageComponent
+CredentialComponent
+HeatComponent
+WantedLevelComponent
+ImplantComponent
+DinosaurComponent
+EggComponent
+TamingComponent
+EnclosureComponent
+KaijuComponent
 ```
 
-## 11.2 Edge classes
+## 13.2 Edge classes
 
 ```text
 Contains
@@ -5958,7 +6997,7 @@ Targets
 ParticipatingIn
 ```
 
-## 11.3 System classes
+## 13.3 System classes
 
 ```text
 WorldClockSystem
@@ -5983,9 +7022,18 @@ SkillXPSystem
 RelationshipUpdateSystem
 StorytellerIncidentSystem
 MemoryWriteSystem
+SurveillanceSystem
+HackingSystem
+HeatSystem
+WantedLevelSystem
+ImplantInstallationSystem
+CreatureNeedSystem
+TamingSystem
+EnclosureIntegritySystem
+KaijuIncidentSystem
 ```
 
-## 11.4 Action handlers
+## 13.4 Action handlers
 
 ```text
 MoveActionHandler
@@ -6009,9 +7057,16 @@ FightActionHandler
 TradeActionHandler
 GiftActionHandler
 ResearchActionHandler
+HackActionHandler
+AccessTerminalActionHandler
+InstallImplantActionHandler
+TrackCreatureActionHandler
+TameCreatureActionHandler
+TrainCreatureActionHandler
+TriggerContainmentActionHandler
 ```
 
-## 11.5 Services
+## 13.5 Services
 
 ```text
 CommandQueueService
@@ -6032,7 +7087,7 @@ PersistenceService
 PluginLoader
 ```
 
-## 11.6 Generators
+## 13.6 Generators
 
 ```text
 WorldBuilderGenerator
@@ -6045,9 +7100,13 @@ FactionGenerator
 CropGenerator
 DungeonGenerator
 LoreGenerator
+DistrictGenerator
+CyberpunkMissionGenerator
+CreatureHabitatGenerator
+ApexIncidentGenerator
 ```
 
-## 11.7 Projections
+## 13.7 Projections
 
 ```text
 RoomSummaryProjection
@@ -6059,9 +7118,13 @@ EventTimelineProjection
 WorldMapProjection
 FactionRelationProjection
 QuestLogProjection
+SecurityMapProjection
+WantedStatusProjection
+HerdStatusProjection
+ContainmentProjection
 ```
 
-## 11.8 Typed events
+## 13.8 Typed events
 
 ```text
 ActorMovedEvent
@@ -6087,11 +7150,19 @@ CharacterDiedEvent
 CharacterRevivedEvent
 ControllerChangedEvent
 PluginLoadedEvent
+HackSucceededEvent
+HeatChangedEvent
+WantedLevelChangedEvent
+ImplantInstalledEvent
+CreatureTamedEvent
+EggHatchedEvent
+CreatureEscapedEvent
+KaijuArrivedEvent
 ```
 
 ---
 
-# 12. Suggested build ordering
+# 14. Suggested build ordering
 
 Even though this is an exhaustive catalogue, the implementation order should be ruthless.
 
@@ -6220,7 +7291,33 @@ contracts/salvage/cargo
 frontier economy
 ```
 
-## Phase 9 — fortress sim
+## Phase 9 — neon sim
+
+```text
+districts/security zones
+devices/networks/surveillance
+hacking actions/credentials
+fixer missions/corp intrigue
+street economy
+reputation/heat/wanted levels
+cybernetics/implant tradeoffs
+city expansion worldgen
+```
+
+## Phase 10 — dino sim
+
+```text
+species/ecology/creature needs
+eggs/breeding/hatching
+tracking/taming/training
+companions/mounts/guards
+enclosures/containment
+escapes/stampedes
+apex predators/kaiju incidents
+ranch production
+```
+
+## Phase 11 — fortress sim
 
 ```text
 deep materials
@@ -6236,7 +7333,7 @@ legends mode
 
 ---
 
-# 13. The most important design warning
+# 15. The most important design warning
 
 The dangerous failure mode is trying to make one giant `SimulationSystem`.
 
