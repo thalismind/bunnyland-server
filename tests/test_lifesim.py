@@ -17,7 +17,9 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     LLMControllerComponent,
+    SleepHandler,
     SuspendedComponent,
+    WakeHandler,
     build_submitted_command,
     spawn_entity,
 )
@@ -52,6 +54,7 @@ from bunnyland.mechanics.lifesim import (
     HasBill,
     HasRoutine,
     HomeComponent,
+    HomeRestComponent,
     HouseholdComponent,
     HouseholdFundsComponent,
     HouseholdJoinedEvent,
@@ -93,6 +96,8 @@ from bunnyland.mechanics.lifesim import (
     StudySkillHandler,
     TaxAssessedEvent,
     WagePaidEvent,
+    WellRestedComponent,
+    WellRestedEvent,
     WitnessRomanceHandler,
     WorkShiftCompletedEvent,
     configure_lifesim_aging,
@@ -552,6 +557,85 @@ async def test_routine_due_consequence_advances_next_due_without_auto_commanding
     assert routine.last_completed_epoch == scenario.actor.epoch
     assert routine.next_due_epoch == scenario.actor.epoch + HOUR
     assert due[0].activity == "water the window herbs"
+
+
+async def test_sleeping_in_claimed_home_grants_well_rested_skill_bonus():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.register_handler(SleepHandler())
+    scenario.actor.register_handler(WakeHandler())
+    rested: list[WellRestedEvent] = []
+    scenario.actor.bus.subscribe(WellRestedEvent, rested.append)
+
+    # Claim the current room as home, then sleep there.
+    await scenario.actor.submit(_cmd(scenario, "claim-home", room_id=str(scenario.room_a)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "sleep"))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_component(HomeRestComponent)
+
+    await scenario.actor.tick(2 * HOUR)  # keep sleeping at home
+    await scenario.actor.submit(_cmd(scenario, "wake"))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(HomeRestComponent)
+    assert character.has_component(WellRestedComponent)
+    assert rested and rested[0].slept_seconds == int(3 * HOUR)
+    assert rested[0].room_id == str(scenario.room_a)
+    fragments = lifesim_fragments(scenario.actor.world, character)
+    assert any("well-rested" in line for line in fragments)
+
+    # Practicing while rested grants the bonus: 100 base xp * 1.25 = 125 -> level 1, 25 over.
+    await scenario.actor.submit(_cmd(scenario, "practice-skill", skill="cooking", xp=100))
+    await scenario.actor.tick(HOUR)
+    skills = scenario.actor.world.get_entity(scenario.character).get_component(SkillSetComponent)
+    assert skills.levels["cooking"] == 1
+    assert skills.xp["cooking"] == 25
+
+
+async def test_sleeping_away_from_home_grants_no_rest_buff():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.register_handler(SleepHandler())
+    scenario.actor.register_handler(WakeHandler())
+    rested: list[WellRestedEvent] = []
+    scenario.actor.bus.subscribe(WellRestedEvent, rested.append)
+
+    # The starting room is not claimed, so sleeping there earns nothing.
+    await scenario.actor.submit(_cmd(scenario, "sleep"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(2 * HOUR)
+    await scenario.actor.submit(_cmd(scenario, "wake"))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(HomeRestComponent)
+    assert not character.has_component(WellRestedComponent)
+    assert rested == []
+
+
+async def test_sleep_shorter_than_threshold_grants_no_rest_buff():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.register_handler(SleepHandler())
+    scenario.actor.register_handler(WakeHandler())
+    rested: list[WellRestedEvent] = []
+    scenario.actor.bus.subscribe(WellRestedEvent, rested.append)
+
+    await scenario.actor.submit(_cmd(scenario, "claim-home", room_id=str(scenario.room_a)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "sleep"))
+    await scenario.actor.tick(0.0)  # falls asleep at home; rest starts now
+    await scenario.actor.submit(_cmd(scenario, "wake"))
+    await scenario.actor.tick(HOUR / 2)  # only half an hour of rest
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(HomeRestComponent)
+    assert not character.has_component(WellRestedComponent)
+    assert rested == []
 
 
 async def test_start_partnership_creates_bidirectional_edges():
