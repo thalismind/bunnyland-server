@@ -72,17 +72,23 @@ def test_worldgen_plugin_contributes_named_generators():
     from bunnyland.worldgen import collect_generators
 
     registry = collect_generators(bunnyland_plugins())
-    assert {"empty", "waiting-room", "oneshot", "recursive"} <= set(registry)
+    assert {"empty", "waiting-room", "halloween", "holiday", "oneshot", "recursive"} <= set(
+        registry
+    )
     # generators are selected by name and disappear if their plugin is dropped
     without = collect_generators([p for p in bunnyland_plugins() if p.id != WORLDGEN])
     assert "empty" not in without
     assert "waiting-room" not in without
+    assert "halloween" not in without
+    assert "holiday" not in without
     assert "oneshot" not in without
     assert "recursive" not in without
     # each sim plugin also contributes its own example world, tied to that plugin
     assert "voidsim-demo" in registry
     assert registry["empty"].uses_seed is False
     assert registry["waiting-room"].uses_seed is False
+    assert registry["halloween"].uses_seed is False
+    assert registry["holiday"].uses_seed is False
     assert registry["recursive"].uses_seed is True
     assert registry["voidsim-demo"].uses_seed is False
     without_void = collect_generators([p for p in bunnyland_plugins() if p.id != VOIDSIM])

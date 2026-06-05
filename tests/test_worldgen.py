@@ -9,6 +9,7 @@ from bunnyland.core import (
     CommandCost,
     ContainerComponent,
     ControlledBy,
+    ExitTo,
     IdentityComponent,
     Lane,
     LightComponent,
@@ -33,6 +34,8 @@ from bunnyland.worldgen import (
     RoomSpec,
     StubWorldBuilder,
     WorldProposal,
+    halloween_generator,
+    holiday_generator,
     instantiate,
     validate_proposal,
     waiting_room_generator,
@@ -107,6 +110,68 @@ async def test_waiting_room_generator_builds_single_white_room_with_red_chair():
     assert identity.kind == "chair"
     assert not chair.has_component(PortableComponent)
     assert container_of(chair) == result.rooms["waiting_room"]
+
+
+@pytest.mark.parametrize(
+    ("generate", "expected"),
+    [
+        (
+            halloween_generator,
+            {
+                "rooms": {"porch", "foyer", "cellar"},
+                "objects": {"candy_bowl", "lantern", "spell_note", "rain_barrel"},
+                "characters": {"caretaker", "host"},
+                "start": "porch",
+                "direction": "in",
+                "destination": "foyer",
+                "claimable": "caretaker",
+                "portable": "lantern",
+                "food": "candy_bowl",
+                "water": "rain_barrel",
+            },
+        ),
+        (
+            holiday_generator,
+            {
+                "rooms": {"snowfield", "workshop", "stable"},
+                "objects": {"cocoa", "gingerbread", "gift_box", "silver_bell"},
+                "characters": {"helper", "foreman"},
+                "start": "snowfield",
+                "direction": "in",
+                "destination": "workshop",
+                "claimable": "helper",
+                "portable": "silver_bell",
+                "food": "gingerbread",
+                "water": "cocoa",
+            },
+        ),
+    ],
+)
+async def test_seasonal_generators_build_playable_demo_worlds(generate, expected):
+    actor = WorldActor()
+
+    result = await generate(actor, "ignored seed", GenOptions())
+
+    assert set(result.rooms) == expected["rooms"]
+    assert set(result.objects) == expected["objects"]
+    assert set(result.characters) == expected["characters"]
+
+    start = actor.world.get_entity(result.rooms[expected["start"]])
+    exits = {edge.direction: target for edge, target in start.get_relationships(ExitTo)}
+    assert exits[expected["direction"]] == result.rooms[expected["destination"]]
+
+    claimable = actor.world.get_entity(result.characters[expected["claimable"]])
+    assert claimable.has_component(CharacterComponent)
+    assert claimable.has_component(SuspendedComponent)
+
+    portable = actor.world.get_entity(result.objects[expected["portable"]])
+    assert portable.has_component(PortableComponent)
+
+    food = actor.world.get_entity(result.objects[expected["food"]])
+    assert food.has_component(FoodComponent)
+
+    water = actor.world.get_entity(result.objects[expected["water"]])
+    assert water.has_component(DrinkableComponent)
 
 
 async def test_instantiate_builds_the_mvp_checklist():

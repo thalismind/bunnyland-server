@@ -464,6 +464,8 @@ from ..worldgen.examples import (
 from ..worldgen.generators import (
     WorldGenerator,
     empty_generator,
+    halloween_generator,
+    holiday_generator,
     oneshot_generator,
     recursive_generator,
     waiting_room_generator,
@@ -747,6 +749,18 @@ def worldgen_plugin() -> Plugin:
                     "waiting-room",
                     waiting_room_generator,
                     "a single stark white room with one red chair",
+                    uses_seed=False,
+                ),
+                WorldGenerator(
+                    "halloween",
+                    halloween_generator,
+                    "a haunted autumn porch, foyer, and cellar with seasonal props",
+                    uses_seed=False,
+                ),
+                WorldGenerator(
+                    "holiday",
+                    holiday_generator,
+                    "a snowy holiday workshop, stable, and field with festive props",
                     uses_seed=False,
                 ),
                 WorldGenerator(
