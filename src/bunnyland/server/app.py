@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -95,7 +96,24 @@ def create_app(
             "bunnyland server API requires FastAPI; install the server dependencies first"
         )
 
-    app = FastAPI(title=title)
+    mcp_session_manager = None
+    mcp_event_bridge = None
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        mcp_session_context = None
+        try:
+            if mcp_session_manager is not None:
+                mcp_session_context = mcp_session_manager.run()
+                await mcp_session_context.__aenter__()
+            yield
+        finally:
+            if mcp_session_context is not None:
+                await mcp_session_context.__aexit__(None, None, None)
+            if mcp_event_bridge is not None:
+                mcp_event_bridge.close()
+
+    app = FastAPI(title=title, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -372,24 +390,6 @@ def create_app(
         )
         mcp_session_manager = getattr(mcp_app, "bunnyland_mcp_session_manager", None)
         mcp_event_bridge = getattr(mcp_app, "bunnyland_mcp_event_bridge", None)
-        mcp_session_context = None
-
-        if mcp_session_manager is not None:
-
-            @app.on_event("startup")
-            async def start_mcp_session_manager() -> None:
-                nonlocal mcp_session_context
-                mcp_session_context = mcp_session_manager.run()
-                await mcp_session_context.__aenter__()
-
-            @app.on_event("shutdown")
-            async def stop_mcp_session_manager() -> None:
-                nonlocal mcp_session_context
-                if mcp_session_context is not None:
-                    await mcp_session_context.__aexit__(None, None, None)
-                    mcp_session_context = None
-                if mcp_event_bridge is not None:
-                    mcp_event_bridge.close()
 
         app.mount(
             MCP_MOUNT_PATH,
