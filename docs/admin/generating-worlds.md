@@ -17,7 +17,29 @@ Implemented sim packages also provide deterministic demo worlds, such as `lifesi
 `gardensim-demo`, `daggersim-demo`, and `voidsim-demo`. See
 [world creation](../developer/world-creation.md) for the full list.
 
-## Generate from the CLI
+## Generate from the web bundle
+
+The web bundle's generator page is the preferred admin workflow for a running server because it
+starts generation asynchronously and shows the world changing as entities appear.
+
+Open `world-generator.html` from the Bunnyland web bundle. On the deployed frontend, the
+server field is usually same-origin `/api`; locally it is commonly `http://127.0.0.1:8765`.
+
+The page:
+
+- lists generators from `GET /admin/world/generators`;
+- accepts a seed/prompt and room budget;
+- requires an explicit reset checkbox before replacing the live world;
+- can request a save after generation when the server was started with `--save`;
+- starts generation as a background job, then watches status and polls snapshots;
+- highlights entity ids that were not present in the previous snapshot.
+
+The reset endpoint clears the current world immediately and returns a job id. The
+generator then adds entities while the page watches `/world/snapshot`, websocket domain
+events, and `GET /admin/world/generation`. Completion is announced with
+`WorldGenerationCompletedEvent`; failures are announced with `WorldGenerationFailedEvent`.
+
+## Generate from the CLI at startup
 
 For a private single-player-style world:
 
@@ -46,25 +68,6 @@ uv run bunnyland serve --generator empty --ticks 0 \
 
 For LLM-generated worlds, add `--llm` and provider credentials as described in
 [running a server](running-a-server.md#connecting-an-llm).
-
-## Generate from the web client
-
-Open `world-generator.html` in the Bunnyland web client. On the deployed frontend, the
-server field is usually same-origin `/api`; locally it is commonly `http://127.0.0.1:8765`.
-
-The page:
-
-- lists generators from `GET /admin/world/generators`;
-- accepts a seed/prompt and room budget;
-- requires an explicit reset checkbox before replacing the live world;
-- can request a save after generation when the server was started with `--save`;
-- starts generation as a background job, then watches status and polls snapshots;
-- highlights entity ids that were not present in the previous snapshot.
-
-The reset endpoint clears the current world immediately and returns a job id. The
-generator then adds entities while the page watches `/world/snapshot`, websocket domain
-events, and `GET /admin/world/generation`. Completion is announced with
-`WorldGenerationCompletedEvent`; failures are announced with `WorldGenerationFailedEvent`.
 
 ## Generate through the admin API
 
