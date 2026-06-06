@@ -6,11 +6,47 @@ Relics world directly; the engine validates the proposal and instantiates it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 from ..llm_agents.agent import DEFAULT_MODEL
+
+_SEVERITY_LABELS = {
+    "none": 0.0,
+    "trivial": 0.5,
+    "minor": 1.0,
+    "low": 1.0,
+    "moderate": 2.0,
+    "medium": 2.0,
+    "high": 3.0,
+    "major": 4.0,
+    "severe": 5.0,
+    "critical": 5.0,
+}
+
+
+def _coerce_profile_string(value: object, default: str) -> object:
+    if value is None:
+        return default
+    if isinstance(value, Mapping):
+        for key in ("profile", "profile_name", "id", "name"):
+            nested = value.get(key)
+            if isinstance(nested, str) and nested.strip():
+                return nested
+        return default
+    return value
+
+
+def _coerce_numeric_label(value: object) -> object:
+    if isinstance(value, str):
+        return _SEVERITY_LABELS.get(value.strip().lower(), value)
+    return value
+
+
+def _default_if_none(value: object, default: object) -> object:
+    return default if value is None else value
 
 
 class RoomSpec(BaseModel):
@@ -44,6 +80,21 @@ class ObjectSpec(BaseModel):
     key_name: str | None = None
     locked: bool = False
 
+    @field_validator(
+        "portable",
+        "nutrition",
+        "satiety",
+        "hydration",
+        "renewable",
+        "open",
+        "writable",
+        "locked",
+        mode="before",
+    )
+    @classmethod
+    def _default_null_scalars(cls, value: object, info) -> object:
+        return _default_if_none(value, cls.model_fields[info.field_name].default)
+
 
 class CharacterSpec(BaseModel):
     key: str
@@ -62,9 +113,7 @@ class CharacterSpec(BaseModel):
     @field_validator("llm_profile", "llm_model", "llm_provider", mode="before")
     @classmethod
     def _default_llm_fields(cls, value: object, info) -> object:
-        if value is None:
-            return cls.model_fields[info.field_name].default
-        return value
+        return _coerce_profile_string(value, cls.model_fields[info.field_name].default)
 
 
 class WorldProposal(BaseModel):
@@ -125,6 +174,21 @@ class ItemProposal(BaseModel):
     key_name: str | None = None
     locked: bool = False
 
+    @field_validator(
+        "portable",
+        "nutrition",
+        "satiety",
+        "hydration",
+        "renewable",
+        "open",
+        "writable",
+        "locked",
+        mode="before",
+    )
+    @classmethod
+    def _default_null_scalars(cls, value: object, info) -> object:
+        return _default_if_none(value, cls.model_fields[info.field_name].default)
+
 
 class CharacterProposal(BaseModel):
     """A character inside a room (key/room are generator-assigned)."""
@@ -144,9 +208,7 @@ class CharacterProposal(BaseModel):
     @field_validator("llm_profile", "llm_model", "llm_provider", mode="before")
     @classmethod
     def _default_llm_fields(cls, value: object, info) -> object:
-        if value is None:
-            return cls.model_fields[info.field_name].default
-        return value
+        return _coerce_profile_string(value, cls.model_fields[info.field_name].default)
 
 
 class RoomContentsProposal(BaseModel):
@@ -167,6 +229,11 @@ class StoryEventProposal(BaseModel):
     stimulus_intensity: float = 1.0
     objects: list[ItemProposal] = Field(default_factory=list)
     characters: list[CharacterProposal] = Field(default_factory=list)
+
+    @field_validator("severity", "budget_spent", "stimulus_intensity", mode="before")
+    @classmethod
+    def _coerce_numeric_labels(cls, value: object) -> object:
+        return _coerce_numeric_label(value)
 
 
 __all__ = [

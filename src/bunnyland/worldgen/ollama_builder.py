@@ -8,9 +8,12 @@ only the validated proposal is ever instantiated (the LLM never touches the ECS)
 from __future__ import annotations
 
 import json
+import logging
 
 from .defaults import DEFAULT_WORLDGEN_MODEL
 from .proposal import WorldProposal
+
+logger = logging.getLogger("bunnyland.worldgen")
 
 _SYSTEM_PROMPT = """You are the world-builder for an asynchronous social sandbox.
 From the seed, return ONLY JSON matching this shape (no prose):
@@ -62,7 +65,62 @@ class OllamaWorldBuilder:
         content = response["message"]["content"]
         data = json.loads(content)
         data.setdefault("seed", seed)
-        return WorldProposal.model_validate(data)
+        return repair_world_proposal(WorldProposal.model_validate(data))
 
 
-__all__ = ["OllamaWorldBuilder"]
+def repair_world_proposal(proposal: WorldProposal) -> WorldProposal:
+    """Repair small LLM proposal reference mistakes before strict instantiation.
+
+    The flat proposal schema does not support nested object contents yet. Live models
+    sometimes put an item in a container key instead of a room key; keep the item playable
+    by placing it in the first room. Dangling exits are dropped because inventing topology
+    would be more surprising than omitting a bad edge.
+    """
+
+    if not proposal.rooms:
+        return proposal
+    room_keys = {room.key for room in proposal.rooms}
+    default_room_key = proposal.rooms[0].key
+
+    repaired_objects = []
+    repaired_object_count = 0
+    for obj in proposal.objects:
+        if obj.room_key in room_keys:
+            repaired_objects.append(obj)
+            continue
+        repaired_objects.append(obj.model_copy(update={"room_key": default_room_key}))
+        repaired_object_count += 1
+
+    repaired_characters = []
+    repaired_character_count = 0
+    for character in proposal.characters:
+        if character.room_key in room_keys:
+            repaired_characters.append(character)
+            continue
+        repaired_characters.append(character.model_copy(update={"room_key": default_room_key}))
+        repaired_character_count += 1
+
+    repaired_exits = [
+        exit_
+        for exit_ in proposal.exits
+        if exit_.from_key in room_keys and exit_.to_key in room_keys
+    ]
+    dropped_exit_count = len(proposal.exits) - len(repaired_exits)
+    if repaired_object_count or repaired_character_count or dropped_exit_count:
+        logger.warning(
+            "repaired live world proposal references: %s object(s), %s character(s), "
+            "%s dropped exit(s)",
+            repaired_object_count,
+            repaired_character_count,
+            dropped_exit_count,
+        )
+    return proposal.model_copy(
+        update={
+            "objects": repaired_objects,
+            "characters": repaired_characters,
+            "exits": repaired_exits,
+        }
+    )
+
+
+__all__ = ["OllamaWorldBuilder", "repair_world_proposal"]

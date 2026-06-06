@@ -31,7 +31,10 @@ from bunnyland.worldgen import (
     CharacterSpec,
     ExitSpec,
     GenOptions,
+    ItemProposal,
+    ObjectSpec,
     RoomSpec,
+    StoryEventProposal,
     StubWorldBuilder,
     WorldProposal,
     halloween_generator,
@@ -41,6 +44,7 @@ from bunnyland.worldgen import (
     validate_proposal,
     waiting_room_generator,
 )
+from bunnyland.worldgen.ollama_builder import repair_world_proposal
 
 HOUR = 3600.0
 
@@ -69,6 +73,18 @@ def test_character_proposal_defaults_null_llm_fields():
     assert proposal.llm_model == "deepseek-v4-flash"
 
 
+def test_character_proposal_coerces_object_llm_profile_to_string():
+    proposal = CharacterProposal.model_validate(
+        {
+            "name": "Elara",
+            "controller": "llm",
+            "llm_profile": {"name": "meadow-shepherd", "role": "guide"},
+        }
+    )
+
+    assert proposal.llm_profile == "meadow-shepherd"
+
+
 def test_character_spec_defaults_to_flash_controller_model():
     spec = CharacterSpec.model_validate(
         {
@@ -81,6 +97,82 @@ def test_character_spec_defaults_to_flash_controller_model():
     )
 
     assert spec.llm_model == "deepseek-v4-flash"
+
+
+def test_story_event_proposal_accepts_common_severity_labels():
+    event = StoryEventProposal.model_validate(
+        {
+            "title": "A harmless clue",
+            "severity": "minor",
+            "budget_spent": "low",
+            "stimulus_intensity": "high",
+        }
+    )
+
+    assert event.severity == 1.0
+    assert event.budget_spent == 1.0
+    assert event.stimulus_intensity == 3.0
+
+
+def test_item_and_object_proposals_default_explicit_null_scalars():
+    item = ItemProposal.model_validate(
+        {
+            "name": "a live-test tool",
+            "nutrition": None,
+            "satiety": None,
+            "hydration": None,
+            "open": None,
+            "locked": None,
+        }
+    )
+    obj = ObjectSpec.model_validate(
+        {
+            "key": "tool",
+            "room_key": "room",
+            "name": "a live-test tool",
+            "nutrition": None,
+            "satiety": None,
+            "hydration": None,
+            "open": None,
+            "locked": None,
+        }
+    )
+
+    assert item.nutrition == 0.0
+    assert item.satiety == 0.0
+    assert item.hydration == 0.0
+    assert item.open is True
+    assert item.locked is False
+    assert obj.nutrition == 0.0
+    assert obj.satiety == 0.0
+    assert obj.hydration == 0.0
+    assert obj.open is True
+    assert obj.locked is False
+
+
+def test_repair_world_proposal_moves_nested_objects_to_first_room_and_drops_bad_exits():
+    proposal = WorldProposal.model_validate(
+        {
+            "seed": "repair",
+            "rooms": [{"key": "meadow", "title": "Meadow"}],
+            "exits": [{"from_key": "meadow", "direction": "east", "to_key": "ghost"}],
+            "objects": [
+                {
+                    "key": "apple",
+                    "room_key": "box",
+                    "name": "an apple",
+                    "kind": "food",
+                }
+            ],
+            "characters": [{"key": "helper", "name": "Helper", "room_key": "box"}],
+        }
+    )
+
+    repaired = repair_world_proposal(proposal)
+
+    assert repaired.objects[0].room_key == "meadow"
+    assert repaired.characters[0].room_key == "meadow"
+    assert repaired.exits == []
 
 
 def test_generation_options_default_to_pro_worldgen_model():

@@ -454,6 +454,8 @@ async def test_ollama_agent_resends_prior_turns_as_context(monkeypatch):
     second = client.calls[1]
     assert second[0] == {"role": "user", "content": "turn one"}
     assert second[1]["role"] == "assistant"
+    assert second[1]["content"] == "Selected tool wait with arguments {}."
+    assert "tool_calls" not in second[1]
     assert second[2] == {"role": "user", "content": "turn two"}
 
 
@@ -611,6 +613,8 @@ async def test_openrouter_agent_resends_prior_turns_as_context(monkeypatch):
     second = agent._client.chat.calls[1]["messages"]
     assert second[0] == {"role": "user", "content": "turn one"}
     assert second[1]["role"] == "assistant"
+    assert second[1]["content"] == 'Selected tool wait with arguments {"reason": "rest"}.'
+    assert "tool_calls" not in second[1]
     assert second[2] == {"role": "user", "content": "turn two"}
 
 

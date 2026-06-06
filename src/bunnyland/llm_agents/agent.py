@@ -147,12 +147,14 @@ class OllamaAgent:
         if response is None:
             return None
         message = response["message"]
-        # Persist the model's reply (including any tool_calls) for the next turn.
+        tool_calls = message.get("tool_calls") or []
         history.append(user_message)
-        history.append(dict(message))
+        if tool_calls:
+            history.append(_tool_call_history(tool_calls[0]["function"]))
+        else:
+            history.append(dict(message))
         self._trim(history)
 
-        tool_calls = message.get("tool_calls") or []
         if not tool_calls:
             return None
         call = tool_calls[0]["function"]
@@ -225,11 +227,24 @@ class OpenRouterAgent:
         if response is None:
             return None
         message = response.choices[0].message
+        tool_calls = getattr(message, "tool_calls", None) or []
         history.append(user_message)
-        history.append(_message_to_history(message))
+        if tool_calls:
+            function = tool_calls[0].function
+            history.append(
+                _tool_call_history(
+                    {
+                        "name": function.name,
+                        "arguments": _openrouter_arguments(
+                            getattr(function, "arguments", {})
+                        ),
+                    }
+                )
+            )
+        else:
+            history.append(_message_to_history(message))
         self._trim(history)
 
-        tool_calls = getattr(message, "tool_calls", None) or []
         if not tool_calls:
             return None
         function = tool_calls[0].function
@@ -344,6 +359,19 @@ def _message_to_history(message) -> dict:
     if tool_calls:
         result["tool_calls"] = tool_calls
     return result
+
+
+def _tool_call_history(function: MappingABC[str, object]) -> dict:
+    name = str(function.get("name", "unknown"))
+    arguments = function.get("arguments", {})
+    try:
+        encoded = json.dumps(arguments, sort_keys=True)
+    except TypeError:
+        encoded = json.dumps(str(arguments))
+    return {
+        "role": "assistant",
+        "content": f"Selected tool {name} with arguments {encoded}.",
+    }
 
 
 def _openrouter_arguments(arguments: object) -> dict:
