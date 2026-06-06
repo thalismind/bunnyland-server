@@ -46,6 +46,7 @@ from .controllers import (
     LLMControllerComponent,
     MCPControllerComponent,
     SuspendedControllerComponent,
+    WebControllerComponent,
 )
 from .ecs import ensure_blank_prefab, parse_entity_id, replace_component, spawn_entity
 from .edges import ControlledBy
@@ -473,6 +474,8 @@ class WorldActor:
             return "llm"
         if controller.has_component(MCPControllerComponent):
             return "mcp"
+        if controller.has_component(WebControllerComponent):
+            return "web"
         if controller.has_component(SuspendedControllerComponent):
             return "suspended"
         return "unknown"
