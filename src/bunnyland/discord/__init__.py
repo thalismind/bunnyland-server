@@ -1,10 +1,12 @@
 """Discord front-end (spec 24). Import the bot lazily so the extra stays optional."""
 
 from .bot import (
+    DiscordMessageFilters,
     assign_discord_controller,
     did_you_mean,
     discord_broadcast_channel_ids,
     parse_discord_action,
+    parse_discord_id_list,
     release_discord_character_to_llm,
     suspend_discord_character,
 )
@@ -22,12 +24,14 @@ from .view import (
 
 __all__ = [
     "DiscordBot",
+    "DiscordMessageFilters",
     "HELP_TEXT",
     "assign_discord_controller",
     "did_you_mean",
     "discord_broadcast_channel_ids",
     "explain_rejection",
     "parse_discord_action",
+    "parse_discord_id_list",
     "release_discord_character_to_llm",
     "render_character_list",
     "render_action_result",

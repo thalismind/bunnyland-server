@@ -93,6 +93,28 @@ Child life-stage characters are not claimable by default. Start the server with
 `--discord-allow-child-claims` only if that world intentionally allows players to control
 child characters.
 
+By default, the bot ignores non-command messages but accepts `!` commands from any guild
+channel or DM it can read. To restrict inbound commands, set one or more allowlists:
+
+```bash
+BUNNYLAND_DISCORD_ALLOWED_GUILD_IDS=111,222 \
+BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS=333,444 \
+BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS=123,456 \
+uv run --extra server --extra discord bunnyland serve --discord
+```
+
+The matching rules are:
+
+| Filter                           | Effect                                                  |
+|----------------------------------|---------------------------------------------------------|
+| `--discord-allowed-guild-id`     | Accept guild messages only from these guilds.           |
+| `--discord-allowed-channel-id`   | Accept guild messages only from these channels.         |
+| `--discord-allowed-dm-user-id`   | Accept DMs only from these users.                       |
+
+Repeat the CLI flags to allow more than one id. If both guild and channel filters are set,
+a guild message must match both. DM messages are accepted only when the author is listed in
+`--discord-allowed-dm-user-id` or `BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS`.
+
 If you do not know the numeric user id yet, omit `BUNNYLAND_DISCORD_USER_ID` and claim from
 Discord instead:
 

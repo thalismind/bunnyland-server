@@ -71,6 +71,34 @@ class DiscordAction:
     tool: str | None = None
 
 
+@dataclass(frozen=True)
+class DiscordMessageFilters:
+    """Allowlist for inbound Discord messages."""
+
+    guild_ids: tuple[int, ...] = ()
+    channel_ids: tuple[int, ...] = ()
+    dm_user_ids: tuple[int, ...] = ()
+
+    def allows(self, message) -> bool:
+        if not self.guild_ids and not self.channel_ids and not self.dm_user_ids:
+            return True
+
+        author = getattr(message, "author", None)
+        guild = getattr(message, "guild", None)
+        if guild is None:
+            return getattr(author, "id", None) in self.dm_user_ids
+
+        if not self.guild_ids and not self.channel_ids:
+            return False
+        if self.guild_ids and getattr(guild, "id", None) not in self.guild_ids:
+            return False
+
+        channel = getattr(message, "channel", None)
+        if self.channel_ids and getattr(channel, "id", None) not in self.channel_ids:
+            return False
+        return True
+
+
 def _require_discord():  # pragma: no cover - exercised only with the extra
     try:
         import discord
@@ -87,6 +115,14 @@ def _split(text: str) -> list[str]:
         return shlex.split(text)
     except ValueError:
         return text.split()
+
+
+def parse_discord_id_list(value: str | None) -> tuple[int, ...]:
+    """Parse comma-separated Discord snowflake ids from env/config text."""
+
+    if value is None or value.strip() == "":
+        return ()
+    return tuple(int(part.strip()) for part in value.split(",") if part.strip())
 
 
 def _parse_scalar(value: str) -> Any:
@@ -210,6 +246,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         llm_provider: str = "ollama",
         character_model: str = DEFAULT_MODEL,
         pause_status: Callable[[], bool] | None = None,
+        message_filters: DiscordMessageFilters | None = None,
     ) -> None:
         discord, commands = _require_discord()
         self.actor = actor
@@ -217,6 +254,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         self.allow_child_claims = allow_child_claims
         self.llm_provider = llm_provider
         self.character_model = character_model
+        self.message_filters = message_filters or DiscordMessageFilters()
         self._pause_status = pause_status
         self._world_paused = pause_status() if pause_status is not None else False
         intents = discord.Intents.default()
@@ -243,6 +281,15 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         if self._pause_status is not None:
             return self._pause_status()
         return self._world_paused
+
+    def _should_handle_message(self, message) -> bool:
+        author = getattr(message, "author", None)
+        if getattr(author, "bot", False):
+            return False
+        content = getattr(message, "content", "")
+        if not content.startswith("!"):
+            return False
+        return self.message_filters.allows(message)
 
     async def _post_pause_status(self, event: WorldPauseStatusChangedEvent) -> None:
         self._world_paused = event.paused
@@ -511,7 +558,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
         @self.client.event
         async def on_message(message):
-            if message.author.bot or not message.content.startswith("!"):
+            if not self._should_handle_message(message):
                 return
             ctx = await self.client.get_context(message)
             await self.handle_text_command(ctx, message.content[1:])
@@ -542,10 +589,12 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 __all__ = [
     "DiscordAction",
     "DiscordBot",
+    "DiscordMessageFilters",
     "assign_discord_controller",
     "did_you_mean",
     "discord_broadcast_channel_ids",
     "parse_discord_action",
+    "parse_discord_id_list",
     "release_discord_character_to_llm",
     "suspend_discord_character",
 ]

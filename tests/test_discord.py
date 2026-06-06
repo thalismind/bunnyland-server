@@ -28,11 +28,13 @@ from bunnyland.core.events import (
 )
 from bunnyland.discord import (
     HELP_TEXT,
+    DiscordMessageFilters,
     assign_discord_controller,
     did_you_mean,
     discord_broadcast_channel_ids,
     explain_rejection,
     parse_discord_action,
+    parse_discord_id_list,
     release_discord_character_to_llm,
     render_action_result,
     render_character_list,
@@ -46,6 +48,27 @@ from bunnyland.discord import (
 from bunnyland.discord.bot import PAUSED_REACTION, QUEUED_REACTION, DiscordBot
 from bunnyland.discord.claim import discord_controlled_character
 from bunnyland.memory import InMemoryStore, install_memory
+
+
+class _DiscordObject:
+    def __init__(self, **attrs):
+        self.__dict__.update(attrs)
+
+
+def _message(
+    *,
+    author_id: int = 123,
+    channel_id: int = 456,
+    content: str = "!look",
+    guild_id: int | None = 789,
+    bot: bool = False,
+):
+    return _DiscordObject(
+        author=_DiscordObject(id=author_id, bot=bot),
+        channel=_DiscordObject(id=channel_id),
+        content=content,
+        guild=None if guild_id is None else _DiscordObject(id=guild_id),
+    )
 
 
 def test_did_you_mean_importable_without_the_discord_extra():
@@ -144,6 +167,63 @@ def test_discord_broadcast_channel_ids_returns_unique_attached_channels(scenario
     )
 
     assert discord_broadcast_channel_ids(scenario.actor) == (456,)
+
+
+def test_discord_message_filters_allow_all_when_unconfigured():
+    filters = DiscordMessageFilters()
+
+    assert filters.allows(_message(guild_id=789))
+    assert filters.allows(_message(guild_id=None))
+
+
+def test_discord_message_filters_require_allowed_guild_and_channel():
+    filters = DiscordMessageFilters(guild_ids=(111, 222), channel_ids=(333, 444))
+
+    assert filters.allows(_message(guild_id=111, channel_id=333))
+    assert filters.allows(_message(guild_id=222, channel_id=444))
+    assert not filters.allows(_message(guild_id=999, channel_id=333))
+    assert not filters.allows(_message(guild_id=111, channel_id=999))
+    assert not filters.allows(_message(guild_id=None, author_id=123, channel_id=333))
+
+
+def test_discord_message_filters_allow_only_configured_user_dms():
+    filters = DiscordMessageFilters(dm_user_ids=(123, 456))
+
+    assert filters.allows(_message(guild_id=None, author_id=123))
+    assert filters.allows(_message(guild_id=None, author_id=456))
+    assert not filters.allows(_message(guild_id=None, author_id=789))
+    assert not filters.allows(_message(guild_id=111, author_id=123))
+
+
+def test_discord_message_filters_allow_guild_channels_or_user_dms():
+    filters = DiscordMessageFilters(
+        guild_ids=(111,),
+        channel_ids=(333,),
+        dm_user_ids=(123,),
+    )
+
+    assert filters.allows(_message(guild_id=111, channel_id=333, author_id=999))
+    assert filters.allows(_message(guild_id=None, author_id=123))
+    assert not filters.allows(_message(guild_id=111, channel_id=999, author_id=123))
+    assert not filters.allows(_message(guild_id=None, author_id=999))
+
+
+def test_parse_discord_id_list_accepts_comma_separated_ids():
+    assert parse_discord_id_list(None) == ()
+    assert parse_discord_id_list("") == ()
+    assert parse_discord_id_list("111, 222,333") == (111, 222, 333)
+
+
+def test_discord_bot_ignores_messages_rejected_by_filters():
+    bot = object.__new__(DiscordBot)
+    bot.message_filters = DiscordMessageFilters(guild_ids=(111,), channel_ids=(333,))
+
+    assert bot._should_handle_message(_message(guild_id=111, channel_id=333))
+    assert not bot._should_handle_message(_message(guild_id=111, channel_id=999))
+    assert not bot._should_handle_message(_message(guild_id=111, channel_id=333, bot=True))
+    assert not bot._should_handle_message(
+        _message(guild_id=111, channel_id=333, content="look")
+    )
 
 
 def test_release_discord_character_reassigns_to_llm_controller(scenario):

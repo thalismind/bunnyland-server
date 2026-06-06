@@ -299,7 +299,20 @@ async def _serve(args) -> None:
     )
     discord_bot = None
     if args.discord:
-        from .discord import DiscordBot
+        from .discord import DiscordBot, DiscordMessageFilters, parse_discord_id_list
+
+        guild_filter_ids = tuple(
+            args.discord_allowed_guild_id
+            or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_GUILD_IDS"))
+        )
+        channel_filter_ids = tuple(
+            args.discord_allowed_channel_id
+            or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS"))
+        )
+        dm_user_filter_ids = tuple(
+            args.discord_allowed_dm_user_id
+            or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS"))
+        )
 
         discord_bot = DiscordBot(
             actor,
@@ -308,6 +321,11 @@ async def _serve(args) -> None:
             llm_provider=args.llm_provider,
             character_model=character_model,
             pause_status=lambda: loop.paused,
+            message_filters=DiscordMessageFilters(
+                guild_ids=guild_filter_ids,
+                channel_ids=channel_filter_ids,
+                dm_user_ids=dm_user_filter_ids,
+            ),
         )
         claim_user_id = args.discord_user_id or _env_int("BUNNYLAND_DISCORD_USER_ID")
         claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0
@@ -521,6 +539,36 @@ def main(argv: list[str] | None = None) -> int:
         "--discord-allow-child-claims",
         action="store_true",
         help="allow Discord users to claim child life-stage characters",
+    )
+    serve.add_argument(
+        "--discord-allowed-guild-id",
+        action="append",
+        type=int,
+        default=None,
+        help=(
+            "allow Discord commands from this guild id; repeat for more "
+            "(env: BUNNYLAND_DISCORD_ALLOWED_GUILD_IDS)"
+        ),
+    )
+    serve.add_argument(
+        "--discord-allowed-channel-id",
+        action="append",
+        type=int,
+        default=None,
+        help=(
+            "allow Discord commands from this guild channel id; repeat for more "
+            "(env: BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS)"
+        ),
+    )
+    serve.add_argument(
+        "--discord-allowed-dm-user-id",
+        action="append",
+        type=int,
+        default=None,
+        help=(
+            "allow Discord DM commands from this user id; repeat for more "
+            "(env: BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS)"
+        ),
     )
     serve.add_argument(
         "--discord-playtest",
