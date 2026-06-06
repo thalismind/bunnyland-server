@@ -120,3 +120,30 @@ Plot a course and jump:
 
 Jumps consume fuel and complete after their route duration. The ship arrives at the plotted
 destination when the jump completes.
+
+## Chaos influence and mutation pressure
+
+Some void-sim worlds include warp breaches, machine possessions, daemon whispers, or other
+chaos sources. In these worlds, chaos is tracked with the same corruption state used by
+barbarian-sim:
+
+```text
+!look
+```
+
+Look output and character prompts can show nearby chaos sources, wards, your current
+chaos corruption, and source-specific mutation pressure.
+
+Chaos sources can:
+
+- add corruption to nearby characters over time
+- add chaos mutation pressure for future mutation rules
+- damage nearby ship systems if the source is severe
+
+Chaos wards reduce the corruption rate. Radiation shields also help a little, so future
+radiation and mutation mechanics can cooperate with the same pressure model.
+
+Mutation outcomes are intentionally not active yet. The current void-sim implementation
+only records chaos mutation pressure. It also defines separate radiation and cybernetic
+pressure components as stubs, so the follow-up nuke-sim pack can accumulate radiation,
+chaos, and augmentation pressure independently before deciding when actual mutations occur.

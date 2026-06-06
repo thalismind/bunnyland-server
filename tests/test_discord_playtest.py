@@ -850,6 +850,7 @@ def _install_voidsim_playtest(actor) -> None:
         actor.register_handler(handler)
     actor.register_consequence(void.LifeSupportConsequence())
     actor.register_consequence(void.JumpTravelConsequence())
+    actor.register_consequence(void.ChaosInfluenceConsequence())
 
 
 def _add_voidsim_systems_world(scenario):
@@ -925,6 +926,31 @@ def _add_voidsim_navigation_world(scenario):
         [void.OrbitalBodyComponent(body_type="moon", landable=True)],
     )
     return ship, station, signal, body
+
+
+def _add_voidsim_chaos_world(scenario):
+    scenario.actor.world.get_entity(scenario.room_a).add_component(
+        void.HabitatModuleComponent(module_type="chapel")
+    )
+    source = _room_content(
+        scenario,
+        "warp breach",
+        "chaos-source",
+        [
+            void.ChaosInfluenceComponent(
+                source_type="warp breach",
+                corruption_per_hour=2.0,
+                mutation_pressure_per_corruption=0.5,
+            )
+        ],
+    )
+    ward = _room_content(
+        scenario,
+        "gellar charm",
+        "ward",
+        [void.ChaosWardComponent(protection_per_hour=1.0)],
+    )
+    return source, ward
 
 
 async def test_discord_playtest_schedules_inputs_by_tick(scenario):
@@ -1607,3 +1633,26 @@ async def test_discord_playtest_voidsim_navigation_loop(scenario):
     assert signal.get_component(void.DistressSignalComponent).answered is True
     assert not ship.has_component(void.OrbitComponent)
     assert completed
+
+
+async def test_discord_playtest_voidsim_chaos_influence_loop(scenario):
+    _install_voidsim_playtest(scenario.actor)
+    source_id, ward_id = _add_voidsim_chaos_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    influence: list = []
+    scenario.actor.bus.subscribe(void.ChaosInfluenceAppliedEvent, influence.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-voidsim-chaos-influence.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert rejected == []
+    assert result.ticks == 3
+    assert len(result.inputs) == 2
+    assert character.get_component(barb.CorruptionComponent).amount == 3.0
+    assert character.get_component(void.ChaosMutationPressureComponent).amount == 1.5
+    assert influence
+    assert {event.source_id for event in influence} == {str(source_id)}
+    assert scenario.actor.world.has_entity(ward_id)

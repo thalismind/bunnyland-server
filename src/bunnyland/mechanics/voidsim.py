@@ -18,7 +18,12 @@ from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.commands import SubmittedCommand
-from ..core.components import CharacterComponent, IdentityComponent
+from ..core.components import (
+    CharacterComponent,
+    DeadComponent,
+    IdentityComponent,
+    SuspendedComponent,
+)
 from ..core.ecs import (
     container_of,
     contents,
@@ -29,6 +34,7 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from .barbariansim import CorruptionComponent, CorruptionGainedEvent
 
 
 @dataclass(frozen=True)
@@ -95,6 +101,60 @@ class OxygenComponent(Component):
 @dataclass(frozen=True)
 class RadiationShieldComponent(Component):
     strength: float = 100.0
+
+
+@dataclass(frozen=True)
+class ChaosInfluenceComponent(Component):
+    """Warp/chaos pressure source.
+
+    Void-sim treats barbarian-sim corruption as the character's chaos state. This component
+    is only the environmental source that applies it.
+    """
+
+    source_type: str = "warp breach"
+    corruption_per_hour: float = 1.0
+    system_damage_per_hour: float = 0.0
+    mutation_pressure_per_corruption: float = 1.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class ChaosWardComponent(Component):
+    """Protection against nearby chaos influence."""
+
+    protection_per_hour: float = 1.0
+
+
+@dataclass(frozen=True)
+class ChaosMutationPressureComponent(Component):
+    """Chaos-specific mutation pressure from warp/corruption exposure."""
+
+    amount: float = 0.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class RadiationMutationPressureComponent(Component):
+    """Radiation-specific mutation pressure reserved for nuke-sim.
+
+    TODO(nuke-sim): accumulate ionizing radiation here and resolve radiation-specific
+    mutation outcomes without mixing it into chaos pressure.
+    """
+
+    amount: float = 0.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class CyberneticMutationPressureComponent(Component):
+    """Cybernetic/body-mod pressure reserved for future augmentation systems.
+
+    TODO(nuke-sim): decide whether cybernetics compete with, suppress, or amplify organic
+    mutation outcomes while still tracking their pressure independently.
+    """
+
+    amount: float = 0.0
+    last_updated_epoch: int = 0
 
 
 # --- 8.2 Space travel, orbits, and navigation -----------------------------------------
@@ -252,6 +312,15 @@ class OrbitEnteredEvent(DomainEvent):
 class LandingCompletedEvent(DomainEvent):
     ship_id: str
     body_id: str
+
+
+class ChaosInfluenceAppliedEvent(DomainEvent):
+    character_id: str
+    source_id: str
+    source_type: str
+    amount: float
+    corruption: float
+    mutation_pressure: float
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -1033,6 +1102,148 @@ class LifeSupportConsequence:
         return events
 
 
+def _reachable_chaos_warding(world: World, character: Entity) -> float:
+    protection = 0.0
+    for entity_id in reachable_ids(world, character):
+        entity = world.get_entity(entity_id)
+        if entity.has_component(ChaosWardComponent):
+            protection += max(0.0, entity.get_component(ChaosWardComponent).protection_per_hour)
+        if entity.has_component(RadiationShieldComponent):
+            protection += max(0.0, entity.get_component(RadiationShieldComponent).strength) / 100.0
+    return protection
+
+
+def _chaos_targets_for_source(world: World, source_id: EntityId) -> list[Entity]:
+    targets: list[Entity] = []
+    for character in (
+        world.query()
+        .with_all([CharacterComponent])
+        .with_none([DeadComponent, SuspendedComponent])
+        .execute_entities()
+    ):
+        if source_id in reachable_ids(world, character):
+            targets.append(character)
+    return targets
+
+
+def _ship_systems_near_source(world: World, source: Entity) -> list[Entity]:
+    parent_id = container_of(source)
+    if parent_id is None or not world.has_entity(parent_id):
+        return []
+    nearby_ids = {parent_id, *contents(world.get_entity(parent_id))}
+    return [
+        world.get_entity(entity_id)
+        for entity_id in nearby_ids
+        if world.has_entity(entity_id)
+        and world.get_entity(entity_id).has_component(ShipSystemComponent)
+    ]
+
+
+class ChaosInfluenceConsequence:
+    """Apply void-sim warp/chaos pressure as barbarian-sim corruption."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for source in world.query().with_all([ChaosInfluenceComponent]).execute_entities():
+            influence = source.get_component(ChaosInfluenceComponent)
+            elapsed = max(0, epoch - influence.last_updated_epoch)
+            replace_component(source, replace(influence, last_updated_epoch=epoch))
+            if elapsed <= 0:
+                continue
+            hours = elapsed / 3600.0
+
+            for character in _chaos_targets_for_source(world, source.id):
+                warding = _reachable_chaos_warding(world, character)
+                rate = max(0.0, influence.corruption_per_hour - warding)
+                amount = rate * hours
+                if amount <= 0.0:
+                    continue
+
+                current = (
+                    character.get_component(CorruptionComponent)
+                    if character.has_component(CorruptionComponent)
+                    else CorruptionComponent()
+                )
+                updated_corruption = replace(
+                    current,
+                    amount=current.amount + amount,
+                    last_updated_epoch=epoch,
+                )
+                replace_component(character, updated_corruption)
+
+                pressure = (
+                    character.get_component(ChaosMutationPressureComponent)
+                    if character.has_component(ChaosMutationPressureComponent)
+                    else ChaosMutationPressureComponent()
+                )
+                mutation_delta = amount * max(0.0, influence.mutation_pressure_per_corruption)
+                replace_component(
+                    character,
+                    replace(
+                        pressure,
+                        amount=pressure.amount + mutation_delta,
+                        last_updated_epoch=epoch,
+                    ),
+                )
+                events.append(
+                    CorruptionGainedEvent(
+                        **_void_event(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            room_id=_room_id(world, character.id),
+                            character_id=str(character.id),
+                            amount=updated_corruption.amount,
+                        )
+                    )
+                )
+                events.append(
+                    ChaosInfluenceAppliedEvent(
+                        **_void_event(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            room_id=_room_id(world, character.id),
+                            target_ids=(str(character.id), str(source.id)),
+                            character_id=str(character.id),
+                            source_id=str(source.id),
+                            source_type=influence.source_type,
+                            amount=amount,
+                            corruption=updated_corruption.amount,
+                            mutation_pressure=pressure.amount + mutation_delta,
+                        )
+                    )
+                )
+
+            system_damage = max(0.0, influence.system_damage_per_hour) * hours
+            if system_damage <= 0.0:
+                continue
+            for system_entity in _ship_systems_near_source(world, source):
+                system = system_entity.get_component(ShipSystemComponent)
+                integrity = max(0.0, system.integrity - system_damage)
+                online = system.online and integrity > 0.0
+                if integrity == system.integrity and online == system.online:
+                    continue
+                replace_component(
+                    system_entity,
+                    replace(system, integrity=integrity, online=online),
+                )
+                events.append(
+                    ShipSystemDamagedEvent(
+                        **_void_event(
+                            epoch,
+                            visibility=EventVisibility.ROOM,
+                            room_id=str(container_of(system_entity) or source.id),
+                            target_ids=(str(system_entity.id), str(source.id)),
+                            system_id=str(system_entity.id),
+                            system_type=system.system_type,
+                            integrity=integrity,
+                        )
+                    )
+                )
+        return events
+
+
 def voidsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     module_id = container_of(character)
@@ -1051,8 +1262,23 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
         if module.has_component(LifeSupportComponent):
             online = module.get_component(LifeSupportComponent).online
             lines.append(f"Life support: {'online' if online else 'OFFLINE'}.")
+        if module.has_component(ChaosInfluenceComponent):
+            influence = module.get_component(ChaosInfluenceComponent)
+            lines.append(
+                f"Chaos influence: {influence.source_type} "
+                f"({influence.corruption_per_hour:g}/hour)."
+            )
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
+        if entity.has_component(ChaosInfluenceComponent):
+            influence = entity.get_component(ChaosInfluenceComponent)
+            lines.append(
+                f"Chaos source {_name(entity)}: {influence.source_type} "
+                f"({influence.corruption_per_hour:g}/hour)."
+            )
+        if entity.has_component(ChaosWardComponent):
+            ward = entity.get_component(ChaosWardComponent)
+            lines.append(f"Chaos ward {_name(entity)}: {ward.protection_per_hour:g}/hour.")
         if entity.has_component(ShipSystemComponent):
             system = entity.get_component(ShipSystemComponent)
             status = "online" if system.online else "offline"
@@ -1097,12 +1323,28 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
         current = world.get_entity(module_id)
         if current.has_component(StarSystemComponent):
             lines.append(f"Current system: {current.get_component(StarSystemComponent).name}.")
+    if character.has_component(CorruptionComponent):
+        corruption = character.get_component(CorruptionComponent)
+        lines.append(f"Chaos corruption: {corruption.amount:g}.")
+    if character.has_component(ChaosMutationPressureComponent):
+        pressure = character.get_component(ChaosMutationPressureComponent)
+        if pressure.amount > 0.0:
+            lines.append(f"Chaos mutation pressure: {pressure.amount:g}.")
+    if character.has_component(RadiationMutationPressureComponent):
+        pressure = character.get_component(RadiationMutationPressureComponent)
+        if pressure.amount > 0.0:
+            lines.append(f"Radiation mutation pressure: {pressure.amount:g}.")
+    if character.has_component(CyberneticMutationPressureComponent):
+        pressure = character.get_component(CyberneticMutationPressureComponent)
+        if pressure.amount > 0.0:
+            lines.append(f"Cybernetic mutation pressure: {pressure.amount:g}.")
     return sorted(lines)
 
 
 def install_voidsim(actor) -> None:
     actor.register_consequence(LifeSupportConsequence())
     actor.register_consequence(JumpTravelConsequence())
+    actor.register_consequence(ChaosInfluenceConsequence())
 
 
 __all__ = [
@@ -1111,6 +1353,11 @@ __all__ = [
     "AnswerDistressSignalHandler",
     "AstrogationComponent",
     "BulkheadComponent",
+    "ChaosInfluenceAppliedEvent",
+    "ChaosInfluenceComponent",
+    "ChaosInfluenceConsequence",
+    "ChaosMutationPressureComponent",
+    "ChaosWardComponent",
     "CoursePlottedEvent",
     "CycleAirlockHandler",
     "DistressSignalComponent",
@@ -1137,6 +1384,7 @@ __all__ = [
     "LifeSupportConsequence",
     "LifeSupportFailedEvent",
     "ModuleEvacuatedEvent",
+    "CyberneticMutationPressureComponent",
     "NavigationHazardEncounteredEvent",
     "NavigationRouteComponent",
     "OpenAirlockHandler",
@@ -1150,6 +1398,7 @@ __all__ = [
     "PressureChangedEvent",
     "PressurizedComponent",
     "RadiationShieldComponent",
+    "RadiationMutationPressureComponent",
     "RefuelHandler",
     "RepairSystemHandler",
     "ReroutePowerHandler",

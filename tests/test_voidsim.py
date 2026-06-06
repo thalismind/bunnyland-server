@@ -16,13 +16,20 @@ from bunnyland.core import (
 )
 from bunnyland.core.components import CharacterComponent
 from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.mechanics.barbariansim import CorruptionComponent, CorruptionGainedEvent
 from bunnyland.mechanics.voidsim import (
     AirlockComponent,
     AirlockCycledEvent,
     AnswerDistressSignalHandler,
     AstrogationComponent,
     BulkheadComponent,
+    ChaosInfluenceAppliedEvent,
+    ChaosInfluenceComponent,
+    ChaosInfluenceConsequence,
+    ChaosMutationPressureComponent,
+    ChaosWardComponent,
     CoursePlottedEvent,
+    CyberneticMutationPressureComponent,
     CycleAirlockHandler,
     DistressSignalComponent,
     DockedTo,
@@ -60,6 +67,8 @@ from bunnyland.mechanics.voidsim import (
     PowerReroutedEvent,
     PressureChangedEvent,
     PressurizedComponent,
+    RadiationMutationPressureComponent,
+    RadiationShieldComponent,
     RefuelHandler,
     RepairSystemHandler,
     ReroutePowerHandler,
@@ -68,6 +77,7 @@ from bunnyland.mechanics.voidsim import (
     SensorComponent,
     ShipComponent,
     ShipSystemComponent,
+    ShipSystemDamagedEvent,
     ShipSystemRepairedEvent,
     SignalDetectedEvent,
     StarSystemComponent,
@@ -100,6 +110,7 @@ def _install(actor):
     actor.register_handler(LaunchHandler())
     actor.register_consequence(LifeSupportConsequence())
     actor.register_consequence(JumpTravelConsequence())
+    actor.register_consequence(ChaosInfluenceConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -413,6 +424,101 @@ async def test_life_support_online_replenishes_oxygen():
     assert oxygen.failed is False
 
 
+async def test_chaos_influence_applies_barbarian_corruption_and_mutation_pressure():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="warp breach", kind="chaos-source"),
+            ChaosInfluenceComponent(
+                source_type="warp breach",
+                corruption_per_hour=2.0,
+                mutation_pressure_per_corruption=0.5,
+            ),
+        ],
+    )
+    corruption: list[CorruptionGainedEvent] = []
+    influence: list[ChaosInfluenceAppliedEvent] = []
+    scenario.actor.bus.subscribe(CorruptionGainedEvent, corruption.append)
+    scenario.actor.bus.subscribe(ChaosInfluenceAppliedEvent, influence.append)
+
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(CorruptionComponent).amount == 2.0
+    pressure = character.get_component(ChaosMutationPressureComponent)
+    assert pressure.amount == 1.0
+    assert corruption[0].amount == 2.0
+    assert influence[0].amount == 2.0
+    assert influence[0].corruption == 2.0
+    assert influence[0].mutation_pressure == 1.0
+
+
+async def test_chaos_wards_reduce_corruption_rate_and_radiation_shields_help():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="gellar shrine", kind="ward"),
+            ChaosWardComponent(protection_per_hour=1.0),
+        ],
+    )
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="radiation baffle", kind="shield"),
+            RadiationShieldComponent(strength=50.0),
+        ],
+    )
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="daemon whisper", kind="chaos-source"),
+            ChaosInfluenceComponent(source_type="daemon whisper", corruption_per_hour=2.0),
+        ],
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(CorruptionComponent).amount == 0.5
+
+
+async def test_chaos_influence_can_damage_nearby_ship_systems():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="warp-tainted cogitator", kind="chaos-source"),
+            ChaosInfluenceComponent(
+                source_type="machine possession",
+                corruption_per_hour=0.0,
+                system_damage_per_hour=3.0,
+            ),
+        ],
+    )
+    system_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="void shields", kind="ship-system"),
+            ShipSystemComponent(system_type="shields", integrity=10.0),
+        ],
+    )
+    damaged: list[ShipSystemDamagedEvent] = []
+    scenario.actor.bus.subscribe(ShipSystemDamagedEvent, damaged.append)
+
+    await scenario.actor.tick(HOUR)
+
+    system = scenario.actor.world.get_entity(system_id).get_component(ShipSystemComponent)
+    assert system.integrity == 7.0
+    assert system.online is True
+    assert damaged[0].system_id == str(system_id)
+    assert damaged[0].integrity == 7.0
+
+
 def test_voidsim_fragments_describe_module_and_systems():
     scenario = build_scenario()
     _make_module(scenario, module_type="engineering")
@@ -433,6 +539,34 @@ def test_voidsim_fragments_describe_module_and_systems():
     assert any("engineering module" in line for line in fragments)
     assert any("Module oxygen: 80/100" in line for line in fragments)
     assert any("Ship system reactor" in line for line in fragments)
+
+
+def test_voidsim_fragments_describe_chaos_wards_and_mutation_pressure():
+    scenario = build_scenario()
+    _make_module(scenario, module_type="sanctum")
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(ChaosInfluenceComponent(source_type="warp scar", corruption_per_hour=2.0))
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="gellar charm", kind="ward"),
+            ChaosWardComponent(protection_per_hour=1.0),
+        ],
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(CorruptionComponent(amount=3.0))
+    character.add_component(ChaosMutationPressureComponent(amount=2.0))
+    character.add_component(RadiationMutationPressureComponent(amount=4.0))
+    character.add_component(CyberneticMutationPressureComponent(amount=1.0))
+
+    fragments = voidsim_fragments(scenario.actor.world, character)
+
+    assert any("Chaos influence: warp scar" in line for line in fragments)
+    assert any("Chaos ward gellar charm: 1/hour" in line for line in fragments)
+    assert any("Chaos corruption: 3" in line for line in fragments)
+    assert any("Chaos mutation pressure: 2" in line for line in fragments)
+    assert any("Radiation mutation pressure: 4" in line for line in fragments)
+    assert any("Cybernetic mutation pressure: 1" in line for line in fragments)
 
 
 # --- 8.2 Space travel, orbits, and navigation -----------------------------------------
