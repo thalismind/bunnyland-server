@@ -129,21 +129,15 @@ jobs:
 
       - name: Validate wizard-rendered Compose config
         env:
-          BUNNYLAND_CONTAINER_RUNTIME: docker
           BUNNYLAND_SETUP_DRY_RUN: "1"
           BUNNYLAND_TLS: "0"
           BUNNYLAND_CONFIGURE_FIREWALL: "0"
           BUNNYLAND_HTTP_BIND: 127.0.0.1:18080
-          BUNNYLAND_DOMAIN: localhost
-          BUNNYLAND_DATA_DIR: ${{ runner.temp }}/bunnyland-vps-data-dry-run
           BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth-dry-run
-          BUNNYLAND_ADMIN_USER: editor
-          BUNNYLAND_ADMIN_PASSWORD: local
           BUNNYLAND_SERVER_TAG: main
-          BUNNYLAND_ENABLE_LLM: "0"
-          BUNNYLAND_ENABLE_DISCORD: "0"
         run: |
-          printf '\nlocalhost\n%s\neditor\nlocal\nlocal\n\n\n\n\nn\n\n' "$BUNNYLAND_DATA_DIR" \
+          data_dir="${{ runner.temp }}/bunnyland-vps-data-dry-run"
+          printf '\nlocalhost\n%s\neditor\nlocal\nlocal\n\n\nnone\n\n\nn\nn\ny\n' "$data_dir" \
             | scripts/vps-docker-wizard
 
       - name: Run setup script
