@@ -5,10 +5,14 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    ActionPointsComponent,
+    CommandCost,
     ContainerComponent,
     DoorComponent,
     IdentityComponent,
+    Lane,
     PortableComponent,
+    build_submitted_command,
     spawn_entity,
 )
 from bunnyland.mechanics.toonsim import (
@@ -16,9 +20,11 @@ from bunnyland.mechanics.toonsim import (
     LAYER_CHARACTER,
     LAYER_FURNITURE,
     LAYER_ITEM,
+    MoveSpriteHandler,
     SpriteBackfillConsequence,
     SpriteImage,
     SpriteLayer,
+    SpriteMovedEvent,
     SpritePosition,
     default_layer_for,
     install_toonsim,
@@ -128,3 +134,44 @@ async def test_install_registers_consequence_and_runs_on_tick():
 
     room = scenario.actor.world.get_entity(scenario.room_a)
     assert room.get_component(SpriteLayer).layer == LAYER_BACKGROUND
+
+
+def _move_sprite(scenario, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="move-sprite",
+        cost=CommandCost(),  # in-room movement is free
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
+async def test_move_sprite_repositions_for_free():
+    scenario = build_scenario(action_current=5.0)
+    scenario.actor.register_handler(MoveSpriteHandler())
+    moved: list[SpriteMovedEvent] = []
+    scenario.actor.bus.subscribe(SpriteMovedEvent, moved.append)
+
+    await scenario.actor.submit(_move_sprite(scenario, x=4.0, y=-1.5))
+    await scenario.actor.tick(0.0)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    pos = character.get_component(SpritePosition)
+    assert (pos.x, pos.y) == (4.0, -1.5)
+    # No action points were spent on the free in-room move.
+    assert character.get_component(ActionPointsComponent).current == 5.0
+    assert moved and (moved[-1].x, moved[-1].y) == (4.0, -1.5)
+    assert moved[-1].room_id == str(scenario.room_a)
+
+
+async def test_move_sprite_rejects_bad_payload():
+    scenario = build_scenario()
+    scenario.actor.register_handler(MoveSpriteHandler())
+
+    await scenario.actor.submit(_move_sprite(scenario, x="left"))
+    await scenario.actor.tick(0.0)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(SpritePosition)

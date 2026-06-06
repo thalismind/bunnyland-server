@@ -435,8 +435,10 @@ from ..mechanics.storyteller import (
     storyteller_fragments,
 )
 from ..mechanics.toonsim import (
+    MoveSpriteHandler,
     SpriteImage,
     SpriteLayer,
+    SpriteMovedEvent,
     SpritePosition,
     install_toonsim,
 )
@@ -1000,6 +1002,10 @@ def toonsim_plugin() -> Plugin:
         name="Toon Sim",
         ecs=EcsContribution(
             components=(SpritePosition, SpriteImage, SpriteLayer),
+        ),
+        commands=CommandContribution(
+            action_handlers=(MoveSpriteHandler,),
+            typed_events=(SpriteMovedEvent,),
         ),
         runtime=RuntimeContribution(service_factories=(install_toonsim,)),
     )

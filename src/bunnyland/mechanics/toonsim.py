@@ -20,6 +20,7 @@ from __future__ import annotations
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from relics import Component, Entity, World
 
+from ..core.commands import SubmittedCommand
 from ..core.components import (
     CharacterComponent,
     ContainerComponent,
@@ -28,7 +29,9 @@ from ..core.components import (
     PortableComponent,
     RoomComponent,
 )
-from ..core.events import DomainEvent
+from ..core.ecs import container_of, parse_entity_id, replace_component
+from ..core.events import DomainEvent, EventVisibility
+from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 
 # Draw layers, spaced so new tiers can slot between existing ones (spec: low draws
 # first, so rooms are the background and characters sit on top).
@@ -131,6 +134,51 @@ class SpriteBackfillConsequence:
         return []
 
 
+class SpriteMovedEvent(DomainEvent):
+    """A character repositioned its sprite within its current room."""
+
+    x: float
+    y: float
+
+
+class MoveSpriteHandler:
+    """Set a character's in-room sprite position.
+
+    This is the toon client's movement verb: it only changes where the character's
+    sprite sits within its room (X/Y), never which room it occupies. The client applies
+    the move optimistically and syncs on a throttled interval by submitting this command
+    with **zero action/focus cost**, so in-room movement is free.
+    """
+
+    command_type = "move-sprite"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None or not ctx.world.has_entity(character_id):
+            return rejected("invalid character id")
+        try:
+            x = float(command.payload["x"])
+            y = float(command.payload["y"])
+        except (KeyError, TypeError, ValueError):
+            return rejected("invalid x/y position")
+
+        character = ctx.entity(character_id)
+        replace_component(character, SpritePosition(x=x, y=y))
+        room_id = container_of(character)
+        return ok(
+            SpriteMovedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room_id) if room_id is not None else None,
+                    target_ids=(str(character_id),),
+                    x=x,
+                    y=y,
+                )
+            )
+        )
+
+
 def install_toonsim(actor) -> None:
     """Register the sprite backfill consequence on an actor."""
     actor.register_consequence(SpriteBackfillConsequence())
@@ -143,9 +191,11 @@ __all__ = [
     "LAYER_EFFECT",
     "LAYER_FURNITURE",
     "LAYER_ITEM",
+    "MoveSpriteHandler",
     "SpriteBackfillConsequence",
     "SpriteImage",
     "SpriteLayer",
+    "SpriteMovedEvent",
     "SpritePosition",
     "default_layer_for",
     "install_toonsim",
