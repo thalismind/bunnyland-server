@@ -244,6 +244,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("sleep", tool_name="sleep", cost=_FREE),
     _definition("wake", tool_name="wake", cost=_FREE),
     _definition("wait", tool_name="wait", cost=_FREE, examples=("wait",)),
+    _definition("move-sprite", ("x", "y"), tool_name="move_sprite", cost=_FREE),
     _definition("say", ("text", "intent", "approach"), tool_name="say", cost=_SPEECH),
     _definition(
         "tell",
