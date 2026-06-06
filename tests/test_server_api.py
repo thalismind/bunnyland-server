@@ -17,6 +17,7 @@ from bunnyland.core import (
     ExitTo,
     IdentityComponent,
     RoomComponent,
+    SuspendedComponent,
     WebControllerComponent,
     WorldPauseStatusChangedEvent,
     parse_entity_id,
@@ -248,6 +249,23 @@ async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
     edge, controller_id = character.get_relationships(ControlledBy)[0]
     assert str(controller_id) == first.controller_id
     assert edge.generation == first.controller_generation
+
+
+async def test_web_controller_claim_unsuspends_character(scenario):
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/world/controllers/web/claim")
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(SuspendedComponent(reason="offline"))
+
+    await route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+
+    assert not character.has_component(SuspendedComponent)
 
 
 async def test_web_controller_fallback_endpoint_updates_existing_claim(scenario):

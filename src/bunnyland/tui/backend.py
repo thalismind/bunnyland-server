@@ -18,6 +18,7 @@ from ..core import (
     CommandCost,
     Lane,
     OnInsufficientPoints,
+    SuspendedComponent,
     WebControllerComponent,
     build_submitted_command,
     spawn_entity,
@@ -183,6 +184,9 @@ class LocalBackend(Backend):
             generation = self.actor.assign_controller(
                 parse_entity_id(player_id), self._controller.id
             )
+            character = self.actor.world.get_entity(parse_entity_id(player_id))
+            if character.has_component(SuspendedComponent):
+                character.remove_component(SuspendedComponent)
         return str(self._controller.id), generation
 
 

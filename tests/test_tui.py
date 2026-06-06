@@ -9,7 +9,9 @@ import pytest
 from bunnyland.core import (
     CharacterComponent,
     IdentityComponent,
+    SuspendedComponent,
     WebControllerComponent,
+    parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.controllers import ClaimTimeoutComponent
@@ -220,6 +222,23 @@ async def test_local_backend_hosts_claims_and_submits():
         # The claimed controller is what the fresh snapshot reports.
         refreshed = World.parse(await backend.fetch_snapshot())
         assert refreshed.control(player) == (controller_id, control[1])
+    finally:
+        await backend.close()
+
+
+async def test_local_backend_claim_unsuspends_player():
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
+    await backend.start()
+    try:
+        world = World.parse(await backend.fetch_snapshot())
+        player = world.characters()[0]["id"]
+        character = backend.actor.world.get_entity(parse_entity_id(player))
+        assert character.has_component(SuspendedComponent)
+
+        control = await backend.claim(player, world)
+
+        assert control is not None
+        assert not character.has_component(SuspendedComponent)
     finally:
         await backend.close()
 

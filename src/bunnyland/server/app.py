@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..content import load_content_library
-from ..core import CharacterComponent, WebControllerComponent, parse_entity_id, spawn_entity
+from ..core import (
+    CharacterComponent,
+    SuspendedComponent,
+    WebControllerComponent,
+    parse_entity_id,
+    spawn_entity,
+)
 from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.controllers import ClaimTimeoutComponent
 from ..core.events import ControllerChangedEvent
@@ -227,6 +233,8 @@ def create_app(
             generation = actor.current_generation(character_id, controller.id)
             if generation is None:
                 generation = actor.assign_controller(character_id, controller.id)
+                if character.has_component(SuspendedComponent):
+                    character.remove_component(SuspendedComponent)
                 await actor.bus.publish(
                     ControllerChangedEvent(
                         **actor._event_base(
