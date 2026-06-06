@@ -40,6 +40,14 @@ class LLMControllerComponent(Component):
 
 
 @dataclass(frozen=True)
+class WebControllerComponent(Component):
+    """A human at an interactive client (web room client, TUI). Submits commands directly;
+    the engine never proposes actions for it the way it does for an LLM controller."""
+
+    label: str = "web"
+
+
+@dataclass(frozen=True)
 class SuspendedControllerComponent(Component):
     """A no-op controller. The character regenerates but takes no actions (spec 7.7)."""
 
@@ -51,4 +59,5 @@ __all__ = [
     "LLMControllerComponent",
     "MCPControllerComponent",
     "SuspendedControllerComponent",
+    "WebControllerComponent",
 ]

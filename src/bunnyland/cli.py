@@ -586,7 +586,23 @@ def main(argv: list[str] | None = None) -> int:
         help="admin token required by MCP world mutation tools (or BUNNYLAND_MCP_ADMIN_TOKEN)",
     )
 
+    tui = sub.add_parser("tui", help="open the terminal client (needs the tui extra)")
+    tui.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
+    tui.add_argument("--seed", default="a quiet marsh", help="seed for a locally hosted world")
+    tui.add_argument(
+        "--generator", default="apartment-demo", help="generator for a locally hosted world"
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "tui":
+        from .tui import main as tui_main
+
+        tui_args = ["--server", args.server] if args.server else [
+            "--seed", args.seed, "--generator", args.generator
+        ]
+        return tui_main(tui_args)
+
     if args.command != "serve":
         parser.print_help()
         return 0

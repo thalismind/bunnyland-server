@@ -12,6 +12,7 @@ from ..core import (
     LLMControllerComponent,
     SuspendedComponent,
     SuspendedControllerComponent,
+    WebControllerComponent,
     spawn_entity,
 )
 from ..core.world_actor import WorldActor
@@ -40,6 +41,8 @@ def _active_controller_kind(actor: WorldActor, character) -> str:
             return "Discord controller"
         if controller.has_component(LLMControllerComponent):
             return "LLM controller"
+        if controller.has_component(WebControllerComponent):
+            return "player"
         if controller.has_component(SuspendedControllerComponent):
             return "suspended"
     return "free"

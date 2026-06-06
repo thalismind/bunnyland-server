@@ -81,6 +81,7 @@ from .controllers import (
     LLMControllerComponent,
     MCPControllerComponent,
     SuspendedControllerComponent,
+    WebControllerComponent,
 )
 from .ecs import (
     container_of,
@@ -196,6 +197,7 @@ __all__ = [
     "SubmittedCommand",
     "SuspendedComponent",
     "SuspendedControllerComponent",
+    "WebControllerComponent",
     "TakeHandler",
     "TellCommand",
     "TellHandler",
