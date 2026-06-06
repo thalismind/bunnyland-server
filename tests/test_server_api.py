@@ -226,6 +226,7 @@ async def test_admin_world_generate_replaces_world_and_updates_metadata(scenario
     registry = collect_generators(plugins)
     meta = WorldMeta(seed="old seed", generator="oneshot")
     request = WorldGenerateRequest(seed="crystal cellar", generator="oneshot")
+    old_world = scenario.actor.world
 
     assert request.confirm_reset is False
 
@@ -244,7 +245,7 @@ async def test_admin_world_generate_replaces_world_and_updates_metadata(scenario
     assert meta.seed == "crystal cellar"
     assert meta.generator == "oneshot"
     assert meta.plugins == ("bunnyland.worldgen",)
-    assert not scenario.actor.world.has_entity(scenario.room_a)
+    assert scenario.actor.world is not old_world
     assert len(list(scenario.actor.world.query().with_all([RoomComponent]).execute_entities())) == 2
     assert (
         len(

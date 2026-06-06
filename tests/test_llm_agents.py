@@ -9,6 +9,9 @@ import pytest
 from conftest import build_scenario
 
 from bunnyland.core import (
+    ActionArgument,
+    ActionDefinition,
+    ActionPattern,
     CommandCost,
     ContainerComponent,
     ContainmentMode,
@@ -117,6 +120,39 @@ def test_command_from_tool_call_drops_unknown_arguments():
     assert command.payload == {"direction": "north"}
 
 
+def test_custom_action_definition_drives_tool_schema_and_command_mapping():
+    definition = ActionDefinition(
+        command_type="wave",
+        tool_name="wave",
+        description="Wave to a reachable character.",
+        arguments={
+            "target_id": ActionArgument(
+                description="The character to wave at.",
+                kind="entity",
+                required=True,
+            )
+        },
+    )
+
+    schema = next(
+        item["function"]
+        for item in tool_schemas((definition,))
+        if item["function"]["name"] == "wave"
+    )
+    command = command_from_tool_call(
+        ToolCall("wave", {"target_id": "char_1", "bogus": "ignored"}),
+        character_id="char_2",
+        controller_id="ctrl_1",
+        controller_generation=0,
+        definitions=(definition,),
+    )
+
+    assert schema["description"] == "Wave to a reachable character."
+    assert schema["parameters"]["required"] == ["target_id"]
+    assert command.command_type == "wave"
+    assert command.payload == {"target_id": "char_1"}
+
+
 def test_note_tools_accept_shared_collection_arguments():
     call = ToolCall(
         name="take_note",
@@ -137,9 +173,7 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     assert parse_natural_command("take the brass key") == ToolCall(
         "take", {"item_id": "the brass key"}
     )
-    assert parse_natural_command('say "hello there"') == ToolCall(
-        "say", {"text": "hello there"}
-    )
+    assert parse_natural_command('say "hello there"') == ToolCall("say", {"text": "hello there"})
     assert parse_natural_command("tell Hazel meet me outside") == ToolCall(
         "tell", {"target_id": "Hazel", "text": "meet me outside"}
     )
@@ -155,15 +189,11 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     assert parse_natural_command("open business Hazel's Farm Stand") == ToolCall(
         "open_business", {"name": "Hazel's Farm Stand"}
     )
-    assert parse_natural_command("adopt Clover") == ToolCall(
-        "adopt_child", {"child_id": "Clover"}
-    )
+    assert parse_natural_command("adopt Clover") == ToolCall("adopt_child", {"child_id": "Clover"})
     assert parse_natural_command("claim oak chest") == ToolCall(
         "claim_ownership", {"target_id": "oak chest"}
     )
-    assert parse_natural_command("till garden bed") == ToolCall(
-        "till", {"soil_id": "garden bed"}
-    )
+    assert parse_natural_command("till garden bed") == ToolCall("till", {"soil_id": "garden bed"})
     assert parse_natural_command("plant turnip seeds in garden bed") == ToolCall(
         "plant", {"seed_id": "turnip seeds", "soil_id": "garden bed"}
     )
@@ -219,15 +249,40 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     assert parse_natural_command("reflect on the basin") == ToolCall(
         "reflect", {"text": "on the basin"}
     )
-    assert parse_natural_command("forget note-123") == ToolCall(
-        "forget", {"note_id": "note-123"}
-    )
+    assert parse_natural_command("forget note-123") == ToolCall("forget", {"note_id": "note-123"})
     assert parse_natural_command("wait") == ToolCall("wait", {})
 
 
 def test_parse_natural_command_returns_none_for_ambiguous_text():
     assert parse_natural_command("") is None
     assert parse_natural_command("maybe Hazel knows") is None
+
+
+def test_parse_natural_command_uses_action_definition_patterns():
+    definition = ActionDefinition(
+        command_type="wave",
+        tool_name="wave",
+        arguments={"target_id": ActionArgument(kind="entity")},
+        natural_patterns=(ActionPattern("wave to {target_id}"),),
+    )
+
+    assert parse_natural_command("wave to Hazel", (definition,)) == ToolCall(
+        "wave", {"target_id": "Hazel"}
+    )
+
+
+def test_parse_natural_command_rejects_adjacent_pattern_slots():
+    definition = ActionDefinition(
+        command_type="give",
+        tool_name="give",
+        arguments={
+            "item_id": ActionArgument(kind="entity"),
+            "target_id": ActionArgument(kind="entity"),
+        },
+        natural_patterns=(ActionPattern("give {item_id} {target_id}"),),
+    )
+
+    assert parse_natural_command("give carrot Hazel", (definition,)) is None
 
 
 def test_scripted_agent_replays_then_waits():
@@ -284,8 +339,13 @@ class _FakeOllamaClient:
         del tools
         self.models.append(model)
         self.calls.append([dict(m) for m in messages])  # snapshot
-        return {"message": {"role": "assistant", "content": "ok",
-                            "tool_calls": [{"function": {"name": "wait", "arguments": {}}}]}}
+        return {
+            "message": {
+                "role": "assistant",
+                "content": "ok",
+                "tool_calls": [{"function": {"name": "wait", "arguments": {}}}],
+            }
+        }
 
 
 class _FakeProviderError(Exception):
@@ -355,8 +415,13 @@ async def test_provider_retry_helper_does_not_retry_non_transient_errors(exc):
 
 
 def _fake_ollama_response():
-    return {"message": {"role": "assistant", "content": "ok",
-                        "tool_calls": [{"function": {"name": "wait", "arguments": {}}}]}}
+    return {
+        "message": {
+            "role": "assistant",
+            "content": "ok",
+            "tool_calls": [{"function": {"name": "wait", "arguments": {}}}],
+        }
+    }
 
 
 class _FlakyOllamaClient(_FakeOllamaClient):
@@ -474,9 +539,7 @@ class _FakeOpenRouterChat:
             model_dump=lambda **_: {
                 "role": "assistant",
                 "content": "ok",
-                "tool_calls": [
-                    {"function": {"name": "wait", "arguments": '{"reason": "rest"}'}}
-                ],
+                "tool_calls": [{"function": {"name": "wait", "arguments": '{"reason": "rest"}'}}],
             },
         )
         return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
@@ -509,9 +572,7 @@ class _FlakyOpenRouterChat(_FakeOpenRouterChat):
             model_dump=lambda **_: {
                 "role": "assistant",
                 "content": "ok",
-                "tool_calls": [
-                    {"function": {"name": "wait", "arguments": '{"reason": "rest"}'}}
-                ],
+                "tool_calls": [{"function": {"name": "wait", "arguments": '{"reason": "rest"}'}}],
             },
         )
         return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
@@ -558,9 +619,7 @@ async def test_openrouter_agent_retries_transient_provider_errors(monkeypatch):
     fake_module.OpenRouter = _FlakyOpenRouterClient
     monkeypatch.setitem(sys.modules, "openrouter", fake_module)
 
-    agent = OpenRouterAgent(
-        model="openai/gpt-4.1-mini", api_key="key", retry_delay_seconds=0
-    )
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key", retry_delay_seconds=0)
     call = await agent.decide("turn one", None, character_id="hazel")
 
     assert call == ToolCall("wait", {"reason": "rest"})
@@ -579,9 +638,7 @@ async def test_openrouter_agent_returns_wait_after_transient_provider_retries(mo
     fake_module.OpenRouter = AlwaysFailOpenRouterClient
     monkeypatch.setitem(sys.modules, "openrouter", fake_module)
 
-    agent = OpenRouterAgent(
-        model="openai/gpt-4.1-mini", api_key="key", retry_delay_seconds=0
-    )
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key", retry_delay_seconds=0)
     call = await agent.decide("turn one", None, character_id="hazel")
 
     assert call is None
@@ -707,12 +764,14 @@ class _RecordingAgent:
         self.prompts: list[str] = []
         self.models: list[str | None] = []
         self.providers: list[str | None] = []
+        self.tools: list[list[dict] | None] = []
         self._index = 0
 
-    def decide(self, prompt, context, *, character_id, model=None, provider=None):
+    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
         self.prompts.append(prompt)
         self.models.append(model)
         self.providers.append(provider)
+        self.tools.append(tools)
         if self._index >= len(self.calls):
             return None
         call = self.calls[self._index]

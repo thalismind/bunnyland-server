@@ -9,6 +9,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from bunnyland.core import (
+    ActionArgument,
+    ActionDefinition,
+    ActionExample,
+    ActionPattern,
     CharacterComponent,
     ContainmentMode,
     Contains,
@@ -221,9 +225,7 @@ def test_discord_bot_ignores_messages_rejected_by_filters():
     assert bot._should_handle_message(_message(guild_id=111, channel_id=333))
     assert not bot._should_handle_message(_message(guild_id=111, channel_id=999))
     assert not bot._should_handle_message(_message(guild_id=111, channel_id=333, bot=True))
-    assert not bot._should_handle_message(
-        _message(guild_id=111, channel_id=333, content="look")
-    )
+    assert not bot._should_handle_message(_message(guild_id=111, channel_id=333, content="look"))
 
 
 def test_release_discord_character_reassigns_to_llm_controller(scenario):
@@ -341,7 +343,7 @@ def test_discord_action_parser_uses_live_world_verbs(scenario):
 
 def test_discord_action_parser_accepts_plugin_only_world_verbs(scenario):
     class DummyHandler:
-        command_type = "attack"
+        command_type = "smile"
 
         def execute(self, ctx, command):
             raise AssertionError("not called")
@@ -349,12 +351,27 @@ def test_discord_action_parser_accepts_plugin_only_world_verbs(scenario):
     scenario.actor.register_handler(DummyHandler())
 
     action = parse_discord_action(
-        "attack target_id=Hazel lethal=true", scenario.actor.available_command_types()
+        "smile target_id=Hazel wide=true", scenario.actor.available_command_types()
     )
 
-    assert action.command_type == "attack"
+    assert action.command_type == "smile"
     assert action.tool is None
-    assert action.payload == {"target_id": "Hazel", "lethal": True}
+    assert action.payload == {"target_id": "Hazel", "wide": True}
+
+
+def test_discord_action_parser_uses_plugin_action_definition_patterns():
+    definition = ActionDefinition(
+        command_type="wave",
+        tool_name="wave",
+        arguments={"target_id": ActionArgument(kind="entity")},
+        natural_patterns=(ActionPattern("wave to {target_id}"),),
+    )
+
+    action = parse_discord_action("wave to Hazel", ("wave",), (definition,))
+
+    assert action.command_type == "wave"
+    assert action.tool == "wave"
+    assert action.payload == {"target_id": "Hazel"}
 
 
 def test_discord_action_parser_accepts_natural_enchant_commands():
@@ -374,7 +391,7 @@ def test_discord_action_parser_accepts_natural_enchant_commands():
 
 def test_discord_action_parser_rejects_unstructured_plugin_only_args(scenario):
     class DummyHandler:
-        command_type = "attack"
+        command_type = "smile"
 
         def execute(self, ctx, command):
             raise AssertionError("not called")
@@ -382,7 +399,7 @@ def test_discord_action_parser_rejects_unstructured_plugin_only_args(scenario):
     scenario.actor.register_handler(DummyHandler())
 
     try:
-        parse_discord_action("attack Hazel", scenario.actor.available_command_types())
+        parse_discord_action("smile Hazel", scenario.actor.available_command_types())
     except ValueError as exc:
         assert "key=value" in str(exc)
     else:
@@ -461,7 +478,33 @@ def test_help_command_stubs_action_help(scenario):
 
     assert "Help for `take`" in text
     assert "item_id" in text
-    assert "Detailed command help is not written yet" in text
+    assert "Character action: take" in text
+
+
+def test_help_command_uses_plugin_action_definition_metadata(scenario):
+    scenario.actor.register_action_definition(
+        ActionDefinition(
+            command_type="wave",
+            tool_name="wave",
+            title="Wave",
+            description="Wave to a reachable character.",
+            arguments={
+                "target_id": ActionArgument(
+                    description="The character to wave at.",
+                    kind="entity",
+                    required=True,
+                )
+            },
+            examples=(ActionExample("wave to Hazel", natural=True),),
+        )
+    )
+
+    text = render_help("wave", scenario.actor)
+
+    assert "Help for `wave`" in text
+    assert "Wave to a reachable character." in text
+    assert "- target_id (entity, required): The character to wave at." in text
+    assert "- wave to Hazel" in text
 
 
 def test_help_command_handles_unknown_topic():

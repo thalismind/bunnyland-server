@@ -6,14 +6,25 @@ import pytest
 from conftest import build_scenario
 
 from bunnyland.core import (
+    DEFAULT_ACTION_DEFINITIONS,
+    ActionArgument,
+    ActionDefinition,
+    ActionExample,
+    ActionPattern,
     CommandCost,
+    HandlerContext,
+    HandlerResult,
     Lane,
     MemoryProfileComponent,
+    SubmittedCommand,
     WorldActor,
     build_submitted_command,
 )
 from bunnyland.core.events import NoteTakenEvent
+from bunnyland.core.handlers import ok
+from bunnyland.llm_agents.tools import tool_schemas
 from bunnyland.plugins import (
+    CommandContribution,
     DependencyContribution,
     EcsContribution,
     Plugin,
@@ -47,9 +58,23 @@ from bunnyland.plugins.builtin import (
 def test_builtin_plugins_declared():
     ids = {p.id for p in bunnyland_plugins()}
     assert ids == {
-        BARBARIANSIM, COLONYSIM, CORE_VERBS, LIFESIM, MEMORY, WORLDGEN, ENVIRONMENT,
-        MECHANISMS, SOCIAL, POLICY, PERSONA, GARDENSIM, DRAGONSIM, DAGGERSIM, MCP,
-        VOIDSIM, STORYTELLER,
+        BARBARIANSIM,
+        COLONYSIM,
+        CORE_VERBS,
+        LIFESIM,
+        MEMORY,
+        WORLDGEN,
+        ENVIRONMENT,
+        MECHANISMS,
+        SOCIAL,
+        POLICY,
+        PERSONA,
+        GARDENSIM,
+        DRAGONSIM,
+        DAGGERSIM,
+        MCP,
+        VOIDSIM,
+        STORYTELLER,
     }
 
 
@@ -143,6 +168,88 @@ def test_missing_recommendation_warns_but_continues(caplog):
     assert "recommends missing" in caplog.text
 
 
+class _WaveHandler:
+    command_type = "wave"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        del ctx, command
+        return ok()
+
+
+def test_plugin_action_definitions_register_with_actor_and_tool_schema():
+    definition = ActionDefinition(
+        command_type="wave",
+        tool_name="wave",
+        title="Wave",
+        description="Wave to a reachable character.",
+        arguments={
+            "target_id": ActionArgument(
+                title="Target",
+                description="The character to wave at.",
+                kind="entity",
+                required=True,
+            )
+        },
+        examples=(ActionExample("wave to Hazel", natural=True),),
+        natural_patterns=(ActionPattern("wave to {target_id}"),),
+    )
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="wave",
+                name="Wave",
+                commands=CommandContribution(
+                    action_handlers=(_WaveHandler,),
+                    action_definitions=(definition,),
+                ),
+            )
+        ],
+        actor,
+    )
+
+    assert actor.action_definitions() == (definition,)
+    schema = next(
+        item["function"]
+        for item in tool_schemas(actor.action_definitions())
+        if item["function"]["name"] == "wave"
+    )
+    assert schema["description"] == "Wave to a reachable character."
+    assert schema["parameters"]["properties"]["target_id"]["description"] == (
+        "The character to wave at."
+    )
+
+
+def test_plugin_handlers_get_inferred_action_definitions_when_missing():
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="wave",
+                name="Wave",
+                commands=CommandContribution(action_handlers=(_WaveHandler,)),
+            )
+        ],
+        actor,
+    )
+
+    definitions = actor.action_definitions()
+    assert len(definitions) == 1
+    assert definitions[0].command_type == "wave"
+    assert definitions[0].name == "wave"
+
+
+def test_builtin_handler_command_types_are_in_the_shared_action_catalog():
+    catalog = {definition.command_type for definition in DEFAULT_ACTION_DEFINITIONS}
+    handler_types = {
+        handler.command_type
+        for plugin in bunnyland_plugins()
+        for handler in plugin.commands.action_handlers
+    }
+
+    assert handler_types - catalog == set()
+
+
 def test_imported_plugin_ids_are_namespaced_and_selectable_by_short_id(monkeypatch):
     import sys
     from types import ModuleType
@@ -195,9 +302,7 @@ async def test_applying_core_verbs_enables_move():
 
 async def test_applying_memory_plugin_enables_notes():
     scenario = _bare_scenario()
-    apply_plugins(
-        [p for p in bunnyland_plugins() if p.id in (CORE_VERBS, MEMORY)], scenario.actor
-    )
+    apply_plugins([p for p in bunnyland_plugins() if p.id in (CORE_VERBS, MEMORY)], scenario.actor)
     char = scenario.actor.world.get_entity(scenario.character)
     char.add_component(MemoryProfileComponent(vector_collection="c"))
 

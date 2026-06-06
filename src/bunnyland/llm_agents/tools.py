@@ -10,7 +10,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..core.commands import CommandCost, Lane, SubmittedCommand, build_submitted_command
+from ..core.actions import (
+    DEFAULT_ACTION_DEFINITIONS,
+    REFERENCE_ARG_KEYS,
+    ActionDefinition,
+    action_definition_for_command_type,
+    action_definitions,
+    definition_by_command_type,
+    definitions_by_tool_name,
+    reference_arg_keys,
+)
+from ..core.commands import SubmittedCommand, build_submitted_command
 
 
 @dataclass(frozen=True)
@@ -19,166 +29,53 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class _Verb:
-    command_type: str
-    lane: Lane
-    cost: CommandCost
-    # maps tool argument names -> payload keys (identity unless renamed)
-    arg_keys: tuple[str, ...]
+def _definitions_by_tool(
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
+) -> dict[str, ActionDefinition]:
+    return definitions_by_tool_name(definitions)
 
 
-_ACTION = CommandCost(action=1)
-_SPEECH = CommandCost(action=1, focus=1)
-_FOCUS = CommandCost(focus=1)
-_FREE = CommandCost()
-
-#: Payload keys whose value names an entity (resolved name -> id during dispatch). Other
-#: keys (direction, text, intent, tags, query, mode, limit, collection) are free text.
-REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
-    {
-        "airlock_id",
-        "child_id",
-        "bill_id",
-        "body_id",
-        "bulkhead_id",
-        "business_id",
-        "bank_id",
-        "co_parent_id",
-        "customer_id",
-        "crime_id",
-        "destination_id",
-        "door_id",
-        "dungeon_id",
-        "exit_id",
-        "fertilizer_id",
-        "faction_id",
-        "grid_id",
-        "incident_id",
-        "institution_id",
-        "item_id",
-        "job_id",
-        "loan_id",
-        "location_id",
-        "module_id",
-        "node_id",
-        "objective_id",
-        "quest_id",
-        "room_id",
-        "rumor_id",
-        "seed_id",
-        "seller_id",
-        "service_id",
-        "ship_id",
-        "signal_id",
-        "site_id",
-        "soil_id",
-        "station_id",
-        "spell_id",
-        "system_id",
-        "target_container_id",
-        "target_id",
-        "template_id",
-        "tool_id",
-        "source_id",
-        "tenant_id",
-    }
-)
-
-# tool name -> verb definition. ``drop`` and ``take_note`` rename to engine command types.
-_VERBS: dict[str, _Verb] = {
-    "move": _Verb("move", Lane.WORLD, _ACTION, ("direction", "exit_id")),
-    "take": _Verb("take", Lane.WORLD, _ACTION, ("item_id",)),
-    "drop": _Verb("put", Lane.WORLD, _ACTION, ("item_id",)),
-    "put": _Verb("put", Lane.WORLD, _ACTION, ("item_id", "target_container_id")),
-    "use": _Verb("use", Lane.WORLD, _ACTION, ("target_id", "tool_id")),
-    "till": _Verb("till", Lane.WORLD, _ACTION, ("soil_id",)),
-    "plant": _Verb("plant", Lane.WORLD, _ACTION, ("soil_id", "seed_id")),
-    "water_crop": _Verb("water-crop", Lane.WORLD, _ACTION, ("soil_id",)),
-    "fertilize": _Verb("fertilize", Lane.WORLD, _ACTION, ("soil_id", "fertilizer_id")),
-    "harvest_crop": _Verb("harvest-crop", Lane.WORLD, _ACTION, ("soil_id",)),
-    "discover_location": _Verb("discover-location", Lane.WORLD, _ACTION, ("location_id",)),
-    "accept_quest": _Verb("accept-quest", Lane.WORLD, _ACTION, ("quest_id",)),
-    "complete_objective": _Verb("complete-objective", Lane.WORLD, _ACTION, ("objective_id",)),
-    "join_faction": _Verb("join-faction", Lane.WORLD, _ACTION, ("faction_id", "rank")),
-    "leave_faction": _Verb("leave-faction", Lane.WORLD, _ACTION, ("faction_id",)),
-    "claim_ownership": _Verb("claim-ownership", Lane.WORLD, _ACTION, ("target_id",)),
-    "release_ownership": _Verb("release-ownership", Lane.WORLD, _ACTION, ("target_id",)),
-    "eat": _Verb("eat", Lane.WORLD, _ACTION, ("item_id",)),
-    "drink": _Verb("drink", Lane.WORLD, _ACTION, ("source_id",)),
-    "adopt_child": _Verb("adopt-child", Lane.WORLD, _ACTION, ("child_id",)),
-    "say": _Verb("say", Lane.WORLD, _SPEECH, ("text", "intent")),
-    "tell": _Verb("tell", Lane.WORLD, _SPEECH, ("target_id", "text", "intent")),
-    "pickpocket": _Verb("pickpocket", Lane.WORLD, _ACTION, ("target_id", "item_id")),
-    "open_business": _Verb("open-business", Lane.WORLD, _ACTION, ("name", "default_price")),
-    "join_household": _Verb("join-household", Lane.WORLD, _ACTION, ("household_id", "name")),
-    "claim_home": _Verb("claim-home", Lane.WORLD, _ACTION, ("room_id",)),
-    "claim_room": _Verb("claim-room", Lane.WORLD, _ACTION, ("room_id",)),
-    "charge_rent": _Verb(
-        "charge-rent", Lane.WORLD, _ACTION, ("tenant_id", "amount", "reason", "due_epoch")
-    ),
-    "pay_bill": _Verb("pay-bill", Lane.WORLD, _ACTION, ("bill_id",)),
-    "buy_item": _Verb(
-        "buy-item", Lane.WORLD, _ACTION, ("seller_id", "item_id", "business_id", "price")
-    ),
-    "sell_item": _Verb(
-        "sell-item", Lane.WORLD, _ACTION, ("item_id", "customer_id", "business_id", "price")
-    ),
-    "create_spell": _Verb(
-        "create-spell", Lane.WORLD, _ACTION, ("template_id", "spell_name")
-    ),
-    "enchant_item": _Verb("enchant-item", Lane.WORLD, _ACTION, ("item_id", "spell_id")),
-    "cast_spell": _Verb("cast-spell", Lane.WORLD, _ACTION, ("spell_id", "target_id")),
-    "take_note": _Verb(
-        "take-note", Lane.FOCUS, _FOCUS, ("text", "tags", "scope", "collection")
-    ),
-    "remember": _Verb(
-        "remember", Lane.FOCUS, _FOCUS, ("query", "mode", "limit", "scope", "collection")
-    ),
-    "forget": _Verb("forget", Lane.FOCUS, _FOCUS, ("note_id", "scope", "collection")),
-    "reflect": _Verb("reflect", Lane.FOCUS, _FOCUS, ("text", "query", "mode", "limit")),
-    "write": _Verb("write", Lane.WORLD, _SPEECH, ("target_id", "text")),
-    "wait": _Verb("wait", Lane.WORLD, _FREE, ()),
-}
+def _definitions_by_command(
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
+) -> dict[str, ActionDefinition]:
+    return definition_by_command_type(definitions)
 
 
-def tool_names() -> tuple[str, ...]:
-    return tuple(_VERBS)
+def tool_names(
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
+) -> tuple[str, ...]:
+    return tuple(_definitions_by_tool(definitions))
 
 
-def command_type_for_tool(name: str) -> str | None:
-    verb = _VERBS.get(name)
-    return verb.command_type if verb is not None else None
+def command_type_for_tool(
+    name: str,
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
+) -> str | None:
+    definition = _definitions_by_tool(definitions).get(name)
+    return definition.command_type if definition is not None else None
 
 
-def tool_arg_keys(name: str) -> tuple[str, ...]:
-    verb = _VERBS.get(name)
-    return verb.arg_keys if verb is not None else ()
+def tool_arg_keys(
+    name: str,
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
+) -> tuple[str, ...]:
+    definition = _definitions_by_tool(definitions).get(name)
+    return definition.arg_keys if definition is not None else ()
 
 
-def tool_for_command_type(command_type: str) -> str | None:
-    for name, verb in _VERBS.items():
-        if verb.command_type == command_type:
-            return name
-    return None
+def tool_for_command_type(
+    command_type: str,
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
+) -> str | None:
+    definition = _definitions_by_command(definitions).get(command_type)
+    return definition.name if definition is not None else None
 
 
-def tool_schemas() -> list[dict[str, Any]]:
+def tool_schemas(
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
+) -> list[dict[str, Any]]:
     """JSON-schema-ish tool definitions for the LLM (Ollama/OpenAI ``tools`` format)."""
-    schemas: list[dict[str, Any]] = []
-    for name, verb in _VERBS.items():
-        properties = {key: {"type": "string"} for key in verb.arg_keys}
-        schemas.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": f"Character action: {name}",
-                    "parameters": {"type": "object", "properties": properties},
-                },
-            }
-        )
-    return schemas
+    return [definition.tool_schema() for definition in action_definitions(definitions or ())]
 
 
 def command_from_tool_call(
@@ -188,19 +85,20 @@ def command_from_tool_call(
     controller_id: str,
     controller_generation: int,
     submitted_at_epoch: int = 0,
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
 ) -> SubmittedCommand:
     """Translate an LLM tool call into a validated command envelope."""
-    verb = _VERBS.get(call.name)
-    if verb is None:
+    definition = _definitions_by_tool(definitions).get(call.name)
+    if definition is None:
         raise ValueError(f"unknown tool {call.name!r}")
-    payload = {key: call.arguments[key] for key in verb.arg_keys if key in call.arguments}
+    payload = {key: call.arguments[key] for key in definition.arg_keys if key in call.arguments}
     return build_submitted_command(
         character_id=character_id,
         controller_id=controller_id,
         controller_generation=controller_generation,
-        command_type=verb.command_type,
-        cost=verb.cost,
-        lane=verb.lane,
+        command_type=definition.command_type,
+        cost=definition.cost,
+        lane=definition.lane,
         payload=payload,
         submitted_at_epoch=submitted_at_epoch,
     )
@@ -208,9 +106,13 @@ def command_from_tool_call(
 
 __all__ = [
     "REFERENCE_ARG_KEYS",
+    "DEFAULT_ACTION_DEFINITIONS",
     "ToolCall",
+    "action_definitions",
+    "action_definition_for_command_type",
     "command_from_tool_call",
     "command_type_for_tool",
+    "reference_arg_keys",
     "tool_arg_keys",
     "tool_for_command_type",
     "tool_names",

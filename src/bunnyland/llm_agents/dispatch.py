@@ -33,7 +33,12 @@ from ..core.edges import ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
 from ..prompts.builder import PromptBuilder, render_prompt
 from .agent import CharacterAgent
-from .tools import REFERENCE_ARG_KEYS, ToolCall, command_from_tool_call
+from .tools import (
+    ToolCall,
+    command_from_tool_call,
+    reference_arg_keys,
+    tool_schemas,
+)
 
 logger = logging.getLogger("bunnyland.dispatch")
 
@@ -63,9 +68,7 @@ def name_candidates(world: World, character: Entity) -> list[tuple[str, EntityId
     return candidates
 
 
-def resolve_reference(
-    value: str, candidates: list[tuple[str, EntityId]], *, world: World
-) -> str:
+def resolve_reference(value: str, candidates: list[tuple[str, EntityId]], *, world: World) -> str:
     """Resolve a human-readable name to an entity id (case-insensitive prefix match).
 
     Already-valid entity ids pass through. An exact (case-insensitive) name wins; otherwise
@@ -115,7 +118,7 @@ def resolve_reference_args(
     character: Entity,
     arguments: Mapping[str, object],
     *,
-    keys: frozenset[str] = REFERENCE_ARG_KEYS,
+    keys: frozenset[str] | None = None,
     suggestions: int = 3,
 ) -> tuple[dict, dict[str, list[str]]]:
     """Resolve entity-reference args to ids.
@@ -127,7 +130,7 @@ def resolve_reference_args(
     candidates = name_candidates(world, character)
     resolved = dict(arguments)
     unresolved: dict[str, list[str]] = {}
-    for key in keys:
+    for key in keys or reference_arg_keys():
         value = resolved.get(key)
         if not isinstance(value, str):
             continue
@@ -245,6 +248,7 @@ class ControllerDispatch:
             character_id=cid,
             model=controller_component.model,
             provider=controller_component.provider,
+            tools=tool_schemas(self.actor.action_definitions()),
         )
         call = await decision if inspect.isawaitable(decision) else decision
 
@@ -257,7 +261,10 @@ class ControllerDispatch:
         # on its next turn (spec 25: tools enforce the same rules for humans and LLMs).
         character = self.actor.world.get_entity(character_id)
         resolved, unresolved = resolve_reference_args(
-            self.actor.world, character, call.arguments
+            self.actor.world,
+            character,
+            call.arguments,
+            keys=reference_arg_keys(self.actor.action_definitions()),
         )
         if unresolved:
             message = did_you_mean(call.arguments, unresolved)
@@ -272,12 +279,11 @@ class ControllerDispatch:
                 controller_id=str(controller_id),
                 controller_generation=generation,
                 submitted_at_epoch=self.actor.epoch,
+                definitions=self.actor.action_definitions(),
             )
         except ValueError as exc:
             message = str(exc)
-            self._feedback[cid] = (
-                f"{message}. Choose one of the available tools exactly as named."
-            )
+            self._feedback[cid] = f"{message}. Choose one of the available tools exactly as named."
             logger.info("character %s chose an unavailable tool: %s", character_id, message)
             return Decision(cid, call.name, message)
         await self.actor.submit(command)

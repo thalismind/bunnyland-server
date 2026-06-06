@@ -7,9 +7,11 @@ reachability, policy, and command state.
 
 from __future__ import annotations
 
+import re
 import shlex
 
-from .tools import ToolCall
+from ..core.actions import ActionDefinition
+from .tools import ToolCall, action_definitions
 
 _DIRECTIONS = {
     "north",
@@ -36,7 +38,51 @@ def _rest(words: list[str], start: int) -> str:
     return " ".join(words[start:]).strip()
 
 
-def parse_natural_command(text: str) -> ToolCall | None:
+def _pattern_regex(pattern: str) -> re.Pattern[str] | None:
+    parts = re.split(r"(\{[a-zA-Z_][a-zA-Z0-9_]*\})", pattern)
+    slots = [part[1:-1] for part in parts if part.startswith("{") and part.endswith("}")]
+    if not slots:
+        return None
+    for left, right in zip(slots, slots[1:], strict=False):
+        left_index = parts.index("{" + left + "}")
+        right_index = parts.index("{" + right + "}")
+        literal = "".join(parts[left_index + 1 : right_index]).strip()
+        if not literal:
+            return None
+    regex = "^"
+    for index, part in enumerate(parts):
+        if part.startswith("{") and part.endswith("}"):
+            name = part[1:-1]
+            rest = "".join(parts[index + 1 :])
+            lazy = "?" if rest.strip() else ""
+            regex += rf"(?P<{name}>.+{lazy})"
+        else:
+            regex += re.escape(part).replace(r"\ ", r"\s+")
+    regex += "$"
+    return re.compile(regex, re.IGNORECASE)
+
+
+def _parse_definition_pattern(
+    text: str, definitions: tuple[ActionDefinition, ...]
+) -> ToolCall | None:
+    for definition in definitions:
+        for pattern in definition.natural_patterns:
+            matcher = _pattern_regex(pattern.text)
+            if matcher is None:
+                continue
+            match = matcher.match(text.strip())
+            if match:
+                args = {
+                    key: value.strip() for key, value in match.groupdict().items() if value.strip()
+                }
+                return ToolCall(definition.name, args)
+    return None
+
+
+def parse_natural_command(
+    text: str,
+    definitions: tuple[ActionDefinition, ...] | list[ActionDefinition] | None = None,
+) -> ToolCall | None:
     """Parse a concise player command into a ``ToolCall``.
 
     Supported forms include ``go north``, ``take basket``, ``say hello``,
@@ -47,6 +93,11 @@ def parse_natural_command(text: str) -> ToolCall | None:
     stripped = text.strip()
     if not stripped:
         return None
+    parsed = _parse_definition_pattern(
+        stripped, tuple(action_definitions(tuple(definitions or ())))
+    )
+    if parsed is not None:
+        return parsed
     words = _split(stripped)
     if not words:
         return None
@@ -85,9 +136,7 @@ def parse_natural_command(text: str) -> ToolCall | None:
                 item = _rest(words, 1) if index <= 1 else _rest(words[:index], 1)
                 target = _rest(words, index + 1)
                 if item and target:
-                    return ToolCall(
-                        "put", {"item_id": item, "target_container_id": target}
-                    )
+                    return ToolCall("put", {"item_id": item, "target_container_id": target})
         item = _rest(words, 1)
         return ToolCall("drop", {"item_id": item}) if item else None
 
@@ -120,9 +169,7 @@ def parse_natural_command(text: str) -> ToolCall | None:
                 spell = _rest(words[:index], 1)
                 target = _rest(words, index + 1)
                 if spell and target:
-                    return ToolCall(
-                        "cast_spell", {"spell_id": spell, "target_id": target}
-                    )
+                    return ToolCall("cast_spell", {"spell_id": spell, "target_id": target})
         spell = _rest(words, 1)
         return ToolCall("cast_spell", {"spell_id": spell}) if spell else None
 
@@ -152,9 +199,7 @@ def parse_natural_command(text: str) -> ToolCall | None:
             soil = _rest(words[:index], 1)
             fertilizer = _rest(words, index + 1)
             if soil and fertilizer:
-                return ToolCall(
-                    "fertilize", {"soil_id": soil, "fertilizer_id": fertilizer}
-                )
+                return ToolCall("fertilize", {"soil_id": soil, "fertilizer_id": fertilizer})
         return None
 
     if verb == "harvest":
