@@ -77,6 +77,7 @@ from .components import (
     WritableComponent,
 )
 from .controllers import (
+    ClaimTimeoutComponent,
     DiscordControllerComponent,
     LLMControllerComponent,
     MCPControllerComponent,
@@ -118,6 +119,7 @@ from .handlers import (
     infer_intent,
 )
 from .queue import CommandQueues
+from .systems import ClaimTimeoutSystem
 from .world_actor import WorldActor
 
 __all__ = [
@@ -137,6 +139,8 @@ __all__ = [
     "BodyPlanComponent",
     "ButtonComponent",
     "CharacterComponent",
+    "ClaimTimeoutComponent",
+    "ClaimTimeoutSystem",
     "Command",
     "CommandCost",
     "CommandQueues",

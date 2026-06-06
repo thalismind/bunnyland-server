@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -21,6 +22,7 @@ from ..core import (
     build_submitted_command,
     spawn_entity,
 )
+from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.ecs import parse_entity_id
 from ..server.serialization import serialize_world
 from .model import World
@@ -84,6 +86,8 @@ class LocalBackend(Backend):
         time_scale: float = 3600.0,
         autorun: bool = True,
         client_id: str | None = None,
+        fallback_controller: str | None = None,
+        timeout_seconds: int | None = None,
     ) -> None:
         self.seed = seed
         self.generator_name = generator
@@ -97,6 +101,8 @@ class LocalBackend(Backend):
         self._task: asyncio.Task | None = None
         self._controller = None
         self.client_id = client_id or persistent_client_id()
+        self.fallback_controller = fallback_controller
+        self.timeout_seconds = timeout_seconds
 
     async def start(self) -> None:
         # Imported here so the optional server/llm wiring is only pulled when hosting.
@@ -167,6 +173,13 @@ class LocalBackend(Backend):
                     self.actor.world,
                     [WebControllerComponent(client_id=self.client_id, label="tui")],
                 )
+            apply_claim_timeout_settings(
+                self._controller,
+                now_unix=int(time.time()),
+                fallback_controller=self.fallback_controller,
+                timeout_seconds=self.timeout_seconds,
+                reset_activity=True,
+            )
             generation = self.actor.assign_controller(
                 parse_entity_id(player_id), self._controller.id
             )
@@ -176,11 +189,20 @@ class LocalBackend(Backend):
 class RemoteBackend(Backend):
     """Poll a running server over HTTP for snapshots and post commands to it."""
 
-    def __init__(self, base_url: str, *, client_id: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        client_id: str | None = None,
+        fallback_controller: str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> None:
         self.base = base_url.rstrip("/")
         self.label = f"remote · {self.base}"
         self._client = None
         self.client_id = client_id or persistent_client_id()
+        self.fallback_controller = fallback_controller
+        self.timeout_seconds = timeout_seconds
 
     async def start(self) -> None:
         import httpx
@@ -203,7 +225,13 @@ class RemoteBackend(Backend):
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
         res = await self._client.post(
             f"{self.base}/world/controllers/web/claim",
-            json={"character_id": player_id, "client_id": self.client_id, "label": "tui"},
+            json={
+                "character_id": player_id,
+                "client_id": self.client_id,
+                "label": "tui",
+                "fallback_controller": self.fallback_controller,
+                "timeout_seconds": self.timeout_seconds,
+            },
         )
         if not res.is_success:
             logger.warning(

@@ -17,6 +17,8 @@ import os
 from collections.abc import Awaitable
 from pathlib import Path
 
+from .core.claim_timeout import CLAIM_TIMEOUT_DEFAULT_SECONDS, normalize_claim_timeout
+from .core.systems import ClaimTimeoutSystem
 from .core.world_actor import WorldActor
 from .discord.claim import assign_discord_controller
 from .engine import GameLoop
@@ -292,6 +294,24 @@ async def _serve(args) -> None:
 
     builder = PromptBuilder(actor.world, fragment_providers=collect_prompt_fragments(plugins))
     dispatch = ControllerDispatch(actor, builder, agent)
+    claim_timeout_seconds = args.claim_timeout_seconds
+    if claim_timeout_seconds is None:
+        env_claim_timeout_seconds = _env_int("BUNNYLAND_CLAIM_TIMEOUT_SECONDS")
+        claim_timeout_seconds = (
+            env_claim_timeout_seconds
+            if env_claim_timeout_seconds is not None
+            else CLAIM_TIMEOUT_DEFAULT_SECONDS
+        )
+    if claim_timeout_seconds > 0:
+        normalize_claim_timeout(claim_timeout_seconds)
+        actor.register_after_tick(
+            ClaimTimeoutSystem(
+                default_timeout_seconds=claim_timeout_seconds,
+                controller_kinds=tuple(args.claim_timeout_controller or ("discord", "web")),
+                default_llm_model=character_model,
+                default_llm_provider=args.llm_provider,
+            )
+        )
     loop = GameLoop(
         actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
         autosave=autosave, autosave_every=args.autosave_every,
@@ -491,6 +511,25 @@ def main(argv: list[str] | None = None) -> int:
         "--time-scale", type=float, default=3600.0, help="game seconds per real tick"
     )
     serve.add_argument(
+        "--claim-timeout-seconds",
+        type=int,
+        default=None,
+        help=(
+            "default wall-clock seconds before inactive player claims expire "
+            "(300-3600; 0 disables; env: BUNNYLAND_CLAIM_TIMEOUT_SECONDS)"
+        ),
+    )
+    serve.add_argument(
+        "--claim-timeout-controller",
+        action="append",
+        choices=("discord", "web"),
+        default=None,
+        help=(
+            "controller kind subject to claim timeout; repeat for more "
+            "(default: discord and web)"
+        ),
+    )
+    serve.add_argument(
         "--lifesim-natural-aging",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -592,15 +631,35 @@ def main(argv: list[str] | None = None) -> int:
     tui.add_argument(
         "--generator", default="apartment-demo", help="generator for a locally hosted world"
     )
+    tui.add_argument(
+        "--claim-fallback",
+        choices=("suspend", "llm"),
+        default=None,
+        help="controller fallback when the TUI claim times out",
+    )
+    tui.add_argument(
+        "--claim-timeout-minutes",
+        type=int,
+        default=None,
+        help="claim timeout override in minutes, between 5 and 60",
+    )
 
     args = parser.parse_args(argv)
 
     if args.command == "tui":
         from .tui import main as tui_main
 
-        tui_args = ["--server", args.server] if args.server else [
-            "--seed", args.seed, "--generator", args.generator
-        ]
+        tui_args = (
+            ["--server", args.server]
+            if args.server
+            else ["--seed", args.seed, "--generator", args.generator]
+        )
+        if args.claim_fallback:
+            tui_args.extend(["--claim-fallback", args.claim_fallback])
+        if args.claim_timeout_minutes is not None:
+            tui_args.extend(
+                ["--claim-timeout-minutes", str(args.claim_timeout_minutes)]
+            )
         return tui_main(tui_args)
 
     if args.command != "serve":

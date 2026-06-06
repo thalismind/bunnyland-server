@@ -12,6 +12,7 @@ from bunnyland.core import (
     WebControllerComponent,
     spawn_entity,
 )
+from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
 from bunnyland.tui.app import BunnylandTUI, TargetPicker, TextPrompt
@@ -177,7 +178,11 @@ def test_assign_web_controller_reports_web_kind():
 # ── local backend (host a world in-process) ───────────────────────────────────
 async def test_local_backend_hosts_claims_and_submits():
     backend = LocalBackend(
-        generator="apartment-demo", autorun=False, client_id="local-client"
+        generator="apartment-demo",
+        autorun=False,
+        client_id="local-client",
+        fallback_controller="llm",
+        timeout_seconds=900,
     )
     await backend.start()
     try:
@@ -194,6 +199,9 @@ async def test_local_backend_hosts_claims_and_submits():
             backend._controller.get_component(WebControllerComponent).client_id
             == "local-client"
         )
+        claim = backend._controller.get_component(ClaimTimeoutComponent)
+        assert claim.fallback_controller == "llm"
+        assert claim.timeout_seconds == 900
 
         epoch_before = backend.actor.epoch
         ok = await backend.submit({
@@ -243,7 +251,12 @@ async def test_remote_backend_claims_web_controller():
             self.requests.append((url, json))
             return Response()
 
-    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend = RemoteBackend(
+        "http://server.example",
+        client_id="remote-client",
+        fallback_controller="llm",
+        timeout_seconds=1200,
+    )
     backend._client = Client()
 
     control = await backend.claim(PLAYER, World.parse(_snapshot()))
@@ -252,7 +265,13 @@ async def test_remote_backend_claims_web_controller():
     assert backend._client.requests == [
         (
             "http://server.example/world/controllers/web/claim",
-            {"character_id": PLAYER, "client_id": "remote-client", "label": "tui"},
+            {
+                "character_id": PLAYER,
+                "client_id": "remote-client",
+                "label": "tui",
+                "fallback_controller": "llm",
+                "timeout_seconds": 1200,
+            },
         )
     ]
 

@@ -8,16 +8,40 @@ mutated in place.
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 from relics import Frequency, System
 
+from .claim_timeout import (
+    CLAIM_FALLBACK_LLM,
+    CLAIM_TIMEOUT_DEFAULT_SECONDS,
+    normalize_claim_timeout,
+)
 from .components import (
     ActionPointsComponent,
+    CharacterComponent,
     FocusPointsComponent,
+    SuspendedComponent,
     WorldClockComponent,
 )
-from .ecs import replace_component
+from .controllers import (
+    ClaimTimeoutComponent,
+    DiscordControllerComponent,
+    LLMControllerComponent,
+    MCPControllerComponent,
+    SuspendedControllerComponent,
+    WebControllerComponent,
+)
+from .ecs import replace_component, spawn_entity
+from .edges import ControlledBy
+from .events import ControllerChangedEvent
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
+    from .world_actor import WorldActor
 
 SECONDS_PER_HOUR = 3600.0
 
@@ -83,4 +107,108 @@ class ActionFocusRegenSystem(System):
                     replace_component(entity, replace(fp, current=new_current))
 
 
-__all__ = ["ActionFocusRegenSystem", "WorldClockSystem"]
+class ClaimTimeoutSystem:
+    """After-tick system that expires inactive player controller claims.
+
+    The server owns timeout policy: default timeout and affected controller kinds. The
+    controller component owns player preference: per-claim timeout and fallback kind.
+    Time is wall-clock seconds so simulation time scaling cannot expire claims early.
+    """
+
+    def __init__(
+        self,
+        *,
+        default_timeout_seconds: int = CLAIM_TIMEOUT_DEFAULT_SECONDS,
+        controller_kinds: Iterable[str] = ("discord", "web"),
+        default_llm_model: str = "deepseek-v4-flash",
+        default_llm_provider: str = "ollama",
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        normalized_default = normalize_claim_timeout(default_timeout_seconds)
+        self.default_timeout_seconds = (
+            normalized_default
+            if normalized_default is not None
+            else CLAIM_TIMEOUT_DEFAULT_SECONDS
+        )
+        self.controller_kinds = frozenset(
+            kind.strip().lower().replace("_", "-") for kind in controller_kinds if kind
+        )
+        self.default_llm_model = default_llm_model
+        self.default_llm_provider = default_llm_provider
+        self.now = now
+
+    async def __call__(self, actor: WorldActor) -> None:
+        if not self.controller_kinds:
+            return
+        now_unix = int(self.now())
+        expired = []
+        characters = list(
+            actor.world.query().with_all([CharacterComponent]).execute_entities()
+        )
+        for character in characters:
+            for _edge, controller_id in character.get_relationships(ControlledBy):
+                if not actor.world.has_entity(controller_id):
+                    continue
+                controller = actor.world.get_entity(controller_id)
+                kind = self._controller_kind(controller)
+                if kind not in self.controller_kinds:
+                    continue
+                if not controller.has_component(ClaimTimeoutComponent):
+                    continue
+                claim = controller.get_component(ClaimTimeoutComponent)
+                last_active = claim.last_command_unix or claim.claimed_at_unix
+                timeout = claim.timeout_seconds or self.default_timeout_seconds
+                if now_unix - last_active >= timeout:
+                    expired.append((character, controller, claim))
+
+        for character, _controller, claim in expired:
+            if claim.fallback_controller == CLAIM_FALLBACK_LLM:
+                controller = spawn_entity(
+                    actor.world,
+                    [
+                        LLMControllerComponent(
+                            profile_name=claim.llm_profile_name or "default",
+                            model=claim.llm_model or self.default_llm_model,
+                            provider=claim.llm_provider or self.default_llm_provider,
+                        )
+                    ]
+                )
+                generation = actor.assign_controller(character.id, controller.id)
+                if character.has_component(SuspendedComponent):
+                    character.remove_component(SuspendedComponent)
+                kind = "llm"
+            else:
+                controller = spawn_entity(
+                    actor.world,
+                    [SuspendedControllerComponent(reason=claim.fallback_reason)]
+                )
+                generation = actor.suspend(
+                    character.id, controller.id, reason=claim.fallback_reason
+                )
+                kind = "suspended"
+            await actor.bus.publish(
+                ControllerChangedEvent(
+                    **actor._event_base(
+                        actor_id=str(character.id),
+                        generation=generation,
+                        controller_kind=kind,
+                    )
+                )
+            )
+
+    @staticmethod
+    def _controller_kind(controller) -> str:
+        if controller.has_component(DiscordControllerComponent):
+            return "discord"
+        if controller.has_component(WebControllerComponent):
+            return "web"
+        if controller.has_component(MCPControllerComponent):
+            return "mcp"
+        if controller.has_component(LLMControllerComponent):
+            return "llm"
+        if controller.has_component(SuspendedControllerComponent):
+            return "suspended"
+        return "unknown"
+
+
+__all__ = ["ActionFocusRegenSystem", "ClaimTimeoutSystem", "WorldClockSystem"]

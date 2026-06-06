@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import TYPE_CHECKING
 
 from ..content import load_content_library
 from ..core import CharacterComponent, WebControllerComponent, parse_entity_id, spawn_entity
+from ..core.claim_timeout import apply_claim_timeout_settings
+from ..core.controllers import ClaimTimeoutComponent
 from ..core.events import ControllerChangedEvent
 from ..core.world_actor import WorldActor
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
@@ -22,6 +25,8 @@ from .models import (
     CommandResponse,
     WebControllerClaimRequest,
     WebControllerClaimResponse,
+    WebControllerFallbackRequest,
+    WebControllerFallbackResponse,
     WorldCharacterGenerationRequest,
     WorldCharacterGenerationResponse,
     WorldEventGenerationRequest,
@@ -163,6 +168,28 @@ def create_app(
         await actor.submit(command)
         return CommandResponse(queued=True, command_id=command.command_id)
 
+    def _web_claim_response(
+        request: WebControllerFallbackRequest,
+        *,
+        controller,
+        generation: int,
+    ) -> WebControllerFallbackResponse:
+        claim = controller.get_component(ClaimTimeoutComponent)
+        return WebControllerFallbackResponse(
+            character_id=request.character_id,
+            controller_id=str(controller.id),
+            controller_generation=generation,
+            fallback_controller=claim.fallback_controller,
+            timeout_seconds=claim.timeout_seconds,
+        )
+
+    def _web_controller_for_client(client_id: str):
+        for entity in actor.world.query().with_all([WebControllerComponent]).execute_entities():
+            component = entity.get_component(WebControllerComponent)
+            if component.client_id == client_id:
+                return entity
+        return None
+
     async def _claim_web_controller_request(
         request: WebControllerClaimRequest,
     ) -> WebControllerClaimResponse:
@@ -179,17 +206,23 @@ def create_app(
         label = request.label.strip() or "web"
 
         async with actor._lock:
-            controller = None
-            for entity in actor.world.query().with_all([WebControllerComponent]).execute_entities():
-                component = entity.get_component(WebControllerComponent)
-                if component.client_id == client_id:
-                    controller = entity
-                    break
+            controller = _web_controller_for_client(client_id)
             if controller is None:
                 controller = spawn_entity(
                     actor.world,
                     [WebControllerComponent(client_id=client_id, label=label)],
                 )
+            apply_claim_timeout_settings(
+                controller,
+                now_unix=int(time.time()),
+                fallback_controller=request.fallback_controller,
+                fallback_reason=request.fallback_reason,
+                llm_profile_name=request.llm_profile_name,
+                llm_model=request.llm_model,
+                llm_provider=request.llm_provider,
+                timeout_seconds=request.timeout_seconds,
+                reset_activity=True,
+            )
 
             generation = actor.current_generation(character_id, controller.id)
             if generation is None:
@@ -205,11 +238,43 @@ def create_app(
                 )
 
         stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
-        return WebControllerClaimResponse(
-            character_id=str(character_id),
-            controller_id=str(controller.id),
-            controller_generation=generation,
+        response = _web_claim_response(
+            request, controller=controller, generation=generation
         )
+        return WebControllerClaimResponse(**response.model_dump())
+
+    async def _web_controller_fallback_request(
+        request: WebControllerFallbackRequest,
+    ) -> WebControllerFallbackResponse:
+        character_id = parse_entity_id(request.character_id)
+        if character_id is None or not actor.world.has_entity(character_id):
+            raise HTTPException(status_code=404, detail="character does not exist")
+        client_id = request.client_id.strip()
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id must not be blank")
+
+        async with actor._lock:
+            controller = _web_controller_for_client(client_id)
+            if controller is None:
+                raise HTTPException(status_code=404, detail="web controller does not exist")
+            generation = actor.current_generation(character_id, controller.id)
+            if generation is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="web controller is not controlling this character",
+                )
+            apply_claim_timeout_settings(
+                controller,
+                now_unix=int(time.time()),
+                fallback_controller=request.fallback_controller,
+                fallback_reason=request.fallback_reason,
+                llm_profile_name=request.llm_profile_name,
+                llm_model=request.llm_model,
+                llm_provider=request.llm_provider,
+                timeout_seconds=request.timeout_seconds,
+                reset_activity=False,
+            )
+            return _web_claim_response(request, controller=controller, generation=generation)
 
     async def _patch_world_request(request: WorldPatchRequest) -> WorldPatchResponse:
         try:
@@ -367,6 +432,12 @@ def create_app(
         request: WebControllerClaimRequest,
     ) -> WebControllerClaimResponse:
         return await _claim_web_controller_request(request)
+
+    @app.patch("/world/controllers/web/fallback", response_model=WebControllerFallbackResponse)
+    async def set_web_controller_fallback(
+        request: WebControllerFallbackRequest,
+    ) -> WebControllerFallbackResponse:
+        return await _web_controller_fallback_request(request)
 
     @app.patch("/admin/world", response_model=WorldPatchResponse)
     async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:

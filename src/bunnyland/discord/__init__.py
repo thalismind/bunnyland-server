@@ -8,6 +8,7 @@ from .bot import (
     parse_discord_action,
     parse_discord_id_list,
     release_discord_character_to_llm,
+    set_discord_claim_fallback,
     suspend_discord_character,
 )
 from .claim import render_character_list
@@ -40,6 +41,7 @@ __all__ = [
     "render_move_result",
     "render_notes_search_result",
     "split_discord_text",
+    "set_discord_claim_fallback",
     "suspend_discord_character",
 ]
 

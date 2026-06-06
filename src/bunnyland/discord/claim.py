@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 from ..core import (
     CharacterComponent,
@@ -15,6 +16,7 @@ from ..core import (
     WebControllerComponent,
     spawn_entity,
 )
+from ..core.claim_timeout import apply_claim_timeout_settings, normalize_claim_fallback
 from ..core.world_actor import WorldActor
 from ..llm_agents import DEFAULT_MODEL
 from ..mechanics.lifesim import LifeStageComponent
@@ -129,6 +131,10 @@ def assign_discord_controller(
     default_channel_id: int = 0,
     character_name: str | None = None,
     allow_child_claims: bool = False,
+    fallback_controller: str | None = None,
+    timeout_seconds: int | None = None,
+    llm_model: str | None = None,
+    llm_provider: str | None = None,
 ) -> str:
     """Assign a Discord controller to a named character, or the first claimable one."""
 
@@ -168,7 +174,25 @@ def assign_discord_controller(
     else:
         for _edge, controller_id in character.get_relationships(ControlledBy):
             if controller_id == controller.id:
+                apply_claim_timeout_settings(
+                    controller,
+                    now_unix=int(time.time()),
+                    fallback_controller=fallback_controller,
+                    llm_model=llm_model,
+                    llm_provider=llm_provider,
+                    timeout_seconds=timeout_seconds,
+                    reset_activity=True,
+                )
                 return character.get_component(IdentityComponent).name
+    apply_claim_timeout_settings(
+        controller,
+        now_unix=int(time.time()),
+        fallback_controller=fallback_controller,
+        llm_model=llm_model,
+        llm_provider=llm_provider,
+        timeout_seconds=timeout_seconds,
+        reset_activity=True,
+    )
     actor.assign_controller(character.id, controller.id)
     if character.has_component(SuspendedComponent):
         character.remove_component(SuspendedComponent)
@@ -196,6 +220,32 @@ def _controlled_character(actor: WorldActor, discord_user_id: int):
         raise RuntimeError("You are not controlling a character yet.")
     character_id, controller_id, _generation = found
     return actor.world.get_entity(character_id), controller_id
+
+
+def set_discord_claim_fallback(
+    actor: WorldActor,
+    *,
+    discord_user_id: int,
+    fallback_controller: str,
+    timeout_seconds: int | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+) -> tuple[str, str]:
+    """Update fallback preferences for a Discord user's current character claim."""
+
+    character, controller_id = _controlled_character(actor, discord_user_id)
+    controller = actor.world.get_entity(controller_id)
+    fallback = normalize_claim_fallback(fallback_controller)
+    apply_claim_timeout_settings(
+        controller,
+        now_unix=int(time.time()),
+        fallback_controller=fallback,
+        timeout_seconds=timeout_seconds,
+        llm_model=model,
+        llm_provider=provider,
+        reset_activity=False,
+    )
+    return character.get_component(IdentityComponent).name, fallback
 
 
 def _retire_discord_controller(actor: WorldActor, controller_id) -> None:
@@ -253,5 +303,6 @@ __all__ = [
     "list_character_statuses",
     "release_discord_character_to_llm",
     "render_character_list",
+    "set_discord_claim_fallback",
     "suspend_discord_character",
 ]

@@ -13,6 +13,7 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    ControlledBy,
     FocusPointsComponent,
     IdentityComponent,
     InitiativeComponent,
@@ -23,8 +24,14 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
-from bunnyland.core.controllers import SuspendedControllerComponent
-from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent
+from bunnyland.core.claim_timeout import apply_claim_timeout_settings
+from bunnyland.core.controllers import (
+    LLMControllerComponent,
+    SuspendedControllerComponent,
+    WebControllerComponent,
+)
+from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent, ControllerChangedEvent
+from bunnyland.core.systems import ClaimTimeoutSystem
 
 HOUR = 3600.0
 
@@ -76,6 +83,81 @@ async def test_world_clock_advances():
     assert clock.game_time_seconds == int(HOUR)
     assert clock.tick_index == 1
     assert scenario.actor.epoch == int(HOUR)
+
+
+async def test_claim_timeout_suspends_inactive_web_controller():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+    apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller="suspend",
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    changed = collect(scenario.actor, ControllerChangedEvent)
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(default_timeout_seconds=1800, now=lambda: 301)
+    )
+
+    await scenario.actor.tick(0)
+
+    _edge, controller_id = character.get_relationships(ControlledBy)[0]
+    controller = scenario.actor.world.get_entity(controller_id)
+    assert character.has_component(SuspendedComponent)
+    assert controller.has_component(SuspendedControllerComponent)
+    assert changed[-1].controller_kind == "suspended"
+
+
+async def test_claim_timeout_can_fall_back_to_llm():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+    apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller="llm",
+        llm_model="claim-model",
+        llm_provider="openrouter",
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(default_timeout_seconds=1800, now=lambda: 301)
+    )
+
+    await scenario.actor.tick(0)
+
+    _edge, controller_id = character.get_relationships(ControlledBy)[0]
+    controller = scenario.actor.world.get_entity(controller_id)
+    llm = controller.get_component(LLMControllerComponent)
+    assert not character.has_component(SuspendedComponent)
+    assert llm.model == "claim-model"
+    assert llm.provider == "openrouter"
+
+
+async def test_claim_timeout_uses_player_timeout_before_server_default():
+    scenario = build_scenario()
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+    apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller="suspend",
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(default_timeout_seconds=3600, now=lambda: 301)
+    )
+
+    await scenario.actor.tick(0)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_component(SuspendedComponent)
 
 
 # -- movement ---------------------------------------------------------------------------

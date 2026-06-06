@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from ..core.claim_timeout import CLAIM_TIMEOUT_MAX_SECONDS, CLAIM_TIMEOUT_MIN_SECONDS
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, SubmittedCommand
 
 
@@ -48,17 +49,37 @@ class CommandResponse(BaseModel):
     command_id: str
 
 
-class WebControllerClaimRequest(BaseModel):
+ClaimFallbackController = Literal["suspend", "llm"]
+
+
+class WebControllerFallbackRequest(BaseModel):
     character_id: str
     client_id: str = Field(min_length=1)
+    fallback_controller: ClaimFallbackController | None = None
+    fallback_reason: str | None = None
+    llm_profile_name: str | None = None
+    llm_model: str | None = None
+    llm_provider: str | None = None
+    timeout_seconds: int | None = Field(
+        default=None, ge=CLAIM_TIMEOUT_MIN_SECONDS, le=CLAIM_TIMEOUT_MAX_SECONDS
+    )
+
+
+class WebControllerClaimRequest(WebControllerFallbackRequest):
     label: str = "web"
 
 
-class WebControllerClaimResponse(BaseModel):
+class WebControllerFallbackResponse(BaseModel):
     ok: bool = True
     character_id: str
     controller_id: str
     controller_generation: int
+    fallback_controller: str
+    timeout_seconds: int
+
+
+class WebControllerClaimResponse(WebControllerFallbackResponse):
+    pass
 
 
 class ComponentPatchSpec(BaseModel):
@@ -270,6 +291,7 @@ __all__ = [
     "ComponentPatchSpec",
     "EcsTypeSchema",
     "EdgePatchSpec",
+    "ClaimFallbackController",
     "WorldCharacterGenerationRequest",
     "WorldCharacterGenerationResponse",
     "WorldEventGenerationRequest",
@@ -290,4 +312,6 @@ __all__ = [
     "WorldSchemaResponse",
     "WebControllerClaimRequest",
     "WebControllerClaimResponse",
+    "WebControllerFallbackRequest",
+    "WebControllerFallbackResponse",
 ]

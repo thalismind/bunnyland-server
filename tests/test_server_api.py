@@ -23,6 +23,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
+from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.events import (
     ActorMovedEvent,
     WorldGenerationCompletedEvent,
@@ -44,6 +45,7 @@ from bunnyland.server.admin import (
 from bunnyland.server.app import create_app, next_websocket_update
 from bunnyland.server.models import (
     WebControllerClaimRequest,
+    WebControllerFallbackRequest,
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
     WorldGenerateRequest,
@@ -195,6 +197,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
     assert "/world/controllers/web/claim" in paths
+    assert "/world/controllers/web/fallback" in paths
     assert "/admin/world" in paths
     assert "/admin/world/generators" in paths
     assert "/admin/world/generate" in paths
@@ -220,6 +223,8 @@ async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
             character_id=str(scenario.character),
             client_id="client-a",
             label="toon",
+            fallback_controller="llm",
+            timeout_seconds=600,
         )
     )
     second = await route.endpoint(
@@ -236,10 +241,48 @@ async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
 
     controller = scenario.actor.world.get_entity(parse_entity_id(first.controller_id))
     assert controller.get_component(WebControllerComponent).client_id == "client-a"
+    claim = controller.get_component(ClaimTimeoutComponent)
+    assert claim.fallback_controller == "llm"
+    assert claim.timeout_seconds == 600
     character = scenario.actor.world.get_entity(scenario.character)
     edge, controller_id = character.get_relationships(ControlledBy)[0]
     assert str(controller_id) == first.controller_id
     assert edge.generation == first.controller_generation
+
+
+async def test_web_controller_fallback_endpoint_updates_existing_claim(scenario):
+    app = create_app(scenario.actor)
+    claim_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/claim"
+    )
+    fallback_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/fallback"
+    )
+
+    claimed = await claim_route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+    updated = await fallback_route.endpoint(
+        WebControllerFallbackRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            fallback_controller="llm",
+            llm_model="claim-model",
+            timeout_seconds=900,
+        )
+    )
+
+    assert updated.controller_id == claimed.controller_id
+    assert updated.controller_generation == claimed.controller_generation
+    assert updated.fallback_controller == "llm"
+    assert updated.timeout_seconds == 900
+    controller = scenario.actor.world.get_entity(parse_entity_id(updated.controller_id))
+    claim = controller.get_component(ClaimTimeoutComponent)
+    assert claim.llm_model == "claim-model"
 
 
 def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):

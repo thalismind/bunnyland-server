@@ -24,6 +24,7 @@ from bunnyland.core import (
     SuspendedControllerComponent,
     spawn_entity,
 )
+from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.events import (
     CommandExecutedEvent,
     CommandRejectedEvent,
@@ -46,6 +47,7 @@ from bunnyland.discord import (
     render_look,
     render_move_result,
     render_notes_search_result,
+    set_discord_claim_fallback,
     split_discord_text,
     suspend_discord_character,
 )
@@ -204,6 +206,54 @@ def test_assign_discord_controller_reuses_existing_user_channel_controller(scena
     assert second_controller_id == first_controller_id
     assert second_edge.generation == first_edge.generation
     assert matching_controllers == [first_controller_id]
+
+
+def test_assign_discord_controller_stores_claim_timeout_preferences(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+        fallback_controller="llm",
+        timeout_seconds=900,
+        llm_model="claim-model",
+        llm_provider="openrouter",
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    _edge, controller_id = character.get_relationships(ControlledBy)[0]
+    controller = scenario.actor.world.get_entity(controller_id)
+    claim = controller.get_component(ClaimTimeoutComponent)
+
+    assert claim.fallback_controller == "llm"
+    assert claim.timeout_seconds == 900
+    assert claim.llm_model == "claim-model"
+    assert claim.llm_provider == "openrouter"
+
+
+def test_set_discord_claim_fallback_updates_existing_claim(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+
+    name, fallback = set_discord_claim_fallback(
+        scenario.actor,
+        discord_user_id=123,
+        fallback_controller="llm",
+        timeout_seconds=1200,
+        model="claim-model",
+        provider="openrouter",
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    _edge, controller_id = character.get_relationships(ControlledBy)[0]
+    claim = scenario.actor.world.get_entity(controller_id).get_component(ClaimTimeoutComponent)
+    assert name == "Juniper"
+    assert fallback == "llm"
+    assert claim.timeout_seconds == 1200
+    assert claim.llm_model == "claim-model"
 
 
 def test_discord_broadcast_channel_ids_returns_unique_attached_channels(scenario):

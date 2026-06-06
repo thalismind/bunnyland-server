@@ -16,12 +16,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import random
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
 from relics import EntityId, World
 
 from .actions import ActionDefinition
+from .claim_timeout import record_claim_activity
 from .commands import Lane, OnInsufficientPoints, SubmittedCommand
 from .components import (
     ActionPointsComponent,
@@ -43,6 +45,7 @@ from .consequences import (
     PerceptionConsequence,
 )
 from .controllers import (
+    ClaimTimeoutComponent,
     DiscordControllerComponent,
     LLMControllerComponent,
     MCPControllerComponent,
@@ -199,6 +202,7 @@ class WorldActor:
     async def _ingest(self) -> None:
         while not self._inbox.empty():
             command = self._inbox.get_nowait()
+            self._record_controller_activity(command)
             self.queues.enqueue(command)
             await self._publish(
                 CommandSubmittedEvent(
@@ -219,6 +223,23 @@ class WorldActor:
                     )
                 )
             )
+
+    def _record_controller_activity(self, command: SubmittedCommand) -> None:
+        controller_id = parse_entity_id(command.controller_id)
+        character_id = parse_entity_id(command.character_id)
+        if (
+            controller_id is None
+            or character_id is None
+            or not self.world.has_entity(controller_id)
+            or not self.world.has_entity(character_id)
+        ):
+            return
+        controller = self.world.get_entity(controller_id)
+        if not controller.has_component(ClaimTimeoutComponent):
+            return
+        if self.current_generation(character_id, controller_id) != command.controller_generation:
+            return
+        record_claim_activity(controller, now_unix=int(time.time()))
 
     async def _process_commands(self) -> None:
         for character_id in self._initiative_order(self.queues.characters_with_pending()):

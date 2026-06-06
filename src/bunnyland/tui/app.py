@@ -13,6 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
+from ..core.claim_timeout import normalize_claim_timeout
 from .backend import Backend, LocalBackend, RemoteBackend
 from .model import World, entity_icon, entity_name, fmt_points, has
 from .verbs import ACTION_VERBS, Verb
@@ -307,11 +308,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--generator", default="apartment-demo", help="generator for a locally hosted world"
     )
+    parser.add_argument(
+        "--claim-fallback",
+        choices=("suspend", "llm"),
+        default=None,
+        help="controller fallback when this TUI claim times out",
+    )
+    parser.add_argument(
+        "--claim-timeout-minutes",
+        type=int,
+        default=None,
+        help="claim timeout override in minutes, between 5 and 60",
+    )
     args = parser.parse_args(argv)
+    timeout_seconds = (
+        normalize_claim_timeout(args.claim_timeout_minutes * 60)
+        if args.claim_timeout_minutes is not None
+        else None
+    )
 
     backend: Backend = (
-        RemoteBackend(args.server) if args.server
-        else LocalBackend(seed=args.seed, generator=args.generator)
+        RemoteBackend(
+            args.server,
+            fallback_controller=args.claim_fallback,
+            timeout_seconds=timeout_seconds,
+        ) if args.server
+        else LocalBackend(
+            seed=args.seed,
+            generator=args.generator,
+            fallback_controller=args.claim_fallback,
+            timeout_seconds=timeout_seconds,
+        )
     )
     BunnylandTUI(backend).run()
     return 0

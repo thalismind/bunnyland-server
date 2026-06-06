@@ -22,6 +22,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
+from ..core.claim_timeout import (
+    normalize_claim_timeout,
+)
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
 from ..core.controllers import DiscordControllerComponent
 from ..core.events import (
@@ -49,6 +52,7 @@ from .claim import (
     discord_controlled_character,
     release_discord_character_to_llm,
     render_character_list,
+    set_discord_claim_fallback,
     suspend_discord_character,
 )
 from .view import (
@@ -67,7 +71,9 @@ logger = logging.getLogger("bunnyland.discord")
 #: Reaction added to a player's message once their command is accepted and queued.
 QUEUED_REACTION = "\N{HOURGLASS WITH FLOWING SAND}"
 PAUSED_REACTION = "\N{DOUBLE VERTICAL BAR}\N{VARIATION SELECTOR-16}"
-META_COMMANDS = frozenset({"help", "claim", "characters", "look", "release", "suspend"})
+META_COMMANDS = frozenset(
+    {"help", "claim", "characters", "fallback", "look", "release", "suspend"}
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,57 @@ class DiscordAction:
     command_type: str
     payload: dict[str, Any]
     tool: str | None = None
+
+
+@dataclass(frozen=True)
+class DiscordClaimArgs:
+    character_name: str | None = None
+    fallback_controller: str | None = None
+    timeout_seconds: int | None = None
+
+
+def _minutes_to_timeout_seconds(value: str | int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("timeout minutes must be a whole number") from exc
+    return normalize_claim_timeout(minutes * 60)
+
+
+def _parse_discord_claim_args(text: str | None) -> DiscordClaimArgs:
+    tokens = shlex.split(text or "")
+    name_parts: list[str] = []
+    fallback = None
+    timeout_seconds = None
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"--fallback", "--fallback-controller"}:
+            index += 1
+            if index >= len(tokens):
+                raise ValueError("--fallback requires suspend or llm")
+            fallback = tokens[index]
+        elif token.startswith("--fallback="):
+            fallback = token.split("=", 1)[1]
+        elif token in {"--timeout", "--timeout-minutes", "--claim-timeout"}:
+            index += 1
+            if index >= len(tokens):
+                raise ValueError("--timeout requires minutes")
+            timeout_seconds = _minutes_to_timeout_seconds(tokens[index])
+        elif token.startswith("--timeout="):
+            timeout_seconds = _minutes_to_timeout_seconds(token.split("=", 1)[1])
+        elif token.startswith("--timeout-minutes="):
+            timeout_seconds = _minutes_to_timeout_seconds(token.split("=", 1)[1])
+        else:
+            name_parts.append(token)
+        index += 1
+    return DiscordClaimArgs(
+        character_name=" ".join(name_parts) or None,
+        fallback_controller=fallback,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 @dataclass(frozen=True)
@@ -561,17 +618,53 @@ class DiscordBot:  # pragma: no cover - needs network + extra
                 await self._reply(ctx, "You are already controlling a character.")
                 return True
             try:
+                claim_args = _parse_discord_claim_args(rest)
                 claimed = assign_discord_controller(
                     self.actor,
                     discord_user_id=ctx.author.id,
                     default_channel_id=ctx.channel.id,
-                    character_name=rest or None,
+                    character_name=claim_args.character_name,
                     allow_child_claims=self.allow_child_claims,
+                    fallback_controller=claim_args.fallback_controller,
+                    timeout_seconds=claim_args.timeout_seconds,
+                    llm_model=self.character_model,
+                    llm_provider=self.llm_provider,
                 )
-            except RuntimeError as exc:
+            except (RuntimeError, ValueError) as exc:
                 await self._reply(ctx, str(exc))
                 return True
             await self._reply(ctx, f"You are now controlling {claimed}.")
+            return True
+
+        if head == "fallback":
+            fallback, _, minutes = rest.partition(" ")
+            if not fallback:
+                await self._reply(
+                    ctx,
+                    "Usage: !fallback suspend|llm [minutes between 5 and 60]",
+                )
+                return True
+            try:
+                timeout_seconds = _minutes_to_timeout_seconds(minutes.strip() or None)
+                name, normalized = set_discord_claim_fallback(
+                    self.actor,
+                    discord_user_id=ctx.author.id,
+                    fallback_controller=fallback,
+                    timeout_seconds=timeout_seconds,
+                    model=self.character_model,
+                    provider=self.llm_provider,
+                )
+            except (RuntimeError, ValueError) as exc:
+                await self._reply(ctx, str(exc))
+                return True
+            timeout_note = (
+                ""
+                if timeout_seconds is None
+                else f" after {timeout_seconds // 60} minutes"
+            )
+            await self._reply(
+                ctx, f"{name} will fall back to {normalized}{timeout_note}."
+            )
             return True
 
         if head == "characters":
@@ -646,17 +739,50 @@ class DiscordBot:  # pragma: no cover - needs network + extra
                 await self._reply(ctx, "You are already controlling a character.")
                 return
             try:
+                claim_args = _parse_discord_claim_args(character)
                 claimed = assign_discord_controller(
                     self.actor,
                     discord_user_id=ctx.author.id,
                     default_channel_id=ctx.channel.id,
-                    character_name=character,
+                    character_name=claim_args.character_name,
                     allow_child_claims=self.allow_child_claims,
+                    fallback_controller=claim_args.fallback_controller,
+                    timeout_seconds=claim_args.timeout_seconds,
+                    llm_model=self.character_model,
+                    llm_provider=self.llm_provider,
                 )
-            except RuntimeError as exc:
+            except (RuntimeError, ValueError) as exc:
                 await self._reply(ctx, str(exc))
                 return
             await self._reply(ctx, f"You are now controlling {claimed}.")
+
+        @self.client.command(name="fallback")
+        async def fallback(ctx, fallback_controller: str | None = None, minutes: int | None = None):
+            if not fallback_controller:
+                await self._reply(
+                    ctx,
+                    "Usage: !fallback suspend|llm [minutes between 5 and 60]",
+                )
+                return
+            try:
+                timeout_seconds = _minutes_to_timeout_seconds(minutes)
+                name, normalized = set_discord_claim_fallback(
+                    self.actor,
+                    discord_user_id=ctx.author.id,
+                    fallback_controller=fallback_controller,
+                    timeout_seconds=timeout_seconds,
+                    model=self.character_model,
+                    provider=self.llm_provider,
+                )
+            except (RuntimeError, ValueError) as exc:
+                await self._reply(ctx, str(exc))
+                return
+            timeout_note = (
+                ""
+                if timeout_seconds is None
+                else f" after {timeout_seconds // 60} minutes"
+            )
+            await self._reply(ctx, f"{name} will fall back to {normalized}{timeout_note}.")
 
         @self.client.command(name="characters")
         async def characters(ctx):
@@ -739,5 +865,6 @@ __all__ = [
     "parse_discord_action",
     "parse_discord_id_list",
     "release_discord_character_to_llm",
+    "set_discord_claim_fallback",
     "suspend_discord_character",
 ]
