@@ -47,6 +47,7 @@ worldgen_provider="${BUNNYLAND_WORLDGEN_PROVIDER:-$llm_provider}"
 enable_tls="${BUNNYLAND_TLS:-1}"
 configure_ufw="${BUNNYLAND_CONFIGURE_FIREWALL:-1}"
 generator="${BUNNYLAND_GENERATOR:-lifesim-demo}"
+starter_pack="${BUNNYLAND_STARTER_PACK:-}"
 tick_seconds="${BUNNYLAND_TICK_SECONDS:-30}"
 time_scale="${BUNNYLAND_TIME_SCALE:-1800}"
 autosave_every="${BUNNYLAND_AUTOSAVE_EVERY:-20}"
@@ -60,6 +61,11 @@ esac
 case "$worldgen_provider" in
   ollama | openrouter) ;;
   *) die "unsupported BUNNYLAND_WORLDGEN_PROVIDER: $worldgen_provider" ;;
+esac
+
+case "$starter_pack" in
+  "" | peaceful | fantastic | futuristic) ;;
+  *) die "unsupported BUNNYLAND_STARTER_PACK: $starter_pack" ;;
 esac
 
 # Explicit BUNNYLAND_ENABLE_LLM=0 and BUNNYLAND_ENABLE_DISCORD=0 force the offline smoke
@@ -280,6 +286,9 @@ render_server_service() {
   if [[ "$enable_mcp" == "1" ]]; then
     printf '          --mcp \\\n'
   fi
+  if [[ -n "$starter_pack" ]]; then
+    printf '          --starter-pack %s \\\n' "$(shell_quote "$starter_pack")"
+  fi
   if [[ "$load_existing_world" == "1" ]]; then
     printf '          --load %s \\\n' "$(shell_quote "$container_world_file")"
   else
@@ -298,6 +307,7 @@ render_server_service() {
   printf '        target: /data\n'
   printf '    environment:\n'
   printf '      BUNNYLAND_GENERATOR: %s\n' "$(yaml_quote "$generator")"
+  printf '      BUNNYLAND_STARTER_PACK: %s\n' "$(yaml_quote "$starter_pack")"
   printf '      BUNNYLAND_WORLD_FILE: %s\n' "$(yaml_quote "$container_world_file")"
   printf '      BUNNYLAND_TICK_SECONDS: %s\n' "$(yaml_quote "$tick_seconds")"
   printf '      BUNNYLAND_TIME_SCALE: %s\n' "$(yaml_quote "$time_scale")"

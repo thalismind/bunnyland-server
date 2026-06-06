@@ -35,13 +35,40 @@ from .plugins import (
     resolve_order,
     select,
 )
-from .plugins.builtin import MCP
+from .plugins.builtin import (
+    BARBARIANSIM,
+    COLONYSIM,
+    CORE_VERBS,
+    DRAGONSIM,
+    GARDENSIM,
+    LIFESIM,
+    MCP,
+    NUKESIM,
+    VOIDSIM,
+    WORLDGEN,
+)
 from .prompts.builder import PromptBuilder
 from .worldgen import DEFAULT_WORLDGEN_MODEL, GenOptions, collect_generators
 
 BUILTIN_MODULE = "bunnyland.plugins.builtin"
 #: Ollama Cloud endpoint; the API key authenticates against it.
 OLLAMA_CLOUD_HOST = "https://ollama.com"
+STARTER_PACKS: dict[str, tuple[str, ...]] = {
+    "peaceful": (CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM),
+    "fantastic": (CORE_VERBS, WORLDGEN, LIFESIM, BARBARIANSIM, DRAGONSIM),
+    "futuristic": (CORE_VERBS, WORLDGEN, LIFESIM, NUKESIM, VOIDSIM),
+}
+
+
+def _dedupe_plugin_ids(plugin_ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for plugin_id in plugin_ids:
+        if plugin_id in seen:
+            continue
+        seen.add(plugin_id)
+        result.append(plugin_id)
+    return result
 
 
 def load_dotenv(path: str | Path = ".env") -> None:
@@ -61,14 +88,21 @@ def select_plugins(
     modules: list[str],
     enabled_ids: list[str] | None,
     extra_enabled_ids: tuple[str, ...] = (),
+    starter_pack: str | None = None,
 ) -> list:
     """Collect builtin + requested plugins and select which are enabled."""
     plugins = list(bunnyland_plugins())
     plugins.extend(load_modules(modules))
+    if starter_pack:
+        pack_ids = STARTER_PACKS.get(starter_pack)
+        if pack_ids is None:
+            names = ", ".join(sorted(STARTER_PACKS))
+            raise PluginError(f"unknown starter pack {starter_pack!r}; available: {names}")
+        enabled_ids = _dedupe_plugin_ids([*(enabled_ids or ()), *pack_ids])
     if not extra_enabled_ids:
         return select(plugins, enabled_ids)
     if enabled_ids is not None:
-        return select(plugins, [*enabled_ids, *extra_enabled_ids])
+        return select(plugins, _dedupe_plugin_ids([*enabled_ids, *extra_enabled_ids]))
     selected = select(plugins, None)
     selected_ids = {plugin.id for plugin in selected}
     for plugin in select(plugins, extra_enabled_ids):
@@ -160,6 +194,7 @@ async def _serve(args) -> None:
             args.module,
             args.plugin,
             extra_enabled_ids=(MCP,) if args.mcp else (),
+            starter_pack=args.starter_pack or os.environ.get("BUNNYLAND_STARTER_PACK") or None,
         )
         ordered_plugins = resolve_order(plugins)
     except PluginError as exc:
@@ -444,6 +479,15 @@ def main(argv: list[str] | None = None) -> int:
         help="import a plugin module",
     )
     serve.add_argument("--plugin", action="append", default=None, help="enable a plugin id")
+    serve.add_argument(
+        "--starter-pack",
+        choices=tuple(sorted(STARTER_PACKS)),
+        default=None,
+        help=(
+            "enable a preset plugin group at startup "
+            "(peaceful, fantastic, futuristic; env: BUNNYLAND_STARTER_PACK)"
+        ),
+    )
     serve.add_argument("--seed", default="a quiet marsh", help="world-generation seed")
     serve.add_argument(
         "--llm", action="store_true", help="drive characters with an LLM (needs llm extra)"

@@ -102,6 +102,26 @@ By default all `default_enabled` plugins load. Restrict with repeated `--plugin`
 uv run bunnyland serve --plugin bunnyland.core_verbs --plugin bunnyland.worldgen
 ```
 
+Starter packs are named startup presets for common plugin groups. They expand before the
+world is generated or loaded, so the server imports and applies the pack's mechanics from
+process start:
+
+```bash
+uv run bunnyland serve --starter-pack peaceful
+```
+
+The bundled packs are:
+
+| Pack | Sim plugins |
+|------|-------------|
+| `peaceful` | `bunnyland.lifesim`, `bunnyland.colonysim`, `bunnyland.gardensim` |
+| `fantastic` | `bunnyland.lifesim`, `bunnyland.barbariansim`, `bunnyland.dragonsim` |
+| `futuristic` | `bunnyland.lifesim`, `bunnyland.nukesim`, `bunnyland.voidsim` |
+
+Each pack also includes `bunnyland.core_verbs` and `bunnyland.worldgen`, so the normal
+startup generators remain available. You can set the same preset for Docker deployments
+with `BUNNYLAND_STARTER_PACK=peaceful`.
+
 Dependency order is resolved automatically (e.g. `lifesim` and `memory` depend on
 `core_verbs`). When you pass an explicit plugin list, include each required plugin yourself;
 missing requirements are logged as errors and the server exits. Recommended plugins are

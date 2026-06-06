@@ -113,6 +113,28 @@ prompt_choice() {
   done
 }
 
+prompt_starter_pack() {
+  local label="$1"
+  local default="$2"
+  local value
+  while true; do
+    value="$(prompt "$label" "$default")"
+    case "$value" in
+      "" | none)
+        printf '\n'
+        return
+        ;;
+      peaceful | fantastic | futuristic)
+        printf '%s\n' "$value"
+        return
+        ;;
+      *)
+        printf 'Please enter none, peaceful, fantastic, or futuristic.\n' >&2
+        ;;
+    esac
+  done
+}
+
 shell_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
@@ -197,6 +219,7 @@ admin_user="$(prompt_required "Admin username" "editor")"
 admin_password="$(prompt_secret_confirm "Admin password")"
 cert_email="$(prompt "Let's Encrypt email (blank is allowed)")"
 world_save="$(prompt "Existing world save path (blank to generate/use data-dir default)")"
+starter_pack="$(prompt_starter_pack "Starter pack (none/peaceful/fantastic/futuristic)" "none")"
 favicon_file="$(prompt "Custom favicon path (blank for default)")"
 home_domain="$(prompt "Homepage domain served by this frontend container (blank to skip)")"
 home_dir=""
@@ -272,6 +295,9 @@ write_env BUNNYLAND_ADMIN_PASSWORD "$admin_password"
 write_env BUNNYLAND_ENABLE_LLM "$enable_llm"
 write_env BUNNYLAND_ENABLE_DISCORD "$enable_discord"
 write_env BUNNYLAND_ENABLE_MCP "$enable_mcp"
+if [[ -n "$starter_pack" ]]; then
+  write_env BUNNYLAND_STARTER_PACK "$starter_pack"
+fi
 if [[ "$enable_mcp" == "1" ]]; then
   write_env BUNNYLAND_MCP_ADMIN_TOKEN "$mcp_admin_token"
 fi
@@ -335,6 +361,7 @@ printf '  Data directory    : %s\n' "$data_dir"
 printf '  Admin username    : %s\n' "$admin_user"
 printf '  Admin password    : (set)\n'
 printf '  Let'\''s Encrypt email: %s\n' "${cert_email:-(none, registering without email)}"
+printf '  Starter pack      : %s\n' "${starter_pack:-(none)}"
 if [[ -n "$world_save" ]]; then printf '  Existing world    : %s\n' "$world_save"; fi
 if [[ -n "$favicon_file" ]]; then printf '  Custom favicon    : %s\n' "$favicon_file"; fi
 if [[ -n "$home_domain" ]]; then

@@ -21,7 +21,17 @@ from bunnyland.discord.claim import discord_controlled_character, list_character
 from bunnyland.mechanics.lifesim import LifeStageComponent
 from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import DependencyContribution, Plugin, PluginError, bunnyland_plugins
-from bunnyland.plugins.builtin import CORE_VERBS, WORLDGEN
+from bunnyland.plugins.builtin import (
+    BARBARIANSIM,
+    COLONYSIM,
+    CORE_VERBS,
+    DRAGONSIM,
+    GARDENSIM,
+    LIFESIM,
+    NUKESIM,
+    VOIDSIM,
+    WORLDGEN,
+)
 
 
 def _install_module(monkeypatch, name: str, plugins: list[Plugin]) -> None:
@@ -36,6 +46,59 @@ def test_select_plugins_records_imported_module_namespace(monkeypatch):
     selected = select_plugins(["module_foo"], ["bar"])
 
     assert [plugin.id for plugin in selected] == ["module_foo.bar"]
+
+
+@pytest.mark.parametrize(
+    ("pack", "expected"),
+    [
+        ("peaceful", {CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM}),
+        ("fantastic", {CORE_VERBS, WORLDGEN, LIFESIM, BARBARIANSIM, DRAGONSIM}),
+        ("futuristic", {CORE_VERBS, WORLDGEN, LIFESIM, NUKESIM, VOIDSIM}),
+    ],
+)
+def test_select_plugins_expands_starter_pack(pack, expected):
+    selected = select_plugins([], None, starter_pack=pack)
+
+    assert {plugin.id for plugin in selected} == expected
+
+
+def test_select_plugins_combines_starter_pack_with_explicit_plugins():
+    selected = select_plugins([], [CORE_VERBS], starter_pack="peaceful")
+
+    assert [plugin.id for plugin in selected] == [
+        CORE_VERBS,
+        WORLDGEN,
+        LIFESIM,
+        COLONYSIM,
+        GARDENSIM,
+    ]
+
+
+def test_unknown_starter_pack_raises_plugin_error():
+    with pytest.raises(PluginError, match="unknown starter pack"):
+        select_plugins([], None, starter_pack="cozy")
+
+
+def test_cli_starter_pack_records_loaded_plugins(tmp_path):
+    path = tmp_path / "world.json"
+
+    result = main(
+        [
+            "serve",
+            "--starter-pack",
+            "peaceful",
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+            "--save",
+            str(path),
+        ]
+    )
+
+    assert result == 0
+    _actor, meta = load_world(path)
+    assert meta.plugins == (CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM)
 
 
 def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):

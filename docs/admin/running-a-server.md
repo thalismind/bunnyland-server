@@ -148,6 +148,7 @@ uv run bunnyland serve --llm --generator recursive \
 | `--mcp`          | off            | Mount the MCP endpoint at `/mcp` on the existing API server.    |
 | `--mcp-admin-token` | env         | Token required by MCP admin tools; defaults to `BUNNYLAND_MCP_ADMIN_TOKEN`. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
+| `--starter-pack` | (none)         | Enable a startup preset: `peaceful`, `fantastic`, or `futuristic`. |
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](./).   |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
 | `--load`         | (none)         | Resume a saved world instead of generating. See [persistence](../developer/persistence.md). |
@@ -166,6 +167,12 @@ move at a comfortable rate while you watch a handful of rounds.
 - For a long-running server, use `--ticks 0` and tune `--tick-seconds` (how often the loop
   wakes) and `--time-scale` (how much game-time each wake represents). For example
   `--tick-seconds 60 --time-scale 3600` is "one game hour every real minute".
+
+Starter packs are startup plugin selections, not live-world toggles. Use
+`--starter-pack peaceful`, `--starter-pack fantastic`, or `--starter-pack futuristic`
+before generating or loading the world so the server imports and applies the proper
+mechanics from startup. Docker deployments can set `BUNNYLAND_STARTER_PACK` to the same
+pack name.
 
 ## Running long-term
 
