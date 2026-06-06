@@ -26,6 +26,7 @@ from bunnyland.mechanics.toonsim import (
     SpriteLayer,
     SpriteMovedEvent,
     SpritePosition,
+    SpriteScale,
     default_layer_for,
     install_toonsim,
 )
@@ -73,8 +74,10 @@ def test_backfill_attaches_position_and_image():
     room = world.get_entity(scenario.room_a)
     assert room.has_component(SpritePosition)
     assert room.has_component(SpriteImage)
+    assert room.has_component(SpriteScale)
     assert room.get_component(SpritePosition).x == 0.0
     assert room.get_component(SpriteImage).url == ""
+    assert room.get_component(SpriteScale).scale == 1.0
 
 
 def test_skips_non_renderable_entities():
@@ -88,6 +91,7 @@ def test_skips_non_renderable_entities():
     assert not faction.has_component(SpriteLayer)
     assert not faction.has_component(SpritePosition)
     assert not faction.has_component(SpriteImage)
+    assert not faction.has_component(SpriteScale)
     assert default_layer_for(faction) is None
 
 
@@ -103,6 +107,7 @@ def test_does_not_overwrite_explicit_values():
             SpritePosition(x=3.5, y=-2.0),
             SpriteImage(url="https://cdn/egg.png"),
             SpriteLayer(layer=99),
+            SpriteScale(scale=2.5),
         ],
     )
 
@@ -112,6 +117,7 @@ def test_does_not_overwrite_explicit_values():
     assert item.get_component(SpriteLayer).layer == 99
     assert item.get_component(SpritePosition).x == 3.5
     assert item.get_component(SpriteImage).url == "https://cdn/egg.png"
+    assert item.get_component(SpriteScale).scale == 2.5
 
 
 def test_backfill_is_idempotent():

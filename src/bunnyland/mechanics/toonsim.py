@@ -87,6 +87,18 @@ class SpriteLayer(Component):
     layer: int = LAYER_ITEM
 
 
+@pydantic_dataclass(frozen=True)
+class SpriteScale(Component):
+    """Uniform display scale for the sprite when compositing the scene.
+
+    ``1.0`` is the image's natural size. Because sprites come from different sources at
+    different pixel sizes, a client normalizes them by scaling each before drawing it
+    into the shared room image.
+    """
+
+    scale: float = 1.0
+
+
 def default_layer_for(entity: Entity) -> int | None:
     """Return the default draw layer for ``entity``, or ``None`` if not renderable.
 
@@ -131,6 +143,8 @@ class SpriteBackfillConsequence:
                 entity.add_component(SpritePosition())
             if not entity.has_component(SpriteImage):
                 entity.add_component(SpriteImage())
+            if not entity.has_component(SpriteScale):
+                entity.add_component(SpriteScale())
         return []
 
 
@@ -197,6 +211,7 @@ __all__ = [
     "SpriteLayer",
     "SpriteMovedEvent",
     "SpritePosition",
+    "SpriteScale",
     "default_layer_for",
     "install_toonsim",
 ]
