@@ -434,6 +434,12 @@ from ..mechanics.storyteller import (
     install_storyteller,
     storyteller_fragments,
 )
+from ..mechanics.toonsim import (
+    SpriteImage,
+    SpriteLayer,
+    SpritePosition,
+    install_toonsim,
+)
 from ..mechanics.voidsim import (
     AirlockComponent,
     AirlockCycledEvent,
@@ -551,6 +557,7 @@ DRAGONSIM = "bunnyland.dragonsim"
 DAGGERSIM = "bunnyland.daggersim"
 VOIDSIM = "bunnyland.voidsim"
 NUKESIM = "bunnyland.nukesim"
+TOONSIM = "bunnyland.toonsim"
 STORYTELLER = "bunnyland.storyteller"
 MCP = "bunnyland.mcp"
 
@@ -987,6 +994,17 @@ def gardensim_plugin() -> Plugin:
     )
 
 
+def toonsim_plugin() -> Plugin:
+    return Plugin(
+        id=TOONSIM,
+        name="Toon Sim",
+        ecs=EcsContribution(
+            components=(SpritePosition, SpriteImage, SpriteLayer),
+        ),
+        runtime=RuntimeContribution(service_factories=(install_toonsim,)),
+    )
+
+
 def dragonsim_plugin() -> Plugin:
     return Plugin(
         id=DRAGONSIM,
@@ -1374,6 +1392,7 @@ def bunnyland_plugins() -> list[Plugin]:
         colonysim_plugin(),
         barbariansim_plugin(),
         gardensim_plugin(),
+        toonsim_plugin(),
         dragonsim_plugin(),
         daggersim_plugin(),
         voidsim_plugin(),
@@ -1400,6 +1419,7 @@ __all__ = [
     "POLICY",
     "SOCIAL",
     "STORYTELLER",
+    "TOONSIM",
     "VOIDSIM",
     "WORLDGEN",
     "barbariansim_plugin",
@@ -1419,6 +1439,7 @@ __all__ = [
     "persona_plugin",
     "policy_plugin",
     "social_plugin",
+    "toonsim_plugin",
     "voidsim_plugin",
     "worldgen_plugin",
 ]

@@ -51,6 +51,7 @@ from bunnyland.plugins.builtin import (
     POLICY,
     SOCIAL,
     STORYTELLER,
+    TOONSIM,
     VOIDSIM,
     WORLDGEN,
 )
@@ -76,13 +77,14 @@ def test_builtin_plugins_declared():
         MCP,
         VOIDSIM,
         NUKESIM,
+        TOONSIM,
         STORYTELLER,
     }
 
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 17
+    assert len(select(plugins, None)) == 18
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
 
 
