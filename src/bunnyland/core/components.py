@@ -128,6 +128,19 @@ class RoomComponent(Component):
 
 
 @dataclass(frozen=True)
+class RegionComponent(Component):
+    """A named geographic or structural area above room scale.
+
+    ``kind`` is intentionally data-driven so worlds can model a planet/continent/country
+    chain, a station/deck/sector chain, or other setting-specific hierarchies without
+    new component classes.
+    """
+
+    name: str
+    kind: str = "region"
+
+
+@dataclass(frozen=True)
 class RoomSummaryComponent(Component):
     """Event-driven projection cache for a room (spec 11.4, 17).
 
@@ -452,6 +465,7 @@ __all__ = [
     "PainComponent",
     "PortableComponent",
     "ReadableComponent",
+    "RegionComponent",
     "RoomComponent",
     "RoomSummaryComponent",
     "SleepingComponent",

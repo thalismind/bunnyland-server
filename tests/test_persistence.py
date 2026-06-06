@@ -6,7 +6,16 @@ import json
 
 from relics import EntityId, World
 
-from bunnyland.core import ExitTo, WorldActor, container_of
+from bunnyland.core import (
+    ContainmentMode,
+    Contains,
+    ExitTo,
+    RegionComponent,
+    RoomComponent,
+    WorldActor,
+    container_of,
+    spawn_entity,
+)
 from bunnyland.core.components import IdentityComponent
 from bunnyland.core.ecs import contents
 from bunnyland.engine import GameLoop
@@ -202,5 +211,38 @@ async def test_game_loop_autosaves_every_n_ticks(tmp_path):
 
 def test_type_registries_cover_core_and_plugin_types():
     components, edges = type_registries(bunnyland_plugins())
-    assert {"IdentityComponent", "HungerComponent", "RoomComponent"} <= set(components)
+    assert {"IdentityComponent", "HungerComponent", "RoomComponent", "RegionComponent"} <= set(
+        components
+    )
     assert {"Contains", "ExitTo", "ControlledBy"} <= set(edges)
+
+
+def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):
+    actor = WorldActor()
+    chain = [
+        spawn_entity(actor.world, [RegionComponent(name="Lapin Prime", kind="planet")]),
+        spawn_entity(actor.world, [RegionComponent(name="Mossreach", kind="continent")]),
+        spawn_entity(actor.world, [RegionComponent(name="Burrowmark", kind="country")]),
+        spawn_entity(actor.world, [RegionComponent(name="North Warren", kind="region")]),
+        spawn_entity(actor.world, [RegionComponent(name="Clover City", kind="city")]),
+        spawn_entity(actor.world, [RegionComponent(name="Old Market", kind="area")]),
+        spawn_entity(actor.world, [RegionComponent(name="Greenhill", kind="neighborhood")]),
+        spawn_entity(actor.world, [RegionComponent(name="Sunstem Zone", kind="zone")]),
+        spawn_entity(actor.world, [RegionComponent(name="Carrot Street", kind="street")]),
+        spawn_entity(actor.world, [RegionComponent(name="Moonroot Tower", kind="building")]),
+        spawn_entity(actor.world, [RegionComponent(name="Story Three", kind="story")]),
+        spawn_entity(actor.world, [RoomComponent(title="Observatory Room", indoor=True)]),
+    ]
+    for parent, child in zip(chain, chain[1:], strict=False):
+        parent.add_relationship(Contains(mode=ContainmentMode.REGION), child.id)
+
+    path = tmp_path / "regions.json"
+    save_world(actor, path, meta=WorldMeta(seed="regional"))
+    loaded, _meta = load_world(path)
+
+    for parent, child in zip(chain, chain[1:], strict=False):
+        relationships = loaded.world.get_entity(parent.id).get_relationships(Contains)
+        assert any(
+            target == child.id and edge.mode == ContainmentMode.REGION
+            for edge, target in relationships
+        )

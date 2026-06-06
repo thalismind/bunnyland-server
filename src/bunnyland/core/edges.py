@@ -20,6 +20,7 @@ class ContainmentMode(StrEnum):
     CONTAINER = "container"
     SURFACE = "surface"
     ATTACHED = "attached"
+    REGION = "region"
 
 
 @dataclass(frozen=True)
