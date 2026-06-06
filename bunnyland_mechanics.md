@@ -15,7 +15,7 @@ The inspirations break down cleanly:
 | FTL            | `void-sim`        | crews survive ships, stations, planets, alien contact, tech, contracts, and hazards |
 | Fallout        | `nuke-sim`        | wasteland survival, radiation, mutation, scavenging, settlement salvage, jury-rigged crafting |
 | Deus Ex / Watch Dogs / Cyberpunk 2077 | `neon-sim` | hackers, surveillance, street economies, corporate intrigue, cybernetics, reputation |
-| Jurassic Park / ARK / Dino Crisis | `dino-sim` | dangerous creature ranching, eggs, taming, training, escapes, and kaiju-scale disasters |
+| Jurassic Park / ARK / Dino Crisis | `dino-sim` | fossil and species identification, cloning, egg handling, reptile procreation, hatching, and kaiju storyteller incidents |
 | Dwarf Fortress | `fortress-sim`    | deep settlement simulation, materials, history, disasters, artifacts, absurd detail |
 
 For source grounding: The Sims uses traits, emotions, whims, aspirations, skills, careers, crafting hobbies, and life-state systems; RimWorld centers on colonist moods, needs, wounds, illnesses, addictions, social bonds, storyteller incidents, work priorities, and mental breaks; Conan Exiles emphasizes survival, building, thralls, weather, temperature, hunger/thirst, PvP/siege, mounts, pets, purges, and world bosses; Stardew Valley revolves around seasonal crops, fertilizer, skills, villagers, gifts, friendship, farming, fishing, mining, and festivals; Skyrim’s replay loop is open-world exploration, factions, skills, combat, magic, stealth, followers, crafting, dragons, and shouts; Daggerfall contributes procedural scale, guilds, banks, services, law, travel, generated quests, and generated dungeons; FTL contributes crewed-ship pressure, subsystem damage, sector travel, distress signals, resource scarcity, and cascading emergencies; Dwarf Fortress goes deeper than all of these with generated worlds, histories, fortress management, geology, migrants, nobles, justice, strange moods, artifacts, tantrum spirals, and many more systems; Deus Ex, Watch Dogs, and Cyberpunk 2077 contribute cyberpunk infiltration, hacking, surveillance, corporate power, street economies, cybernetics, and reputation pressure; Jurassic Park, ARK, and Dino Crisis contribute dangerous animals, eggs, taming, escapes, containment failure, and monster-scale emergency response. ([Electronic Arts Inc.][1])
@@ -6010,23 +6010,132 @@ data leak -> generated shell company -> terminal network -> blackmail file -> fa
 
 ---
 
-# 11. `dinosim` package — Jurassic Park / ARK / Dino Crisis-inspired creature ranching
+# 11. `dinosim` package — Jurassic Park / ARK / Dino Crisis-inspired creature lifecycle
 
-`dino-sim` is the dangerous creature-ranching package. The internal package name should be
-`dinosim`, matching the existing no-hyphen Python package style while the public-facing
+`dino-sim` is the prehistoric creature lifecycle package. The internal package name should
+be `dinosim`, matching the existing no-hyphen Python package style while the public-facing
 package label uses the same hyphenated style as `garden-sim`, `void-sim`, and `neon-sim`.
 
-Its main inspirations are **Jurassic Park**, **ARK**, and **Dino Crisis**: eggs, taming,
-training, caretaking, tracking, dangerous escapes, and the moment when a managed animal
-becomes an emergency. This is not a park-management package. It is survival farming with
-pulp battles: Jurassic Park with a hint of Pacific Rim, where creatures can be livestock,
-companions, or enemies depending on species, training, hunger, enclosure state, and recent
-events.
+Its main inspirations are **Jurassic Park**, **ARK**, and **Dino Crisis**: fossils, eggs,
+taming, training, caretaking, tracking, dangerous escapes, and the moment when a managed
+animal becomes an emergency. This is not a park-management package and should not introduce
+Zoo Tycoon-style guest attraction, ticketing, visitor happiness, shops, tours, or exhibit
+rating loops. It is survival farming with pulp battles: Jurassic Park with a hint of
+Pacific Rim, where creatures can be livestock, companions, or enemies depending on species,
+training, hunger, enclosure state, and recent events.
 
-Genetic engineering should be left out at first. Eggs, heredity, species traits, breeding,
-hatching, training, and containment are enough for the initial package.
+The initial package should focus on three primary mechanics:
 
-## 11.1 Species, ecology, and creature needs
+```text
+egg handling and reptile procreation
+kaiju attack storyteller incidents
+fossil and species identification and cloning
+```
+
+Everything else in this section supports those loops. Taming, training, containment,
+feeding, and creature products are useful once creatures exist, but they should not
+displace the lifecycle, discovery, or incident systems as the package's core. Full genetic
+engineering should be left out at first. The initial cloning surface should be constrained
+to recovering viable ancient material, identifying it, preparing a clone candidate, and
+producing an egg or embryo that the normal incubation and lifesim ageing surface can take
+over.
+
+## 11.1 Fossils, identification, and cloning
+
+### Mechanics
+
+```text
+fossil deposit
+excavation site
+fossil fragment
+bone set
+amber sample
+ancient tissue
+sample contamination
+species identification
+genome completeness
+clone viability
+clone candidate
+embryo
+lab incubator
+surrogate egg
+failed clone
+```
+
+### Components
+
+```python
+FossilDepositComponent
+ExcavationSiteComponent
+FossilFragmentComponent
+BoneSetComponent
+AmberSampleComponent
+AncientTissueComponent
+ContaminationComponent
+SpeciesIdentificationComponent
+GenomeCompletenessComponent
+CloneViabilityComponent
+CloneCandidateComponent
+EmbryoComponent
+LabIncubatorComponent
+SurrogateEggComponent
+FailedCloneComponent
+```
+
+### Systems
+
+```text
+FossilDiscoverySystem
+ExcavationSystem
+FossilIdentificationSystem
+AncientSampleSystem
+ContaminationSystem
+GenomeCompletenessSystem
+CloneViabilitySystem
+ClonePreparationSystem
+LabIncubationSystem
+SurrogateEggSystem
+```
+
+### Actions
+
+```text
+survey fossil site
+excavate fossil
+clean fossil
+identify fossil
+extract ancient sample
+stabilize sample
+prepare clone
+implant embryo
+monitor lab incubator
+discard failed clone
+```
+
+### Events
+
+```text
+FossilSiteSurveyedEvent
+FossilExcavatedEvent
+FossilCleanedEvent
+SpeciesIdentifiedEvent
+AncientSampleExtractedEvent
+SampleContaminatedEvent
+SampleStabilizedEvent
+ClonePreparedEvent
+EmbryoImplantedEvent
+LabIncubationChangedEvent
+CloneFailedEvent
+SurrogateEggCreatedEvent
+```
+
+Cloning should feed into the egg and hatching systems instead of bypassing them. A
+successful clone preparation creates either an `EmbryoComponent` in a `LabIncubatorComponent`
+or a `SurrogateEggComponent` that also carries the normal egg/incubation components. Once a
+clone hatches, `dinosim` should hand the creature to the lifesim-compatible ageing surface
+as a hatchling or juvenile rather than owning a separate adulthood timeline.
+
+## 11.2 Species, ecology, and creature needs
 
 ### Mechanics
 
@@ -6108,7 +6217,7 @@ CreatureStressChangedEvent
 
 ---
 
-## 11.2 Eggs, breeding, hatching, and raising
+## 11.3 Egg handling, reptile procreation, hatching, and raising
 
 ### Mechanics
 
@@ -6116,6 +6225,11 @@ CreatureStressChangedEvent
 egg
 clutch
 nesting site
+fertility
+fertilization
+reptile procreation
+parent species
+offspring species
 incubation
 temperature
 brooding
@@ -6133,6 +6247,11 @@ caretaking
 EggComponent
 ClutchComponent
 NestingSiteComponent
+FertilityComponent
+FertilizationComponent
+ReptileProcreationComponent
+ParentSpeciesComponent
+OffspringSpeciesComponent
 IncubationComponent
 BroodingComponent
 HatchingComponent
@@ -6148,6 +6267,9 @@ CaretakingComponent
 ```text
 BreedingSystem
 NestSelectionSystem
+FertilizationSystem
+ReptileProcreationSystem
+OffspringSpeciesSystem
 IncubationSystem
 TemperatureIncubationSystem
 HatchingSystem
@@ -6162,7 +6284,9 @@ CaretakingSystem
 ```text
 pair creatures
 prepare nest
+fertilize egg
 collect egg
+inspect egg
 incubate egg
 warm egg
 cool egg
@@ -6177,7 +6301,9 @@ care for juvenile
 CreaturesPairedEvent
 NestPreparedEvent
 EggLaidEvent
+EggFertilizedEvent
 EggCollectedEvent
+EggInspectedEvent
 IncubationChangedEvent
 EggHatchedEvent
 HatchlingImprintedEvent
@@ -6185,9 +6311,15 @@ JuvenileCaredForEvent
 GrowthStageChangedEvent
 ```
 
+Eggs are the common output of natural procreation and cloning. A naturally laid egg should
+carry parentage and species data; a cloned egg should carry source sample and species
+identification data. After hatching, the creature should become a normal character or
+critter entity with lifesim-compatible age state so ageing, care, relationships, injury,
+and death do not need a separate dinosaur-only timeline.
+
 ---
 
-## 11.3 Tracking, taming, training, and companions
+## 11.4 Tracking, taming, training, and companions
 
 ### Mechanics
 
@@ -6272,7 +6404,7 @@ CreatureRecalledEvent
 
 ---
 
-## 11.4 Enclosures, containment, and escapes
+## 11.5 Enclosures, containment, and escapes
 
 ### Mechanics
 
@@ -6349,7 +6481,7 @@ RoomEvacuatedEvent
 
 ---
 
-## 11.5 Dangerous encounters, battles, and kaiju incidents
+## 11.6 Dangerous encounters, battles, and kaiju incidents
 
 ### Mechanics
 
@@ -6431,9 +6563,21 @@ SettlementDamagedEvent
 PredatorDrivenOffEvent
 ```
 
+Kaiju attacks should be storyteller incidents when both `dinosim` and `colonysim` are
+enabled. Colony-sim provides the settlement target, jobs, reservations, hauling, repair
+work, and post-attack recovery pressure; without colony-sim, kaiju can remain local
+encounters or generated threats, but should not assume settlement damage or colony job
+queues exist.
+
+The incident should be selected by the storyteller budget, create an active incident entity,
+and then spawn or reference a kaiju threat. Resolution should use normal incident handling
+plus concrete colony work when available: evacuate, fight or drive off the kaiju, repair
+damaged settlement objects, haul debris, and treat casualties. This makes kaiju attacks a
+colony-scale emergency without adding park guests or attraction management.
+
 ---
 
-## 11.6 Ranch production and survival farming
+## 11.7 Creature products and survival farming
 
 ### Mechanics
 
@@ -6449,8 +6593,6 @@ fertilizer
 labor animal
 mount work
 guard animal
-ranch reputation
-danger premium
 ```
 
 ### Components
@@ -6464,8 +6606,6 @@ ToxinComponent
 CreatureMilkComponent
 RanchLaborComponent
 GuardAnimalComponent
-RanchReputationComponent
-DangerPremiumComponent
 ```
 
 ### Systems
@@ -6475,8 +6615,6 @@ FeedStoreSystem
 CreatureProductSystem
 RanchLaborSystem
 GuardAnimalSystem
-RanchReputationSystem
-DangerPremiumSystem
 ```
 
 ### Actions
@@ -6487,7 +6625,6 @@ collect egg
 harvest product
 assign ranch work
 assign guard
-sell creature product
 ```
 
 ### Events
@@ -6497,13 +6634,11 @@ FeedStockedEvent
 CreatureProductCollectedEvent
 RanchWorkAssignedEvent
 GuardAssignedEvent
-CreatureProductSoldEvent
-RanchReputationChangedEvent
 ```
 
 ---
 
-## 11.7 How `dinosim` uses other packages
+## 11.8 How `dinosim` uses other packages
 
 `dinosim` should build on the existing survival and farming surface without turning into a
 theme-park management game.
@@ -6521,8 +6656,9 @@ void-sim emergency logic -> alarms, evacuation, quarantine pens, and system-like
 
 ```text
 strange tracks -> generated nesting site -> egg/clutch -> parent threat -> ranching or survival consequence
+fossil rumor -> generated dig site -> identified fossil -> viable clone sample -> lab egg/embryo
 storm damage -> enclosure breach -> escaped creature -> tracking/taming/battle -> settlement aftermath
-legend rumor -> generated apex lair -> kaiju incident -> army response -> reputation and repair costs
+legend rumor + colonysim settlement -> generated apex lair -> kaiju incident -> army response -> repair jobs
 ```
 
 ---

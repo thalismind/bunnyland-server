@@ -59,6 +59,7 @@ from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.mechanics import barbariansim as barb
 from bunnyland.mechanics import colonysim as colony
 from bunnyland.mechanics import daggersim as dagger
+from bunnyland.mechanics import dinosim as dino
 from bunnyland.mechanics import dragonsim as dragon
 from bunnyland.mechanics import lifesim as life
 from bunnyland.mechanics import nukesim as nuke
@@ -434,6 +435,53 @@ def _add_colonysim_loop_world(scenario):
         ],
     )
     return node_id, job_id, recipe.id
+
+
+def _install_dinosim_playtest(actor) -> None:
+    dino.install_dinosim(actor)
+    actor.register_handler(dino.IdentifyFossilHandler())
+    actor.register_handler(dino.ExtractAncientSampleHandler())
+    actor.register_handler(dino.PrepareCloneHandler())
+    actor.register_handler(dino.LayEggHandler())
+    actor.register_handler(dino.FertilizeEggHandler())
+    actor.register_handler(dino.IncubateEggHandler())
+    actor.register_handler(dino.HatchEggHandler())
+
+
+def _add_dinosim_loop_world(scenario):
+    fossil_id = _room_content(
+        scenario,
+        "amber bone shard",
+        "fossil",
+        [dino.FossilFragmentComponent(sample_quality=0.8)],
+    )
+    parent_id = _room_content(
+        scenario,
+        "clever raptor",
+        "character",
+        [
+            CharacterComponent(species="velociraptor"),
+            dino.DinosaurComponent(species_name="velociraptor"),
+            dino.FertilityComponent(),
+            dino.ReptileProcreationComponent(egg_species_name="velociraptor"),
+        ],
+    )
+    return fossil_id, parent_id
+
+
+def _add_dinosim_kaiju_world(scenario):
+    install_storyteller(scenario.actor)
+    colony.install_colonysim(scenario.actor)
+    dino.install_dinosim(scenario.actor)
+    storyteller = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="kaiju storyteller", kind="controller"),
+            StorytellerComponent(interval_seconds=24 * 3600, next_incident_epoch=3600),
+            IncidentBudgetComponent(points=20.0, points_per_day=0.0),
+        ],
+    )
+    return storyteller.id
 
 
 def _install_nukesim_playtest(actor) -> None:
@@ -1320,6 +1368,78 @@ async def test_discord_playtest_colonysim_core_loop(scenario):
     assert claimed and released
     assert not node.has_relationship(colony.ReservedBy, scenario.character)
     assert not character.has_relationship(Owns, node_id)
+
+
+async def test_discord_playtest_dinosim_lifecycle_loop(scenario):
+    _install_dinosim_playtest(scenario.actor)
+    fossil_id, _parent_id = _add_dinosim_loop_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    identified: list[dino.FossilIdentifiedEvent] = []
+    extracted: list[dino.AncientSampleExtractedEvent] = []
+    clones: list[dino.ClonePreparedEvent] = []
+    hatched: list[dino.EggHatchedEvent] = []
+    scenario.actor.bus.subscribe(dino.FossilIdentifiedEvent, identified.append)
+    scenario.actor.bus.subscribe(dino.AncientSampleExtractedEvent, extracted.append)
+    scenario.actor.bus.subscribe(dino.ClonePreparedEvent, clones.append)
+    scenario.actor.bus.subscribe(dino.EggHatchedEvent, hatched.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-dinosim-lifecycle.json")),
+    )
+
+    fossil = scenario.actor.world.get_entity(fossil_id)
+    hatchlings = [
+        entity
+        for entity in scenario.actor.world.query()
+        .with_all([dino.DinosaurComponent, dino.HatchlingComponent])
+        .execute_entities()
+    ]
+    assert rejected == []
+    assert result.ticks == 12
+    assert len(result.inputs) == 12
+    assert fossil.get_component(dino.SpeciesIdentificationComponent).species_name == "velociraptor"
+    assert identified and extracted and clones
+    assert len(hatched) == 2
+    assert len(hatchlings) == 2
+    assert all(
+        entity.get_component(CharacterComponent).species == "velociraptor"
+        for entity in hatchlings
+    )
+
+
+async def test_discord_playtest_dinosim_kaiju_incident_loop(scenario):
+    scenario.actor.register_handler(ResolveIncidentHandler())
+    _add_dinosim_kaiju_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    started: list[IncidentStartedEvent] = []
+    resolved: list[IncidentResolvedEvent] = []
+    scenario.actor.bus.subscribe(IncidentStartedEvent, started.append)
+    scenario.actor.bus.subscribe(IncidentResolvedEvent, resolved.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-dinosim-kaiju.json")),
+    )
+
+    incidents = list(
+        scenario.actor.world.query().with_all([IncidentComponent]).execute_entities()
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room_entities = [
+        scenario.actor.world.get_entity(entity_id)
+        for _edge, entity_id in room.get_relationships(Contains)
+    ]
+    assert rejected == []
+    assert result.ticks == 3
+    assert len(result.inputs) == 2
+    assert len(incidents) == 1
+    assert incidents[0].get_component(IncidentComponent).kind == "kaiju_attack"
+    assert incidents[0].has_component(dino.SettlementDamageComponent)
+    assert incidents[0].get_component(IncidentComponent).resolved_at_epoch is not None
+    assert any(entity.has_component(dino.KaijuComponent) for entity in room_entities)
+    assert started and started[0].kind == "kaiju_attack"
+    assert resolved and resolved[0].kind == "kaiju_attack"
 
 
 async def test_discord_playtest_nukesim_wasteland_loop(scenario):

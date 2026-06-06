@@ -22,6 +22,8 @@ from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_com
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from .colonysim import ColonySimComponent
+from .dinosim import DinosimPolicyComponent, KaijuComponent, SettlementDamageComponent
 
 SECONDS_PER_DAY = 24 * 60 * 60
 
@@ -99,7 +101,21 @@ def _target_room(world: World):
     return rooms[0] if rooms else None
 
 
-def _choose_incident(points: float) -> tuple[str, float]:
+def _kaiju_storyteller_enabled(world: World) -> bool:
+    colony_enabled = any(
+        marker.get_component(ColonySimComponent).enabled
+        for marker in world.query().with_all([ColonySimComponent]).execute_entities()
+    )
+    dino_enabled = any(
+        policy.get_component(DinosimPolicyComponent).kaiju_storyteller_incidents
+        for policy in world.query().with_all([DinosimPolicyComponent]).execute_entities()
+    )
+    return colony_enabled and dino_enabled
+
+
+def _choose_incident(world: World, points: float) -> tuple[str, float]:
+    if points >= 15 and _kaiju_storyteller_enabled(world):
+        return "kaiju_attack", 15.0
     if points >= 10:
         return "hostile_encounter", 10.0
     if points >= 5:
@@ -131,6 +147,16 @@ def _spawn_incident(world: World, epoch: int, room, kind: str, spent: float):
                 ],
             )
             room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), supply.id)
+        elif kind == "kaiju_attack":
+            kaiju = spawn_entity(
+                world,
+                [
+                    IdentityComponent(name="rampaging kaiju", kind="kaiju"),
+                    KaijuComponent(threat_level=15, target_room_id=str(room.id)),
+                ],
+            )
+            room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), kaiju.id)
+            replace_component(incident, SettlementDamageComponent(severity=3))
     return incident
 
 
@@ -157,7 +183,7 @@ class StorytellerConsequence:
                 if entity.has_component(ThreatPointsComponent)
                 else 0.0
             )
-            kind, spent = _choose_incident(points + threat)
+            kind, spent = _choose_incident(world, points + threat)
             room = _target_room(world)
             incident = _spawn_incident(world, epoch, room, kind, spent)
             history = (

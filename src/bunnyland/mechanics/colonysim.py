@@ -42,6 +42,11 @@ SECONDS_PER_DAY = 24 * 60 * 60
 
 
 @dataclass(frozen=True)
+class ColonySimComponent(Component):
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class ResourceNodeComponent(Component):
     resource_type: str
     current: int
@@ -117,6 +122,17 @@ class ResourceRegenSystem(System):
                 entity,
                 replace(node, current=min(node.maximum, node.current + recovered)),
             )
+
+
+def ensure_colonysim_marker(actor) -> ColonySimComponent:
+    for entity in actor.world.query().with_all([ColonySimComponent]).execute_entities():
+        return entity.get_component(ColonySimComponent)
+    entity = spawn_entity(actor.world, [ColonySimComponent()])
+    return entity.get_component(ColonySimComponent)
+
+
+def install_colonysim(actor) -> None:
+    ensure_colonysim_marker(actor)
 
 
 def _reservation_holder(entity: Entity) -> EntityId | None:
@@ -562,6 +578,7 @@ __all__ = [
     "AssignedTo",
     "AssignJobHandler",
     "ClaimOwnershipHandler",
+    "ColonySimComponent",
     "CompleteJobHandler",
     "CraftHandler",
     "GatherResourceHandler",
@@ -577,4 +594,6 @@ __all__ = [
     "ResourceStackComponent",
     "WorkstationComponent",
     "colonysim_fragments",
+    "ensure_colonysim_marker",
+    "install_colonysim",
 ]

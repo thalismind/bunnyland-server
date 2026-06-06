@@ -1,0 +1,56 @@
+{
+  "ticks": 12,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {
+      "tick": 0,
+      "content": "!claim Juniper",
+      "expect": ["You are now controlling Juniper."]
+    },
+    {
+      "tick": 1,
+      "content": "!identify-fossil fossil_id=\"amber bone shard\" species_name=\"velociraptor\""
+    },
+    {
+      "tick": 2,
+      "content": "!extract-ancient-sample fossil_id=\"amber bone shard\""
+    },
+    {
+      "tick": 3,
+      "content": "!prepare-clone sample_id=\"velociraptor ancient sample\""
+    },
+    {
+      "tick": 4,
+      "content": "!incubate-egg egg_id=\"velociraptor egg\" duration_seconds=3600"
+    },
+    {
+      "tick": 5,
+      "content": "!wait"
+    },
+    {
+      "tick": 6,
+      "content": "!hatch-egg egg_id=\"velociraptor egg\""
+    },
+    {
+      "tick": 7,
+      "content": "!lay-egg parent_id=\"clever raptor\""
+    },
+    {
+      "tick": 8,
+      "content": "!fertilize-egg egg_id=\"velociraptor egg\" parent_id=\"clever raptor\""
+    },
+    {
+      "tick": 9,
+      "content": "!incubate-egg egg_id=\"velociraptor egg\" duration_seconds=3600"
+    },
+    {
+      "tick": 10,
+      "content": "!wait"
+    },
+    {
+      "tick": 11,
+      "content": "!hatch-egg egg_id=\"velociraptor egg\""
+    }
+  ]
+}

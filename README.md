@@ -129,6 +129,8 @@ branch tags and `latest` for the default branch. The web repo publishes
   banking, law, magic, afflictions, and dungeons.
 - **[Void-sim ships and space travel](docs/player/voidsim.md)** — airlocks, life support,
   power, docking, fuel, sensors, orbit, landing, and jumps.
+- **[Dino-sim fossils, eggs, and kaiju incidents](docs/player/dinosim.md)** — identifying
+  fossils, cloning eggs, hatching dinos, and handling kaiju storyteller incidents.
 
 ### Technical docs
 
@@ -178,7 +180,7 @@ full catalogue is in [`bunnyland_mechanics.md`](bunnyland_mechanics.md).
 | **Dagger Sim**  | Implemented | Daggerfall       | Procedural frontier expansion, rumors, travel logistics, guilds/institutions and services, banking and debt, civic law and fines, custom classes and spells, language pacification, supernatural afflictions, procedural dungeons, etiquette and social approach |
 | **Void Sim**    | Implemented | FTL              | Ships, stations and habitat modules, life support, pressure and airlocks, power grids, ship-system repair, and docking |
 | **Neon Sim**    | Planned     | Deus Ex, Watch Dogs, Cyberpunk 2077 | Cyberpunk districts, usable surveillance, ECS hacking, fixer missions, corporate intrigue, street economy, wanted levels, reputation, and cybernetics |
-| **Dino Sim**    | Planned     | Jurassic Park, ARK, Dino Crisis | Dangerous creature ranching, eggs, taming, training, enclosures, escapes, apex predators, kaiju incidents, and survival farming |
+| **Dino Sim**    | Implemented | Jurassic Park, ARK, Dino Crisis | Fossil/species identification and cloning, egg handling, reptile procreation, incubation, hatching, and kaiju storyteller incidents |
 | **Fortress Sim** | Planned    | Dwarf Fortress   | Deep materials, world history, civilizations, artifacts, nobles, justice, institutions, tantrum spirals, and multi-site worlds |
 
 Foundational plugins back these up: **Environment** (time, weather, fire), **Mechanisms**
@@ -200,8 +202,9 @@ backstories, homes, and daily routines, a rat-man in the warren below, and hidde
 For lighter genre-spoof setups, the worldgen plugin also ships `clue-snack-demo`,
 `dive-scheme-demo`, `star-opera-demo`, and `gothic-count-demo`, all using new names,
 locations, and props.
-The `neonsim`, `dinosim`, and `fortresssim` packages are planned catalogue packages and do
-not have plugins or demo generators yet.
+The `neonsim` and `fortresssim` packages are planned catalogue packages and do not have
+plugins or demo generators yet. The implemented `dinosim` package currently focuses on
+fossil cloning, eggs, hatching, and kaiju incidents; it does not have a demo generator yet.
 
 ## Development
 

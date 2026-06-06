@@ -66,6 +66,7 @@ from ..mechanics.colonysim import (
     AssignedTo,
     AssignJobHandler,
     ClaimOwnershipHandler,
+    ColonySimComponent,
     CompleteJobHandler,
     CraftHandler,
     GatherResourceHandler,
@@ -81,6 +82,7 @@ from ..mechanics.colonysim import (
     ResourceStackComponent,
     WorkstationComponent,
     colonysim_fragments,
+    install_colonysim,
 )
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.daggersim import (
@@ -213,6 +215,38 @@ from ..mechanics.daggersim import (
 )
 from ..mechanics.daggersim import (
     QuestCompletedEvent as DaggerQuestCompletedEvent,
+)
+from ..mechanics.dinosim import (
+    AncientSampleComponent,
+    AncientSampleExtractedEvent,
+    CloneCandidateComponent,
+    ClonePreparedEvent,
+    DinosaurComponent,
+    DinosimPolicyComponent,
+    EggComponent,
+    EggFertilizedEvent,
+    EggHatchedEvent,
+    EggIncubatedEvent,
+    EggLaidEvent,
+    ExtractAncientSampleHandler,
+    FertilityComponent,
+    FertilizeEggHandler,
+    FossilFragmentComponent,
+    FossilIdentifiedEvent,
+    HatchEggHandler,
+    HatchlingComponent,
+    IdentifyFossilHandler,
+    IncubateEggHandler,
+    IncubationComponent,
+    KaijuComponent,
+    LayEggHandler,
+    PrepareCloneHandler,
+    ReptileProcreationComponent,
+    SettlementDamageComponent,
+    SpeciesComponent,
+    SpeciesIdentificationComponent,
+    dinosim_fragments,
+    install_dinosim,
 )
 from ..mechanics.dragonsim import (
     AcceptQuestHandler,
@@ -556,6 +590,7 @@ PERSONA = "bunnyland.persona"
 COLONYSIM = "bunnyland.colonysim"
 BARBARIANSIM = "bunnyland.barbariansim"
 GARDENSIM = "bunnyland.gardensim"
+DINOSIM = "bunnyland.dinosim"
 DRAGONSIM = "bunnyland.dragonsim"
 DAGGERSIM = "bunnyland.daggersim"
 VOIDSIM = "bunnyland.voidsim"
@@ -863,6 +898,7 @@ def colonysim_plugin() -> Plugin:
         dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(
             components=(
+                ColonySimComponent,
                 ResourceNodeComponent,
                 ResourceStackComponent,
                 WorkstationComponent,
@@ -888,6 +924,7 @@ def colonysim_plugin() -> Plugin:
             prompt_fragments=(colonysim_fragments,),
             world_generators=(COLONYSIM_DEMO,),
         ),
+        runtime=RuntimeContribution(service_factories=(install_colonysim,)),
     )
 
 
@@ -994,6 +1031,57 @@ def gardensim_plugin() -> Plugin:
             prompt_fragments=(gardensim_fragments,),
             world_generators=(GARDENSIM_DEMO,),
         ),
+    )
+
+
+def dinosim_plugin() -> Plugin:
+    return Plugin(
+        id=DINOSIM,
+        name="Dino Sim",
+        dependencies=DependencyContribution(
+            requires=(CORE_VERBS,),
+            recommends=(LIFESIM, COLONYSIM, STORYTELLER),
+        ),
+        ecs=EcsContribution(
+            components=(
+                DinosimPolicyComponent,
+                DinosaurComponent,
+                SpeciesComponent,
+                FossilFragmentComponent,
+                SpeciesIdentificationComponent,
+                AncientSampleComponent,
+                CloneCandidateComponent,
+                EggComponent,
+                FertilityComponent,
+                ReptileProcreationComponent,
+                IncubationComponent,
+                HatchlingComponent,
+                KaijuComponent,
+                SettlementDamageComponent,
+            )
+        ),
+        commands=CommandContribution(
+            action_handlers=(
+                IdentifyFossilHandler,
+                ExtractAncientSampleHandler,
+                PrepareCloneHandler,
+                LayEggHandler,
+                FertilizeEggHandler,
+                IncubateEggHandler,
+                HatchEggHandler,
+            ),
+            typed_events=(
+                FossilIdentifiedEvent,
+                AncientSampleExtractedEvent,
+                ClonePreparedEvent,
+                EggLaidEvent,
+                EggFertilizedEvent,
+                EggIncubatedEvent,
+                EggHatchedEvent,
+            ),
+        ),
+        runtime=RuntimeContribution(service_factories=(install_dinosim,)),
+        content=ContentContribution(prompt_fragments=(dinosim_fragments,)),
     )
 
 
@@ -1399,6 +1487,7 @@ def bunnyland_plugins() -> list[Plugin]:
         colonysim_plugin(),
         barbariansim_plugin(),
         gardensim_plugin(),
+        dinosim_plugin(),
         toonsim_plugin(),
         dragonsim_plugin(),
         daggersim_plugin(),
@@ -1414,6 +1503,7 @@ __all__ = [
     "CORE_VERBS",
     "COLONYSIM",
     "DAGGERSIM",
+    "DINOSIM",
     "DRAGONSIM",
     "ENVIRONMENT",
     "GARDENSIM",
@@ -1432,6 +1522,7 @@ __all__ = [
     "barbariansim_plugin",
     "bunnyland_plugins",
     "colonysim_plugin",
+    "dinosim_plugin",
     "core_verbs_plugin",
     "daggersim_plugin",
     "dragonsim_plugin",

@@ -81,12 +81,14 @@ behaviour is added by **plugins**; the builtins are:
 | `bunnyland.mechanisms`  | door auto-close and momentary-button reset timers             |
 | `bunnyland.social`      | social bonds that grow through speech (affinity/trust/fear)   |
 | `bunnyland.policy`      | boundary/consent gate (flirting etc.); denied always wins     |
+| `bunnyland.dinosim`     | fossils, species identification, clone eggs, hatching, kaiju  |
 | `bunnyland.mcp`         | optional HTTP MCP endpoint for agentic clients                |
 
 The sim packages (`bunnyland.lifesim`, `colonysim`, `gardensim`, `barbariansim`,
-`dragonsim`, `daggersim`, `voidsim`) add their own components, verbs, and a ready-to-play
-`<sim>-demo` world generator each — e.g. `serve --generator voidsim-demo`. See
-[world creation](../developer/world-creation.md) for the full list.
+`dragonsim`, `daggersim`, `voidsim`, `dinosim`) add their own components and verbs. Most
+implemented sims also include a ready-to-play `<sim>-demo` world generator — e.g.
+`serve --generator voidsim-demo`. See [world creation](../developer/world-creation.md) for
+the full list.
 
 Each mechanic surfaces itself to characters where it can — needs, weather/time, and
 relationships all appear in a "Currently" block in the agent's prompt, and changes (light,

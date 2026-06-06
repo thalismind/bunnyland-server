@@ -73,6 +73,13 @@ from bunnyland.mechanics.daggersim import (
     SpellCreatedEvent,
     SpellTemplateComponent,
 )
+from bunnyland.mechanics.dinosim import (
+    DinosaurComponent,
+    EggComponent,
+    EggHatchedEvent,
+    FossilFragmentComponent,
+    SpeciesIdentificationComponent,
+)
 from bunnyland.mechanics.gardensim import (
     CropComponent,
     CropHarvestedEvent,
@@ -92,6 +99,7 @@ from bunnyland.mechanics.lifesim import (
     HomeComponent,
     HouseholdComponent,
     HouseholdFundsComponent,
+    LifeStageComponent,
     OwnsBusiness,
     RentChargedEvent,
     RoomClaimComponent,
@@ -618,6 +626,69 @@ async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
     assert character.get_component(HouseholdFundsComponent).balance == 15
     assert merchant.get_component(HouseholdFundsComponent).balance == 3
     assert merchant.get_component(CustomerComponent).budget == 12
+
+
+async def test_scripted_agent_identifies_fossil_clones_and_hatches_dino_e2e():
+    actor, _proposal, result = await _new_world()
+    hazel = result.characters["hazel"]
+    character = actor.world.get_entity(hazel)
+    replace_component(
+        character,
+        ActionPointsComponent(current=8.0, maximum=8.0, regen_per_hour=0.0),
+    )
+    room_id = container_of(character)
+    assert room_id is not None
+    room = actor.world.get_entity(room_id)
+    fossil = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="amber bone shard", kind="fossil"),
+            FossilFragmentComponent(sample_quality=0.8),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), fossil.id)
+    hatched: list[EggHatchedEvent] = []
+    rejected: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(EggHatchedEvent, hatched.append)
+    actor.bus.subscribe(CommandRejectedEvent, rejected.append)
+
+    agent = ScriptedAgent(
+        [
+            ToolCall(
+                "identify_fossil",
+                {"fossil_id": "amber bone shard", "species_name": "velociraptor"},
+            ),
+            ToolCall("extract_ancient_sample", {"fossil_id": "amber bone shard"}),
+            ToolCall("prepare_clone", {"sample_id": "velociraptor ancient sample"}),
+            ToolCall("incubate_egg", {"egg_id": "velociraptor egg"}),
+            ToolCall("wait", {}),
+            ToolCall("hatch_egg", {"egg_id": "velociraptor egg"}),
+        ]
+    )
+    builder = PromptBuilder(
+        actor.world,
+        fragment_providers=collect_prompt_fragments(bunnyland_plugins()),
+    )
+    loop = GameLoop(
+        actor,
+        ControllerDispatch(actor, builder, agent),
+        tick_seconds=1.0,
+        time_scale=24 * 60 * 60,
+    )
+
+    await loop.run(max_ticks=7)
+
+    assert rejected == []
+    assert fossil.get_component(SpeciesIdentificationComponent).species_name == "velociraptor"
+    assert hatched
+    hatchling_id = parse_entity_id(hatched[0].hatchling_id)
+    assert hatchling_id is not None
+    hatchling = actor.world.get_entity(hatchling_id)
+    assert hatchling.get_component(CharacterComponent).species == "velociraptor"
+    assert hatchling.get_component(LifeStageComponent).stage == "child"
+    assert hatchling.has_component(DinosaurComponent)
+    assert container_of(hatchling) == room_id
+    assert not list(actor.world.query().with_all([EggComponent]).execute_entities())
 
 
 async def test_scripted_agent_claims_home_and_pays_rent_bill():

@@ -39,6 +39,7 @@ from bunnyland.plugins.builtin import (
     COLONYSIM,
     CORE_VERBS,
     DAGGERSIM,
+    DINOSIM,
     DRAGONSIM,
     ENVIRONMENT,
     GARDENSIM,
@@ -74,6 +75,7 @@ def test_builtin_plugins_declared():
         GARDENSIM,
         DRAGONSIM,
         DAGGERSIM,
+        DINOSIM,
         MCP,
         VOIDSIM,
         NUKESIM,
@@ -84,7 +86,7 @@ def test_builtin_plugins_declared():
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 18
+    assert len(select(plugins, None)) == 19
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
 
 
