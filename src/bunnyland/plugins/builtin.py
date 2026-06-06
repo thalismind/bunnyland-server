@@ -468,11 +468,15 @@ from ..memory import install_memory
 from ..worldgen.apartment import APARTMENT_DEMO
 from ..worldgen.examples import (
     BARBARIANSIM_DEMO,
+    CLUE_SNACK_DEMO,
     COLONYSIM_DEMO,
     DAGGERSIM_DEMO,
+    DIVE_SCHEME_DEMO,
     DRAGONSIM_DEMO,
     GARDENSIM_DEMO,
+    GOTHIC_COUNT_DEMO,
     LIFESIM_DEMO,
+    STAR_OPERA_DEMO,
     VOIDSIM_DEMO,
 )
 from ..worldgen.generators import (
@@ -789,6 +793,10 @@ def worldgen_plugin() -> Plugin:
                     "a locked tower room where an angel and devil debate forever",
                     uses_seed=False,
                 ),
+                CLUE_SNACK_DEMO,
+                DIVE_SCHEME_DEMO,
+                STAR_OPERA_DEMO,
+                GOTHIC_COUNT_DEMO,
                 WorldGenerator(
                     "oneshot", oneshot_generator, "single LLM proposal, instantiated at once"
                 ),

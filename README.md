@@ -197,6 +197,9 @@ The demos are `lifesim-demo`, `gardensim-demo`, `colonysim-demo`, `barbariansim-
 `dragonsim-demo`, `daggersim-demo`, and `voidsim-demo`. There is also a larger life-sim
 showcase, `apartment-demo`: a quirky NYC apartment building of eccentric tenants with
 backstories, homes, and daily routines, a rat-man in the warren below, and hidden corners.
+For lighter genre-spoof setups, the worldgen plugin also ships `clue-snack-demo`,
+`dive-scheme-demo`, `star-opera-demo`, and `gothic-count-demo`, all using new names,
+locations, and props.
 The `neonsim`, `dinosim`, and `fortresssim` packages are planned catalogue packages and do
 not have plugins or demo generators yet.
 

@@ -1,4 +1,4 @@
-"""Hand-built example worlds, one per sim package (spec 21.4, 28.2).
+"""Hand-built example worlds (spec 21.4, 28.2).
 
 Each generator lays down a small base world (rooms + life-sim characters with needs and
 memory) via the same ``instantiate`` path the LLM uses, then layers on the components and
@@ -12,7 +12,7 @@ build on life-sim needs, which every character already gets from ``instantiate``
 
 from __future__ import annotations
 
-from ..core.ecs import spawn_entity
+from ..core.ecs import replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains
 from .generators import GenOptions, WorldGenerator
 from .instantiate import InstantiatedWorld, instantiate
@@ -496,6 +496,366 @@ async def voidsim_example(actor, seed: str, options: GenOptions) -> Instantiated
     return world
 
 
+# --------------------------------------------------------------------------------------
+# pop-culture demos — legally distinct affectionate genre spoofs
+# --------------------------------------------------------------------------------------
+
+
+async def clue_snack_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A comic mystery demo with a nervous snack-lover and a talking sleuth-hound."""
+
+    del options
+    from ..core.components import IdentityComponent, PortableComponent, ReadableComponent
+    from ..mechanics.dragonsim import (
+        DiscoveryComponent,
+        PointOfInterestComponent,
+        QuestComponent,
+        QuestObjectiveComponent,
+        QuestRewardComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="snack_van", title="Snack Van Pull-Off", biome="roadside",
+                     light=0.5, celsius=16.0),
+            RoomSpec(key="lodge", title="Creaky Mascot Lodge", biome="lodge",
+                     indoor=True, light=0.25, celsius=13.0),
+            RoomSpec(key="cellar", title="Stage-Trick Cellar", biome="cellar",
+                     indoor=True, light=0.1, celsius=11.0),
+        ],
+        exits=[
+            ExitSpec(from_key="snack_van", direction="in", to_key="lodge"),
+            ExitSpec(from_key="lodge", direction="out", to_key="snack_van"),
+            ExitSpec(from_key="lodge", direction="down", to_key="cellar"),
+            ExitSpec(from_key="cellar", direction="up", to_key="lodge"),
+        ],
+        objects=[
+            ObjectSpec(key="sandwiches", room_key="snack_van", name="a hamper of tower sandwiches",
+                       kind="food", nutrition=5.0, satiety=22.0, portable=True),
+            ObjectSpec(key="water_jug", room_key="snack_van", name="a sloshing water jug",
+                       kind="water", hydration=18.0, portable=True, renewable=False),
+            ObjectSpec(key="mask", room_key="cellar", name="a rubber fog-beast mask",
+                       kind="item", portable=True),
+            ObjectSpec(key="projector", room_key="cellar", name="a rattling shadow projector",
+                       kind="item", portable=False),
+        ],
+        characters=[
+            CharacterSpec(key="munch", name="Jory Munch", room_key="snack_van",
+                          controller="suspended", traits=("nervous", "hungry", "loyal"),
+                          goals=("find the hidden snack stash", "avoid being volunteered")),
+            CharacterSpec(key="hound", name="Biscuit", room_key="snack_van", species="dog",
+                          controller="llm", llm_profile="comic-hound",
+                          traits=("talkative", "brave-when-fed"),
+                          goals=("sniff out the prankster", "protect Jory's lunch")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        cellar = world.rooms["cellar"]
+        _augment(actor, cellar,
+                 PointOfInterestComponent(location_type="stage trick", region="Fogbank Pier"),
+                 DiscoveryComponent())
+        _add(actor, world.rooms["lodge"], [
+            IdentityComponent(name="Unmask the Fog Prank", kind="quest"),
+            QuestComponent(quest_id="fog-prank", title="Unmask the Fog Prank",
+                           status="offered"),
+            QuestObjectiveComponent(quest_id="fog-prank",
+                                    description="Find the stage equipment under the lodge"),
+            QuestRewardComponent(quest_id="fog-prank",
+                                 description="a heroic share of the sandwich hamper"),
+        ])
+        actor.world.get_entity(world.objects["projector"]).add_component(
+            ReadableComponent(
+                title="Projector Label",
+                text="Property of Pier Promotions. Do not use to frighten guests after hours.",
+            )
+        )
+        _add(actor, world.rooms["lodge"], [
+            IdentityComponent(name="a squeaky clue notebook", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Clue Notebook",
+                              text="Someone ordered extra fog, extra chains, and no witnesses."),
+        ])
+    return world
+
+
+async def dive_scheme_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A dysfunctional city tavern where every room contains a terrible business plan."""
+
+    del options
+    from ..core.components import IdentityComponent, PortableComponent, ReadableComponent
+    from ..mechanics.colonysim import JobComponent, ResourceStackComponent, WorkstationComponent
+    from ..mechanics.daggersim import LawRegionComponent, RumorComponent
+    from ..mechanics.lifesim import CareerComponent, HouseholdFundsComponent, SkillSetComponent
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="bar", title="Gull And Grift Taproom", biome="city-tavern",
+                     indoor=True, light=0.45, celsius=20.0),
+            RoomSpec(key="office", title="Back Office Of Bad Ideas", biome="office",
+                     indoor=True, light=0.35, celsius=21.0),
+            RoomSpec(key="alley", title="Dumpster Negotiation Alley", biome="alley",
+                     light=0.25, celsius=12.0),
+        ],
+        exits=[
+            ExitSpec(from_key="bar", direction="back", to_key="office"),
+            ExitSpec(from_key="office", direction="front", to_key="bar"),
+            ExitSpec(from_key="bar", direction="out", to_key="alley"),
+            ExitSpec(from_key="alley", direction="in", to_key="bar"),
+        ],
+        objects=[
+            ObjectSpec(key="beer", room_key="bar", name="a questionable house lager",
+                       kind="water", hydration=6.0, portable=False),
+            ObjectSpec(key="pretzels", room_key="bar", name="a bowl of over-salted pretzels",
+                       kind="food", nutrition=2.0, satiety=8.0, portable=False),
+            ObjectSpec(key="scheme_board", room_key="office", name="a corkboard of doomed schemes",
+                       kind="paper", writable=True, portable=False),
+            ObjectSpec(key="crate", room_key="alley", name="a crate of unsold novelty whistles",
+                       kind="container", portable=True, open=True),
+        ],
+        characters=[
+            CharacterSpec(key="boss", name="Rex Malloy", room_key="bar", controller="suspended",
+                          traits=("commanding", "self-serving"),
+                          goals=("declare himself general manager",)),
+            CharacterSpec(key="performer", name="Lina Sharp", room_key="bar", controller="llm",
+                          llm_profile="dive-performer", traits=("vain", "quick-witted"),
+                          goals=("turn tonight into a showcase",)),
+            CharacterSpec(key="fixer", name="Ozzie Crank", room_key="office", controller="llm",
+                          llm_profile="bad-scheme-fixer", traits=("intense", "impatient"),
+                          goals=("prove the whistle franchise is viable",)),
+            CharacterSpec(key="investor", name="Marta Quill", room_key="alley", controller="llm",
+                          llm_profile="reckless-investor", traits=("rich", "bored"),
+                          goals=("buy influence with pocket change",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        _augment(actor, world.rooms["bar"],
+                 LawRegionComponent(region_id="river-ward", fines={"brawl": 15, "default": 5}))
+        _add(actor, world.rooms["office"], [
+            IdentityComponent(name="a broken laminating station", kind="workstation"),
+            WorkstationComponent(station_type="office"),
+        ])
+        _add(actor, world.rooms["alley"], [
+            IdentityComponent(name="six novelty whistles", kind="resource"),
+            PortableComponent(can_pick_up=True),
+            ResourceStackComponent(resource_type="novelty-whistle", quantity=6),
+        ])
+        _add(actor, world.rooms["office"], [
+            IdentityComponent(name="tonight's terrible job", kind="job"),
+            JobComponent(job_type="sell-whistles", priority=5),
+        ])
+        _add(actor, world.rooms["bar"], [
+            IdentityComponent(name="a barfly rumor", kind="rumor"),
+            RumorComponent(text="The alley crate is worth less than the argument about it."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["scheme_board"]),
+            ReadableComponent(title="Scheme Board",
+                              text="Step 1: rebrand whistles. Step 2: citywide respect. "
+                                   "Step 3: absolutely no refunds.")
+        )
+        _augment(actor, world.characters["boss"],
+                 CareerComponent(title="bar co-owner", level=1, hourly_pay=0),
+                 SkillSetComponent(levels={"intimidation": 2}),
+                 HouseholdFundsComponent(balance=37))
+    return world
+
+
+async def star_opera_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A bright star-opera demo with rebels, a rusty courier ship, and a masked officer."""
+
+    del options
+    from ..core.components import IdentityComponent, PortableComponent, ReadableComponent
+    from ..mechanics.barbariansim import DurabilityComponent, WeaponComponent
+    from ..mechanics.dragonsim import FactionComponent, QuestComponent, QuestObjectiveComponent
+    from ..mechanics.voidsim import (
+        FuelComponent,
+        HabitatModuleComponent,
+        JumpDriveComponent,
+        LifeSupportComponent,
+        NavigationRouteComponent,
+        OxygenComponent,
+        PowerGridComponent,
+        PressurizedComponent,
+        SensorComponent,
+        ShipComponent,
+        StarSystemComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="duneport", title="Saffron Duneport Market", biome="desert-port",
+                     light=0.95, celsius=34.0),
+            RoomSpec(key="freighter", title="Rustwing Freighter Hold", biome="ship",
+                     indoor=True, light=0.55, celsius=22.0),
+            RoomSpec(key="checkpoint", title="Black-Helmet Checkpoint", biome="checkpoint",
+                     indoor=True, light=0.7, celsius=20.0),
+        ],
+        exits=[
+            ExitSpec(from_key="duneport", direction="aboard", to_key="freighter"),
+            ExitSpec(from_key="freighter", direction="down-ramp", to_key="duneport"),
+            ExitSpec(from_key="duneport", direction="east", to_key="checkpoint"),
+            ExitSpec(from_key="checkpoint", direction="west", to_key="duneport"),
+        ],
+        objects=[
+            ObjectSpec(key="ration", room_key="duneport", name="a packet of sun-baked rations",
+                       kind="food", nutrition=4.0, satiety=15.0, portable=True),
+            ObjectSpec(key="canteen", room_key="duneport", name="a dented vapor canteen",
+                       kind="water", hydration=20.0, portable=True, renewable=False),
+            ObjectSpec(key="data_spool", room_key="checkpoint", name="a coded courier spool",
+                       kind="paper", writable=False, portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="farmhand", name="Tavi Orun", room_key="duneport",
+                          controller="suspended", traits=("idealistic", "restless"),
+                          goals=("escape the dunes", "deliver the coded spool")),
+            CharacterSpec(key="courier", name="Captain Brindle Voss", room_key="freighter",
+                          controller="llm", llm_profile="wry-courier",
+                          traits=("charming", "indebted"),
+                          goals=("get paid before helping anyone",)),
+            CharacterSpec(key="mentor", name="Old Sera", room_key="duneport",
+                          controller="llm", llm_profile="star-monk",
+                          traits=("patient", "cryptic"),
+                          goals=("teach Tavi restraint",)),
+            CharacterSpec(key="marshal", name="Marshal Vark", room_key="checkpoint",
+                          controller="llm", llm_profile="masked-officer",
+                          traits=("severe", "ceremonial"),
+                          goals=("recover the courier spool",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        duneport = world.rooms["duneport"]
+        freighter = world.rooms["freighter"]
+        _augment(actor, duneport, StarSystemComponent(name="Amber Verge"))
+        _augment(actor, freighter,
+                 HabitatModuleComponent(module_type="freighter-hold"),
+                 PressurizedComponent(pressure=1.0),
+                 OxygenComponent(level=91.0),
+                 LifeSupportComponent(online=True),
+                 NavigationRouteComponent(destination_id="Free Lantern", fuel_cost=20.0))
+        _add(actor, freighter, [
+            IdentityComponent(name="the Rustwing", kind="ship"),
+            ShipComponent(name="Rustwing", hull_integrity=64.0),
+            PowerGridComponent(capacity=80.0, available=38.0),
+            FuelComponent(level=44.0, maximum=100.0),
+            JumpDriveComponent(charged=False),
+            SensorComponent(scan_range=1.5),
+        ])
+        _add(actor, duneport, [
+            IdentityComponent(name="Free Lantern Cell", kind="faction"),
+            FactionComponent(name="Free Lantern Cell", ideology="smuggle hope past checkpoints"),
+        ])
+        _add(actor, duneport, [
+            IdentityComponent(name="Run The Checkpoint", kind="quest"),
+            QuestComponent(quest_id="run-checkpoint", title="Run The Checkpoint",
+                           status="offered"),
+            QuestObjectiveComponent(quest_id="run-checkpoint",
+                                    description="Carry the coded spool aboard the Rustwing"),
+        ])
+        _add(actor, world.rooms["checkpoint"], [
+            IdentityComponent(name="a humming training baton", kind="weapon"),
+            PortableComponent(can_pick_up=True),
+            WeaponComponent(damage=5.0, damage_type="energy", lethal_capable=False),
+            DurabilityComponent(current=30.0, maximum=40.0),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["data_spool"]),
+            ReadableComponent(title="Courier Spool",
+                              text="A compressed route ledger points toward the Free Lantern.")
+        )
+    return world
+
+
+async def gothic_count_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A gothic castle demo with an over-formal night host and suspicious paperwork."""
+
+    del options
+    from ..core.components import IdentityComponent, PortableComponent, ReadableComponent
+    from ..mechanics.daggersim import (
+        FeedingNeedComponent,
+        SecretDoorComponent,
+        SupernaturalAfflictionComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="inn", title="Moor Road Inn", biome="moor", indoor=True,
+                     light=0.4, celsius=9.0),
+            RoomSpec(key="hall", title="Moonlit Castle Hall", biome="castle",
+                     indoor=True, light=0.2, celsius=8.0),
+            RoomSpec(key="crypt", title="Velvet-Draped Crypt", biome="crypt",
+                     indoor=True, light=0.05, celsius=6.0),
+        ],
+        exits=[
+            ExitSpec(from_key="inn", direction="up-road", to_key="hall"),
+            ExitSpec(from_key="hall", direction="down-road", to_key="inn"),
+            ExitSpec(from_key="hall", direction="down", to_key="crypt"),
+            ExitSpec(from_key="crypt", direction="up", to_key="hall"),
+        ],
+        objects=[
+            ObjectSpec(key="broth", room_key="inn", name="a bowl of garlicy root broth",
+                       kind="food", nutrition=4.0, satiety=14.0, portable=False),
+            ObjectSpec(key="tea", room_key="inn", name="a chipped cup of black tea",
+                       kind="water", hydration=12.0, portable=False),
+            ObjectSpec(key="deed", room_key="hall", name="a crimson-sealed property deed",
+                       kind="paper", writable=False, portable=True),
+            ObjectSpec(key="travel_trunk", room_key="hall", name="a brass-bound travel trunk",
+                       kind="container", portable=True, open=False),
+        ],
+        characters=[
+            CharacterSpec(key="clerk", name="Merrit Vale", room_key="inn",
+                          controller="suspended", traits=("polite", "uneasy"),
+                          goals=("complete the property papers", "leave before midnight")),
+            CharacterSpec(key="count", name="Lord Varro", room_key="hall", species="nightfolk",
+                          controller="llm", llm_profile="gothic-host",
+                          traits=("courtly", "hungry", "ancient"),
+                          goals=("keep guests comfortable", "avoid direct sunlight")),
+            CharacterSpec(key="innkeeper", name="Nessa Pike", room_key="inn",
+                          controller="llm", llm_profile="worried-innkeeper",
+                          traits=("superstitious", "practical"),
+                          goals=("warn Merrit without naming the danger",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        hall, crypt = world.rooms["hall"], world.rooms["crypt"]
+        _augment(actor, crypt,
+                 PointOfInterestComponent(location_type="crypt", region="Moor Road"),
+                 DiscoveryComponent())
+        _augment(actor, world.characters["count"],
+                 SupernaturalAfflictionComponent(affliction_type="nocturnal hunger",
+                                                 contracted_at_epoch=0,
+                                                 stage="mastered"),
+                 FeedingNeedComponent(current=6.0, maximum=10.0))
+        _add(actor, hall, [
+            IdentityComponent(name="a hidden stair behind the portrait", kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(crypt), direction="behind portrait",
+                                hint="The portrait frame is cleaner on one side."),
+        ])
+        _add(actor, crypt, [
+            IdentityComponent(name="a silvered travel mirror", kind="item"),
+            PortableComponent(can_pick_up=True),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["deed"]),
+            ReadableComponent(title="Property Deed",
+                              text="The buyer agrees to occupy the estate only after sunset "
+                                   "and never inspect the lower rooms uninvited.")
+        )
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -524,21 +884,55 @@ VOIDSIM_DEMO = WorldGenerator(
     name="voidsim-demo", generate=voidsim_example,
     description="A modular ship with life support, power, and a damaged reactor.",
     uses_seed=False)
+CLUE_SNACK_DEMO = WorldGenerator(
+    name="clue-snack-demo", generate=clue_snack_example,
+    description=(
+        "A legally distinct comic mystery with snacks, a talking hound, and a fake haunting."
+    ),
+    uses_seed=False)
+DIVE_SCHEME_DEMO = WorldGenerator(
+    name="dive-scheme-demo", generate=dive_scheme_example,
+    description="A legally distinct dysfunctional tavern sitcom full of bad schemes.",
+    uses_seed=False)
+STAR_OPERA_DEMO = WorldGenerator(
+    name="star-opera-demo", generate=star_opera_example,
+    description="A legally distinct star-opera rebellion at a desert port and rusty freighter.",
+    uses_seed=False)
+GOTHIC_COUNT_DEMO = WorldGenerator(
+    name="gothic-count-demo", generate=gothic_count_example,
+    description="A legally distinct gothic night-host castle with papers, secrets, and hunger.",
+    uses_seed=False)
+
+POP_CULTURE_DEMOS = (
+    CLUE_SNACK_DEMO,
+    DIVE_SCHEME_DEMO,
+    STAR_OPERA_DEMO,
+    GOTHIC_COUNT_DEMO,
+)
 
 
 __all__ = [
     "BARBARIANSIM_DEMO",
+    "CLUE_SNACK_DEMO",
     "COLONYSIM_DEMO",
     "DAGGERSIM_DEMO",
     "DRAGONSIM_DEMO",
+    "DIVE_SCHEME_DEMO",
     "GARDENSIM_DEMO",
+    "GOTHIC_COUNT_DEMO",
     "LIFESIM_DEMO",
+    "POP_CULTURE_DEMOS",
+    "STAR_OPERA_DEMO",
     "VOIDSIM_DEMO",
     "barbariansim_example",
+    "clue_snack_example",
     "colonysim_example",
     "daggersim_example",
     "dragonsim_example",
+    "dive_scheme_example",
     "gardensim_example",
+    "gothic_count_example",
     "lifesim_example",
+    "star_opera_example",
     "voidsim_example",
 ]

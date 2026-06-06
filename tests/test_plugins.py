@@ -103,6 +103,10 @@ def test_worldgen_plugin_contributes_named_generators():
         "halloween",
         "holiday",
         "tower-debate",
+        "clue-snack-demo",
+        "dive-scheme-demo",
+        "star-opera-demo",
+        "gothic-count-demo",
         "oneshot",
         "recursive",
     } <= set(registry)
@@ -113,6 +117,10 @@ def test_worldgen_plugin_contributes_named_generators():
     assert "halloween" not in without
     assert "holiday" not in without
     assert "tower-debate" not in without
+    assert "clue-snack-demo" not in without
+    assert "dive-scheme-demo" not in without
+    assert "star-opera-demo" not in without
+    assert "gothic-count-demo" not in without
     assert "oneshot" not in without
     assert "recursive" not in without
     # each sim plugin also contributes its own example world, tied to that plugin
@@ -122,6 +130,10 @@ def test_worldgen_plugin_contributes_named_generators():
     assert registry["halloween"].uses_seed is False
     assert registry["holiday"].uses_seed is False
     assert registry["tower-debate"].uses_seed is False
+    assert registry["clue-snack-demo"].uses_seed is False
+    assert registry["dive-scheme-demo"].uses_seed is False
+    assert registry["star-opera-demo"].uses_seed is False
+    assert registry["gothic-count-demo"].uses_seed is False
     assert registry["recursive"].uses_seed is True
     assert registry["voidsim-demo"].uses_seed is False
     without_void = collect_generators([p for p in bunnyland_plugins() if p.id != VOIDSIM])

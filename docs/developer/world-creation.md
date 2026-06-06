@@ -83,6 +83,19 @@ in `src/bunnyland/worldgen/examples.py` and double as worked examples for the se
 the larger `apartment-demo` (also contributed by the life-sim plugin) lives in
 `src/bunnyland/worldgen/apartment.py`.
 
+### Pop-culture demo worlds
+
+The built-in worldgen plugin also contributes small legally distinct genre-spoof demos.
+They are meant to remind players of familiar screen-story setups through broad archetypes,
+new names, and changed locations without copying protected names or settings:
+
+| Generator | What it sets up |
+|-----------|-----------------|
+| `clue-snack-demo` | A comic mystery with a nervous snack-lover, a talking hound, a lodge, and a fake haunting |
+| `dive-scheme-demo` | A dysfunctional city tavern where every room contains a terrible business plan |
+| `star-opera-demo` | A desert starport, rusty courier ship, rebel cell, and ceremonial checkpoint |
+| `gothic-count-demo` | A moor inn, moonlit castle hall, hidden crypt, courtly night host, and suspicious deed |
+
 An unknown `--generator` name lists what the enabled plugins actually provide:
 
 ```

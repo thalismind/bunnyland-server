@@ -10,8 +10,12 @@ Enabled plugins contribute named generators. The built-in worldgen plugin provid
 | Generator | Use it for |
 |-----------|------------|
 | `empty` | A blank administrative reset with only the world clock. Not playable until patched or regenerated. |
+| `clue-snack-demo` | A legally distinct comic mystery with snacks, a talking hound, and a fake haunting. |
+| `dive-scheme-demo` | A legally distinct dysfunctional tavern sitcom full of bad schemes. |
+| `gothic-count-demo` | A legally distinct gothic night-host castle with papers, secrets, and hunger. |
 | `oneshot` | Small worlds generated in one proposal. Fastest and simplest. |
 | `recursive` | Larger room graphs grown room-by-room with `--max-rooms`. Better for coherent explorable spaces. |
+| `star-opera-demo` | A legally distinct star-opera rebellion at a desert port and rusty freighter. |
 
 Implemented sim packages also provide deterministic demo worlds, such as `lifesim-demo`,
 `gardensim-demo`, `daggersim-demo`, and `voidsim-demo`. See
