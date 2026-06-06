@@ -61,6 +61,7 @@ from bunnyland.mechanics import colonysim as colony
 from bunnyland.mechanics import daggersim as dagger
 from bunnyland.mechanics import dragonsim as dragon
 from bunnyland.mechanics import lifesim as life
+from bunnyland.mechanics import nukesim as nuke
 from bunnyland.mechanics import voidsim as void
 from bunnyland.mechanics.colonysim import ClaimOwnershipHandler, Owns
 from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
@@ -433,6 +434,60 @@ def _add_colonysim_loop_world(scenario):
         ],
     )
     return node_id, job_id, recipe.id
+
+
+def _install_nukesim_playtest(actor) -> None:
+    nuke.install_nukesim(actor)
+    actor.register_handler(nuke.ScanRadiationHandler())
+    actor.register_handler(nuke.SealRadiationSourceHandler())
+    actor.register_handler(nuke.DecontaminateHandler())
+    actor.register_handler(nuke.UseRadMedicineHandler())
+    actor.register_handler(nuke.ScavengeHandler())
+    actor.register_handler(nuke.ScrapItemHandler())
+    actor.register_handler(nuke.StabilizeMutationHandler())
+
+
+def _add_nukesim_loop_world(scenario):
+    source_id = _room_content(
+        scenario,
+        "isotope case",
+        "radiation-source",
+        [nuke.RadiationSourceComponent(rads_per_hour=1.0)],
+    )
+    site_id = _room_content(
+        scenario,
+        "pharmacy cache",
+        "scavenge-site",
+        [
+            nuke.ScavengeSiteComponent(site_type="pharmacy", charges=1, hazard_rads=2.0),
+            nuke.LootTableComponent(outputs={"scrap": 2, "cloth": 1}),
+        ],
+    )
+    station_id = _room_content(
+        scenario,
+        "decon arch",
+        "decontamination",
+        [
+            nuke.DecontaminationComponent(
+                dose_reduction=3.0,
+                sickness_reduction=2.0,
+                mutation_pressure_reduction=3.0,
+            )
+        ],
+    )
+    med_id = _add_inventory_item(
+        scenario,
+        "rad-away",
+        kind="medicine",
+        components=[nuke.RadMedicineComponent(dose_reduction=2.0)],
+    )
+    junk_id = _add_inventory_item(
+        scenario,
+        "bent pressure cooker",
+        kind="junk",
+        components=[nuke.JunkComponent(outputs={"scrap": 2}, contaminated_rads=1.0)],
+    )
+    return source_id, site_id, station_id, med_id, junk_id
 
 
 def _install_barbariansim_playtest(actor) -> None:
@@ -1265,6 +1320,40 @@ async def test_discord_playtest_colonysim_core_loop(scenario):
     assert claimed and released
     assert not node.has_relationship(colony.ReservedBy, scenario.character)
     assert not character.has_relationship(Owns, node_id)
+
+
+async def test_discord_playtest_nukesim_wasteland_loop(scenario):
+    _install_nukesim_playtest(scenario.actor)
+    _source_id, site_id, _station_id, _med_id, _junk_id = _add_nukesim_loop_world(scenario)
+    rejected = _collect_rejections(scenario.actor)
+    scanned: list = []
+    scavenged: list = []
+    scrapped: list = []
+    sealed: list = []
+    decontaminated: list = []
+    medicated: list = []
+    scenario.actor.bus.subscribe(nuke.RadiationScannedEvent, scanned.append)
+    scenario.actor.bus.subscribe(nuke.SiteScavengedEvent, scavenged.append)
+    scenario.actor.bus.subscribe(nuke.ItemScrappedEvent, scrapped.append)
+    scenario.actor.bus.subscribe(nuke.RadiationSourceSealedEvent, sealed.append)
+    scenario.actor.bus.subscribe(nuke.DecontaminationAppliedEvent, decontaminated.append)
+    scenario.actor.bus.subscribe(nuke.RadMedicineUsedEvent, medicated.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-nukesim-wasteland.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    site = scenario.actor.world.get_entity(site_id)
+    assert rejected == []
+    assert result.ticks == 7
+    assert len(result.inputs) == 7
+    assert scanned and scavenged and scrapped and sealed and decontaminated and medicated
+    assert site.get_component(nuke.ScavengeSiteComponent).depleted is True
+    assert character.has_component(nuke.RadiationDoseComponent)
+    assert character.get_component(nuke.RadiationDoseComponent).amount >= 0.0
+    assert scrapped[0].output_ids
 
 
 async def test_discord_playtest_barbariansim_core_loop(scenario):

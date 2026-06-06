@@ -456,6 +456,24 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("leave-orbit", ("ship_id",), tool_name="leave_orbit"),
     _definition("land", ("ship_id",), tool_name="land"),
     _definition("launch", ("ship_id",), tool_name="launch"),
+    # Nuke sim.
+    _definition("scan-radiation", ("target_id",), tool_name="scan_radiation"),
+    _definition(
+        "seal-radiation-source", ("target_id",), tool_name="seal_radiation_source"
+    ),
+    _definition(
+        "decontaminate",
+        ("target_id", "station_id"),
+        tool_name="decontaminate",
+    ),
+    _definition(
+        "use-rad-medicine",
+        ("item_id", "target_id"),
+        tool_name="use_rad_medicine",
+    ),
+    _definition("scavenge", ("site_id",), tool_name="scavenge"),
+    _definition("scrap-item", ("item_id",), tool_name="scrap_item"),
+    _definition("stabilize-mutation", ("mutation_id",), tool_name="stabilize_mutation"),
     _definition("resolve-incident", ("incident_id",), tool_name="resolve_incident"),
 )
 
