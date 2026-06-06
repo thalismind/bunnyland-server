@@ -53,6 +53,7 @@ class CharacterAgent(Protocol):
         character_id: str,
         model: str | None = None,
         provider: str | None = None,
+        tools: list[dict] | None = None,
     ) -> ToolCall | None | Awaitable[ToolCall | None]: ...
 
 
@@ -71,8 +72,9 @@ class ScriptedAgent:
         character_id: str,
         model: str | None = None,
         provider: str | None = None,
+        tools: list[dict] | None = None,
     ) -> ToolCall | None:
-        del prompt, context, character_id, model, provider
+        del prompt, context, character_id, model, provider, tools
         if self._index >= len(self._calls):
             return None
         call = self._calls[self._index]
@@ -122,6 +124,7 @@ class OllamaAgent:
         character_id: str,
         model: str | None = None,
         provider: str | None = None,
+        tools: list[dict] | None = None,
     ) -> ToolCall | None:
         del context, provider
         history = self._history.setdefault(character_id, [])
@@ -132,7 +135,7 @@ class OllamaAgent:
             return await self._client.chat(
                 model=normalize_model(model or self._model),
                 messages=messages,
-                tools=tool_schemas(),
+                tools=tools or tool_schemas(),
             )
 
         response = await _call_provider_with_retries(
@@ -199,6 +202,7 @@ class OpenRouterAgent:
         character_id: str,
         model: str | None = None,
         provider: str | None = None,
+        tools: list[dict] | None = None,
     ) -> ToolCall | None:
         del context, provider
         history = self._history.setdefault(character_id, [])
@@ -209,7 +213,7 @@ class OpenRouterAgent:
             return await self._client.chat.send_async(
                 model=normalize_model(model or self._model),
                 messages=messages,
-                tools=tool_schemas(),
+                tools=tools or tool_schemas(),
             )
 
         response = await _call_provider_with_retries(
@@ -255,6 +259,7 @@ class ProviderRouterAgent:
         character_id: str,
         model: str | None = None,
         provider: str | None = None,
+        tools: list[dict] | None = None,
     ) -> ToolCall | None | Awaitable[ToolCall | None]:
         selected = provider or self._default_provider
         agent = self._providers.get(selected)
@@ -263,7 +268,14 @@ class ProviderRouterAgent:
             raise RuntimeError(
                 f"no LLM agent configured for provider {selected!r}; available: {available}"
             )
-        return agent.decide(prompt, context, character_id=character_id, model=model)
+        return agent.decide(
+            prompt,
+            context,
+            character_id=character_id,
+            model=model,
+            provider=provider,
+            tools=tools,
+        )
 
 
 def _provider_status_code(exc: BaseException) -> int | None:

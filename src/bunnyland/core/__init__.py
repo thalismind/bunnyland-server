@@ -4,6 +4,18 @@ This package wraps the synchronous Relics ECS with the async, event-driven,
 command-queue architecture described in the bunnyland specification.
 """
 
+from .actions import (
+    DEFAULT_ACTION_DEFINITIONS,
+    ActionArgument,
+    ActionDefinition,
+    ActionExample,
+    ActionPattern,
+    action_definition_for_command_type,
+    action_definitions,
+    definition_by_command_type,
+    definitions_by_tool_name,
+    reference_arg_keys,
+)
 from .commands import (
     Command,
     CommandCost,
@@ -109,6 +121,13 @@ from .world_actor import WorldActor
 
 __all__ = [
     "ActionPointsComponent",
+    "ActionArgument",
+    "ActionDefinition",
+    "ActionExample",
+    "ActionPattern",
+    "DEFAULT_ACTION_DEFINITIONS",
+    "action_definition_for_command_type",
+    "action_definitions",
     "AffectComponent",
     "AffectDelta",
     "AffectVector",
@@ -196,9 +215,12 @@ __all__ = [
     "build_submitted_command",
     "container_of",
     "contents",
+    "definition_by_command_type",
+    "definitions_by_tool_name",
     "infer_intent",
     "parse_entity_id",
     "reachable_ids",
+    "reference_arg_keys",
     "replace_component",
     "spawn_entity",
 ]

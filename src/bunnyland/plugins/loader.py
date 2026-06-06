@@ -12,6 +12,7 @@ import logging
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING
 
+from ..core.actions import action_definition_for_command_type, inferred_action_definition
 from .model import Plugin
 
 if TYPE_CHECKING:
@@ -122,8 +123,19 @@ def apply_plugin(plugin: Plugin, actor: WorldActor) -> None:
         actor.world.register_system(_instantiate(system))
     for observer in plugin.ecs.observers:
         actor.world.observe(_instantiate(observer))
+    for definition in plugin.commands.action_definitions:
+        actor.register_action_definition(_instantiate(definition))
     for handler in plugin.commands.action_handlers:
-        actor.register_handler(_instantiate(handler))
+        instance = _instantiate(handler)
+        actor.register_handler(instance)
+        if not any(
+            definition.command_type == instance.command_type
+            for definition in actor.action_definitions()
+        ):
+            actor.register_action_definition(
+                action_definition_for_command_type(instance.command_type)
+                or inferred_action_definition(instance.command_type)
+            )
     for factory in plugin.runtime.all_factories():
         factory(actor)
 

@@ -35,8 +35,10 @@ from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.natural_language import parse_natural_command
 from ..llm_agents.tools import (
     ToolCall,
+    action_definitions,
     command_from_tool_call,
     command_type_for_tool,
+    reference_arg_keys,
     tool_arg_keys,
     tool_for_command_type,
     tool_names,
@@ -173,10 +175,15 @@ def _with_discord_defaults(action: DiscordAction) -> DiscordAction:
     return replace(action, payload=payload)
 
 
-def parse_discord_action(text: str, available_commands: tuple[str, ...]) -> DiscordAction:
+def parse_discord_action(
+    text: str,
+    available_commands: tuple[str, ...],
+    definitions=(),
+) -> DiscordAction:
     """Parse a Discord ``!`` action against the live world verb set."""
 
     available = set(available_commands)
+    action_defs = action_definitions(tuple(definitions))
     words = _split(text.strip())
     if not words:
         raise ValueError("No command provided")
@@ -187,9 +194,9 @@ def parse_discord_action(text: str, available_commands: tuple[str, ...]) -> Disc
     structured = bool(rest) and _parse_structured_payload(rest) is not None
 
     if not structured:
-        natural = parse_natural_command(text)
+        natural = parse_natural_command(text, action_defs)
         if natural is not None:
-            natural_command_type = command_type_for_tool(natural.name)
+            natural_command_type = command_type_for_tool(natural.name, action_defs)
             if natural_command_type in available:
                 return _with_discord_defaults(
                     DiscordAction(
@@ -199,19 +206,23 @@ def parse_discord_action(text: str, available_commands: tuple[str, ...]) -> Disc
                     )
                 )
 
-    if tool in tool_names():
-        mapped = command_type_for_tool(tool)
+    if tool in tool_names(action_defs):
+        mapped = command_type_for_tool(tool, action_defs)
         if mapped in available:
             return _with_discord_defaults(
-                DiscordAction(mapped, _payload_from_text(rest, tool_arg_keys(tool)), tool=tool)
+                DiscordAction(
+                    mapped,
+                    _payload_from_text(rest, tool_arg_keys(tool, action_defs)),
+                    tool=tool,
+                )
             )
     if command_type in available:
-        mapped_tool = tool_for_command_type(command_type)
+        mapped_tool = tool_for_command_type(command_type, action_defs)
         if mapped_tool is not None:
             return _with_discord_defaults(
                 DiscordAction(
                     command_type,
-                    _payload_from_text(rest, tool_arg_keys(mapped_tool)),
+                    _payload_from_text(rest, tool_arg_keys(mapped_tool, action_defs)),
                     tool=mapped_tool,
                 )
             )
@@ -226,9 +237,7 @@ def discord_broadcast_channel_ids(actor: WorldActor) -> tuple[int, ...]:
     channel_ids: set[int] = set()
     controllers = actor.world.query().with_all([DiscordControllerComponent]).execute_entities()
     for controller in controllers:
-        channel_id = controller.get_component(
-            DiscordControllerComponent
-        ).default_channel_id
+        channel_id = controller.get_component(DiscordControllerComponent).default_channel_id
         if channel_id:
             channel_ids.add(channel_id)
     return tuple(sorted(channel_ids))
@@ -333,7 +342,12 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         character_id, controller_id, generation = found
 
         character = self.actor.world.get_entity(character_id)
-        resolved, unresolved = resolve_reference_args(self.actor.world, character, action.payload)
+        resolved, unresolved = resolve_reference_args(
+            self.actor.world,
+            character,
+            action.payload,
+            keys=reference_arg_keys(self.actor.action_definitions()),
+        )
         if unresolved:
             return None, did_you_mean(action.payload, unresolved)
 
@@ -344,6 +358,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
                 controller_id=str(controller_id),
                 controller_generation=generation,
                 submitted_at_epoch=self.actor.epoch,
+                definitions=self.actor.action_definitions(),
             )
         else:
             command = build_submitted_command(
@@ -458,9 +473,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
         if head == "suspend":
             try:
-                suspended = suspend_discord_character(
-                    self.actor, discord_user_id=ctx.author.id
-                )
+                suspended = suspend_discord_character(self.actor, discord_user_id=ctx.author.id)
             except RuntimeError as exc:
                 await self._reply(ctx, str(exc))
                 return True
@@ -488,7 +501,11 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         if head in META_COMMANDS and await self._handle_meta_command(ctx, head, rest):
             return
         try:
-            action = parse_discord_action(stripped, self.actor.available_command_types())
+            action = parse_discord_action(
+                stripped,
+                self.actor.available_command_types(),
+                self.actor.action_definitions(),
+            )
         except ValueError as exc:
             await self._reply(ctx, str(exc))
             return
@@ -536,9 +553,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         @self.client.command(name="suspend")
         async def suspend(ctx):
             try:
-                suspended = suspend_discord_character(
-                    self.actor, discord_user_id=ctx.author.id
-                )
+                suspended = suspend_discord_character(self.actor, discord_user_id=ctx.author.id)
             except RuntimeError as exc:
                 await self._reply(ctx, str(exc))
                 return

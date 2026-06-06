@@ -12,7 +12,6 @@ builtins include ``empty`` (only the world clock), seasonal deterministic demos,
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -441,7 +440,7 @@ async def oneshot_generator(actor: WorldActor, seed: str, options: GenOptions) -
         )
     else:
         builder = StubWorldBuilder()
-    proposal = await asyncio.to_thread(builder.propose, seed)
+    proposal = builder.propose(seed)
     result = await instantiate(actor, proposal)
     result.prompt = builder.system_prompt  # literal DM system prompt, for provenance
     return result

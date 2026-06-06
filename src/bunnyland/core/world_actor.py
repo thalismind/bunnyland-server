@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 
 from relics import EntityId, World
 
+from .actions import ActionDefinition
 from .commands import Lane, OnInsufficientPoints, SubmittedCommand
 from .components import (
     ActionPointsComponent,
@@ -92,6 +93,7 @@ class WorldActor:
         self.bus = EventBus()
         self.queues = CommandQueues()
         self._handlers: dict[str, CommandHandler] = {}
+        self._action_definitions: dict[str, ActionDefinition] = {}
         self._consequences: list[Consequence] = [
             EncumbranceConsequence(),
             InjuryConsequence(),
@@ -118,6 +120,12 @@ class WorldActor:
 
     def register_handler(self, handler: CommandHandler) -> None:
         self._handlers[handler.command_type] = handler
+
+    def register_action_definition(self, definition: ActionDefinition) -> None:
+        self._action_definitions[definition.command_type] = definition
+
+    def action_definitions(self) -> tuple[ActionDefinition, ...]:
+        return tuple(self._action_definitions.values())
 
     def register_consequence(self, consequence: Consequence) -> None:
         """Add a post-command consequence pass (spec 5.6 phase 6)."""
@@ -148,9 +156,7 @@ class WorldActor:
         Loading a saved world replaces every entity (including the clock spawned in
         ``__init__``), so persistence calls this afterwards to rebind the singleton clock.
         """
-        clocks = list(
-            self.world.query().with_all([WorldClockComponent]).execute_entities()
-        )
+        clocks = list(self.world.query().with_all([WorldClockComponent]).execute_entities())
         if len(clocks) != 1:
             raise RuntimeError(f"expected exactly one world clock, found {len(clocks)}")
         self._clock_entity = clocks[0]

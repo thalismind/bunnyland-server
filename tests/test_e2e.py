@@ -167,10 +167,16 @@ class _RecordingAgent(ScriptedAgent):
         character_id: str,
         model: str | None = None,
         provider: str | None = None,
+        tools: list[dict] | None = None,
     ):
         self.prompts.append(prompt)
         return super().decide(
-            prompt, context, character_id=character_id, model=model, provider=provider
+            prompt,
+            context,
+            character_id=character_id,
+            model=model,
+            provider=provider,
+            tools=tools,
         )
 
 

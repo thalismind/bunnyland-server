@@ -8,7 +8,7 @@ from ..core.components import IdentityComponent, RoomComponent
 from ..core.ecs import container_of, parse_entity_id
 from ..core.events import CommandExecutedEvent, CommandRejectedEvent, NotesSearchedEvent
 from ..core.world_actor import WorldActor
-from ..llm_agents.tools import tool_schemas
+from ..llm_agents.tools import action_definitions
 from ..projections import RoomSummaryProjection
 from .claim import discord_controlled_character
 
@@ -42,20 +42,13 @@ AGENT_HELP_LINES = [
         "Act by choosing one available verb/tool with explicit arguments. The engine "
         "validates cost, reachability, controller generation, policy, and state."
     ),
-    (
-        "Action points pay for physical/world actions and usually regenerate over time."
-    ),
-    (
-        "Focus points pay for private mental actions like notes, memory, and reflection."
-    ),
+    ("Action points pay for physical/world actions and usually regenerate over time."),
+    ("Focus points pay for private mental actions like notes, memory, and reflection."),
     (
         "Inputs are names, directions, free text, and other prompt-visible references. "
         "The server resolves entity names before commands run."
     ),
-    (
-        "Outputs are command results, events, updated prompts, memories, and visible "
-        "world changes."
-    ),
+    ("Outputs are command results, events, updated prompts, memories, and visible world changes."),
     (
         "You cannot mutate ECS directly, inspect hidden state, bypass consent/policy, "
         "or do anything a human could not do through the same verbs."
@@ -97,16 +90,20 @@ def _verb_name_lines(actor: WorldActor | None) -> list[str]:
     return _wrapped_inline_lines("World verbs available now:", verbs)
 
 
-def _tool_argument_index() -> dict[str, str]:
+def _actor_action_definitions(actor: WorldActor | None):
+    extra = actor.action_definitions() if actor is not None else ()
+    return action_definitions(extra)
+
+
+def _tool_argument_index(actor: WorldActor | None) -> dict[str, str]:
     by_verb: dict[str, str] = {}
-    for schema in tool_schemas():
-        function = schema.get("function", {})
-        name = str(function.get("name") or "")
-        properties = function.get("parameters", {}).get("properties", {})
-        args = ", ".join(properties) if isinstance(properties, dict) else ""
+    for definition in _actor_action_definitions(actor):
+        name = definition.name
+        args = ", ".join(definition.arg_keys)
         summary = args or "no arguments"
         by_verb[name] = summary
         by_verb[name.replace("_", "-")] = summary
+        by_verb[definition.command_type] = summary
     return by_verb
 
 
@@ -114,7 +111,7 @@ def _verb_detail_lines(actor: WorldActor | None, *, page: int = 1) -> list[str]:
     verbs = _available_verbs(actor)
     if not verbs:
         return []
-    args_by_verb = _tool_argument_index()
+    args_by_verb = _tool_argument_index(actor)
     page_count = max(1, (len(verbs) + HELP_VERBS_PER_PAGE - 1) // HELP_VERBS_PER_PAGE)
     page = max(1, min(page, page_count))
     start = (page - 1) * HELP_VERBS_PER_PAGE
@@ -157,19 +154,24 @@ def split_discord_text(text: str, *, limit: int = HELP_MESSAGE_LIMIT) -> tuple[s
 def _command_help(topic: str, actor: WorldActor | None = None) -> str:
     key = topic.strip().lower().replace("-", "_")
     available = set(_available_verbs(actor))
-    for schema in tool_schemas():
-        function = schema.get("function", {})
-        name = function.get("name", "")
-        if key not in {name, name.replace("_", "-")}:
+    for definition in _actor_action_definitions(actor):
+        if key not in {definition.name, definition.name.replace("_", "-"), definition.command_type}:
             continue
-        parameters = function.get("parameters", {}).get("properties", {})
-        args = ", ".join(parameters) or "no arguments"
+        args = []
+        for name, argument in (definition.arguments or {}).items():
+            detail = argument.description or argument.title
+            required = "required" if argument.required else "optional"
+            args.append(f"- {name} ({argument.kind}, {required}){': ' + detail if detail else ''}")
+        examples = [f"- {example.text}" for example in definition.examples]
         return "\n".join(
             [
-                f"Help for `{name}`:",
-                function.get("description") or f"Character action: {name}",
-                f"Arguments: {args}.",
-                "Detailed command help is not written yet.",
+                f"Help for `{definition.name}`:",
+                definition.description
+                or definition.title
+                or f"Character action: {definition.name}",
+                "Arguments:",
+                *(args or ["- no arguments"]),
+                *(["Examples:", *examples] if examples else []),
             ]
         )
     return "\n".join(
@@ -180,10 +182,7 @@ def _command_help(topic: str, actor: WorldActor | None = None) -> str:
                 if topic in available
                 else "It may not be available in the current world."
             ),
-            (
-                "Try `!help humans`, `!help agents`, or `!help <verb>` for an "
-                "available action verb."
-            ),
+            ("Try `!help humans`, `!help agents`, or `!help <verb>` for an available action verb."),
         ]
     )
 
@@ -346,8 +345,7 @@ def _render_domain_event(actor: WorldActor, event: dict[str, Any]) -> str:
             and value not in (None, "", (), [])
             and not (key.endswith("_id") and _entity_name(actor, value) is None)
             and not (
-                key.endswith("_ids")
-                and all(_entity_name(actor, item) is None for item in value)
+                key.endswith("_ids") and all(_entity_name(actor, item) is None for item in value)
             )
         },
     )
