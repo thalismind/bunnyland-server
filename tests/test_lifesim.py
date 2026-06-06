@@ -11,6 +11,9 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     ControlledBy,
+    DeadComponent,
+    DownedComponent,
+    HealthComponent,
     IdentityComponent,
     Lane,
     LLMControllerComponent,
@@ -22,11 +25,13 @@ from bunnyland.core.events import (
     AdoptionCompletedEvent,
     BirthDueEvent,
     BirthResolvedEvent,
+    CharacterDiedEvent,
     CommandRejectedEvent,
     PartnershipStartedEvent,
 )
 from bunnyland.mechanics.lifesim import (
     AdoptChildHandler,
+    AgeComponent,
     AspirationComponent,
     AssessTaxHandler,
     BillComponent,
@@ -54,6 +59,7 @@ from bunnyland.mechanics.lifesim import (
     JealousyTriggeredEvent,
     JobScheduleComponent,
     JoinHouseholdHandler,
+    LifesimAgingPolicyComponent,
     LifeStageComponent,
     MentorshipCompletedEvent,
     MentorSkillHandler,
@@ -89,6 +95,7 @@ from bunnyland.mechanics.lifesim import (
     WagePaidEvent,
     WitnessRomanceHandler,
     WorkShiftCompletedEvent,
+    configure_lifesim_aging,
     install_lifesim,
     kinship_label,
     lifesim_fragments,
@@ -98,6 +105,7 @@ from bunnyland.mechanics.policy import (
     CharacterBoundaryComponent,
     install_policy,
 )
+from bunnyland.persistence import WorldMeta, load_world, save_world
 
 HOUR = 3600.0
 LIFE_TAGS = frozenset({BoundaryTag.ROMANCE, BoundaryTag.ADULT, BoundaryTag.PREGNANCY})
@@ -223,6 +231,88 @@ async def test_aspiration_milestone_completion_can_reward_inventory_item():
     assert reward_id is not None
     inventory_ids = {str(target_id) for _edge, target_id in character.get_relationships(Contains)}
     assert reward_id in inventory_ids
+
+
+async def test_lifesim_aging_is_disabled_by_default():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(AgeComponent(born_at_epoch=0))
+    character.add_component(LifeStageComponent(stage="child"))
+
+    await scenario.actor.tick(100 * 365 * 24 * 60 * 60)
+
+    policies = list(
+        scenario.actor.world.query().with_all([LifesimAgingPolicyComponent]).execute_entities()
+    )
+    assert policies[0].get_component(LifesimAgingPolicyComponent).natural_aging is False
+    assert character.get_component(LifeStageComponent).stage == "child"
+    assert not character.has_component(DownedComponent)
+    assert not character.has_component(DeadComponent)
+
+
+async def test_enabled_lifesim_aging_reuses_core_death_lifecycle():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    configure_lifesim_aging(
+        scenario.actor,
+        natural_aging=True,
+        adult_age_seconds=10,
+        elder_age_seconds=20,
+        natural_death_age_seconds=30,
+        natural_death_checks=1,
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(AgeComponent(born_at_epoch=0))
+    character.add_component(LifeStageComponent(stage="child"))
+    character.add_component(HealthComponent(current=100.0, maximum=100.0))
+    died: list[CharacterDiedEvent] = []
+    scenario.actor.bus.subscribe(CharacterDiedEvent, died.append)
+
+    await scenario.actor.tick(20.0)
+
+    assert character.get_component(LifeStageComponent).stage == "elder"
+    assert character.get_component(HealthComponent).current == 100.0
+    assert not character.has_component(DownedComponent)
+
+    await scenario.actor.tick(10.0)
+
+    assert character.get_component(HealthComponent).current == 0.0
+    assert character.get_component(DownedComponent).cause == "natural causes"
+    assert not character.has_component(DeadComponent)
+    assert died == []
+
+    await scenario.actor.tick(1.0)
+
+    assert character.get_component(DeadComponent).cause == "natural causes"
+    assert not character.has_component(DownedComponent)
+    assert died[-1].cause == "natural causes"
+
+
+def test_lifesim_aging_policy_is_world_level_and_persists(tmp_path):
+    scenario = build_scenario()
+    _install(scenario.actor)
+
+    configure_lifesim_aging(scenario.actor, natural_aging=True)
+    path = tmp_path / "world.json"
+    save_world(scenario.actor, path, meta=WorldMeta(seed="aging"))
+
+    loaded, _meta = load_world(path)
+    policies = list(loaded.world.query().with_all([LifesimAgingPolicyComponent]).execute_entities())
+    assert len(policies) == 1
+    assert policies[0].get_component(LifesimAgingPolicyComponent).natural_aging is True
+
+
+def test_install_lifesim_can_enable_natural_aging_server_wide():
+    scenario = build_scenario()
+
+    install_lifesim(scenario.actor, natural_aging=True)
+
+    policies = list(
+        scenario.actor.world.query().with_all([LifesimAgingPolicyComponent]).execute_entities()
+    )
+    assert len(policies) == 1
+    assert policies[0].get_component(LifesimAgingPolicyComponent).natural_aging is True
 
 
 async def test_practice_and_study_progress_skill_and_emit_level_up():
@@ -650,6 +740,7 @@ async def test_relationship_pregnancy_and_birth_create_llm_controlled_child():
     )
     assert str(child.id) == child_id
     assert child.get_component(IdentityComponent).name == "Clover"
+    assert child.get_component(AgeComponent).born_at_epoch == scenario.actor.epoch
     assert child.get_component(LifeStageComponent).stage == "child"
     assert scenario.actor.world.get_entity(target).has_relationship(ParentOf, child.id)
     controllers = [

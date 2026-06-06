@@ -21,6 +21,7 @@ from .core.world_actor import WorldActor
 from .discord.claim import assign_discord_controller
 from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
+from .mechanics.lifesim import configure_lifesim_aging
 from .memory import install_memory
 from .persistence import WorldMeta, load_world, save_world
 from .plugins import (
@@ -100,6 +101,18 @@ def _env_int(name: str) -> int | None:
     return int(value)
 
 
+def _env_bool(name: str) -> bool | None:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of 1/0, true/false, yes/no, or on/off")
+
+
 async def _run_with_optional_discord(
     runtime: Awaitable[int],
     loop: GameLoop,
@@ -152,10 +165,18 @@ async def _serve(args) -> None:
         raise SystemExit(2) from exc
     # TODO: add --auto-load-requires to include missing required plugins automatically.
 
+    load_dotenv()
+    try:
+        lifesim_natural_aging = (
+            args.lifesim_natural_aging
+            if args.lifesim_natural_aging is not None
+            else _env_bool("BUNNYLAND_LIFESIM_NATURAL_AGING")
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
     host = api_key = worldgen_api_key = discord_token = None
     openrouter_api_key = openrouter_server_url = None
-    if args.llm or args.discord or args.mcp:
-        load_dotenv()
     if args.llm:
         openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
         openrouter_server_url = os.environ.get("OPENROUTER_SERVER_URL")
@@ -226,6 +247,9 @@ async def _serve(args) -> None:
         )
         print(f"Generated world {args.seed!r} via {generator.name!r}: "
               f"{len(result.rooms)} rooms, {len(result.characters)} characters.")
+
+    if lifesim_natural_aging is not None:
+        configure_lifesim_aging(actor, natural_aging=lifesim_natural_aging)
 
     try:
         configure_memory_backend(actor, args.memory_backend, args.memory_path)
@@ -447,6 +471,15 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--tick-seconds", type=float, default=1.0, help="real seconds per tick")
     serve.add_argument(
         "--time-scale", type=float, default=3600.0, help="game seconds per real tick"
+    )
+    serve.add_argument(
+        "--lifesim-natural-aging",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "enable or disable lifesim ageing into elderhood and natural-cause death "
+            "(env: BUNNYLAND_LIFESIM_NATURAL_AGING)"
+        ),
     )
     serve.add_argument(
         "--api-host",

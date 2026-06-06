@@ -277,6 +277,7 @@ from ..mechanics.gardensim import (
 )
 from ..mechanics.lifesim import (
     AdoptChildHandler,
+    AgeComponent,
     AspirationChosenEvent,
     AspirationComponent,
     AssessTaxHandler,
@@ -313,6 +314,7 @@ from ..mechanics.lifesim import (
     JealousyTriggeredEvent,
     JobScheduleComponent,
     JoinHouseholdHandler,
+    LifesimAgingPolicyComponent,
     LifeStageComponent,
     MentorshipCompletedEvent,
     MentorSkillHandler,
@@ -552,7 +554,9 @@ def lifesim_plugin() -> Plugin:
                 RoutineComponent,
                 ReputationComponent,
                 SkillSetComponent,
+                AgeComponent,
                 LifeStageComponent,
+                LifesimAgingPolicyComponent,
                 ReproductiveComponent,
                 PregnancyComponent,
                 BirthDueComponent,

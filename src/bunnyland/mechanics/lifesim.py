@@ -21,9 +21,11 @@ from ..core.components import (
     CharacterComponent,
     DeadComponent,
     DownedComponent,
+    HealthComponent,
     IdentityComponent,
     RoomComponent,
     SuspendedComponent,
+    WorldClockComponent,
 )
 from ..core.controllers import LLMControllerComponent
 from ..core.ecs import (
@@ -48,11 +50,30 @@ from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .policy import BoundaryTag, PolicyGate
 
 DEFAULT_PREGNANCY_SECONDS = 3 * 24 * 60 * 60
+SECONDS_PER_DAY = 24 * 60 * 60
+SECONDS_PER_YEAR = 365 * SECONDS_PER_DAY
+DEFAULT_ADULT_AGE_SECONDS = 18 * SECONDS_PER_YEAR
+DEFAULT_ELDER_AGE_SECONDS = 65 * SECONDS_PER_YEAR
+DEFAULT_NATURAL_DEATH_AGE_SECONDS = 90 * SECONDS_PER_YEAR
 
 
 @dataclass(frozen=True)
 class LifeStageComponent(Component):
     stage: str = "adult"
+
+
+@dataclass(frozen=True)
+class AgeComponent(Component):
+    born_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class LifesimAgingPolicyComponent(Component):
+    natural_aging: bool = False
+    adult_age_seconds: int = DEFAULT_ADULT_AGE_SECONDS
+    elder_age_seconds: int = DEFAULT_ELDER_AGE_SECONDS
+    natural_death_age_seconds: int = DEFAULT_NATURAL_DEATH_AGE_SECONDS
+    natural_death_checks: int = 1
 
 
 @dataclass(frozen=True)
@@ -504,6 +525,52 @@ def partners_of(world: World, character_id: EntityId) -> tuple[str, ...]:
             if edge.status == "together"
         )
     )
+
+
+def _lifesim_aging_policy(world: World) -> LifesimAgingPolicyComponent:
+    for entity in world.query().with_all([LifesimAgingPolicyComponent]).execute_entities():
+        return entity.get_component(LifesimAgingPolicyComponent)
+    return LifesimAgingPolicyComponent()
+
+
+def _lifesim_aging_policy_entity(world: World) -> Entity:
+    for entity in world.query().with_all([LifesimAgingPolicyComponent]).execute_entities():
+        return entity
+    clocks = list(world.query().with_all([WorldClockComponent]).execute_entities())
+    return clocks[0] if clocks else spawn_entity(world, [])
+
+
+def configure_lifesim_aging(
+    actor,
+    *,
+    natural_aging: bool | None = None,
+    adult_age_seconds: int | None = None,
+    elder_age_seconds: int | None = None,
+    natural_death_age_seconds: int | None = None,
+    natural_death_checks: int | None = None,
+) -> LifesimAgingPolicyComponent:
+    """Ensure the world has a lifesim ageing policy and optionally update it."""
+
+    entity = _lifesim_aging_policy_entity(actor.world)
+    policy = (
+        entity.get_component(LifesimAgingPolicyComponent)
+        if entity.has_component(LifesimAgingPolicyComponent)
+        else LifesimAgingPolicyComponent()
+    )
+    updates = {}
+    if natural_aging is not None:
+        updates["natural_aging"] = natural_aging
+    if adult_age_seconds is not None:
+        updates["adult_age_seconds"] = adult_age_seconds
+    if elder_age_seconds is not None:
+        updates["elder_age_seconds"] = elder_age_seconds
+    if natural_death_age_seconds is not None:
+        updates["natural_death_age_seconds"] = natural_death_age_seconds
+    if natural_death_checks is not None:
+        updates["natural_death_checks"] = natural_death_checks
+    updated = replace(policy, **updates)
+    replace_component(entity, updated)
+    return updated
 
 
 def _routine_for_activity(world: World, character: Entity, activity: str) -> Entity | None:
@@ -1659,6 +1726,7 @@ class ResolveBirthHandler:
             [
                 IdentityComponent(name=child_name, kind="character"),
                 CharacterComponent(species=actor.get_component(CharacterComponent).species),
+                AgeComponent(born_at_epoch=ctx.epoch),
                 LifeStageComponent(stage="child"),
             ],
         )
@@ -1763,6 +1831,55 @@ class PregnancyDueConsequence:
                 )
             )
         return events
+
+
+class AgingConsequence:
+    """Advance lifesim age stages and hand terminal ageing to the core death lifecycle."""
+
+    def process(self, world: World, epoch: int):
+        policy = _lifesim_aging_policy(world)
+        if not policy.natural_aging:
+            return []
+
+        query = (
+            world.query()
+            .with_all([AgeComponent, CharacterComponent])
+            .with_none([SuspendedComponent, DeadComponent])
+        )
+        for entity in query.execute_entities():
+            age = max(0, epoch - entity.get_component(AgeComponent).born_at_epoch)
+            if entity.has_component(LifeStageComponent):
+                stage = entity.get_component(LifeStageComponent)
+            else:
+                stage = LifeStageComponent()
+
+            next_stage = stage.stage
+            if age >= policy.elder_age_seconds:
+                next_stage = "elder"
+            elif age >= policy.adult_age_seconds:
+                next_stage = "adult"
+
+            if next_stage != stage.stage:
+                replace_component(entity, replace(stage, stage=next_stage))
+
+            if (
+                age >= policy.natural_death_age_seconds
+                and not entity.has_component(DownedComponent)
+            ):
+                if entity.has_component(HealthComponent):
+                    health = entity.get_component(HealthComponent)
+                    replace_component(entity, replace(health, current=0.0))
+                else:
+                    replace_component(entity, HealthComponent(current=0.0, maximum=100.0))
+                replace_component(
+                    entity,
+                    DownedComponent(
+                        downed_at_epoch=epoch,
+                        cause="natural causes",
+                        checks_remaining=max(1, policy.natural_death_checks),
+                    ),
+                )
+        return []
 
 
 class RoutineDueConsequence:
@@ -1938,7 +2055,9 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     return sorted(lines)
 
 
-def install_lifesim(actor) -> None:
+def install_lifesim(actor, *, natural_aging: bool | None = None) -> None:
+    configure_lifesim_aging(actor, natural_aging=natural_aging)
+    actor.register_consequence(AgingConsequence())
     actor.register_consequence(PregnancyDueConsequence())
     actor.register_consequence(RoutineDueConsequence())
     actor.register_gate(PolicyGate((romance_classifier, adult_classifier, pregnancy_classifier)))
@@ -1982,7 +2101,10 @@ __all__ = [
     "JobScheduleComponent",
     "JealousOf",
     "JealousyTriggeredEvent",
+    "AgeComponent",
+    "AgingConsequence",
     "LifeStageComponent",
+    "LifesimAgingPolicyComponent",
     "MentorSkillHandler",
     "MentorshipCompletedEvent",
     "MilestoneCompletedEvent",
@@ -2027,6 +2149,7 @@ __all__ = [
     "WitnessRomanceHandler",
     "adult_classifier",
     "children_of",
+    "configure_lifesim_aging",
     "install_lifesim",
     "kinship_label",
     "lifesim_fragments",
