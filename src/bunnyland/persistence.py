@@ -1,9 +1,10 @@
 """Saving and reloading worlds (spec 26).
 
-A save is a single JSON file containing the Relics ECS snapshot *and* the bunnyland
-metadata that produced it (seed, prompt, generator). It is written in the layout Relics'
-own loader understands, so reloading is just ``relics.load`` — which preserves entity ids
-(so edges survive) and restores the clock.
+A save is a single file containing the Relics ECS snapshot *and* the bunnyland metadata
+that produced it (seed, prompt, generator). JSON saves use the layout Relics' own loader
+understands, so reloading is just ``relics.load``. YAML saves use Bunnyland's optional
+compact Relics persistence driver, where each entity is a record and edges are written as
+``EdgeType -> target_entity`` subrecords.
 
 Relics' serializer only walks top-level component fields, so bunnyland's nested value
 objects (``Meter``, ``AffectVector``) are flattened to plain dicts on save with
@@ -22,19 +23,21 @@ from dataclasses import is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import relics
 from pydantic import BaseModel
 from relics import Component, Edge
 
 from .core.world_actor import WorldActor
+from .persistence_yaml import YAMLPersistenceDriver
 from .plugins import PluginError, apply_plugins
 
 if TYPE_CHECKING:
     from .plugins.model import Plugin
 
 SCHEMA_VERSION = 1
+PersistenceFormat = Literal["json", "yaml"]
 
 # Modules scanned for the component/edge types a saved world may contain. Plugin-provided
 # types are added from each plugin's EcsContribution at save/load time.
@@ -141,23 +144,52 @@ def _snapshot(actor: WorldActor, meta: WorldMeta) -> dict[str, Any]:
     }
 
 
-def save_world(actor: WorldActor, path: str | Path, *, meta: WorldMeta) -> WorldMeta:
-    """Write the world (ECS + provenance) to ``path`` as JSON. Returns the stamped meta."""
+def _format_for_path(path: Path, format: PersistenceFormat | None) -> PersistenceFormat:
+    if format is not None:
+        if format not in ("json", "yaml"):
+            raise ValueError(f"unknown persistence format: {format}")
+        return format
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        return "yaml"
+    return "json"
+
+
+def save_world(
+    actor: WorldActor,
+    path: str | Path,
+    *,
+    meta: WorldMeta,
+    format: PersistenceFormat | None = None,
+) -> WorldMeta:
+    """Write the world (ECS + provenance) to ``path``. Returns the stamped meta."""
     stamped = meta.model_copy(
         update={"saved_at_epoch": actor.epoch, "saved_at": datetime.now(UTC)}
     )
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_snapshot(actor, stamped), indent=2, default=str))
+    snapshot = _snapshot(actor, stamped)
+    if _format_for_path(path, format) == "yaml":
+        YAMLPersistenceDriver().save_snapshot(snapshot, path)
+    else:
+        path.write_text(json.dumps(snapshot, indent=2, default=str))
     return stamped
 
 
 def load_world(
-    path: str | Path, *, plugins: Sequence[Plugin] | None = None
+    path: str | Path,
+    *,
+    plugins: Sequence[Plugin] | None = None,
+    format: PersistenceFormat | None = None,
 ) -> tuple[WorldActor, WorldMeta]:
     """Reload a world from ``path``. Applies ``plugins`` (handlers/systems) before loading."""
     path = Path(path)
-    data = json.loads(path.read_text())
+    selected_format = _format_for_path(path, format)
+    yaml_driver = YAMLPersistenceDriver() if selected_format == "yaml" else None
+    data = (
+        yaml_driver.read_snapshot(path)
+        if yaml_driver is not None
+        else json.loads(path.read_text())
+    )
     meta = WorldMeta.model_validate(data.get("bunnyland", {}))
 
     actor = WorldActor()
@@ -170,11 +202,25 @@ def load_world(
         apply_plugins(plugins, actor)
 
     component_registry, edge_registry = type_registries(plugins)
-    relics.load(
-        actor.world, path, component_registry=component_registry, edge_registry=edge_registry
-    )
+    if yaml_driver is not None:
+        yaml_driver.load_snapshot(actor.world, data, component_registry, edge_registry)
+    else:
+        relics.load(
+            actor.world,
+            path,
+            component_registry=component_registry,
+            edge_registry=edge_registry,
+        )
     actor.bind_clock()  # the __init__ clock was cleared by the load; rebind to the saved one
     return actor, meta
 
 
-__all__ = ["SCHEMA_VERSION", "WorldMeta", "load_world", "save_world", "type_registries"]
+__all__ = [
+    "SCHEMA_VERSION",
+    "PersistenceFormat",
+    "WorldMeta",
+    "YAMLPersistenceDriver",
+    "load_world",
+    "save_world",
+    "type_registries",
+]

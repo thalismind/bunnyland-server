@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import json
 
-from bunnyland.core import WorldActor, container_of
+from relics import EntityId, World
+
+from bunnyland.core import ExitTo, WorldActor, container_of
 from bunnyland.core.components import IdentityComponent
 from bunnyland.core.ecs import contents
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.mechanics.needs import HungerComponent
-from bunnyland.persistence import WorldMeta, load_world, save_world, type_registries
+from bunnyland.persistence import (
+    WorldMeta,
+    YAMLPersistenceDriver,
+    load_world,
+    save_world,
+    type_registries,
+)
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.worldgen import StubWorldBuilder, instantiate
@@ -90,6 +98,75 @@ async def test_save_file_embeds_ecs_and_provenance(tmp_path):
     assert {"components", "entities", "relationships", "bunnyland"} <= set(data)
     assert data["bunnyland"]["seed"] == "marsh"
     assert data["bunnyland"]["generator"] == "recursive"
+
+
+async def test_yaml_save_file_uses_compact_entity_records(tmp_path):
+    actor, _result = await _build_and_play()
+    path = tmp_path / "world.yaml"
+    save_world(actor, path, meta=WorldMeta(seed="marsh", prompt="p", generator="recursive"))
+
+    text = path.read_text()
+    assert "__metadata__:" in text
+    assert "__bunnyland__:" in text
+    assert "IdentityComponent:" in text
+    assert "Contains -> " in text
+    assert '"seed": "marsh"' in text
+    assert '"generator": "recursive"' in text
+    assert '"name": "a scrap of paper"' in text
+    assert '"kind": "paper"' in text
+
+
+async def test_yaml_save_reload_preserves_world(tmp_path):
+    actor, result = await _build_and_play()
+    hazel = result.characters["hazel"]
+    before_room = container_of(actor.world.get_entity(hazel))
+    before_inventory = _inventory(actor, hazel)
+    before_epoch = actor.epoch
+    before_hunger = actor.world.get_entity(hazel).get_component(HungerComponent).meter.value
+
+    path = tmp_path / "world.yaml"
+    save_world(actor, path, meta=WorldMeta(seed="a quiet marsh", prompt="p", generator="oneshot"))
+    actor2, meta = load_world(path, plugins=bunnyland_plugins())
+
+    assert container_of(actor2.world.get_entity(hazel)) == before_room
+    assert _inventory(actor2, hazel) == before_inventory
+    assert actor2.epoch == before_epoch
+    hunger = actor2.world.get_entity(hazel).get_component(HungerComponent)
+    assert hunger.meter.value == before_hunger
+    assert (meta.seed, meta.prompt, meta.generator) == ("a quiet marsh", "p", "oneshot")
+
+
+def test_yaml_driver_defers_edge_resolution(tmp_path):
+    path = tmp_path / "manual.yaml"
+    path.write_text(
+        """
+__metadata__: {"version": "1.0", "epoch": 7}
+__prefabs__: {"entity": {"components": {}}}
+entity_1:
+  IdentityComponent: {"name": "Source \\"quoted\\" ☃", "kind": "room", "tags": ["start"]}
+  ExitTo -> entity_2: {
+    "direction": "north",
+    "label": "North",
+    "locked": false,
+    "hidden": false,
+    "action_cost": 1
+  }
+entity_2:
+  IdentityComponent: {"name": "Target", "kind": "room", "tags": []}
+""".lstrip()
+    )
+    components, edges = type_registries(bunnyland_plugins())
+    world = World()
+    YAMLPersistenceDriver().load(world, path, components, edges)
+
+    source_id = EntityId.parse("entity_1")
+    target_id = EntityId.parse("entity_2")
+    source = world.get_entity(source_id)
+    assert world.epoch == 7
+    assert source.get_component(IdentityComponent).name == 'Source "quoted" ☃'
+    assert source.get_relationships(ExitTo) == [
+        (ExitTo(direction="north", label="North"), target_id)
+    ]
 
 
 async def test_reload_starts_with_empty_command_queues(tmp_path):
