@@ -24,6 +24,7 @@ bunnyland-tui = "bunnyland.tui:main"
 
 [dependency-groups]
 dev = [
+    "pytest-cov>=7.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
@@ -45,6 +46,19 @@ testpaths = ["tests"]
 markers = [
     "live_llm: optional live LLM integration tests; skipped unless BUNNYLAND_LIVE_LLM=1 and provider credentials are set",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["bunnyland"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+show_missing = true
+skip_covered = false
 
 [tool.ruff]
 line-length = 100

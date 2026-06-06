@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_dir"
+
+coverage_artifact_dir="${BUNNYLAND_COVERAGE_ARTIFACT_DIR:-artifacts/coverage}"
+coverage_junit="$coverage_artifact_dir/pytest.xml"
+mkdir -p "$coverage_artifact_dir"
+
+uv run -m pytest \
+  --cov=bunnyland \
+  --cov-report=term-missing \
+  --cov-report=html \
+  --cov-report=xml \
+  --junit-xml="$coverage_junit" \
+  "$@"
+
+uv run python - "$coverage_junit" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from xml.etree import ElementTree
+
+report_path = Path(sys.argv[1])
+suite_names = ("tests.test_e2e", "tests.test_discord_playtest")
+tree = ElementTree.parse(report_path)
+skipped: list[str] = []
+for testcase in tree.iter("testcase"):
+    classname = testcase.attrib.get("classname", "")
+    if not classname.startswith(suite_names):
+        continue
+    if testcase.find("skipped") is not None:
+        skipped.append(f"{classname}.{testcase.attrib.get('name', '(unknown)')}")
+
+if skipped:
+    joined = "\n".join(f"  - {name}" for name in skipped)
+    raise SystemExit(f"e2e and Discord playtest coverage cannot skip tests:\n{joined}")
+PY

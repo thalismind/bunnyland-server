@@ -5,6 +5,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+artifacts/coverage/
 
 # venv / uv
 .venv/
