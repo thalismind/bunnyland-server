@@ -29,6 +29,7 @@ from bunnyland.core.events import (
     BirthResolvedEvent,
     CharacterDiedEvent,
     CommandRejectedEvent,
+    PartnershipEndedEvent,
     PartnershipStartedEvent,
 )
 from bunnyland.mechanics.lifesim import (
@@ -40,7 +41,10 @@ from bunnyland.mechanics.lifesim import (
     BillPaidEvent,
     BirthDueComponent,
     BusinessOwnerComponent,
+    BusinessPromotedEvent,
+    BusinessPurchaseEvent,
     BusinessSaleEvent,
+    BuyItemHandler,
     CareerComponent,
     ChargeRentHandler,
     ChooseAspirationHandler,
@@ -48,6 +52,7 @@ from bunnyland.mechanics.lifesim import (
     ClaimRoomHandler,
     CompleteMilestoneHandler,
     CustomerComponent,
+    EndPartnershipHandler,
     FindJobHandler,
     GossipSpreadEvent,
     GoToWorkHandler,
@@ -137,6 +142,7 @@ def _install(actor):
     actor.register_handler(PayBillHandler())
     actor.register_handler(OpenBusinessHandler())
     actor.register_handler(SellItemHandler())
+    actor.register_handler(BuyItemHandler())
     actor.register_handler(PromoteBusinessHandler())
     actor.register_handler(JoinHouseholdHandler())
     actor.register_handler(ClaimHomeHandler())
@@ -145,6 +151,7 @@ def _install(actor):
     actor.register_handler(SetRelationshipStatusHandler())
     actor.register_handler(SpreadGossipHandler())
     actor.register_handler(WitnessRomanceHandler())
+    actor.register_handler(EndPartnershipHandler())
 
 
 def _co_parent(scenario, *, boundary=None):
@@ -464,6 +471,37 @@ async def test_household_economy_pays_wages_taxes_rent_and_bills():
     assert not any("Unpaid bills" in line for line in fragments)
 
 
+async def test_pay_bill_without_id_selects_first_unpaid_bill_then_rejects_when_clear():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HouseholdFundsComponent(balance=25))
+    paid_bill = spawn_entity(
+        scenario.actor.world,
+        [BillComponent(amount=5, reason="old fee", paid_at_epoch=1)],
+    )
+    unpaid_bill = spawn_entity(
+        scenario.actor.world,
+        [BillComponent(amount=12, reason="garden dues")],
+    )
+    character.add_relationship(HasBill(), paid_bill.id)
+    character.add_relationship(HasBill(), unpaid_bill.id)
+    paid: list[BillPaidEvent] = []
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(BillPaidEvent, paid.append)
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "pay-bill"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "pay-bill"))
+    await scenario.actor.tick(HOUR)
+
+    assert paid[0].bill_id == str(unpaid_bill.id)
+    assert character.get_component(HouseholdFundsComponent).balance == 13
+    assert unpaid_bill.get_component(BillComponent).paid_at_epoch == HOUR
+    assert any(event.reason == "no unpaid bills" for event in rejects)
+
+
 async def test_business_sale_moves_item_out_of_inventory_and_pays_funds():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -502,6 +540,94 @@ async def test_business_sale_moves_item_out_of_inventory_and_pays_funds():
     assert not character.has_relationship(Contains, item.id)
     assert customer.get_component(CustomerComponent).budget == 15
     assert sales[0].item_id == str(item.id)
+
+
+async def test_promote_business_marks_business_and_updates_fragments():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    promoted: list[BusinessPromotedEvent] = []
+    scenario.actor.bus.subscribe(BusinessPromotedEvent, promoted.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "open-business", name="Moon Market", default_price=8)
+    )
+    await scenario.actor.tick(HOUR)
+    business_id = scenario.actor.world.get_entity(scenario.character).get_relationships(
+        OwnsBusiness
+    )[0][1]
+    await scenario.actor.submit(_cmd(scenario, "promote-business", business_id=str(business_id)))
+    await scenario.actor.tick(HOUR)
+
+    business = scenario.actor.world.get_entity(business_id).get_component(BusinessOwnerComponent)
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert business.promoted is True
+    assert promoted[0].business_name == "Moon Market"
+    assert "You own Moon Market; 0 sales." in lifesim_fragments(scenario.actor.world, character)
+
+
+async def test_buy_item_without_business_moves_inventory_and_pays_seller():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    buyer = scenario.actor.world.get_entity(scenario.character)
+    buyer.add_component(HouseholdFundsComponent(balance=40))
+    seller = _co_parent(scenario)
+    seller_entity = scenario.actor.world.get_entity(seller)
+    seller_entity.add_component(HouseholdFundsComponent(balance=5))
+    item = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="moon jam", kind="item")]
+    )
+    seller_entity.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    purchases: list[BusinessPurchaseEvent] = []
+    scenario.actor.bus.subscribe(BusinessPurchaseEvent, purchases.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "buy-item", seller_id=str(seller), item_id=str(item.id), price=18)
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert buyer.has_relationship(Contains, item.id)
+    assert not seller_entity.has_relationship(Contains, item.id)
+    assert buyer.get_component(HouseholdFundsComponent).balance == 22
+    assert seller_entity.get_component(HouseholdFundsComponent).balance == 23
+    assert purchases[0].business_name == ""
+    assert purchases[0].balance == 22
+
+
+async def test_buy_item_from_business_increments_sales_count():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    buyer = scenario.actor.world.get_entity(scenario.character)
+    buyer.add_component(HouseholdFundsComponent(balance=40))
+    seller = _co_parent(scenario)
+    seller_entity = scenario.actor.world.get_entity(seller)
+    seller_entity.add_component(HouseholdFundsComponent(balance=0))
+    business = spawn_entity(
+        scenario.actor.world,
+        [BusinessOwnerComponent(name="Hazel's Stall", default_price=11)],
+    )
+    seller_entity.add_relationship(OwnsBusiness(), business.id)
+    item = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="star biscuit", kind="item")]
+    )
+    seller_entity.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    purchases: list[BusinessPurchaseEvent] = []
+    scenario.actor.bus.subscribe(BusinessPurchaseEvent, purchases.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "buy-item",
+            seller_id=str(seller),
+            item_id=str(item.id),
+            business_id=str(business.id),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert business.get_component(BusinessOwnerComponent).sales_count == 1
+    assert seller_entity.get_component(HouseholdFundsComponent).balance == 11
+    assert buyer.get_component(HouseholdFundsComponent).balance == 29
+    assert purchases[0].business_name == "Hazel's Stall"
 
 
 async def test_household_home_and_room_claims_update_world_state():
@@ -653,6 +779,25 @@ async def test_start_partnership_creates_bidirectional_edges():
     assert character.has_relationship(PartnerOf, target)
     assert partner.has_relationship(PartnerOf, scenario.character)
     assert started[0].partner_id == str(target)
+
+
+async def test_end_partnership_removes_bidirectional_edges():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _co_parent(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    partner = scenario.actor.world.get_entity(target)
+    character.add_relationship(PartnerOf(since_epoch=0), target)
+    partner.add_relationship(PartnerOf(since_epoch=0), scenario.character)
+    ended: list[PartnershipEndedEvent] = []
+    scenario.actor.bus.subscribe(PartnershipEndedEvent, ended.append)
+
+    await scenario.actor.submit(_cmd(scenario, "end-partnership", target_id=str(target)))
+    await scenario.actor.tick(HOUR)
+
+    assert not character.has_relationship(PartnerOf, target)
+    assert not partner.has_relationship(PartnerOf, scenario.character)
+    assert ended[0].partner_id == str(target)
 
 
 async def test_relationship_status_transition_is_prompt_visible():
@@ -881,6 +1026,45 @@ def test_lifesim_fragments_describe_partner_and_pregnancy():
     assert any("partners with Hazel" in line for line in fragments)
     assert any("pregnant" in line for line in fragments)
     assert any("Your children: Clover" in line for line in fragments)
+
+
+def test_lifesim_fragments_describe_aspiration_career_funds_routine_and_jealousy():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    partner = _co_parent(scenario)
+    rival = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Poppy", kind="character"), CharacterComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), rival.id
+    )
+    routine = spawn_entity(
+        scenario.actor.world,
+        [RoutineComponent(activity="tend shop", next_due_epoch=123)],
+    )
+    character.add_component(
+        AspirationComponent(
+            name="Cozy Magnate",
+            milestones=("open shop",),
+            completed=("open shop",),
+        )
+    )
+    character.add_component(CareerComponent(title="Archivist", level=3, active=True))
+    character.add_component(HouseholdFundsComponent(balance=77))
+    character.add_relationship(HasRoutine(), routine.id)
+    character.add_relationship(
+        JealousOf(partner_id=str(partner), intensity=0.5, triggered_at_epoch=10),
+        rival.id,
+    )
+
+    fragments = lifesim_fragments(scenario.actor.world, character)
+
+    assert "Your aspiration is Cozy Magnate; completed: open shop." in fragments
+    assert "Your career is Archivist, level 3." in fragments
+    assert "Household funds: 77." in fragments
+    assert "Routine: tend shop due at epoch 123." in fragments
+    assert "You feel jealous of Poppy over Hazel." in fragments
 
 
 def test_lifesim_fragments_describe_parents():

@@ -148,6 +148,7 @@ from bunnyland.mechanics.daggersim import (
     WereformComponent,
     WithdrawHandler,
     daggersim_fragments,
+    install_daggersim,
 )
 
 HOUR = 60 * 60
@@ -982,6 +983,122 @@ def test_daggersim_fragments_show_institutions_and_memberships():
     assert any("Institution membership: Burrow Cartographers" in line for line in fragments)
 
 
+def test_daggersim_fragments_show_nearby_services_magic_law_and_character_state():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(StreetwiseSkillComponent(level=3))
+    character.add_component(CustomClassComponent(class_name="Night Gardener"))
+    character.add_component(
+        SupernaturalAfflictionComponent(
+            affliction_type="moon-form", contracted_at_epoch=0, stage="active"
+        )
+    )
+    character.add_component(FeedingNeedComponent(current=4.0, maximum=10.0))
+    character.add_component(RecallAnchorComponent(room_id=str(scenario.room_b)))
+    nearby = [
+        [
+            IdentityComponent(name="Moss Bank", kind="bank"),
+            BankComponent(name="Moss Bank"),
+        ],
+        [
+            IdentityComponent(name="bank loan", kind="loan"),
+            LoanComponent(
+                bank_id=str(scenario.room_a),
+                borrower_id=str(scenario.character),
+                principal=25,
+                balance=10,
+                due_at_epoch=500,
+            ),
+        ],
+        [
+            IdentityComponent(name="trespass charge", kind="crime-record"),
+            CrimeRecordComponent(crime_type="trespass", region_id="moss-road", fine=5),
+        ],
+        [
+            IdentityComponent(name="Ranger", kind="class-template"),
+            ClassTemplateComponent(class_name="Ranger"),
+        ],
+        [
+            IdentityComponent(name="Mend", kind="spell-template"),
+            SpellTemplateComponent(spell_name="Mend", effect_type="heal", magnitude=5),
+        ],
+        [
+            IdentityComponent(name="Moon Mend", kind="spell"),
+            CustomSpellComponent(spell_name="Moon Mend", effect_type="heal", magnitude=7),
+        ],
+        [
+            IdentityComponent(name="silver spoon", kind="item"),
+            EnchantedItemComponent(spell_name="Gleam", effect_type="light", magnitude=1),
+        ],
+        [
+            IdentityComponent(name="burrow spriggan", kind="creature"),
+            CreatureLanguageComponent(language="sylvan"),
+            HostilityComponent(hostile=False),
+        ],
+        [
+            IdentityComponent(name="quest board", kind="quest-template"),
+            QuestTemplateComponent(
+                title="Gather Moon Carrots",
+                objective="gather",
+                reward_item_name="moon carrot",
+            ),
+        ],
+        [
+            IdentityComponent(name="Gather Moon Carrots", kind="quest"),
+            GeneratedQuestComponent(title="Gather Moon Carrots", objective="gather"),
+        ],
+        [
+            IdentityComponent(name="Sunken Library", kind="dungeon"),
+            DungeonComponent(dungeon_id="sunken-library", theme="ruin", seed="sl"),
+        ],
+        [
+            IdentityComponent(name="loose stone", kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(scenario.room_b), hint="cold air", found=True),
+        ],
+        [
+            IdentityComponent(name="moon key", kind="objective"),
+            DungeonObjectiveComponent(objective_kind="key", description="a moon key", found=True),
+        ],
+        [
+            IdentityComponent(name="Baroness Thistledown", kind="character"),
+            CharacterComponent(species="bunny"),
+            SocialRegisterComponent(register="court"),
+            ConversationToneComponent(tone="cool", last_reaction="faux-pas"),
+        ],
+    ]
+    for components in nearby:
+        entity = spawn_entity(scenario.actor.world, components)
+        scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+            Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
+        )
+    scenario.actor.world.get_entity(scenario.room_a).add_component(
+        RestRiskComponent(band="uneasy")
+    )
+
+    fragments = daggersim_fragments(scenario.actor.world, character)
+
+    assert "Bank nearby: Moss Bank." in fragments
+    assert "Loan: 10 due at epoch 500 (active)." in fragments
+    assert "Crime record: trespass (open)." in fragments
+    assert "Class template available: Ranger." in fragments
+    assert "Spell formula available: Mend." in fragments
+    assert "Known custom spell: Moon Mend (heal)." in fragments
+    assert "Enchanted item: Gleam (light)." in fragments
+    assert "Creature language nearby: sylvan (calm)." in fragments
+    assert "Work available: Gather Moon Carrots." in fragments
+    assert "Generated quest: Gather Moon Carrots (offered)." in fragments
+    assert "Dungeon nearby: sunken-library (unexplored)." in fragments
+    assert "Secret door found here: cold air." in fragments
+    assert "Dungeon objective found: key." in fragments
+    assert any("took your last approach faux-pas" in line for line in fragments)
+    assert "Rest risk here: uneasy." in fragments
+    assert f"Recall anchor set at room {scenario.room_b}." in fragments
+    assert "Streetwise skill: 3." in fragments
+    assert "Custom class: Night Gardener." in fragments
+    assert "Affliction: moon-form (active)." in fragments
+    assert "Feeding need: 4.0/10.0." in fragments
+
+
 def _dungeon(scenario, *, generated=True):
     world = scenario.actor.world
     entry_room = spawn_entity(
@@ -1370,3 +1487,20 @@ def test_dialogue_fragments_surface_register_and_skills():
 
     assert any("Etiquette skill: 2" in line for line in fragments)
     assert any("Social register of Baroness Thistledown: court" in line for line in fragments)
+
+
+def test_install_daggersim_registers_plugin_consequences():
+    scenario = build_scenario()
+    before = len(scenario.actor._consequences)
+
+    install_daggersim(scenario.actor)
+
+    registered = {
+        type(consequence).__name__ for consequence in scenario.actor._consequences[before:]
+    }
+    assert registered == {
+        "TravelCompletionConsequence",
+        "QuestDeadlineConsequence",
+        "LoanDueConsequence",
+        "FeedingNeedConsequence",
+    }

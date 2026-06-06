@@ -83,6 +83,7 @@ from bunnyland.mechanics.voidsim import (
     StarSystemComponent,
     StationComponent,
     UndockHandler,
+    install_voidsim,
     voidsim_fragments,
 )
 
@@ -165,6 +166,25 @@ async def test_open_airlock_to_vacuum_decompresses_module():
     assert module.pressure == 0.0
     assert cycled[0].state == "open"
     assert pressure[0].pressure == 0.0
+
+
+async def test_open_airlock_rejects_already_open_airlock():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    airlock_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="port airlock", kind="airlock"),
+            AirlockComponent(state="open", exposes_vacuum=True),
+        ],
+    )
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "open-airlock", airlock_id=str(airlock_id)))
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "airlock is already open" for event in rejects)
 
 
 async def test_cycle_airlock_preserves_pressure():
@@ -740,6 +760,30 @@ async def test_scan_detects_then_answer_distress_signal():
     assert answered.answered is True
 
 
+async def test_scan_rejects_when_all_signals_already_detected():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    ship_id = _ship_in(scenario, scenario.room_a)
+    signal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="old mayday", kind="signal"),
+            DistressSignalComponent(text="Already logged.", detected=True),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), signal.id
+    )
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "scan", ship_id=str(ship_id)))
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "scan finds nothing" for event in rejects)
+
+
 async def test_refuel_fills_tank():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -752,6 +796,27 @@ async def test_refuel_fills_tank():
     await scenario.actor.tick(HOUR)
     assert scenario.actor.world.get_entity(ship_id).get_component(FuelComponent).level == 100.0
     assert fuel[0].level == 100.0
+
+
+async def test_refuel_accepts_partial_amount_and_rejects_full_tank():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    ship_id = _ship_in(scenario, scenario.room_a, fuel=60.0)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "refuel", ship_id=str(ship_id), amount=15))
+    await scenario.actor.tick(HOUR)
+    assert scenario.actor.world.get_entity(ship_id).get_component(FuelComponent).level == 75.0
+
+    await scenario.actor.submit(_cmd(scenario, "refuel", ship_id=str(ship_id), amount=25))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "refuel", ship_id=str(ship_id), amount=1))
+    await scenario.actor.tick(HOUR)
+
+    assert scenario.actor.world.get_entity(ship_id).get_component(FuelComponent).level == 100.0
+    assert any(event.reason == "fuel tank is already full" for event in rejects)
 
 
 async def test_enter_orbit_land_launch_and_leave():
@@ -809,3 +874,67 @@ async def test_land_rejected_when_not_in_orbit():
     await scenario.actor.submit(_cmd(scenario, "land", ship_id=str(ship_id)))
     await scenario.actor.tick(HOUR)
     assert any(event.reason == "ship must be in orbit to land" for event in rejects)
+
+
+def test_voidsim_fragments_describe_navigation_status_and_signals():
+    scenario = build_scenario()
+    _system(scenario, scenario.room_a, "Sol")
+    body = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Verdant III", kind="planet"),
+            OrbitalBodyComponent(body_type="planet", landable=True),
+        ],
+    )
+    station = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Moss Station", kind="station"),
+            StationComponent(name="Moss Station"),
+        ],
+    )
+    signal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="mayday", kind="signal"),
+            DistressSignalComponent(text="Hull breach.", detected=True),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    for entity_id in (body.id, station.id, signal.id):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity_id)
+    ship_id = _ship_in(scenario, scenario.room_a, fuel=42.0)
+    ship = scenario.actor.world.get_entity(ship_id)
+    ship.add_relationship(DockedTo(), station.id)
+    ship.add_component(OrbitComponent(body_id=str(body.id), altitude="orbit"))
+    ship.add_component(
+        NavigationRouteComponent(destination_id=str(scenario.room_b), hazard="ion storm")
+    )
+
+    fragments = voidsim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+
+    assert "Current system: Sol." in fragments
+    assert any("Burrow Runner is docked at Moss Station" in line for line in fragments)
+    assert any("Burrow Runner fuel: 42/100" in line for line in fragments)
+    assert any("Burrow Runner is in orbit of Verdant III" in line for line in fragments)
+    assert any("Burrow Runner course: plotted (hazard: ion storm)" in line for line in fragments)
+    assert "Distress signal: Hull breach." in fragments
+    assert "Orbital body nearby: Verdant III (planet)." in fragments
+
+
+def test_install_voidsim_registers_plugin_consequences():
+    scenario = build_scenario()
+    before = len(scenario.actor._consequences)
+
+    install_voidsim(scenario.actor)
+
+    registered = {
+        type(consequence).__name__ for consequence in scenario.actor._consequences[before:]
+    }
+    assert registered == {
+        "LifeSupportConsequence",
+        "JumpTravelConsequence",
+        "ChaosInfluenceConsequence",
+    }
