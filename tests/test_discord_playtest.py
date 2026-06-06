@@ -623,6 +623,7 @@ def _install_daggersim_playtest(actor) -> None:
         dagger.PayFineHandler(),
         dagger.CreateCustomClassHandler(),
         dagger.CreateSpellHandler(),
+        dagger.EnchantItemHandler(),
         dagger.CastSpellHandler(),
         dagger.AttemptPacifyHandler(),
         dagger.ContractAfflictionHandler(),
@@ -752,6 +753,7 @@ def _add_daggersim_magic_world(scenario):
         "spell-template",
         [dagger.SpellTemplateComponent(spell_name="Mend Sprout", effect_type="heal", magnitude=4)],
     )
+    charm = _add_inventory_item(scenario, "moss charm")
     creature = _room_content(
         scenario,
         "moon moth",
@@ -762,7 +764,7 @@ def _add_daggersim_magic_world(scenario):
         ],
     )
     character.add_component(dagger.LanguageSkillComponent(languages={"Mothwing": 2}))
-    return class_template, spell_template, creature
+    return class_template, spell_template, charm, creature
 
 
 def _add_daggersim_dungeon_world(scenario):
@@ -1465,7 +1467,7 @@ async def test_discord_playtest_daggersim_economy_loop(scenario):
 
 async def test_discord_playtest_daggersim_magic_loop(scenario):
     _install_daggersim_playtest(scenario.actor)
-    _class_template, _spell_template, creature_id = _add_daggersim_magic_world(scenario)
+    _class_template, _spell_template, _charm_id, creature_id = _add_daggersim_magic_world(scenario)
     rejected = _collect_rejections(scenario.actor)
     pacified: list = []
     transformed: list = []
@@ -1489,6 +1491,33 @@ async def test_discord_playtest_daggersim_magic_loop(scenario):
     assert character.has_component(dagger.SupernaturalAfflictionComponent)
     assert character.has_component(dagger.WereformComponent)
     assert pacified and transformed
+
+
+async def test_discord_playtest_daggersim_enchant_item_loop(scenario):
+    _install_daggersim_playtest(scenario.actor)
+    _class_template, _spell_template, charm_id, _creature_id = _add_daggersim_magic_world(
+        scenario
+    )
+    rejected = _collect_rejections(scenario.actor)
+    enchanted: list = []
+    cast: list = []
+    scenario.actor.bus.subscribe(dagger.ItemEnchantedEvent, enchanted.append)
+    scenario.actor.bus.subscribe(dagger.SpellCastEvent, cast.append)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-daggersim-enchant-item.json")),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    charm = scenario.actor.world.get_entity(charm_id)
+    assert rejected == []
+    assert result.ticks == 5
+    assert len(result.inputs) == 5
+    assert charm.get_component(dagger.EnchantedItemComponent).spell_name == "Mend Moss"
+    assert len(enchanted) == 1
+    assert len(cast) == 1
+    assert character.get_component(HealthComponent).current == 7.0
 
 
 async def test_discord_playtest_daggersim_dungeon_loop(scenario):

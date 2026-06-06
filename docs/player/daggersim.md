@@ -117,6 +117,23 @@ Create and cast a spell:
 !cast-spell spell_id="Mend Moss"
 ```
 
+Enchant a carried item with a spell, then cast through the item:
+
+```text
+!enchant-item item_id="moss charm" spell_id="Mend Moss"
+!cast-spell spell_id="moss charm"
+```
+
+The spell source can be a spell formula or a custom spell you created with
+`!create-spell`. Enchanting copies the spell effect onto the item, so the item becomes
+the thing you cast from. Use `target_id` when you want to affect someone other than
+yourself:
+
+```text
+!enchant-item item_id="silver needle" spell_id="mend sprout formula"
+!cast-spell spell_id="silver needle" target_id="moon moth"
+```
+
 Pacify a creature using a language your character knows:
 
 ```text

@@ -11,6 +11,7 @@ from bunnyland.core import (
     ExitTo,
     IdentityComponent,
     Lane,
+    PortableComponent,
     RoomComponent,
     build_submitted_command,
     container_of,
@@ -61,6 +62,8 @@ from bunnyland.mechanics.daggersim import (
     DungeonRequestedEvent,
     DungeonRoomComponent,
     DungeonRoomDiscoveredEvent,
+    EnchantedItemComponent,
+    EnchantItemHandler,
     EnterDungeonHandler,
     EtiquetteSkillComponent,
     ExpandSiteHandler,
@@ -78,6 +81,7 @@ from bunnyland.mechanics.daggersim import (
     InstitutionServiceComponent,
     InstitutionServiceUsedEvent,
     InvestigateRumorHandler,
+    ItemEnchantedEvent,
     JoinInstitutionHandler,
     LanguageSkillComponent,
     LawRegionComponent,
@@ -168,6 +172,7 @@ def _install(actor):
     actor.register_handler(PayFineHandler())
     actor.register_handler(CreateCustomClassHandler())
     actor.register_handler(CreateSpellHandler())
+    actor.register_handler(EnchantItemHandler())
     actor.register_handler(CastSpellHandler())
     actor.register_handler(AttemptPacifyHandler())
     actor.register_handler(ContractAfflictionHandler())
@@ -780,6 +785,90 @@ async def test_create_and_cast_custom_spell_heals_target_health():
     assert container_of(spell) == scenario.character
     assert character.get_component(HealthComponent).current == 7.0
     assert cast[0].target_health == 7.0
+
+
+async def test_enchant_item_with_created_spell_and_cast_from_item():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    template_id = _spell_template(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=1.0, maximum=10.0))
+    charm = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="moss charm", kind="item"),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), charm.id)
+    created: list[SpellCreatedEvent] = []
+    enchanted: list[ItemEnchantedEvent] = []
+    cast: list[SpellCastEvent] = []
+    scenario.actor.bus.subscribe(SpellCreatedEvent, created.append)
+    scenario.actor.bus.subscribe(ItemEnchantedEvent, enchanted.append)
+    scenario.actor.bus.subscribe(SpellCastEvent, cast.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "create-spell",
+            template_id=str(template_id),
+            spell_name="Mend Moss",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    spell_id = parse_entity_id(created[0].spell_id)
+    assert spell_id is not None
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "enchant-item",
+            item_id=str(charm.id),
+            spell_id=str(spell_id),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "cast-spell",
+            spell_id=str(charm.id),
+            target_id=str(scenario.character),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    enchantment = charm.get_component(EnchantedItemComponent)
+    assert enchantment.spell_name == "Mend Moss"
+    assert enchantment.source_spell_id == str(spell_id)
+    assert enchanted[0].item_id == str(charm.id)
+    assert enchanted[0].spell_id == str(spell_id)
+    assert character.get_component(HealthComponent).current == 5.0
+    assert cast[0].spell_id == str(charm.id)
+    assert cast[0].spell_name == "Mend Moss"
+    assert cast[0].target_health == 5.0
+
+
+async def test_enchant_item_rejects_non_item_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    template_id = _spell_template(scenario)
+    rejected_events: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejected_events.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "enchant-item",
+            item_id=str(scenario.room_a),
+            spell_id=str(template_id),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert rejected_events[0].reason == "target is not an item"
 
 
 async def test_language_skill_pacifies_hostile_creature():

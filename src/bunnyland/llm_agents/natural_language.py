@@ -102,6 +102,30 @@ def parse_natural_command(text: str) -> ToolCall | None:
         target = _rest(words, 1)
         return ToolCall("use", {"target_id": target}) if target else None
 
+    if verb == "enchant":
+        lowered = [word.lower() for word in words]
+        if "with" in lowered[2:]:
+            index = lowered.index("with")
+            item = _rest(words[:index], 1)
+            spell = _rest(words, index + 1)
+            if item and spell:
+                return ToolCall("enchant_item", {"item_id": item, "spell_id": spell})
+        return None
+
+    if verb == "cast":
+        lowered = [word.lower() for word in words]
+        for marker in ("on", "at"):
+            if marker in lowered[2:]:
+                index = lowered.index(marker)
+                spell = _rest(words[:index], 1)
+                target = _rest(words, index + 1)
+                if spell and target:
+                    return ToolCall(
+                        "cast_spell", {"spell_id": spell, "target_id": target}
+                    )
+        spell = _rest(words, 1)
+        return ToolCall("cast_spell", {"spell_id": spell}) if spell else None
+
     if verb == "till":
         soil = _rest(words, 1)
         return ToolCall("till", {"soil_id": soil}) if soil else None

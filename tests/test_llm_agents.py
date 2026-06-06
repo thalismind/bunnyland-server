@@ -72,8 +72,11 @@ def test_tool_schemas_cover_every_verb():
         "claim_ownership",
         "claim_room",
         "complete_objective",
+        "create_spell",
+        "cast_spell",
         "discover_location",
         "drop",
+        "enchant_item",
         "fertilize",
         "harvest_crop",
         "join_household",
@@ -203,6 +206,12 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
     assert parse_natural_command("pay bill") == ToolCall("pay_bill", {})
     assert parse_natural_command("pay bill bill-123") == ToolCall(
         "pay_bill", {"bill_id": "bill-123"}
+    )
+    assert parse_natural_command("enchant moss charm with Mend Moss") == ToolCall(
+        "enchant_item", {"item_id": "moss charm", "spell_id": "Mend Moss"}
+    )
+    assert parse_natural_command("cast moss charm on Juniper") == ToolCall(
+        "cast_spell", {"spell_id": "moss charm", "target_id": "Juniper"}
     )
     assert parse_natural_command("take note the basin is cold") == ToolCall(
         "take_note", {"text": "the basin is cold"}

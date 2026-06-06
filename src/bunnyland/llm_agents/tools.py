@@ -124,6 +124,11 @@ _VERBS: dict[str, _Verb] = {
     "sell_item": _Verb(
         "sell-item", Lane.WORLD, _ACTION, ("item_id", "customer_id", "business_id", "price")
     ),
+    "create_spell": _Verb(
+        "create-spell", Lane.WORLD, _ACTION, ("template_id", "spell_name")
+    ),
+    "enchant_item": _Verb("enchant-item", Lane.WORLD, _ACTION, ("item_id", "spell_id")),
+    "cast_spell": _Verb("cast-spell", Lane.WORLD, _ACTION, ("spell_id", "target_id")),
     "take_note": _Verb(
         "take-note", Lane.FOCUS, _FOCUS, ("text", "tags", "scope", "collection")
     ),

@@ -357,6 +357,21 @@ def test_discord_action_parser_accepts_plugin_only_world_verbs(scenario):
     assert action.payload == {"target_id": "Hazel", "lethal": True}
 
 
+def test_discord_action_parser_accepts_natural_enchant_commands():
+    action = parse_discord_action(
+        "enchant moss charm with Mend Moss",
+        ("enchant-item", "cast-spell"),
+    )
+    cast = parse_discord_action("cast moss charm on Juniper", ("cast-spell",))
+
+    assert action.command_type == "enchant-item"
+    assert action.tool == "enchant_item"
+    assert action.payload == {"item_id": "moss charm", "spell_id": "Mend Moss"}
+    assert cast.command_type == "cast-spell"
+    assert cast.tool == "cast_spell"
+    assert cast.payload == {"spell_id": "moss charm", "target_id": "Juniper"}
+
+
 def test_discord_action_parser_rejects_unstructured_plugin_only_args(scenario):
     class DummyHandler:
         command_type = "attack"

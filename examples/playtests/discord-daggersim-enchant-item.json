@@ -1,0 +1,12 @@
+{
+  "ticks": 5,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!create-spell template_id=\"mend sprout formula\" spell_name=\"Mend Moss\"", "expect": ["Spell created: spell Mend Moss; spell name Mend Moss; effect type heal; magnitude 4.0."]},
+    {"tick": 2, "content": "!enchant-item item_id=\"moss charm\" spell_id=\"Mend Moss\"", "expect": ["Item enchanted: item moss charm; spell Mend Moss; spell name Mend Moss; effect type heal; magnitude 4.0."]},
+    {"tick": 3, "content": "!cast-spell spell_id=\"moss charm\"", "expect": ["Spell cast: spell moss charm; spell name Mend Moss; target Juniper; effect type heal; magnitude 4.0; target health 7.0."]},
+    {"tick": 4, "content": "!look", "expect": ["Juniper"]}
+  ]
+}

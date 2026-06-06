@@ -13,7 +13,7 @@ from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.commands import SubmittedCommand
-from ..core.components import HealthComponent, IdentityComponent
+from ..core.components import HealthComponent, IdentityComponent, PortableComponent
 from ..core.ecs import (
     container_of,
     contents,
@@ -229,6 +229,17 @@ class CustomSpellComponent(Component):
     magnitude: float
     cost: int = 1
     creator_id: str | None = None
+
+
+@dataclass(frozen=True)
+class EnchantedItemComponent(Component):
+    spell_name: str
+    effect_type: str
+    magnitude: float
+    cost: int = 1
+    source_spell_id: str | None = None
+    enchanter_id: str | None = None
+    enchanted_at_epoch: int = 0
 
 
 @dataclass(frozen=True)
@@ -499,6 +510,14 @@ class CustomClassCreatedEvent(DomainEvent):
 
 
 class SpellCreatedEvent(DomainEvent):
+    spell_id: str
+    spell_name: str
+    effect_type: str
+    magnitude: float
+
+
+class ItemEnchantedEvent(DomainEvent):
+    item_id: str
     spell_id: str
     spell_name: str
     effect_type: str
@@ -1645,10 +1664,10 @@ class CastSpellHandler:
         if spell_id not in reachable_ids(ctx.world, character):
             return rejected("spell is not reachable")
         spell_entity = ctx.entity(spell_id)
-        if not spell_entity.has_component(CustomSpellComponent):
-            return rejected("target spell is not custom")
+        spell = _spell_from_entity(spell_entity)
+        if spell is None:
+            return rejected("target is not a spell or enchanted item")
         target = ctx.entity(target_id)
-        spell = spell_entity.get_component(CustomSpellComponent)
         target_health = _apply_spell_effect(target, spell)
         return ok(
             SpellCastEvent(
@@ -1668,7 +1687,83 @@ class CastSpellHandler:
         )
 
 
-def _apply_spell_effect(target: Entity, spell: CustomSpellComponent) -> float | None:
+class EnchantItemHandler:
+    command_type = "enchant-item"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        spell_id = parse_entity_id(command.payload.get("spell_id"))
+        if character_id is None or item_id is None or spell_id is None:
+            return rejected("invalid character, item, or spell id")
+        if not ctx.world.has_entity(item_id) or not ctx.world.has_entity(spell_id):
+            return rejected("item or spell does not exist")
+
+        character = ctx.entity(character_id)
+        reachable = reachable_ids(ctx.world, character)
+        if item_id not in reachable:
+            return rejected("item is not reachable")
+        if spell_id not in reachable:
+            return rejected("spell is not reachable")
+
+        item = ctx.entity(item_id)
+        if not item.has_component(PortableComponent):
+            return rejected("target is not an item")
+        if item.has_component(SpellTemplateComponent) or item.has_component(CustomSpellComponent):
+            return rejected("target item is a spell")
+
+        spell_source = ctx.entity(spell_id)
+        spell = _spell_from_entity(spell_source)
+        if spell is None and spell_source.has_component(SpellTemplateComponent):
+            template = spell_source.get_component(SpellTemplateComponent)
+            spell = CustomSpellComponent(
+                spell_name=template.spell_name,
+                effect_type=template.effect_type,
+                magnitude=template.magnitude,
+                cost=template.cost,
+                creator_id=None,
+            )
+        if spell is None:
+            return rejected("source is not a spell")
+
+        enchantment = EnchantedItemComponent(
+            spell_name=spell.spell_name,
+            effect_type=spell.effect_type,
+            magnitude=spell.magnitude,
+            cost=spell.cost,
+            source_spell_id=str(spell_id),
+            enchanter_id=str(character_id),
+            enchanted_at_epoch=ctx.epoch,
+        )
+        replace_component(item, enchantment)
+        return ok(
+            ItemEnchantedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item_id), str(spell_id)),
+                    item_id=str(item_id),
+                    spell_id=str(spell_id),
+                    spell_name=enchantment.spell_name,
+                    effect_type=enchantment.effect_type,
+                    magnitude=enchantment.magnitude,
+                )
+            )
+        )
+
+
+def _spell_from_entity(entity: Entity) -> CustomSpellComponent | EnchantedItemComponent | None:
+    if entity.has_component(CustomSpellComponent):
+        return entity.get_component(CustomSpellComponent)
+    if entity.has_component(EnchantedItemComponent):
+        return entity.get_component(EnchantedItemComponent)
+    return None
+
+
+def _apply_spell_effect(
+    target: Entity, spell: CustomSpellComponent | EnchantedItemComponent
+) -> float | None:
     if not target.has_component(HealthComponent):
         return None
     health = target.get_component(HealthComponent)
@@ -2391,6 +2486,9 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(CustomSpellComponent):
             spell = entity.get_component(CustomSpellComponent)
             lines.append(f"Known custom spell: {spell.spell_name} ({spell.effect_type}).")
+        if entity.has_component(EnchantedItemComponent):
+            spell = entity.get_component(EnchantedItemComponent)
+            lines.append(f"Enchanted item: {spell.spell_name} ({spell.effect_type}).")
         if entity.has_component(CreatureLanguageComponent):
             language = entity.get_component(CreatureLanguageComponent).language
             state = "hostile"
@@ -2587,6 +2685,8 @@ __all__ = [
     "DebtComponent",
     "DepositHandler",
     "DepositMadeEvent",
+    "EnchantItemHandler",
+    "EnchantedItemComponent",
     "ExpandSiteHandler",
     "ExpansionHookComponent",
     "ExpansionRequestedEvent",
@@ -2601,6 +2701,7 @@ __all__ = [
     "InstitutionJoinedEvent",
     "InstitutionServiceComponent",
     "InstitutionServiceUsedEvent",
+    "ItemEnchantedEvent",
     "JoinInstitutionHandler",
     "LawRegionComponent",
     "LanguageSkillComponent",

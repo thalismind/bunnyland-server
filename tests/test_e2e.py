@@ -41,7 +41,7 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
-from bunnyland.core.components import RoomComponent, WritableComponent
+from bunnyland.core.components import HealthComponent, RoomComponent, WritableComponent
 from bunnyland.core.edges import ExitTo
 from bunnyland.core.events import (
     ActorMovedEvent,
@@ -66,6 +66,13 @@ from bunnyland.llm_agents import (
 )
 from bunnyland.mechanics.colonysim import Owns
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
+from bunnyland.mechanics.daggersim import (
+    EnchantedItemComponent,
+    ItemEnchantedEvent,
+    SpellCastEvent,
+    SpellCreatedEvent,
+    SpellTemplateComponent,
+)
 from bunnyland.mechanics.gardensim import (
     CropComponent,
     CropHarvestedEvent,
@@ -684,6 +691,86 @@ async def test_scripted_agent_claims_home_and_pays_rent_bill():
     assert character.get_component(HouseholdFundsComponent).balance == 28
     assert landlord.get_component(HouseholdFundsComponent).balance == 12
     assert not any("Unpaid bills" in line for line in lifesim_fragments(actor.world, character))
+
+
+async def test_scripted_agent_enchants_created_spell_onto_item_e2e():
+    actor, _proposal, result = await _new_world()
+    hazel = result.characters["hazel"]
+    character = actor.world.get_entity(hazel)
+    for entity in actor.world.query().with_all([CharacterComponent]).execute_entities():
+        if entity.id != hazel and not entity.has_component(SuspendedComponent):
+            entity.add_component(SuspendedComponent(reason="enchantment e2e focuses on Hazel"))
+    replace_component(
+        character,
+        ActionPointsComponent(current=8.0, maximum=8.0, regen_per_hour=0.0),
+    )
+    character.add_component(HealthComponent(current=2.0, maximum=10.0))
+    room = actor.world.get_entity(container_of(character))
+    formula = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="mend sprout formula", kind="spell-template"),
+            SpellTemplateComponent(
+                spell_name="Mend Sprout",
+                effect_type="heal",
+                magnitude=4.0,
+                cost=1,
+            ),
+        ],
+    )
+    charm = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="moss charm", kind="item"),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), formula.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), charm.id)
+
+    created: list[SpellCreatedEvent] = []
+    enchanted: list[ItemEnchantedEvent] = []
+    cast: list[SpellCastEvent] = []
+    rejected: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(SpellCreatedEvent, created.append)
+    actor.bus.subscribe(ItemEnchantedEvent, enchanted.append)
+    actor.bus.subscribe(SpellCastEvent, cast.append)
+    actor.bus.subscribe(CommandRejectedEvent, rejected.append)
+
+    agent = ScriptedAgent(
+        [
+            ToolCall(
+                "create_spell",
+                {"template_id": "mend sprout formula", "spell_name": "Mend Moss"},
+            ),
+            ToolCall("enchant_item", {"item_id": "moss charm", "spell_id": "Mend Moss"}),
+            ToolCall("cast_spell", {"spell_id": "moss charm"}),
+        ]
+    )
+    builder = PromptBuilder(
+        actor.world,
+        fragment_providers=collect_prompt_fragments(bunnyland_plugins()),
+    )
+    loop = GameLoop(
+        actor,
+        ControllerDispatch(actor, builder, agent),
+        tick_seconds=1.0,
+        time_scale=60 * 60,
+    )
+
+    await loop.run(max_ticks=5)
+
+    assert rejected == []
+    assert len(created) == 1
+    assert len(enchanted) == 1
+    assert len(cast) == 1
+    enchantment = charm.get_component(EnchantedItemComponent)
+    assert enchantment.spell_name == "Mend Moss"
+    assert enchantment.source_spell_id == created[0].spell_id
+    assert enchanted[0].item_id == str(charm.id)
+    assert character.get_component(HealthComponent).current == 6.0
+    assert cast[0].spell_id == str(charm.id)
+    assert cast[0].target_health == 6.0
 
 
 async def test_llm_agent_notes_can_be_found_by_chroma_vector_synonyms():
