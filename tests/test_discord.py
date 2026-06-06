@@ -59,6 +59,58 @@ class _DiscordObject:
         self.__dict__.update(attrs)
 
 
+class _DiscordThread:
+    def __init__(self, *, parent=None):
+        self.id = 987
+        self.parent = parent
+        self.owner_id = 654
+        self.sent = []
+
+    async def send(self, body):
+        self.sent.append(body)
+
+
+class _DiscordThreadMessage:
+    def __init__(self, thread=None, *, fail_create=False):
+        self.thread = thread or _DiscordThread()
+        self.thread_requests = []
+        self.fail_create = fail_create
+
+    async def create_thread(self, **kwargs):
+        self.thread_requests.append(kwargs)
+        if self.fail_create:
+            raise RuntimeError("missing thread permissions")
+        return self.thread
+
+
+class _DiscordThreadCtx:
+    def __init__(
+        self,
+        *,
+        channel=None,
+        message=None,
+        permissions=None,
+        guild=True,
+    ):
+        self.author = _DiscordObject(id=123, mention="<@123>")
+        self.me = _DiscordObject(id=456)
+        self.guild = None if guild is None else _DiscordObject(id=789, me=self.me)
+        self.channel = channel or _DiscordObject(id=456)
+        self.message = message or _DiscordThreadMessage()
+        self.sent = []
+        self.replies = []
+        self._permissions = permissions
+
+        if permissions is not None:
+            self.channel.permissions_for = lambda _member: permissions
+
+    async def send(self, body):
+        self.sent.append(body)
+
+    async def reply(self, body, mention_author=False):
+        self.replies.append((body, mention_author))
+
+
 def _message(
     *,
     author_id: int = 123,
@@ -188,6 +240,15 @@ def test_discord_message_filters_require_allowed_guild_and_channel():
     assert not filters.allows(_message(guild_id=999, channel_id=333))
     assert not filters.allows(_message(guild_id=111, channel_id=999))
     assert not filters.allows(_message(guild_id=None, author_id=123, channel_id=333))
+
+
+def test_discord_message_filters_allow_threads_in_allowed_parent_channel():
+    filters = DiscordMessageFilters(guild_ids=(111,), channel_ids=(333,))
+    channel = _DiscordObject(id=999, parent=_DiscordObject(id=333))
+    message = _message(guild_id=111, channel_id=999)
+    message.channel = channel
+
+    assert filters.allows(message)
 
 
 def test_discord_message_filters_allow_only_configured_user_dms():
@@ -512,6 +573,61 @@ def test_help_command_handles_unknown_topic():
 
     assert "No detailed help is available for `dance` yet" in text
     assert "!help agents" in text
+
+
+async def test_discord_threaded_reply_creates_thread_when_permitted():
+    thread = _DiscordThread()
+    message = _DiscordThreadMessage(thread)
+    permissions = _DiscordObject(create_public_threads=True, send_messages_in_threads=True)
+    ctx = _DiscordThreadCtx(message=message, permissions=permissions)
+
+    await DiscordBot._send_threaded_or_reply(
+        ctx, "Help body", title="Bunnyland help", topic="verbs 2"
+    )
+
+    assert message.thread_requests == [
+        {"name": "Bunnyland help: verbs 2", "auto_archive_duration": 60}
+    ]
+    assert thread.sent == ["Help body"]
+    assert ctx.replies == []
+    assert ctx.sent == []
+
+
+async def test_discord_threaded_reply_continues_in_existing_thread():
+    parent = _DiscordObject(id=456)
+    thread = _DiscordThread(parent=parent)
+    ctx = _DiscordThreadCtx(channel=thread, message=_DiscordThreadMessage())
+
+    await DiscordBot._send_threaded_or_reply(ctx, "More help", title="Bunnyland help")
+
+    assert thread.sent == ["More help"]
+    assert ctx.message.thread_requests == []
+    assert ctx.replies == []
+
+
+async def test_discord_threaded_reply_falls_back_to_reply_without_thread_permissions():
+    permissions = _DiscordObject(create_public_threads=False, send_messages_in_threads=True)
+    ctx = _DiscordThreadCtx(permissions=permissions)
+
+    await DiscordBot._send_threaded_or_reply(ctx, "Help body", title="Bunnyland help")
+
+    assert ctx.message.thread_requests == []
+    assert ctx.replies == [("Help body", True)]
+    assert ctx.sent == []
+
+
+async def test_discord_threaded_reply_logs_thread_creation_failure(caplog):
+    permissions = _DiscordObject(create_public_threads=True, send_messages_in_threads=True)
+    ctx = _DiscordThreadCtx(
+        message=_DiscordThreadMessage(fail_create=True),
+        permissions=permissions,
+    )
+
+    caplog.set_level("WARNING", logger="bunnyland.discord")
+    await DiscordBot._send_threaded_or_reply(ctx, "Help body", title="Bunnyland help")
+
+    assert ctx.replies == [("Help body", True)]
+    assert "Discord thread creation failed; falling back." in caplog.text
 
 
 def test_render_look_uses_room_summary_projection(scenario):

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -59,6 +60,9 @@ from .view import (
 )
 
 MOVE_RESULT_TIMEOUT_SECONDS = 120.0
+DISCORD_THREAD_AUTO_ARCHIVE_MINUTES = 60
+DISCORD_THREAD_NAME_LIMIT = 100
+logger = logging.getLogger("bunnyland.discord")
 
 #: Reaction added to a player's message once their command is accepted and queued.
 QUEUED_REACTION = "\N{HOURGLASS WITH FLOWING SAND}"
@@ -96,7 +100,13 @@ class DiscordMessageFilters:
             return False
 
         channel = getattr(message, "channel", None)
-        if self.channel_ids and getattr(channel, "id", None) not in self.channel_ids:
+        channel_id = getattr(channel, "id", None)
+        parent_channel_id = getattr(getattr(channel, "parent", None), "id", None)
+        if (
+            self.channel_ids
+            and channel_id not in self.channel_ids
+            and parent_channel_id not in self.channel_ids
+        ):
             return False
         return True
 
@@ -423,7 +433,31 @@ class DiscordBot:  # pragma: no cover - needs network + extra
     @staticmethod
     async def _reply(ctx, body: str) -> None:
         """Reply to the player and ping them so the result reaches their notifications."""
-        await ctx.send(f"{ctx.author.mention} {body}")
+        reply = getattr(ctx, "reply", None)
+        if callable(reply):
+            try:
+                await reply(body, mention_author=True)
+                return
+            except TypeError:
+                await reply(body)
+                return
+            except Exception:
+                logger.warning("Discord context reply failed; falling back.", exc_info=True)
+
+        message_reply = getattr(getattr(ctx, "message", None), "reply", None)
+        if callable(message_reply):
+            try:
+                await message_reply(body, mention_author=True)
+                return
+            except TypeError:
+                await message_reply(body)
+                return
+            except Exception:
+                logger.warning("Discord message reply failed; falling back.", exc_info=True)
+
+        mention = getattr(getattr(ctx, "author", None), "mention", "")
+        prefix = f"{mention} " if mention else ""
+        await ctx.send(f"{prefix}{body}")
 
     @staticmethod
     async def _send_help(ctx, body: str) -> None:
@@ -432,6 +466,93 @@ class DiscordBot:  # pragma: no cover - needs network + extra
         for index, chunk in enumerate(chunks):
             await ctx.send(chunk)
             if index < len(chunks) - 1:
+                await asyncio.sleep(0.25)
+
+    @staticmethod
+    def _is_thread_channel(channel) -> bool:
+        """Detect Discord thread channels without importing the optional discord extra."""
+        if channel is None:
+            return False
+        channel_type = str(getattr(channel, "type", "")).lower()
+        if "thread" in channel_type:
+            return True
+        if channel.__class__.__name__ == "Thread":
+            return True
+        return hasattr(channel, "owner_id") and hasattr(channel, "parent")
+
+    @staticmethod
+    def _can_start_thread(ctx) -> bool:
+        guild = getattr(ctx, "guild", None) or getattr(getattr(ctx, "message", None), "guild", None)
+        if guild is None:
+            return False
+
+        channel = getattr(ctx, "channel", None)
+        permissions_for = getattr(channel, "permissions_for", None)
+        me = getattr(ctx, "me", None) or getattr(guild, "me", None)
+        if not callable(permissions_for) or me is None:
+            return True
+
+        permissions = permissions_for(me)
+        can_create = bool(getattr(permissions, "create_public_threads", False))
+        can_post = bool(getattr(permissions, "send_messages_in_threads", False))
+        return can_create and can_post
+
+    @staticmethod
+    def _thread_name(title: str, topic: str | None = None) -> str:
+        clean_title = " ".join(title.split()) or "Bunnyland"
+        normalized_topic = " ".join((topic or "").split())
+        name = f"{clean_title}: {normalized_topic}" if normalized_topic else clean_title
+        return name[:DISCORD_THREAD_NAME_LIMIT]
+
+    @classmethod
+    async def _reply_thread(cls, ctx, *, title: str, topic: str | None = None):
+        channel = getattr(ctx, "channel", None)
+        if cls._is_thread_channel(channel):
+            return channel
+        if not cls._can_start_thread(ctx):
+            return None
+
+        create_thread = getattr(getattr(ctx, "message", None), "create_thread", None)
+        if not callable(create_thread):
+            return None
+
+        try:
+            return await create_thread(
+                name=cls._thread_name(title, topic),
+                auto_archive_duration=DISCORD_THREAD_AUTO_ARCHIVE_MINUTES,
+            )
+        except TypeError:
+            try:
+                return await create_thread(name=cls._thread_name(title, topic))
+            except Exception:
+                logger.warning("Discord thread creation failed; falling back.", exc_info=True)
+                return None
+        except Exception:
+            logger.warning("Discord thread creation failed; falling back.", exc_info=True)
+            return None
+
+    @classmethod
+    async def _send_threaded_or_reply(
+        cls, ctx, body: str, *, title: str, topic: str | None = None
+    ) -> None:
+        """Send chunks in a Discord thread when possible, falling back to replies."""
+        chunks = split_discord_text(body)
+        thread = await cls._reply_thread(ctx, title=title, topic=topic)
+        sent_chunks = 0
+        if thread is not None:
+            try:
+                for index, chunk in enumerate(chunks):
+                    await thread.send(chunk)
+                    sent_chunks = index + 1
+                    if index < len(chunks) - 1:
+                        await asyncio.sleep(0.25)
+                return
+            except Exception:
+                logger.warning("Discord thread send failed; falling back.", exc_info=True)
+
+        for index, chunk in enumerate(chunks[sent_chunks:]):
+            await cls._reply(ctx, chunk)
+            if index < len(chunks) - sent_chunks - 1:
                 await asyncio.sleep(0.25)
 
     async def _handle_meta_command(self, ctx, head: str, rest: str) -> bool:
@@ -485,7 +606,12 @@ class DiscordBot:  # pragma: no cover - needs network + extra
             return True
 
         if head == "help":
-            await self._send_help(ctx, render_help(rest or None, self.actor))
+            await self._send_threaded_or_reply(
+                ctx,
+                render_help(rest or None, self.actor),
+                title="Bunnyland help",
+                topic=rest or None,
+            )
             return True
 
         return False
@@ -565,7 +691,9 @@ class DiscordBot:  # pragma: no cover - needs network + extra
 
         @self.client.command(name="help")
         async def help_command(ctx, *, topic: str | None = None):
-            await self._send_help(ctx, render_help(topic, self.actor))
+            await self._send_threaded_or_reply(
+                ctx, render_help(topic, self.actor), title="Bunnyland help", topic=topic
+            )
 
         @self.client.event
         async def on_ready():
