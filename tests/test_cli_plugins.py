@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import ModuleType
 
 import pytest
 
+import bunnyland.cli as cli
 from bunnyland.cli import assign_discord_controller, configure_memory_backend, main, select_plugins
 from bunnyland.core import (
     CharacterComponent,
@@ -128,6 +130,104 @@ def test_cli_discord_requires_token(monkeypatch, tmp_path):
 
     with pytest.raises(SystemExit, match="--discord needs DISCORD_TOKEN"):
         main(["serve", "--discord", "--ticks", "1"])
+
+
+def test_cli_rejects_incompatible_discord_playtest_modes(tmp_path):
+    spec = tmp_path / "playtest.json"
+    spec.write_text("{}")
+
+    with pytest.raises(SystemExit, match="do not combine it with --discord"):
+        main(["serve", "--discord", "--discord-playtest", str(spec), "--ticks", "1"])
+
+    with pytest.raises(SystemExit, match="cannot be combined with --api-port yet"):
+        main(["serve", "--discord-playtest", str(spec), "--api-port", "8080", "--ticks", "1"])
+
+
+def test_cli_mcp_requires_api_port():
+    with pytest.raises(SystemExit, match="--mcp mounts on the HTTP API and needs --api-port"):
+        main(["serve", "--mcp", "--ticks", "1"])
+
+
+def test_cli_env_parsers_and_dotenv(monkeypatch, tmp_path):
+    monkeypatch.delenv("BUNNYLAND_FLAG", raising=False)
+    monkeypatch.delenv("BUNNYLAND_COUNT", raising=False)
+    assert cli._env_bool("BUNNYLAND_FLAG") is None
+    assert cli._env_int("BUNNYLAND_COUNT") is None
+
+    monkeypatch.setenv("BUNNYLAND_FLAG", " yes ")
+    monkeypatch.setenv("BUNNYLAND_COUNT", " 42 ")
+    assert cli._env_bool("BUNNYLAND_FLAG") is True
+    assert cli._env_int("BUNNYLAND_COUNT") == 42
+
+    monkeypatch.setenv("BUNNYLAND_FLAG", "off")
+    assert cli._env_bool("BUNNYLAND_FLAG") is False
+
+    monkeypatch.setenv("BUNNYLAND_FLAG", "maybe")
+    with pytest.raises(ValueError, match="BUNNYLAND_FLAG must be one of"):
+        cli._env_bool("BUNNYLAND_FLAG")
+
+    monkeypatch.setenv("BUNNYLAND_FROM_ENV", "existing")
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        """
+# comment
+BUNNYLAND_FROM_ENV=ignored
+BUNNYLAND_NEW_VALUE='loaded'
+bad line
+""".lstrip()
+    )
+    cli.load_dotenv(dotenv)
+    assert cli.os.environ["BUNNYLAND_FROM_ENV"] == "existing"
+    assert cli.os.environ["BUNNYLAND_NEW_VALUE"] == "loaded"
+
+
+def test_configure_memory_backend_rejects_unknown_backend():
+    with pytest.raises(ValueError, match="unknown memory backend 'disk'"):
+        configure_memory_backend(WorldActor(), "disk")
+
+
+async def test_run_with_optional_discord_returns_runtime_and_closes_bot():
+    class FakeBot:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def start(self):
+            while not self.closed:
+                await asyncio.sleep(0)
+
+        async def close(self):
+            self.closed = True
+
+    bot = FakeBot()
+    loop = type("Loop", (), {"stop": lambda self: None})()
+
+    result = await cli._run_with_optional_discord(asyncio.sleep(0, result=7), loop, bot)
+
+    assert result == 7
+    assert bot.closed is True
+
+
+async def test_run_with_optional_discord_stops_loop_when_bot_exits():
+    class FakeLoop:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    class FakeBot:
+        async def start(self):
+            return None
+
+        async def close(self):
+            raise AssertionError("close is only used when runtime finishes first")
+
+    loop = FakeLoop()
+
+    with pytest.raises(RuntimeError, match="Discord bot stopped unexpectedly"):
+        await cli._run_with_optional_discord(asyncio.sleep(60), loop, FakeBot())
+
+    assert loop.stopped is True
 
 
 def test_assign_discord_controller_claims_suspended_character():

@@ -24,7 +24,16 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
-from bunnyland.core.claim_timeout import apply_claim_timeout_settings
+from bunnyland.core.claim_timeout import (
+    CLAIM_FALLBACK_LLM,
+    CLAIM_FALLBACK_SUSPEND,
+    CLAIM_TIMEOUT_MAX_SECONDS,
+    CLAIM_TIMEOUT_MIN_SECONDS,
+    apply_claim_timeout_settings,
+    normalize_claim_fallback,
+    normalize_claim_timeout,
+    record_claim_activity,
+)
 from bunnyland.core.controllers import (
     LLMControllerComponent,
     SuspendedControllerComponent,
@@ -158,6 +167,69 @@ async def test_claim_timeout_uses_player_timeout_before_server_default():
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.has_component(SuspendedComponent)
+
+
+def test_claim_timeout_normalizers_accept_aliases_and_reject_bad_values():
+    assert normalize_claim_fallback(None) == CLAIM_FALLBACK_SUSPEND
+    assert normalize_claim_fallback(" suspended ") == CLAIM_FALLBACK_SUSPEND
+    assert normalize_claim_fallback("offline") == CLAIM_FALLBACK_SUSPEND
+    assert normalize_claim_fallback("AI") == CLAIM_FALLBACK_LLM
+    assert normalize_claim_fallback("agent") == CLAIM_FALLBACK_LLM
+    assert normalize_claim_timeout(CLAIM_TIMEOUT_MIN_SECONDS) == CLAIM_TIMEOUT_MIN_SECONDS
+    assert normalize_claim_timeout(CLAIM_TIMEOUT_MAX_SECONDS) == CLAIM_TIMEOUT_MAX_SECONDS
+
+    with pytest.raises(ValueError, match="fallback_controller must be one of: llm, suspend"):
+        normalize_claim_fallback("manual")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "timeout_seconds must be between "
+            f"{CLAIM_TIMEOUT_MIN_SECONDS} and {CLAIM_TIMEOUT_MAX_SECONDS}"
+        ),
+    ):
+        normalize_claim_timeout(CLAIM_TIMEOUT_MIN_SECONDS - 1)
+
+
+def test_claim_timeout_settings_preserve_existing_values_and_record_activity():
+    scenario = build_scenario()
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    first = apply_claim_timeout_settings(
+        web,
+        now_unix=100,
+        fallback_controller="ai",
+        fallback_reason=" idle ",
+        llm_profile_name=" guide ",
+        llm_model=" model ",
+        llm_provider=" provider ",
+        timeout_seconds=CLAIM_TIMEOUT_MIN_SECONDS,
+        reset_activity=True,
+    )
+
+    second = apply_claim_timeout_settings(
+        web,
+        now_unix=200,
+        fallback_controller=None,
+        fallback_reason=" ",
+        llm_profile_name=" ",
+        llm_model=" ",
+        llm_provider=" ",
+        timeout_seconds=None,
+        reset_activity=False,
+    )
+    untracked = spawn_entity(scenario.actor.world)
+    record_claim_activity(untracked, now_unix=500)
+    record_claim_activity(web, now_unix=300)
+    updated = web.get_component(type(first))
+
+    assert first.fallback_controller == CLAIM_FALLBACK_LLM
+    assert second.fallback_reason == "idle"
+    assert second.llm_profile_name == "guide"
+    assert second.llm_model == "model"
+    assert second.llm_provider == "provider"
+    assert second.timeout_seconds == CLAIM_TIMEOUT_MIN_SECONDS
+    assert second.claimed_at_unix == 100
+    assert updated.last_command_unix == 300
 
 
 # -- movement ---------------------------------------------------------------------------

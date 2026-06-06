@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+
+import pytest
 
 from bunnyland.core import (
     ButtonComponent,
@@ -50,6 +53,7 @@ from bunnyland.core.events import (
 )
 from bunnyland.discord.playtest import (
     DiscordPlaytest,
+    DiscordPlaytestHarness,
     PlaytestInput,
     load_discord_playtest,
     run_discord_playtest,
@@ -1129,6 +1133,99 @@ async def test_discord_playtest_writes_trace_artifacts(scenario, tmp_path, monke
     assert trace["final_epoch"] == scenario.actor.epoch
     assert trace["final_world"]["bunnyland"]["saved_at_epoch"] == scenario.actor.epoch
     assert trace["final_world"] == json.loads(world_path.read_text())
+
+
+def test_discord_playtest_resolved_ticks_requires_limit_for_epoch_only_inputs():
+    assert (
+        DiscordPlaytest(inputs=(PlaytestInput(tick=3, content="wait"),)).resolved_ticks(None) == 4
+    )
+    assert (
+        DiscordPlaytest(inputs=(PlaytestInput(epoch=3600, content="wait"),)).resolved_ticks(2)
+        == 2
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="epoch-keyed playtests need either a spec `ticks` value or CLI --ticks",
+    ):
+        DiscordPlaytest(inputs=(PlaytestInput(epoch=3600, content="wait"),)).resolved_ticks(None)
+
+
+async def test_discord_playtest_reports_unscheduled_inputs(scenario):
+    spec = DiscordPlaytest(
+        ticks=1,
+        inputs=(PlaytestInput(epoch=7200, content="move north"),),
+    )
+    harness = DiscordPlaytestHarness(_loop(scenario.actor), spec)
+
+    try:
+        with pytest.raises(
+            AssertionError,
+            match=r"playtest input\(s\) were never scheduled: #0 'move north' at epoch 7200",
+        ):
+            harness.assert_no_unfinished_inputs()
+    finally:
+        await harness.close()
+
+
+async def test_discord_playtest_reports_inputs_that_never_finish(scenario):
+    spec = DiscordPlaytest(
+        ticks=1,
+        inputs=(PlaytestInput(tick=0, content="move north"),),
+    )
+    harness = DiscordPlaytestHarness(_loop(scenario.actor), spec)
+    harness._scheduled.add(0)
+    harness._tasks[0] = asyncio.create_task(asyncio.sleep(60))
+
+    try:
+        with pytest.raises(
+            AssertionError,
+            match=r"playtest input\(s\) did not finish before the run ended: #0 'move north'",
+        ):
+            harness.assert_no_unfinished_inputs()
+    finally:
+        await harness.close()
+
+
+async def test_discord_playtest_traces_failed_expectations(scenario, tmp_path, monkeypatch):
+    monkeypatch.setenv("BUNNYLAND_PLAYTEST_TRACE_DIR", str(tmp_path))
+    spec = DiscordPlaytest(
+        name="failing trace",
+        ticks=1,
+        inputs=(
+            PlaytestInput(
+                tick=0,
+                user_id=123,
+                channel_id=456,
+                content="claim Juniper",
+                expect=("this response should not appear",),
+            ),
+        ),
+    )
+
+    with pytest.raises(AssertionError, match="expected output containing"):
+        await run_discord_playtest(_loop(scenario.actor), spec)
+
+    trace = json.loads(next(tmp_path.glob("*.trace.json")).read_text())
+    assert trace["status"] == "failed"
+    assert "AssertionError" in trace["error"]
+    assert trace["received_messages"][0]["content"] == "!claim Juniper"
+
+
+def test_load_discord_playtest_rejects_invalid_input_schedules(tmp_path):
+    path = tmp_path / "bad-playtest.json"
+    path.write_text(json.dumps({"inputs": [{"tick": 0, "epoch": 0, "content": "claim"}]}))
+
+    with pytest.raises(
+        ValueError,
+        match=r"playtest input #0 must set exactly one of `tick` or `epoch`",
+    ):
+        load_discord_playtest(path)
+
+    path.write_text(json.dumps({"inputs": [{"tick": 0}]}))
+
+    with pytest.raises(ValueError, match="playtest input #0 needs `content` or `command`"):
+        load_discord_playtest(path)
 
 
 async def test_discord_playtest_schedules_inputs_by_starting_epoch(scenario):

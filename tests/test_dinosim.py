@@ -16,6 +16,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.components import CharacterComponent
+from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.colonysim import install_colonysim
 from bunnyland.mechanics.dinosim import (
     AncientSampleComponent,
@@ -82,6 +83,12 @@ def _room_contents(scenario):
         scenario.actor.world.get_entity(entity_id)
         for _edge, entity_id in room.get_relationships(Contains)
     ]
+
+
+def _collect_rejections(actor) -> list[CommandRejectedEvent]:
+    rejects: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+    return rejects
 
 
 async def test_fossil_identification_extracts_sample_and_prepares_clone_egg():
@@ -201,6 +208,134 @@ async def test_reptile_egg_can_be_fertilized_incubated_and_hatched_into_lifesim_
     assert hatchling.get_component(LifeStageComponent).stage == "child"
     assert hatchling.has_component(DinosaurComponent)
     assert container_of(hatchling) == scenario.room_a
+
+
+async def test_dinosim_rejects_invalid_fossil_sample_and_parent_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    rejects = _collect_rejections(scenario.actor)
+    non_fossil = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="plain rock", kind="rock")],
+    )
+    fossil = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="amber chip", kind="fossil"),
+            FossilFragmentComponent(sample_quality=0.5),
+        ],
+    )
+    sample_target = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="glass vial", kind="item")],
+    )
+    infertile_parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="tired raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            FertilityComponent(fertile=False),
+            ReptileProcreationComponent(egg_species_name="velociraptor"),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    for entity in (non_fossil, fossil, sample_target, infertile_parent):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "identify-fossil", fossil_id="not-an-id", species_name="raptor")
+    )
+    await scenario.actor.submit(
+        _cmd(scenario, "identify-fossil", fossil_id="entity_999", species_name="raptor")
+    )
+    await scenario.actor.submit(
+        _cmd(scenario, "identify-fossil", fossil_id=str(non_fossil.id), species_name="raptor")
+    )
+    await scenario.actor.submit(_cmd(scenario, "extract-ancient-sample", fossil_id=str(fossil.id)))
+    await scenario.actor.submit(_cmd(scenario, "prepare-clone", sample_id=str(sample_target.id)))
+    await scenario.actor.submit(_cmd(scenario, "lay-egg", parent_id=str(scenario.character)))
+    await scenario.actor.submit(_cmd(scenario, "lay-egg", parent_id=str(infertile_parent.id)))
+    await scenario.actor.tick(HOUR)
+
+    reasons = {event.reason for event in rejects}
+    assert "invalid character, fossil, or species name" in reasons
+    assert "fossil does not exist" in reasons
+    assert "target is not a fossil" in reasons
+    assert "fossil has not been identified" in reasons
+    assert "target is not an ancient sample" in reasons
+    assert "parent cannot lay reptile eggs" in reasons
+    assert "parent is not fertile" in reasons
+
+
+async def test_dinosim_rejects_invalid_egg_lifecycle_steps():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    rejects = _collect_rejections(scenario.actor)
+    parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="clever raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            FertilityComponent(),
+            ReptileProcreationComponent(egg_species_name="velociraptor"),
+        ],
+    )
+    infertile_parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="tired raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            FertilityComponent(fertile=False),
+            ReptileProcreationComponent(egg_species_name="velociraptor"),
+        ],
+    )
+    not_egg = spawn_entity(scenario.actor.world, [IdentityComponent(name="stone", kind="item")])
+    egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="raptor egg", kind="egg"),
+            EggComponent(species_name="velociraptor", laid_at_epoch=0),
+        ],
+    )
+    other_egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="other raptor egg", kind="egg"),
+            EggComponent(species_name="velociraptor", laid_at_epoch=0),
+        ],
+    )
+    waiting_egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="waiting raptor egg", kind="egg"),
+            EggComponent(species_name="velociraptor", laid_at_epoch=0, fertilized=True),
+            IncubationComponent(started_at_epoch=0, required_seconds=DAY),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    for entity in (parent, infertile_parent, not_egg, egg, other_egg, waiting_egg):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    commands = [
+        _cmd(scenario, "fertilize-egg", egg_id=str(not_egg.id), parent_id=str(parent.id)),
+        _cmd(scenario, "fertilize-egg", egg_id=str(egg.id), parent_id=str(infertile_parent.id)),
+        _cmd(scenario, "fertilize-egg", egg_id=str(egg.id), parent_id=str(parent.id)),
+        _cmd(scenario, "fertilize-egg", egg_id=str(egg.id), parent_id=str(parent.id)),
+        _cmd(scenario, "incubate-egg", egg_id=str(other_egg.id)),
+        _cmd(scenario, "hatch-egg", egg_id=str(egg.id)),
+        _cmd(scenario, "hatch-egg", egg_id=str(waiting_egg.id)),
+    ]
+    for command in commands:
+        await scenario.actor.submit(command)
+        await scenario.actor.tick(HOUR)
+
+    reasons = [event.reason for event in rejects]
+    assert "target is not an egg" in reasons
+    assert "parent is not fertile" in reasons
+    assert "egg is already fertilized" in reasons
+    assert "egg is not fertilized" in reasons
+    assert "egg is not incubating" in reasons
+    assert "egg is not ready to hatch" in reasons
 
 
 async def test_storyteller_selects_kaiju_attack_only_when_colonysim_and_dinosim_are_enabled():

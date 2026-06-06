@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,7 +57,8 @@ from bunnyland.server.models import (
     WorldPatchRequest,
     WorldRoomGenerationRequest,
 )
-from bunnyland.server.patches import apply_world_patch
+from bunnyland.server.patches import WorldPatchError, apply_world_patch
+from bunnyland.server.runtime import run_loop_with_api
 from bunnyland.server.schema import world_schema
 from bunnyland.server.worldgen import (
     generate_character_patch,
@@ -213,6 +217,102 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/updates" in paths
 
 
+async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
+    monkeypatch,
+    scenario,
+):
+    servers = []
+
+    class FakeLoop:
+        paused = False
+        running = True
+
+        async def run(self, *, max_ticks=None):
+            self.max_ticks = max_ticks
+            return 7
+
+        def stop(self):
+            raise AssertionError("server should not stop the loop in this path")
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+            self.exited_after_signal = False
+            servers.append(self)
+
+        async def serve(self):
+            while not self.should_exit:
+                await asyncio.sleep(0)
+            self.exited_after_signal = True
+
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        SimpleNamespace(Config=lambda app, **kwargs: {"app": app, **kwargs}, Server=FakeServer),
+    )
+    loop = FakeLoop()
+
+    ticks = await run_loop_with_api(
+        loop,
+        scenario.actor,
+        WorldMeta(seed="runtime"),
+        host="127.0.0.1",
+        port=8765,
+        max_ticks=7,
+    )
+
+    assert ticks == 7
+    assert loop.max_ticks == 7
+    assert servers[0].config["host"] == "127.0.0.1"
+    assert servers[0].config["port"] == 8765
+    assert servers[0].exited_after_signal is True
+
+
+async def test_run_loop_with_api_stops_game_when_server_finishes(monkeypatch, scenario):
+    class FakeLoop:
+        paused = False
+        running = True
+
+        def __init__(self) -> None:
+            self.stopped = False
+
+        async def run(self, *, max_ticks=None):
+            while not self.stopped:
+                await asyncio.sleep(0)
+            return 3
+
+        def stop(self):
+            self.stopped = True
+
+    class FakeServer:
+        should_exit = False
+
+        def __init__(self, _config):
+            pass
+
+        async def serve(self):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        SimpleNamespace(Config=lambda app, **kwargs: {"app": app, **kwargs}, Server=FakeServer),
+    )
+    loop = FakeLoop()
+
+    ticks = await run_loop_with_api(
+        loop,
+        scenario.actor,
+        WorldMeta(seed="runtime"),
+        host="127.0.0.1",
+        port=8765,
+    )
+
+    assert ticks == 3
+    assert loop.stopped is True
+
+
 async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
     scenario,
 ):
@@ -303,6 +403,63 @@ async def test_web_controller_fallback_endpoint_updates_existing_claim(scenario)
     assert claim.llm_model == "claim-model"
 
 
+async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
+    app = create_app(scenario.actor)
+    claim_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/claim"
+    )
+    fallback_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/fallback"
+    )
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+
+    with pytest.raises(Exception) as missing_character:
+        await fallback_route.endpoint(
+            WebControllerFallbackRequest(character_id="entity_999", client_id="client-a")
+        )
+    assert missing_character.value.status_code == 404
+    assert missing_character.value.detail == "character does not exist"
+
+    with pytest.raises(Exception) as blank_client:
+        await fallback_route.endpoint(
+            WebControllerFallbackRequest(
+                character_id=str(scenario.character),
+                client_id=" ",
+            )
+        )
+    assert blank_client.value.status_code == 400
+    assert blank_client.value.detail == "client_id must not be blank"
+
+    with pytest.raises(Exception) as missing_controller:
+        await fallback_route.endpoint(
+            WebControllerFallbackRequest(
+                character_id=str(scenario.character),
+                client_id="client-a",
+            )
+        )
+    assert missing_controller.value.status_code == 404
+    assert missing_controller.value.detail == "web controller does not exist"
+
+    await claim_route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+        )
+    )
+    with pytest.raises(Exception) as wrong_character:
+        await fallback_route.endpoint(
+            WebControllerFallbackRequest(
+                character_id=str(other.id),
+                client_id="client-a",
+            )
+        )
+    assert wrong_character.value.status_code == 409
+    assert wrong_character.value.detail == "web controller is not controlling this character"
+
+
 def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):
     path = tmp_path / "admin-save.json"
 
@@ -318,6 +475,28 @@ def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):
     reloaded, meta = load_world(path)
     assert reloaded.epoch == scenario.actor.epoch
     assert meta.seed == "moss"
+
+
+async def test_admin_runtime_endpoints_require_attached_loop(scenario):
+    app = create_app(scenario.actor)
+
+    for path in ("/admin/runtime", "/admin/pause", "/admin/resume"):
+        route = next(route for route in app.routes if route.path == path)
+        with pytest.raises(Exception) as exc:
+            await route.endpoint()
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "server runtime is not attached"
+
+
+async def test_admin_save_endpoint_requires_configured_path(scenario):
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/admin/world/save")
+
+    with pytest.raises(Exception) as exc:
+        await route.endpoint()
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "server was not started with --save"
 
 
 async def test_admin_world_generate_replaces_world_and_updates_metadata(scenario):
@@ -440,6 +619,89 @@ async def test_admin_world_generate_defaults_to_recursive_when_available(scenari
     )
 
     assert response.generator == "recursive"
+
+
+async def test_admin_world_generate_endpoint_reports_precondition_errors(scenario):
+    app_without_plugins = create_app(scenario.actor)
+    route_without_plugins = next(
+        route for route in app_without_plugins.routes if route.path == "/admin/world/generate"
+    )
+
+    with pytest.raises(Exception) as unconfirmed:
+        await route_without_plugins.endpoint(WorldGenerateRequest())
+    assert unconfirmed.value.status_code == 400
+    assert unconfirmed.value.detail == "confirm_reset must be true"
+
+    with pytest.raises(Exception) as no_registry:
+        await route_without_plugins.endpoint(WorldGenerateRequest(confirm_reset=True))
+    assert no_registry.value.status_code == 409
+    assert no_registry.value.detail == "server was not started with a world generator registry"
+
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    app = create_app(scenario.actor, plugins=plugins)
+    route = next(route for route in app.routes if route.path == "/admin/world/generate")
+
+    with pytest.raises(Exception) as unknown:
+        await route.endpoint(WorldGenerateRequest(confirm_reset=True, generator="missing"))
+    assert unknown.value.status_code == 400
+    assert "unknown generator 'missing'" in unknown.value.detail
+
+
+async def test_admin_patch_endpoint_translates_patch_errors_to_http_400(scenario):
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/admin/world")
+
+    with pytest.raises(Exception) as exc:
+        await route.endpoint(
+            WorldPatchRequest.model_validate(
+                {"operations": [{"op": "delete_entity", "entity_id": "entity_999"}]}
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "entity 'entity_999' does not exist"
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "message"),
+    [
+        (
+            "/admin/world/generate-room",
+            WorldRoomGenerationRequest(door_entity_id="entity_999"),
+            "door entity 'entity_999' does not exist",
+        ),
+        (
+            "/admin/world/generate-character",
+            WorldCharacterGenerationRequest(room_entity_id="entity_999"),
+            "room entity 'entity_999' does not exist",
+        ),
+        (
+            "/admin/world/generate-item",
+            WorldItemGenerationRequest(container_entity_id="entity_999"),
+            "container entity 'entity_999' does not exist",
+        ),
+        (
+            "/admin/world/generate-event",
+            WorldEventGenerationRequest(room_entity_id="entity_999"),
+            "room entity 'entity_999' does not exist",
+        ),
+    ],
+)
+async def test_admin_entity_generation_endpoints_translate_patch_errors(
+    scenario,
+    path,
+    payload,
+    message,
+):
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == path)
+
+    with pytest.raises(Exception) as exc:
+        await route.endpoint(payload)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == message
+
 
 def test_world_schema_includes_available_types_and_live_usage(scenario):
     schema = world_schema(scenario.actor)
@@ -737,6 +999,98 @@ def test_world_patch_can_reference_client_ids_within_one_request(scenario):
     assert len(response.changed_entities) == 2
     exits = scenario.actor.world.get_entity(scenario.room_a).get_relationships(ExitTo)
     assert any(edge.direction == "down" for edge, _target in exits)
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        (
+            {"op": "delete_entity", "entity_id": "entity_999"},
+            "entity 'entity_999' does not exist",
+        ),
+        (
+            {
+                "op": "add_entity",
+                "components": [{"type": "MissingComponent", "fields": {}}],
+            },
+            "unknown component 'MissingComponent'",
+        ),
+        (
+            {
+                "op": "add_entity",
+                "components": [
+                    {"type": "IdentityComponent", "fields": {"name": "bad"}}
+                ],
+            },
+            "invalid IdentityComponent",
+        ),
+        (
+            {
+                "op": "remove_component",
+                "entity_id": "$character",
+                "component_type": "MissingComponent",
+            },
+            "unknown component 'MissingComponent'",
+        ),
+        (
+            {
+                "op": "set_edge",
+                "source_id": "$room",
+                "target_id": "$character",
+                "edge": {"type": "MissingEdge", "fields": {}},
+            },
+            "unknown edge 'MissingEdge'",
+        ),
+        (
+            {
+                "op": "set_edge",
+                "source_id": "$room",
+                "target_id": "$character",
+                "edge": {"type": "Contains", "fields": {"mode": "somewhere"}},
+            },
+            "invalid Contains",
+        ),
+        (
+            {
+                "op": "remove_edge",
+                "source_id": "$room",
+                "target_id": "$character",
+                "edge_type": "MissingEdge",
+            },
+            "unknown edge 'MissingEdge'",
+        ),
+    ],
+)
+def test_world_patch_reports_validation_errors(scenario, operation, message):
+    aliases = {
+        "$room": str(scenario.room_a),
+        "$character": str(scenario.character),
+    }
+    rendered = json.loads(json.dumps(operation))
+    for key in ("entity_id", "source_id", "target_id"):
+        if rendered.get(key) in aliases:
+            rendered[key] = aliases[rendered[key]]
+
+    with pytest.raises(WorldPatchError, match=message):
+        apply_world_patch(
+            scenario.actor,
+            WorldPatchRequest.model_validate({"operations": [rendered]}),
+        )
+
+
+def test_world_patch_rejects_duplicate_client_entity_ids(scenario):
+    with pytest.raises(WorldPatchError, match="duplicate client entity id '\\$new'"):
+        apply_world_patch(
+            scenario.actor,
+            WorldPatchRequest.model_validate(
+                {
+                    "operations": [
+                        {"op": "add_entity", "client_id": "$new"},
+                        {"op": "add_entity", "client_id": "$new"},
+                    ]
+                }
+            ),
+        )
 
 
 def test_worldgen_room_patch_expands_selected_door(scenario):

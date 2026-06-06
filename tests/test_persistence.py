@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from relics import EntityId, World
 
 from bunnyland.core import (
@@ -176,6 +177,51 @@ entity_2:
     assert source.get_relationships(ExitTo) == [
         (ExitTo(direction="north", label="North"), target_id)
     ]
+
+
+def test_yaml_driver_rejects_malformed_snapshot_sections():
+    driver = YAMLPersistenceDriver()
+
+    with pytest.raises(ValueError, match="metadata must be a YAML mapping"):
+        driver.dumps_snapshot({"metadata": []})
+
+    with pytest.raises(ValueError, match="YAML document must be a YAML mapping"):
+        driver.snapshot_from_document(["not", "a", "mapping"])
+
+    with pytest.raises(ValueError, match="Contains edges for entity_1 must be a list"):
+        driver.dumps_snapshot(
+            {
+                "entities": {"entity_1": {}},
+                "relationships": {"Contains": {"entity_1": {"target": "entity_2"}}},
+            }
+        )
+
+
+def test_yaml_driver_handles_relic_listing_errors_and_duplicates(tmp_path):
+    driver = YAMLPersistenceDriver()
+    relics_dir = tmp_path / "relics"
+    world = World()
+
+    assert driver.list_relics(relics_dir) == []
+
+    driver.save_relic(world, "smoke", relics_dir)
+    with pytest.raises(FileExistsError, match="Relic 'smoke' already exists"):
+        driver.save_relic(world, "smoke", relics_dir)
+
+    (relics_dir / "_hidden.yaml").write_text("__metadata__: {\"relic_name\": \"hidden\"}\n")
+    (relics_dir / "broken.yaml").write_text("- not\n- a\n- mapping\n")
+
+    relics = driver.list_relics(relics_dir)
+    assert [relic.name for relic in relics] == ["smoke"]
+
+    with pytest.raises(FileNotFoundError, match="Relic 'missing' not found"):
+        driver.load_relic(world, "missing", relics_dir)
+
+
+def test_yaml_driver_returns_regular_relics_snapshot_unchanged():
+    snapshot = {"metadata": {"epoch": 12}, "entities": {"entity_1": {}}}
+
+    assert YAMLPersistenceDriver().snapshot_from_document(snapshot) == snapshot
 
 
 async def test_reload_starts_with_empty_command_queues(tmp_path):

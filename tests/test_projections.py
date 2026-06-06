@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from conftest import build_scenario
 
@@ -25,6 +26,12 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.ecs import replace_component
+from bunnyland.core.events import (
+    CharacterDiedEvent,
+    CharacterDownedEvent,
+    ItemDroppedEvent,
+    ItemTakenEvent,
+)
 from bunnyland.projections import (
     RecentContextProjection,
     RoomSummaryProjection,
@@ -33,6 +40,18 @@ from bunnyland.projections import (
 )
 
 HOUR = 3600.0
+
+
+def event_base(**overrides):
+    base = {
+        "event_id": "event",
+        "world_epoch": 0,
+        "created_at": datetime.now(UTC),
+        "actor_id": None,
+        "room_id": None,
+    }
+    base.update(overrides)
+    return base
 
 
 def move_cmd(scenario):
@@ -305,3 +324,60 @@ async def test_recent_context_records_speech_and_movement():
 
     log = recent.recent(scenario.room_a)
     assert any('Juniper said: "Hello there."' == entry for entry in log)
+
+
+def test_recent_context_records_inventory_and_lifecycle_fallbacks():
+    scenario = build_scenario()
+    recent = RecentContextProjection(scenario.actor.world, capacity=2)
+    item = add_object(
+        scenario,
+        scenario.room_a,
+        [IdentityComponent(name="silver spoon", kind="item")],
+    )
+
+    recent._on_event(
+        ItemTakenEvent(
+            **event_base(
+                event_id="taken",
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+            ),
+            item_id=str(item.id),
+            from_container_id=str(scenario.room_a),
+        )
+    )
+    recent._on_event(
+        ItemDroppedEvent(
+            **event_base(
+                event_id="dropped",
+                actor_id=None,
+                room_id=str(scenario.room_a),
+            ),
+            item_id="missing",
+            room_id_dropped=str(scenario.room_a),
+        )
+    )
+    assert recent.recent(scenario.room_a) == (
+        "Juniper picked up silver spoon.",
+        "someone dropped someone.",
+    )
+
+    recent._on_event(
+        CharacterDownedEvent(
+            **event_base(event_id="downed", actor_id=str(scenario.character)),
+            cause="test",
+        )
+    )
+    recent._on_event(
+        CharacterDiedEvent(
+            **event_base(
+                event_id="died",
+                actor_id="missing",
+                room_id=str(scenario.room_a),
+            ),
+            cause="test",
+        )
+    )
+
+    assert recent.recent("missing") == ()
+    assert recent.recent(scenario.room_a) == ("Juniper collapsed.", "someone died.")

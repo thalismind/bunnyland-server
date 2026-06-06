@@ -4,10 +4,13 @@ import asyncio
 import json
 import socket
 import sys
+from datetime import UTC, datetime
 from types import ModuleType, SimpleNamespace
 
+import pytest
 from pydantic import AnyUrl
 
+import bunnyland.mcp.server as mcp_server
 from bunnyland.cli import select_plugins
 from bunnyland.core import (
     CharacterComponent,
@@ -18,11 +21,14 @@ from bunnyland.core import (
     WorldActor,
     spawn_entity,
 )
+from bunnyland.core.events import ActorMovedEvent
 from bunnyland.mcp import (
     EVENTS_RESOURCE_URI,
     assign_mcp_controller,
     mcp_controlled_character,
     mcp_enabled,
+    release_mcp_controller,
+    render_mcp_agent_prompt,
 )
 from bunnyland.mechanics.lifesim import LifeStageComponent
 from bunnyland.plugins import bunnyland_plugins, select
@@ -104,6 +110,152 @@ def test_assign_mcp_controller_skips_child_character_for_default_claim():
     assert child.has_component(SuspendedComponent)
     assert not adult.has_component(SuspendedComponent)
     assert mcp_controlled_character(actor, "agent-a")[0] == adult.id
+
+
+def test_mcp_controller_claim_validation_errors_and_child_override():
+    actor = WorldActor()
+    child = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(species="bunny"),
+            LifeStageComponent(stage="child"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="June", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="agent_id is required"):
+        assign_mcp_controller(actor, agent_id=" ")
+
+    with pytest.raises(RuntimeError, match="no character with id 'entity_999' exists"):
+        assign_mcp_controller(actor, agent_id="agent-a", character_id="entity_999")
+
+    with pytest.raises(RuntimeError, match="multiple characters match 'Jun'"):
+        assign_mcp_controller(actor, agent_id="agent-a", character_name="Jun")
+
+    with pytest.raises(RuntimeError, match="no character named 'Hazel' exists"):
+        assign_mcp_controller(actor, agent_id="agent-a", character_name="Hazel")
+
+    with pytest.raises(RuntimeError, match="child character"):
+        assign_mcp_controller(actor, agent_id="agent-a", character_id=str(child.id))
+
+    claimed = assign_mcp_controller(
+        actor,
+        agent_id="agent-a",
+        character_id=str(child.id),
+        allow_child_claims=True,
+    )
+    assert claimed["character_name"] == "Clover"
+
+
+def test_mcp_release_validation_and_llm_fallback(monkeypatch):
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="agent is not controlling a character yet"):
+        release_mcp_controller(actor, agent_id="agent-a")
+
+    assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
+    with pytest.raises(RuntimeError, match="mode must be 'suspend' or 'llm'"):
+        release_mcp_controller(actor, agent_id="agent-a", mode="manual")
+
+    assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
+    monkeypatch.setenv("BUNNYLAND_CHARACTER_MODEL", "env-model")
+    released = release_mcp_controller(
+        actor,
+        agent_id="agent-a",
+        mode="llm",
+        provider="openrouter",
+    )
+    controller_id = character.get_relationships(ControlledBy)[0][1]
+    controller = actor.world.get_entity(controller_id)
+    llm = controller.get_component(mcp_server.LLMControllerComponent)
+
+    assert released["controller_kind"] == "llm"
+    assert released["controller_id"] == str(controller_id)
+    assert llm.model == "env-model"
+    assert llm.provider == "openrouter"
+    assert not character.has_component(SuspendedComponent)
+
+
+def test_mcp_admin_token_and_prompt_errors(monkeypatch, scenario):
+    monkeypatch.delenv(mcp_server.ADMIN_TOKEN_ENV, raising=False)
+
+    with pytest.raises(PermissionError, match="BUNNYLAND_MCP_ADMIN_TOKEN is not configured"):
+        mcp_server._require_admin_token("secret", None)
+
+    monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "secret")
+    with pytest.raises(PermissionError, match="invalid MCP admin token"):
+        mcp_server._require_admin_token("wrong", None)
+    mcp_server._require_admin_token("secret", None)
+
+    with pytest.raises(RuntimeError, match="agent is not controlling a character yet"):
+        render_mcp_agent_prompt(scenario.actor, agent_id="agent-a")
+
+
+async def test_mcp_event_bridge_filters_and_notifies_agent_resources(scenario):
+    class Session:
+        def __init__(self, *, fail: bool = False) -> None:
+            self.fail = fail
+            self.updated: list[str] = []
+
+        async def send_resource_updated(self, uri: AnyUrl) -> None:
+            if self.fail:
+                raise RuntimeError("gone")
+            self.updated.append(str(uri))
+
+    assign_mcp_controller(scenario.actor, agent_id="agent-a", character_name="Juniper")
+    bridge = mcp_server.MCPEventBridge(scenario.actor)
+    world_session = Session()
+    agent_session = Session()
+    prompt_session = Session()
+    stale_session = Session(fail=True)
+    bridge.subscribe(EVENTS_RESOURCE_URI, world_session)
+    bridge.subscribe(mcp_server._agent_events_uri("agent-a"), agent_session)
+    bridge.subscribe(mcp_server._agent_prompt_uri("agent-a"), prompt_session)
+    bridge.subscribe(mcp_server._agent_events_uri("missing"), stale_session)
+
+    try:
+        event = ActorMovedEvent(
+            event_id="move",
+            world_epoch=0,
+            created_at=datetime.now(UTC),
+            actor_id=str(scenario.character),
+            from_room_id=str(scenario.room_a),
+            to_room_id=str(scenario.room_b),
+        )
+        await bridge.record(event)
+
+        assert bridge.recent_messages()
+        assert bridge.recent_for_agent("agent-a")
+        assert bridge.recent_for_agent("missing") == []
+        assert world_session.updated == [EVENTS_RESOURCE_URI]
+        assert agent_session.updated == [mcp_server._agent_events_uri("agent-a")]
+        assert prompt_session.updated == [mcp_server._agent_prompt_uri("agent-a")]
+        assert stale_session.updated == []
+    finally:
+        bridge.close()
 
 
 def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario):

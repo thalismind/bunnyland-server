@@ -282,7 +282,7 @@ async def test_reroute_power_brings_system_online():
         scenario,
         [
             IdentityComponent(name="shields", kind="ship-system"),
-            ShipSystemComponent(system_type="shields", online=False),
+            ShipSystemComponent(system_type="shields"),
         ],
     )
     rerouted: list[PowerReroutedEvent] = []
@@ -314,7 +314,7 @@ async def test_reroute_power_rejects_insufficient_power():
         scenario,
         [
             IdentityComponent(name="shields", kind="ship-system"),
-            ShipSystemComponent(system_type="shields"),
+            ShipSystemComponent(system_type="shields", online=False),
         ],
     )
     rejects: list[CommandRejectedEvent] = []
@@ -325,6 +325,44 @@ async def test_reroute_power_rejects_insufficient_power():
     )
     await scenario.actor.tick(HOUR)
     assert any(event.reason == "not enough power available" for event in rejects)
+
+
+async def test_reroute_power_rejects_invalid_power_amount():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    grid_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="main bus", kind="power-grid"),
+            PowerGridComponent(available=10.0),
+        ],
+    )
+    system_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="shields", kind="ship-system"),
+            ShipSystemComponent(system_type="shields", online=False),
+        ],
+    )
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "reroute-power",
+            grid_id=str(grid_id),
+            system_id=str(system_id),
+            amount="lots",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    grid = scenario.actor.world.get_entity(grid_id).get_component(PowerGridComponent)
+    system = scenario.actor.world.get_entity(system_id).get_component(ShipSystemComponent)
+    assert grid.available == 10.0
+    assert system.online is False
+    assert any(event.reason == "invalid power amount" for event in rejects)
 
 
 async def test_dock_then_undock():
@@ -817,6 +855,21 @@ async def test_refuel_accepts_partial_amount_and_rejects_full_tank():
 
     assert scenario.actor.world.get_entity(ship_id).get_component(FuelComponent).level == 100.0
     assert any(event.reason == "fuel tank is already full" for event in rejects)
+
+
+async def test_refuel_rejects_invalid_amount():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _system(scenario, scenario.room_a, "Sol")
+    ship_id = _ship_in(scenario, scenario.room_a, fuel=60.0)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "refuel", ship_id=str(ship_id), amount="plenty"))
+    await scenario.actor.tick(HOUR)
+
+    assert scenario.actor.world.get_entity(ship_id).get_component(FuelComponent).level == 60.0
+    assert any(event.reason == "invalid fuel amount" for event in rejects)
 
 
 async def test_enter_orbit_land_launch_and_leave():
