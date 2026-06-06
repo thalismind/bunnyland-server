@@ -13,6 +13,7 @@ The inspirations break down cleanly:
 | Skyrim         | `dragon-sim`      | open-world exploration, quests, factions, skills-by-use, dungeons, dragons, shouts  |
 | Daggerfall     | `dagger-sim`      | procedural realm expands through rumors, guilds, banks, law, travel, and dungeons   |
 | FTL            | `void-sim`        | crews survive ships, stations, planets, alien contact, tech, contracts, and hazards |
+| Fallout        | `nuke-sim`        | wasteland survival, radiation, mutation, scavenging, settlement salvage, jury-rigged crafting |
 | Deus Ex / Watch Dogs / Cyberpunk 2077 | `neon-sim` | hackers, surveillance, street economies, corporate intrigue, cybernetics, reputation |
 | Jurassic Park / ARK / Dino Crisis | `dino-sim` | dangerous creature ranching, eggs, taming, training, escapes, and kaiju-scale disasters |
 | Dwarf Fortress | `fortress-sim`    | deep settlement simulation, materials, history, disasters, artifacts, absurd detail |
@@ -5155,7 +5156,353 @@ ship mortgage default -> creditor faction pressure -> bounty/impound event -> le
 
 ---
 
-# 9. `neonsim` package — Deus Ex / Watch Dogs / Cyberpunk 2077-inspired cyberpunk mechanics
+# 9. `nukesim` package — Fallout-inspired wasteland mechanics
+
+`nuke-sim` is the post-disaster wasteland package. The internal package name should be
+`nukesim`, matching the existing no-hyphen Python package style while the public-facing
+package label uses the same hyphenated style as `void-sim`, `garden-sim`, and
+`dragon-sim`.
+
+Its main inspiration is **Fallout**: contaminated ruins, radiation pressure, strange
+mutations, scavenged junk, jury-rigged gear, settlement survival, faction salvage rights,
+and dangerous old-world technology. The package should not make bunnyland a combat-only
+RPG. It should add environmental risk and resourceful crafting loops that interact with
+colony work, void-sim radiation shields, barbarian-sim survival pressure, and storyteller
+incidents.
+
+## 9.1 Radiation exposure and protection
+
+### Mechanics
+
+```text
+radiation source
+fallout zone
+hotspot
+contaminated water
+irradiated food
+dosimeter
+hazard suit
+rad shielding
+decontamination station
+radiation sickness
+```
+
+### Components
+
+```python
+RadiationSourceComponent
+RadiationDoseComponent
+RadiationSicknessComponent
+DecontaminationComponent
+RadProtectionComponent
+RadiationShieldComponent
+RadiationMutationPressureComponent
+```
+
+### Systems
+
+```text
+RadiationExposureSystem
+RadiationDecaySystem
+RadiationSicknessSystem
+ProtectionAggregationSystem
+DecontaminationSystem
+```
+
+### Actions
+
+```text
+scan radiation
+decontaminate
+use rad medicine
+mark hotspot
+seal radiation source
+```
+
+### Events
+
+```text
+RadiationExposureEvent
+RadiationSicknessChangedEvent
+RadiationScannedEvent
+DecontaminationAppliedEvent
+HotspotMarkedEvent
+RadiationSourceSealedEvent
+```
+
+## 9.2 Mutation pressure and outcomes
+
+### Mechanics
+
+```text
+mutation pressure
+mutation threshold
+beneficial mutation
+harmful mutation
+unstable mutation
+mutation resistance
+mutation suppressant
+adapted creature
+feral transformation
+```
+
+### Components
+
+```python
+MutationComponent
+MutationResistanceComponent
+MutationSuppressantComponent
+MutationThresholdComponent
+RadiationMutationPressureComponent
+ChaosMutationPressureComponent
+CyberneticMutationPressureComponent
+```
+
+### Systems
+
+```text
+MutationPressureSystem
+MutationResolutionSystem
+MutationSuppressionSystem
+MutationInteractionSystem
+```
+
+### Actions
+
+```text
+stabilize mutation
+suppress mutation
+study mutation
+harvest mutant sample
+```
+
+### Events
+
+```text
+MutationPressureChangedEvent
+MutationManifestedEvent
+MutationStabilizedEvent
+MutationSuppressedEvent
+MutantSampleHarvestedEvent
+```
+
+Mutation pressure must stay source-specific. Radiation, chaos, and cybernetic pressure may
+interact later, but each keeps its own component so packages can be enabled independently.
+
+## 9.3 Wasteland scavenging and salvage
+
+### Mechanics
+
+```text
+scavenging site
+ruin cache
+locked crate
+hazardous salvage
+junk item
+scrap metal
+electronics
+chemicals
+pre-war artifact
+salvage rights
+faction claim
+```
+
+### Components
+
+```python
+ScavengeSiteComponent
+LootTableComponent
+SalvageClaimComponent
+JunkComponent
+PreWarArtifactComponent
+ContaminationComponent
+```
+
+### Systems
+
+```text
+ScavengeRefreshSystem
+LootTableSystem
+HazardousSalvageSystem
+SalvageClaimSystem
+ArtifactDiscoverySystem
+```
+
+### Actions
+
+```text
+scavenge
+claim salvage
+sort junk
+scrap item
+appraise artifact
+```
+
+### Events
+
+```text
+SiteScavengedEvent
+LootFoundEvent
+HazardTriggeredEvent
+SalvageClaimedEvent
+ItemScrappedEvent
+ArtifactAppraisedEvent
+```
+
+## 9.4 Jury-rigged crafting, repair, and chems
+
+### Mechanics
+
+```text
+workbench
+chem bench
+camp stove
+schematic
+weapon mod
+armor patch
+rad medicine
+dirty water
+purified water
+scrap recipe
+field repair
+```
+
+### Components
+
+```python
+JuryRiggedComponent
+SchematicComponent
+WeaponModComponent
+ArmorPatchComponent
+ChemComponent
+WaterPurificationComponent
+RecipeComponent
+WorkstationComponent
+ResourceStackComponent
+DurabilityComponent
+```
+
+### Systems
+
+```text
+JuryRigCraftingSystem
+FieldRepairSystem
+WaterPurificationSystem
+ChemCraftingSystem
+ModInstallationSystem
+```
+
+### Actions
+
+```text
+craft wasteland item
+install mod
+field repair
+purify water
+brew chem
+strip for parts
+```
+
+### Events
+
+```text
+WastelandItemCraftedEvent
+ModInstalledEvent
+FieldRepairCompletedEvent
+WaterPurifiedEvent
+ChemBrewedEvent
+ItemStrippedEvent
+```
+
+`nukesim` should reuse `colonysim` resource stacks, recipes, and workstations where they
+fit. It should add new components only when the wasteland rule is distinct: radiation,
+mutation, hazardous salvage, chems, and jury-rigged instability.
+
+## 9.5 Settlements, factions, and old-world tech
+
+### Mechanics
+
+```text
+settlement claim
+scrap barricade
+water purifier
+generator
+radio beacon
+trader route
+raider pressure
+faction reputation
+old-world terminal
+reactor core
+vault door
+```
+
+### Components
+
+```python
+SettlementComponent
+WaterPurifierComponent
+GeneratorComponent
+RadioBeaconComponent
+TraderRouteComponent
+RaiderThreatComponent
+WastelandFactionComponent
+OldWorldTechComponent
+VaultComponent
+```
+
+### Systems
+
+```text
+SettlementUpkeepSystem
+WaterProductionSystem
+GeneratorFuelSystem
+TraderRouteSystem
+RaiderPressureSystem
+FactionReputationSystem
+OldWorldTechSystem
+```
+
+### Actions
+
+```text
+claim settlement
+build purifier
+power generator
+activate beacon
+open trader route
+negotiate faction salvage
+boot old-world terminal
+```
+
+### Events
+
+```text
+SettlementClaimedEvent
+PurifierBuiltEvent
+GeneratorPoweredEvent
+BeaconActivatedEvent
+TraderRouteOpenedEvent
+FactionSalvageNegotiatedEvent
+OldWorldTerminalBootedEvent
+```
+
+## 9.6 How `nukesim` uses worldgen
+
+`nukesim` should expand worlds through hazardous sites and salvage leads:
+
+```text
+geiger spike -> generated ruin -> radiation source -> scavenging cache -> mutation pressure
+radio beacon -> generated settlement -> purifier job -> trader route -> raider incident
+pre-war keycard -> generated vault door -> old-world terminal -> faction salvage dispute
+```
+
+The first playable slice should be small and deterministic: radiation accumulation,
+shielding, decontamination, mutation manifestation, one scavenging action, and recipes that
+use found scrap.
+
+---
+
+# 10. `neonsim` package — Deus Ex / Watch Dogs / Cyberpunk 2077-inspired cyberpunk mechanics
 
 `neon-sim` is the cyberpunk city package. The internal package name should be `neonsim`,
 matching the existing no-hyphen Python package style while the public-facing package label
@@ -5171,7 +5518,7 @@ bargains, and people trying to survive inside systems that record everything.
 The first implementation should keep hacking in ECS actions and consequences. Minigames
 can exist later as client-side or script-driven presentation over the same actions.
 
-## 9.1 Cyberpunk districts, sites, and access
+## 10.1 Cyberpunk districts, sites, and access
 
 ### Mechanics
 
@@ -5240,7 +5587,7 @@ SafehouseClaimedEvent
 
 ---
 
-## 9.2 Devices, networks, and surveillance
+## 10.2 Devices, networks, and surveillance
 
 ### Mechanics
 
@@ -5318,7 +5665,7 @@ EvidenceWipedEvent
 
 ---
 
-## 9.3 Hacking, credentials, and intrusion
+## 10.3 Hacking, credentials, and intrusion
 
 ### Mechanics
 
@@ -5396,7 +5743,7 @@ AlarmRaisedEvent
 
 ---
 
-## 9.4 Fixers, missions, and corporate intrigue
+## 10.4 Fixers, missions, and corporate intrigue
 
 ### Mechanics
 
@@ -5476,7 +5823,7 @@ DoubleCrossRevealedEvent
 
 ---
 
-## 9.5 Street economy, reputation, and wanted levels
+## 10.5 Street economy, reputation, and wanted levels
 
 ### Mechanics
 
@@ -5559,7 +5906,7 @@ InformantTurnedEvent
 
 ---
 
-## 9.6 Cybernetics, implants, and tradeoffs
+## 10.6 Cybernetics, implants, and tradeoffs
 
 ### Mechanics
 
@@ -5641,7 +5988,7 @@ stigma, or vulnerability to hacking.
 
 ---
 
-## 9.7 How `neonsim` uses other packages
+## 10.7 How `neonsim` uses other packages
 
 `neonsim` should compose heavily with existing systems rather than becoming a second core.
 
@@ -5663,7 +6010,7 @@ data leak -> generated shell company -> terminal network -> blackmail file -> fa
 
 ---
 
-# 10. `dinosim` package — Jurassic Park / ARK / Dino Crisis-inspired creature ranching
+# 11. `dinosim` package — Jurassic Park / ARK / Dino Crisis-inspired creature ranching
 
 `dino-sim` is the dangerous creature-ranching package. The internal package name should be
 `dinosim`, matching the existing no-hyphen Python package style while the public-facing
@@ -5679,7 +6026,7 @@ events.
 Genetic engineering should be left out at first. Eggs, heredity, species traits, breeding,
 hatching, training, and containment are enough for the initial package.
 
-## 10.1 Species, ecology, and creature needs
+## 11.1 Species, ecology, and creature needs
 
 ### Mechanics
 
@@ -5761,7 +6108,7 @@ CreatureStressChangedEvent
 
 ---
 
-## 10.2 Eggs, breeding, hatching, and raising
+## 11.2 Eggs, breeding, hatching, and raising
 
 ### Mechanics
 
@@ -5840,7 +6187,7 @@ GrowthStageChangedEvent
 
 ---
 
-## 10.3 Tracking, taming, training, and companions
+## 11.3 Tracking, taming, training, and companions
 
 ### Mechanics
 
@@ -5925,7 +6272,7 @@ CreatureRecalledEvent
 
 ---
 
-## 10.4 Enclosures, containment, and escapes
+## 11.4 Enclosures, containment, and escapes
 
 ### Mechanics
 
@@ -6002,7 +6349,7 @@ RoomEvacuatedEvent
 
 ---
 
-## 10.5 Dangerous encounters, battles, and kaiju incidents
+## 11.5 Dangerous encounters, battles, and kaiju incidents
 
 ### Mechanics
 
@@ -6086,7 +6433,7 @@ PredatorDrivenOffEvent
 
 ---
 
-## 10.6 Ranch production and survival farming
+## 11.6 Ranch production and survival farming
 
 ### Mechanics
 
@@ -6156,7 +6503,7 @@ RanchReputationChangedEvent
 
 ---
 
-## 10.7 How `dinosim` uses other packages
+## 11.7 How `dinosim` uses other packages
 
 `dinosim` should build on the existing survival and farming surface without turning into a
 theme-park management game.
@@ -6180,11 +6527,11 @@ legend rumor -> generated apex lair -> kaiju incident -> army response -> reputa
 
 ---
 
-# 11. `fortresssim` package — Dwarf Fortress-inspired mechanics
+# 12. `fortresssim` package — Dwarf Fortress-inspired mechanics
 
 Dwarf Fortress is the “mother of all sims” here, but it is intentionally not practical to exhaustively scope. The useful direction for bunnyland is to borrow *depth patterns*: generated world history, materials, geology, settlement logistics, strange moods, artifacts, nobles, justice, taverns, libraries, hospitals, sieges, migrants, trade caravans, tantrum spirals, and the fact that the world continues beyond any one character. Dwarf Fortress includes generated worlds and histories, fortress mode, adventure mode, legends mode, geology, z-level digging, farming, migrants, caravans, nobles, mandates, justice, vampires, strange moods, artifacts, and fortress-ending spirals. ([Wikipedia][8])
 
-## 11.1 World generation and history
+## 12.1 World generation and history
 
 ### Mechanics
 
@@ -6236,7 +6583,7 @@ LegendRecordedEvent
 
 ---
 
-## 11.2 Materials and item specificity
+## 12.2 Materials and item specificity
 
 ### Mechanics
 
@@ -6289,7 +6636,7 @@ ItemDamagedEvent
 
 ---
 
-## 11.3 Workshops and production chains
+## 12.3 Workshops and production chains
 
 ### Mechanics
 
@@ -6338,7 +6685,7 @@ StockCountUpdatedEvent
 
 ---
 
-## 11.4 Strange moods and artifacts
+## 12.4 Strange moods and artifacts
 
 ### Mechanics
 
@@ -6383,7 +6730,7 @@ StrangeMoodFailedEvent
 
 ---
 
-## 11.5 Nobles, mandates, justice
+## 12.5 Nobles, mandates, justice
 
 ### Mechanics
 
@@ -6433,7 +6780,7 @@ PunishmentAppliedEvent
 
 ---
 
-## 11.6 Tantrum spirals and social collapse
+## 12.6 Tantrum spirals and social collapse
 
 ### Mechanics
 
@@ -6476,7 +6823,7 @@ ColonyCollapseWarningEvent
 
 ---
 
-## 11.7 Taverns, temples, libraries, hospitals
+## 12.7 Taverns, temples, libraries, hospitals
 
 ### Mechanics
 
@@ -6533,11 +6880,11 @@ InstitutionReputationChangedEvent
 
 ---
 
-# 12. Cross-package mechanics we should expect
+# 13. Cross-package mechanics we should expect
 
 These are not one game’s feature. They are the glue that makes all packages interact.
 
-## 12.1 Perception, attention, and stimuli
+## 13.1 Perception, attention, and stimuli
 
 ### Mechanics
 
@@ -6588,7 +6935,7 @@ CharacterDetectedEvent
 
 ---
 
-## 12.2 Notes, memory, and reflection
+## 13.2 Notes, memory, and reflection
 
 ### Mechanics
 
@@ -6651,7 +6998,7 @@ ReadableTextReadEvent
 
 ---
 
-## 12.3 Economy, value, trade, and ownership
+## 13.3 Economy, value, trade, and ownership
 
 ### Mechanics
 
@@ -6726,7 +7073,7 @@ BillPaidEvent
 
 ---
 
-## 12.4 Crafting, recipes, tools, and workstations
+## 13.4 Crafting, recipes, tools, and workstations
 
 ### Components
 
@@ -6767,7 +7114,7 @@ dismantle
 
 ---
 
-## 12.5 Construction and world modification
+## 13.5 Construction and world modification
 
 ### Components
 
@@ -6805,7 +7152,7 @@ decorate
 
 ---
 
-## 12.6 Resource nodes and regeneration
+## 13.6 Resource nodes and regeneration
 
 ### Components
 
@@ -6829,7 +7176,7 @@ SeasonalResourceSystem
 
 ---
 
-## 12.7 Animals, wildlife, monsters
+## 13.7 Animals, wildlife, monsters
 
 ### Components
 
@@ -6857,7 +7204,7 @@ AnimalNeedsSystem
 
 ---
 
-## 12.8 Fire, fluids, weather hazards
+## 13.8 Fire, fluids, weather hazards
 
 ### Components
 
@@ -6883,7 +7230,7 @@ StructuralDamageSystem
 
 ---
 
-## 12.9 Policies and boundaries
+## 13.9 Policies and boundaries
 
 ### Components
 
@@ -6918,11 +7265,11 @@ Suspended characters cannot die.
 
 ---
 
-# 13. Package-level class inventory
+# 14. Package-level class inventory
 
 This is the class taxonomy I would expect in the codebase.
 
-## 13.1 Component classes
+## 14.1 Component classes
 
 ```text
 IdentityComponent
@@ -6974,7 +7321,7 @@ EnclosureComponent
 KaijuComponent
 ```
 
-## 13.2 Edge classes
+## 14.2 Edge classes
 
 ```text
 Contains
@@ -6997,7 +7344,7 @@ Targets
 ParticipatingIn
 ```
 
-## 13.3 System classes
+## 14.3 System classes
 
 ```text
 WorldClockSystem
@@ -7033,7 +7380,7 @@ EnclosureIntegritySystem
 KaijuIncidentSystem
 ```
 
-## 13.4 Action handlers
+## 14.4 Action handlers
 
 ```text
 MoveActionHandler
@@ -7066,7 +7413,7 @@ TrainCreatureActionHandler
 TriggerContainmentActionHandler
 ```
 
-## 13.5 Services
+## 14.5 Services
 
 ```text
 CommandQueueService
@@ -7087,7 +7434,7 @@ PersistenceService
 PluginLoader
 ```
 
-## 13.6 Generators
+## 14.6 Generators
 
 ```text
 WorldBuilderGenerator
@@ -7106,7 +7453,7 @@ CreatureHabitatGenerator
 ApexIncidentGenerator
 ```
 
-## 13.7 Projections
+## 14.7 Projections
 
 ```text
 RoomSummaryProjection
@@ -7124,7 +7471,7 @@ HerdStatusProjection
 ContainmentProjection
 ```
 
-## 13.8 Typed events
+## 14.8 Typed events
 
 ```text
 ActorMovedEvent
@@ -7162,7 +7509,7 @@ KaijuArrivedEvent
 
 ---
 
-# 14. Suggested build ordering
+# 15. Suggested build ordering
 
 Even though this is an exhaustive catalogue, the implementation order should be ruthless.
 
@@ -7291,7 +7638,21 @@ contracts/salvage/cargo
 frontier economy
 ```
 
-## Phase 9 — neon sim
+## Phase 9 — nuke sim
+
+```text
+radiation sources/exposure
+rad shielding/decontamination
+mutation pressure/outcomes
+wasteland scavenging
+junk/scrap resource chains
+jury-rigged crafting
+rad medicine/dirty water
+settlement salvage hooks
+old-world tech leads
+```
+
+## Phase 10 — neon sim
 
 ```text
 districts/security zones
@@ -7304,7 +7665,7 @@ cybernetics/implant tradeoffs
 city expansion worldgen
 ```
 
-## Phase 10 — dino sim
+## Phase 11 — dino sim
 
 ```text
 species/ecology/creature needs
@@ -7317,7 +7678,7 @@ apex predators/kaiju incidents
 ranch production
 ```
 
-## Phase 11 — fortress sim
+## Phase 12 — fortress sim
 
 ```text
 deep materials
@@ -7333,7 +7694,7 @@ legends mode
 
 ---
 
-# 15. The most important design warning
+# 16. The most important design warning
 
 The dangerous failure mode is trying to make one giant `SimulationSystem`.
 

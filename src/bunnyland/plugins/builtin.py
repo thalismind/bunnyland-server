@@ -373,6 +373,42 @@ from ..mechanics.needs import (
     ThirstSystem,
     need_fragments,
 )
+from ..mechanics.nukesim import (
+    DecontaminateHandler,
+    DecontaminationAppliedEvent,
+    DecontaminationComponent,
+    HazardTriggeredEvent,
+    ItemScrappedEvent,
+    JunkComponent,
+    LootFoundEvent,
+    LootTableComponent,
+    MutationComponent,
+    MutationManifestedEvent,
+    MutationPressureChangedEvent,
+    MutationResistanceComponent,
+    MutationStabilizedEvent,
+    MutationThresholdComponent,
+    RadiationDoseComponent,
+    RadiationExposureEvent,
+    RadiationScannedEvent,
+    RadiationSicknessChangedEvent,
+    RadiationSicknessComponent,
+    RadiationSourceComponent,
+    RadiationSourceSealedEvent,
+    RadMedicineComponent,
+    RadMedicineUsedEvent,
+    RadProtectionComponent,
+    ScanRadiationHandler,
+    ScavengeHandler,
+    ScavengeSiteComponent,
+    ScrapItemHandler,
+    SealRadiationSourceHandler,
+    SiteScavengedEvent,
+    StabilizeMutationHandler,
+    UseRadMedicineHandler,
+    install_nukesim,
+    nukesim_fragments,
+)
 from ..mechanics.persona import (
     GoalComponent,
     PreferenceComponent,
@@ -476,6 +512,7 @@ from ..worldgen.examples import (
     GARDENSIM_DEMO,
     GOTHIC_COUNT_DEMO,
     LIFESIM_DEMO,
+    NUKESIM_DEMO,
     STAR_OPERA_DEMO,
     VOIDSIM_DEMO,
 )
@@ -513,6 +550,7 @@ GARDENSIM = "bunnyland.gardensim"
 DRAGONSIM = "bunnyland.dragonsim"
 DAGGERSIM = "bunnyland.daggersim"
 VOIDSIM = "bunnyland.voidsim"
+NUKESIM = "bunnyland.nukesim"
 STORYTELLER = "bunnyland.storyteller"
 MCP = "bunnyland.mcp"
 
@@ -1226,6 +1264,66 @@ def voidsim_plugin() -> Plugin:
     )
 
 
+def nukesim_plugin() -> Plugin:
+    return Plugin(
+        id=NUKESIM,
+        name="Nuke Sim",
+        dependencies=DependencyContribution(
+            requires=(CORE_VERBS,),
+            recommends=(COLONYSIM, VOIDSIM),
+        ),
+        ecs=EcsContribution(
+            components=(
+                RadiationSourceComponent,
+                RadiationDoseComponent,
+                RadiationSicknessComponent,
+                RadProtectionComponent,
+                DecontaminationComponent,
+                RadMedicineComponent,
+                MutationThresholdComponent,
+                MutationResistanceComponent,
+                MutationComponent,
+                RadiationMutationPressureComponent,
+                ScavengeSiteComponent,
+                LootTableComponent,
+                JunkComponent,
+                ResourceStackComponent,
+            )
+        ),
+        commands=CommandContribution(
+            action_handlers=(
+                ScanRadiationHandler,
+                SealRadiationSourceHandler,
+                DecontaminateHandler,
+                UseRadMedicineHandler,
+                ScavengeHandler,
+                ScrapItemHandler,
+                StabilizeMutationHandler,
+            ),
+            typed_events=(
+                RadiationExposureEvent,
+                RadiationSicknessChangedEvent,
+                RadiationScannedEvent,
+                RadiationSourceSealedEvent,
+                DecontaminationAppliedEvent,
+                RadMedicineUsedEvent,
+                MutationPressureChangedEvent,
+                MutationManifestedEvent,
+                MutationStabilizedEvent,
+                SiteScavengedEvent,
+                LootFoundEvent,
+                HazardTriggeredEvent,
+                ItemScrappedEvent,
+            ),
+        ),
+        runtime=RuntimeContribution(service_factories=(install_nukesim,)),
+        content=ContentContribution(
+            prompt_fragments=(nukesim_fragments,),
+            world_generators=(NUKESIM_DEMO,),
+        ),
+    )
+
+
 def storyteller_plugin() -> Plugin:
     return Plugin(
         id=STORYTELLER,
@@ -1279,6 +1377,7 @@ def bunnyland_plugins() -> list[Plugin]:
         dragonsim_plugin(),
         daggersim_plugin(),
         voidsim_plugin(),
+        nukesim_plugin(),
         storyteller_plugin(),
         mcp_plugin(),
     ]
@@ -1296,6 +1395,7 @@ __all__ = [
     "MCP",
     "MECHANISMS",
     "MEMORY",
+    "NUKESIM",
     "PERSONA",
     "POLICY",
     "SOCIAL",
@@ -1315,6 +1415,7 @@ __all__ = [
     "mechanisms_plugin",
     "memory_plugin",
     "mcp_plugin",
+    "nukesim_plugin",
     "persona_plugin",
     "policy_plugin",
     "social_plugin",

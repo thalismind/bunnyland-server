@@ -98,11 +98,18 @@ from bunnyland.mechanics.lifesim import (
     lifesim_fragments,
 )
 from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
+from bunnyland.mechanics.nukesim import (
+    DecontaminationComponent,
+    JunkComponent,
+    RadiationSourceComponent,
+    ScavengeSiteComponent,
+    nukesim_fragments,
+)
 from bunnyland.memory import install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_prompt_fragments
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
-from bunnyland.worldgen import StubWorldBuilder, instantiate
+from bunnyland.worldgen import GenOptions, StubWorldBuilder, collect_generators, instantiate
 
 KIND_COMPONENT = {
     "food": FoodComponent,
@@ -242,6 +249,27 @@ async def test_generated_world_matches_its_proposal():
                 for _edge, target in entity.get_relationships(ControlledBy)
             ]
             assert any(c.has_component(LLMControllerComponent) for c in controllers)
+
+
+async def test_nukesim_demo_world_instantiates_playable_wasteland_loop():
+    actor = WorldActor()
+    plugins = bunnyland_plugins()
+    apply_plugins(plugins, actor)
+    generator = collect_generators(plugins)["nukesim-demo"]
+
+    result = await generator.generate(actor, "nuke-e2e", GenOptions())
+
+    world = actor.world
+    assert result.rooms["checkpoint"]
+    assert result.rooms["ruin"]
+    assert list(world.query().with_all([RadiationSourceComponent]).execute_entities())
+    assert list(world.query().with_all([ScavengeSiteComponent]).execute_entities())
+    assert list(world.query().with_all([DecontaminationComponent]).execute_entities())
+    assert list(world.query().with_all([JunkComponent]).execute_entities())
+
+    scavenger = world.get_entity(result.characters["scavenger"])
+    prompt_lines = nukesim_fragments(world, scavenger)
+    assert any("Decontamination available" in line for line in prompt_lines)
 
 
 async def test_prompt_includes_status_fragments_from_plugins():
