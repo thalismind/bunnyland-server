@@ -440,6 +440,7 @@ from ..mechanics.toonsim import (
     SpriteLayer,
     SpriteMovedEvent,
     SpritePosition,
+    SpriteScale,
     install_toonsim,
 )
 from ..mechanics.voidsim import (
@@ -1001,7 +1002,7 @@ def toonsim_plugin() -> Plugin:
         id=TOONSIM,
         name="Toon Sim",
         ecs=EcsContribution(
-            components=(SpritePosition, SpriteImage, SpriteLayer),
+            components=(SpritePosition, SpriteImage, SpriteLayer, SpriteScale),
         ),
         commands=CommandContribution(
             action_handlers=(MoveSpriteHandler,),
