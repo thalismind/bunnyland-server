@@ -7,7 +7,11 @@ so the app never needs to know which one it is using.
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from abc import ABC, abstractmethod
+from pathlib import Path
+from uuid import UUID, uuid4
 
 from ..core import (
     CommandCost,
@@ -20,6 +24,30 @@ from ..core import (
 from ..core.ecs import parse_entity_id
 from ..server.serialization import serialize_world
 from .model import World
+
+logger = logging.getLogger("bunnyland.tui")
+
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "bunnyland"
+CLIENT_ID_PATH = CONFIG_DIR / "client-id"
+
+
+def persistent_client_id(path: Path = CLIENT_ID_PATH) -> str:
+    if path.exists():
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+            return str(UUID(value))
+        except ValueError:
+            logger.warning("Ignoring invalid TUI client id in %s", path, exc_info=True)
+        except OSError:
+            logger.warning("Could not read TUI client id from %s", path, exc_info=True)
+
+    client_id = str(uuid4())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{client_id}\n", encoding="utf-8")
+    except OSError:
+        logger.warning("Could not persist TUI client id to %s", path, exc_info=True)
+    return client_id
 
 
 class Backend(ABC):
@@ -55,6 +83,7 @@ class LocalBackend(Backend):
         tick_seconds: float = 1.0,
         time_scale: float = 3600.0,
         autorun: bool = True,
+        client_id: str | None = None,
     ) -> None:
         self.seed = seed
         self.generator_name = generator
@@ -67,6 +96,7 @@ class LocalBackend(Backend):
         self._loop = None
         self._task: asyncio.Task | None = None
         self._controller = None
+        self.client_id = client_id or persistent_client_id()
 
     async def start(self) -> None:
         # Imported here so the optional server/llm wiring is only pulled when hosting.
@@ -133,7 +163,10 @@ class LocalBackend(Backend):
         so the offline dispatch stops driving it."""
         async with self.actor._lock:
             if self._controller is None:
-                self._controller = spawn_entity(self.actor.world, [WebControllerComponent()])
+                self._controller = spawn_entity(
+                    self.actor.world,
+                    [WebControllerComponent(client_id=self.client_id, label="tui")],
+                )
             generation = self.actor.assign_controller(
                 parse_entity_id(player_id), self._controller.id
             )
@@ -143,10 +176,11 @@ class LocalBackend(Backend):
 class RemoteBackend(Backend):
     """Poll a running server over HTTP for snapshots and post commands to it."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, *, client_id: str | None = None) -> None:
         self.base = base_url.rstrip("/")
         self.label = f"remote · {self.base}"
         self._client = None
+        self.client_id = client_id or persistent_client_id()
 
     async def start(self) -> None:
         import httpx
@@ -167,6 +201,17 @@ class RemoteBackend(Backend):
         return res.is_success
 
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
-        # No claim endpoint on the server; ride the controller already on the snapshot,
-        # exactly as the web toon client does.
-        return world.control(player_id)
+        res = await self._client.post(
+            f"{self.base}/world/controllers/web/claim",
+            json={"character_id": player_id, "client_id": self.client_id, "label": "tui"},
+        )
+        if not res.is_success:
+            logger.warning(
+                "Remote web controller claim failed for %s: HTTP %s %s",
+                player_id,
+                res.status_code,
+                res.text,
+            )
+            return None
+        data = res.json()
+        return data["controller_id"], int(data["controller_generation"])

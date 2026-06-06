@@ -48,6 +48,19 @@ class CommandResponse(BaseModel):
     command_id: str
 
 
+class WebControllerClaimRequest(BaseModel):
+    character_id: str
+    client_id: str = Field(min_length=1)
+    label: str = "web"
+
+
+class WebControllerClaimResponse(BaseModel):
+    ok: bool = True
+    character_id: str
+    controller_id: str
+    controller_generation: int
+
+
 class ComponentPatchSpec(BaseModel):
     type: str
     fields: dict[str, Any] = Field(default_factory=dict)
@@ -275,4 +288,6 @@ __all__ = [
     "WorldRuntimeResponse",
     "WorldSaveResponse",
     "WorldSchemaResponse",
+    "WebControllerClaimRequest",
+    "WebControllerClaimResponse",
 ]

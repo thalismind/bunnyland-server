@@ -7,6 +7,8 @@ FastAPI app factory is imported lazily by callers that install web-server depend
 from .models import (
     CommandRequest,
     CommandResponse,
+    WebControllerClaimRequest,
+    WebControllerClaimResponse,
     WorldCharacterGenerationRequest,
     WorldCharacterGenerationResponse,
     WorldGenerateRequest,
@@ -32,6 +34,8 @@ __all__ = [
     "CommandResponse",
     "EventStream",
     "EventSubscription",
+    "WebControllerClaimRequest",
+    "WebControllerClaimResponse",
     "WorldCharacterGenerationRequest",
     "WorldCharacterGenerationResponse",
     "WorldGenerateRequest",

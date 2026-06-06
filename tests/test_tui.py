@@ -15,7 +15,7 @@ from bunnyland.core import (
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
 from bunnyland.tui.app import BunnylandTUI, TargetPicker, TextPrompt
-from bunnyland.tui.backend import Backend, LocalBackend
+from bunnyland.tui.backend import Backend, LocalBackend, RemoteBackend, persistent_client_id
 from bunnyland.tui.model import World, entity_icon, entity_name, entity_type
 from bunnyland.tui.verbs import ACTION_VERBS
 
@@ -176,7 +176,9 @@ def test_assign_web_controller_reports_web_kind():
 
 # ── local backend (host a world in-process) ───────────────────────────────────
 async def test_local_backend_hosts_claims_and_submits():
-    backend = LocalBackend(generator="apartment-demo", autorun=False)
+    backend = LocalBackend(
+        generator="apartment-demo", autorun=False, client_id="local-client"
+    )
     await backend.start()
     try:
         world = World.parse(await backend.fetch_snapshot())
@@ -188,6 +190,10 @@ async def test_local_backend_hosts_claims_and_submits():
         controller_id, _generation = control
         # The claim attaches our reusable web controller.
         assert backend.actor._controller_kind(backend._controller.id) == "web"
+        assert (
+            backend._controller.get_component(WebControllerComponent).client_id
+            == "local-client"
+        )
 
         epoch_before = backend.actor.epoch
         ok = await backend.submit({
@@ -208,6 +214,47 @@ async def test_local_backend_hosts_claims_and_submits():
         assert refreshed.control(player) == (controller_id, control[1])
     finally:
         await backend.close()
+
+
+def test_persistent_client_id_reuses_config_file(tmp_path):
+    path = tmp_path / "bunnyland" / "client-id"
+
+    first = persistent_client_id(path)
+    second = persistent_client_id(path)
+
+    assert first == second
+    assert path.read_text(encoding="utf-8").strip() == first
+
+
+async def test_remote_backend_claims_web_controller():
+    class Response:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"controller_id": "controller:web", "controller_generation": 4}
+
+    class Client:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, dict]] = []
+
+        async def post(self, url: str, json: dict):
+            self.requests.append((url, json))
+            return Response()
+
+    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend._client = Client()
+
+    control = await backend.claim(PLAYER, World.parse(_snapshot()))
+
+    assert control == ("controller:web", 4)
+    assert backend._client.requests == [
+        (
+            "http://server.example/world/controllers/web/claim",
+            {"character_id": PLAYER, "client_id": "remote-client", "label": "tui"},
+        )
+    ]
 
 
 # ── the app (Textual pilot) ───────────────────────────────────────────────────

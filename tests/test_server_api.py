@@ -12,11 +12,14 @@ from bunnyland.core import (
     ContainerComponent,
     ContainmentMode,
     Contains,
+    ControlledBy,
     DoorComponent,
     ExitTo,
     IdentityComponent,
     RoomComponent,
+    WebControllerComponent,
     WorldPauseStatusChangedEvent,
+    parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
@@ -40,6 +43,7 @@ from bunnyland.server.admin import (
 )
 from bunnyland.server.app import create_app, next_websocket_update
 from bunnyland.server.models import (
+    WebControllerClaimRequest,
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
     WorldGenerateRequest,
@@ -190,6 +194,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/library" in paths
     assert "/world/events/recent" in paths
     assert "/world/commands" in paths
+    assert "/world/controllers/web/claim" in paths
     assert "/admin/world" in paths
     assert "/admin/world/generators" in paths
     assert "/admin/world/generate" in paths
@@ -202,6 +207,39 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/admin/pause" in paths
     assert "/admin/resume" in paths
     assert "/world/updates" in paths
+
+
+async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
+    scenario,
+):
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/world/controllers/web/claim")
+
+    first = await route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+    second = await route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+
+    assert first.controller_id == second.controller_id
+    assert first.controller_generation == second.controller_generation
+    assert first.controller_generation == scenario.generation + 1
+
+    controller = scenario.actor.world.get_entity(parse_entity_id(first.controller_id))
+    assert controller.get_component(WebControllerComponent).client_id == "client-a"
+    character = scenario.actor.world.get_entity(scenario.character)
+    edge, controller_id = character.get_relationships(ControlledBy)[0]
+    assert str(controller_id) == first.controller_id
+    assert edge.generation == first.controller_generation
 
 
 def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):

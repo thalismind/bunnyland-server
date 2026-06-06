@@ -44,6 +44,7 @@ class WebControllerComponent(Component):
     """A human at an interactive client (web room client, TUI). Submits commands directly;
     the engine never proposes actions for it the way it does for an LLM controller."""
 
+    client_id: str = ""
     label: str = "web"
 
 

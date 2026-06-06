@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..content import load_content_library
+from ..core import CharacterComponent, WebControllerComponent, parse_entity_id, spawn_entity
+from ..core.events import ControllerChangedEvent
 from ..core.world_actor import WorldActor
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
 from ..persistence import WorldMeta
@@ -18,6 +20,8 @@ from .admin import idle_generation_status, save_configured_world, start_world_ge
 from .models import (
     CommandRequest,
     CommandResponse,
+    WebControllerClaimRequest,
+    WebControllerClaimResponse,
     WorldCharacterGenerationRequest,
     WorldCharacterGenerationResponse,
     WorldEventGenerationRequest,
@@ -158,6 +162,54 @@ def create_app(
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
         await actor.submit(command)
         return CommandResponse(queued=True, command_id=command.command_id)
+
+    async def _claim_web_controller_request(
+        request: WebControllerClaimRequest,
+    ) -> WebControllerClaimResponse:
+        character_id = parse_entity_id(request.character_id)
+        if character_id is None or not actor.world.has_entity(character_id):
+            raise HTTPException(status_code=404, detail="character does not exist")
+        character = actor.world.get_entity(character_id)
+        if not character.has_component(CharacterComponent):
+            raise HTTPException(status_code=400, detail="entity is not a character")
+
+        client_id = request.client_id.strip()
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id must not be blank")
+        label = request.label.strip() or "web"
+
+        async with actor._lock:
+            controller = None
+            for entity in actor.world.query().with_all([WebControllerComponent]).execute_entities():
+                component = entity.get_component(WebControllerComponent)
+                if component.client_id == client_id:
+                    controller = entity
+                    break
+            if controller is None:
+                controller = spawn_entity(
+                    actor.world,
+                    [WebControllerComponent(client_id=client_id, label=label)],
+                )
+
+            generation = actor.current_generation(character_id, controller.id)
+            if generation is None:
+                generation = actor.assign_controller(character_id, controller.id)
+                await actor.bus.publish(
+                    ControllerChangedEvent(
+                        **actor._event_base(
+                            actor_id=str(character_id),
+                            generation=generation,
+                            controller_kind="web",
+                        )
+                    )
+                )
+
+        stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
+        return WebControllerClaimResponse(
+            character_id=str(character_id),
+            controller_id=str(controller.id),
+            controller_generation=generation,
+        )
 
     async def _patch_world_request(request: WorldPatchRequest) -> WorldPatchResponse:
         try:
@@ -309,6 +361,12 @@ def create_app(
     @app.post("/world/commands", response_model=CommandResponse, status_code=202)
     async def submit_command(request: CommandRequest) -> CommandResponse:
         return await _submit_command_request(request)
+
+    @app.post("/world/controllers/web/claim", response_model=WebControllerClaimResponse)
+    async def claim_web_controller(
+        request: WebControllerClaimRequest,
+    ) -> WebControllerClaimResponse:
+        return await _claim_web_controller_request(request)
 
     @app.patch("/admin/world", response_model=WorldPatchResponse)
     async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:
