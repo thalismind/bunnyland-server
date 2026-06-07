@@ -61,6 +61,140 @@ def test_mcp_plugin_is_not_enabled_by_default():
     assert mcp_enabled(select(bunnyland_plugins(), None)) is False
 
 
+def test_mcp_uri_and_character_summary_helpers_cover_edge_cases():
+    actor = WorldActor()
+    suspended = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="waiting"),
+        ],
+    )
+    active = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+
+    prompt_uri = mcp_server._agent_prompt_uri("agent/a b")
+
+    assert prompt_uri == "bunnyland://agents/agent%2Fa%20b/prompt"
+    assert mcp_server._agent_id_from_uri(prompt_uri, "/prompt") == "agent/a b"
+    assert mcp_server._agent_id_from_uri(prompt_uri, "/events") is None
+    assert mcp_server._agent_id_from_uri("bunnyland://rooms/1/prompt", "/prompt") is None
+    assert mcp_server._active_controller_kind(actor, active) == "other"
+    assert mcp_server._character_summary(actor, suspended)["controller_status"] == "suspended"
+    assert {
+        item["name"]: item["controller_status"]
+        for item in mcp_server.list_mcp_characters(actor)
+    } == {"Clover": "suspended", "Juniper": "other"}
+
+
+def test_mcp_match_and_controlled_character_helpers_cover_edge_cases():
+    actor = WorldActor()
+    non_character = spawn_entity(actor.world, [IdentityComponent(name="Rock", kind="prop")])
+    child = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(species="bunny"),
+            LifeStageComponent(stage="child"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="no suspended claimable character"):
+        mcp_server._match_character(
+            actor,
+            None,
+            None,
+            allow_child_claims=False,
+        )
+    with pytest.raises(RuntimeError, match="no character with id"):
+        mcp_server._match_character(
+            actor,
+            None,
+            str(non_character.id),
+            allow_child_claims=True,
+        )
+
+    matched = mcp_server._match_character(
+        actor,
+        None,
+        None,
+        allow_child_claims=True,
+    )
+    assert matched.id == child.id
+    assert mcp_server._is_child_character(non_character) is False
+    assert mcp_server._mcp_controller_for(actor, "missing") is None
+    assert mcp_controlled_character(actor, "missing") is None
+
+
+def test_mcp_controlled_or_requested_character_validation():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    other = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="agent is not controlling"):
+        mcp_server._controlled_or_requested_character(actor, "agent-a", None)
+    with pytest.raises(RuntimeError, match="does not exist"):
+        mcp_server._controlled_or_requested_character(actor, "agent-a", "entity_999")
+
+    assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
+
+    assert mcp_server._controlled_or_requested_character(actor, "agent-a", None)[0] == character.id
+    assert (
+        mcp_server._controlled_or_requested_character(actor, "agent-a", str(character.id))[0]
+        == character.id
+    )
+    with pytest.raises(RuntimeError, match="does not control the requested character"):
+        mcp_server._controlled_or_requested_character(actor, "agent-a", str(other.id))
+
+
+async def test_mcp_event_bridge_unsubscribe_and_stale_session_cleanup(scenario):
+    class Session:
+        def __init__(self, *, fail: bool = False) -> None:
+            self.fail = fail
+            self.updated: list[str] = []
+
+        async def send_resource_updated(self, uri: AnyUrl) -> None:
+            if self.fail:
+                raise RuntimeError("gone")
+            self.updated.append(str(uri))
+
+    bridge = mcp_server.MCPEventBridge(scenario.actor)
+    session = Session()
+    stale = Session(fail=True)
+    bridge.unsubscribe(EVENTS_RESOURCE_URI, session)
+    bridge.subscribe(EVENTS_RESOURCE_URI, session)
+    bridge.unsubscribe(EVENTS_RESOURCE_URI, session)
+    bridge.subscribe(EVENTS_RESOURCE_URI, stale)
+
+    try:
+        await bridge._notify_uri(EVENTS_RESOURCE_URI)
+
+        assert stale.updated == []
+        assert EVENTS_RESOURCE_URI not in bridge._subscriptions
+    finally:
+        bridge.close()
+
+
 def test_assign_mcp_controller_claims_suspended_character():
     actor = WorldActor()
     character = spawn_entity(

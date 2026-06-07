@@ -16,6 +16,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.dragonsim import (
     AcceptQuestHandler,
     CompleteObjectiveHandler,
@@ -52,6 +53,18 @@ def _install(actor):
 def _cmd(scenario, command_type, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type=command_type,
@@ -213,6 +226,242 @@ async def test_complete_final_objective_rejects_missing_reward_item_without_comp
     assert objective_component.completed is False
     assert reward_component.claimed is False
     assert any(event.reason == "quest reward item does not exist" for event in rejects)
+
+
+def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="plain stone", kind="prop")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+    distant_poi = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far watchtower", kind="location"),
+            PointOfInterestComponent(location_type="ruin", region="north meadow"),
+        ],
+    )
+    discovered_poi = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="known watchtower", kind="location"),
+            PointOfInterestComponent(location_type="ruin", region="north meadow"),
+            DiscoveryComponent(discovered_by=(str(scenario.character),)),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), discovered_poi.id)
+    spawn_entity(
+        scenario.actor.world,
+        [QuestComponent(quest_id="guard-duty", title="Guard Duty")],
+    )
+    active_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            QuestComponent(
+                quest_id="active-duty",
+                title="Active Duty",
+                status="active",
+                accepted_by=(str(scenario.character),),
+            )
+        ],
+    )
+    completed_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            QuestComponent(
+                quest_id="done-duty",
+                title="Done Duty",
+                status="completed",
+            )
+        ],
+    )
+    objective = spawn_entity(
+        scenario.actor.world,
+        [QuestObjectiveComponent(quest_id="guard-duty", description="Stand watch")],
+    )
+    completed_objective = spawn_entity(
+        scenario.actor.world,
+        [
+            QuestObjectiveComponent(
+                quest_id="guard-duty",
+                description="Already stood watch",
+                completed=True,
+            )
+        ],
+    )
+    orphan_objective = spawn_entity(
+        scenario.actor.world,
+        [QuestObjectiveComponent(quest_id="missing-quest", description="No quest")],
+    )
+    faction = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Moss Wardens", kind="faction"),
+            FactionComponent(name="Moss Wardens", ideology="protect the burrow"),
+        ],
+    )
+
+    cases = [
+        (
+            DiscoverLocationHandler(),
+            _handler_cmd(
+                scenario,
+                "discover-location",
+                character_id="not-an-id",
+                location_id=str(distant_poi.id),
+            ),
+            "invalid character or location id",
+        ),
+        (
+            DiscoverLocationHandler(),
+            _handler_cmd(scenario, "discover-location", location_id="entity_999"),
+            "location does not exist",
+        ),
+        (
+            DiscoverLocationHandler(),
+            _handler_cmd(
+                scenario,
+                "discover-location",
+                location_id=str(distant_poi.id),
+            ),
+            "location is not reachable",
+        ),
+        (
+            DiscoverLocationHandler(),
+            _handler_cmd(scenario, "discover-location", location_id=str(wrong_kind.id)),
+            "target is not discoverable",
+        ),
+        (
+            DiscoverLocationHandler(),
+            _handler_cmd(
+                scenario,
+                "discover-location",
+                location_id=str(discovered_poi.id),
+            ),
+            "location already discovered",
+        ),
+        (
+            AcceptQuestHandler(),
+            _handler_cmd(scenario, "accept-quest", character_id="not-an-id", quest_id="x"),
+            "invalid character or quest id",
+        ),
+        (
+            AcceptQuestHandler(),
+            _handler_cmd(scenario, "accept-quest", quest_id="missing"),
+            "quest does not exist",
+        ),
+        (
+            AcceptQuestHandler(),
+            _handler_cmd(scenario, "accept-quest", quest_id=str(completed_quest.id)),
+            "quest is already complete",
+        ),
+        (
+            AcceptQuestHandler(),
+            _handler_cmd(scenario, "accept-quest", quest_id=str(active_quest.id)),
+            "quest already accepted",
+        ),
+        (
+            CompleteObjectiveHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-objective",
+                character_id="not-an-id",
+                objective_id=str(objective.id),
+            ),
+            "invalid character or objective id",
+        ),
+        (
+            CompleteObjectiveHandler(),
+            _handler_cmd(scenario, "complete-objective", objective_id="missing"),
+            "objective does not exist",
+        ),
+        (
+            CompleteObjectiveHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-objective",
+                objective_id=str(completed_objective.id),
+            ),
+            "objective is already complete",
+        ),
+        (
+            CompleteObjectiveHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-objective",
+                objective_id=str(orphan_objective.id),
+            ),
+            "quest does not exist",
+        ),
+        (
+            CompleteObjectiveHandler(),
+            _handler_cmd(scenario, "complete-objective", objective_id=str(objective.id)),
+            "quest is not accepted",
+        ),
+        (
+            JoinFactionHandler(),
+            _handler_cmd(
+                scenario,
+                "join-faction",
+                character_id="not-an-id",
+                faction_id=str(faction.id),
+            ),
+            "invalid character or faction id",
+        ),
+        (
+            JoinFactionHandler(),
+            _handler_cmd(scenario, "join-faction", faction_id="entity_999"),
+            "faction does not exist",
+        ),
+        (
+            JoinFactionHandler(),
+            _handler_cmd(scenario, "join-faction", faction_id=str(wrong_kind.id)),
+            "target is not a faction",
+        ),
+        (
+            LeaveFactionHandler(),
+            _handler_cmd(
+                scenario,
+                "leave-faction",
+                character_id="not-an-id",
+                faction_id=str(faction.id),
+            ),
+            "invalid character or faction id",
+        ),
+        (
+            LeaveFactionHandler(),
+            _handler_cmd(scenario, "leave-faction", faction_id="entity_999"),
+            "faction does not exist",
+        ),
+        (
+            LeaveFactionHandler(),
+            _handler_cmd(scenario, "leave-faction", faction_id=str(wrong_kind.id)),
+            "target is not a faction",
+        ),
+        (
+            LeaveFactionHandler(),
+            _handler_cmd(scenario, "leave-faction", faction_id=str(faction.id)),
+            "not a faction member",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(MemberOf(rank="member", since_epoch=0), faction.id)
+    result = JoinFactionHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "join-faction", faction_id=str(faction.id)),
+    )
+    assert result.ok is False
+    assert result.reason == "already a faction member"
 
 
 async def test_complete_objective_rejects_unaccepted_quest():

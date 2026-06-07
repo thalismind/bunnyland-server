@@ -17,6 +17,7 @@ from bunnyland.core import (
 )
 from bunnyland.core.components import CharacterComponent
 from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.colonysim import install_colonysim
 from bunnyland.mechanics.dinosim import (
     AncientSampleComponent,
@@ -38,6 +39,7 @@ from bunnyland.mechanics.dinosim import (
     PrepareCloneHandler,
     ReptileProcreationComponent,
     SettlementDamageComponent,
+    SpeciesComponent,
     SpeciesIdentificationComponent,
     dinosim_fragments,
     install_dinosim,
@@ -68,6 +70,18 @@ def _install(actor):
 def _cmd(scenario, command_type, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type=command_type,
@@ -336,6 +350,270 @@ async def test_dinosim_rejects_invalid_egg_lifecycle_steps():
     assert "egg is not fertilized" in reasons
     assert "egg is not incubating" in reasons
     assert "egg is not ready to hatch" in reasons
+
+
+def test_dinosim_handlers_reject_invalid_and_unreachable_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="plain rock", kind="rock")],
+    )
+    fossil = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="amber chip", kind="fossil"),
+            FossilFragmentComponent(sample_quality=0.5),
+        ],
+    )
+    sample = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ancient sample", kind="sample"),
+            AncientSampleComponent(species_name="velociraptor"),
+        ],
+    )
+    egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="raptor egg", kind="egg"),
+            EggComponent(species_name="velociraptor", laid_at_epoch=0),
+        ],
+    )
+    fertile_parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="clever raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            FertilityComponent(),
+            ReptileProcreationComponent(egg_species_name="velociraptor"),
+        ],
+    )
+    infertile_parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="tired raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            FertilityComponent(fertile=False),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    species_parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ancient reptile", kind="character"),
+            CharacterComponent(species="ancient reptile"),
+            SpeciesComponent(common_name="ancient reptile"),
+        ],
+    )
+    distant_fossil = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far fossil", kind="fossil"),
+            FossilFragmentComponent(sample_quality=0.5),
+        ],
+    )
+    distant_sample = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far sample", kind="sample"),
+            AncientSampleComponent(species_name="velociraptor"),
+        ],
+    )
+    distant_egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far egg", kind="egg"),
+            EggComponent(species_name="velociraptor", laid_at_epoch=0),
+        ],
+    )
+    distant_parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    for entity in (
+        wrong_kind,
+        fossil,
+        sample,
+        egg,
+        fertile_parent,
+        infertile_parent,
+        species_parent,
+    ):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    cases = [
+        (
+            IdentifyFossilHandler(),
+            _handler_cmd(
+                scenario,
+                "identify-fossil",
+                character_id="not-an-id",
+                fossil_id=str(fossil.id),
+                species_name="raptor",
+            ),
+            "invalid character, fossil, or species name",
+        ),
+        (
+            IdentifyFossilHandler(),
+            _handler_cmd(
+                scenario,
+                "identify-fossil",
+                fossil_id=str(distant_fossil.id),
+                species_name="raptor",
+            ),
+            "fossil is not reachable",
+        ),
+        (
+            ExtractAncientSampleHandler(),
+            _handler_cmd(
+                scenario,
+                "extract-ancient-sample",
+                character_id="not-an-id",
+                fossil_id=str(fossil.id),
+            ),
+            "invalid character or fossil id",
+        ),
+        (
+            ExtractAncientSampleHandler(),
+            _handler_cmd(
+                scenario,
+                "extract-ancient-sample",
+                fossil_id=str(distant_fossil.id),
+            ),
+            "fossil is not reachable",
+        ),
+        (
+            PrepareCloneHandler(),
+            _handler_cmd(
+                scenario,
+                "prepare-clone",
+                character_id="not-an-id",
+                sample_id=str(sample.id),
+            ),
+            "invalid character or sample id",
+        ),
+        (
+            PrepareCloneHandler(),
+            _handler_cmd(scenario, "prepare-clone", sample_id="entity_999"),
+            "sample does not exist",
+        ),
+        (
+            PrepareCloneHandler(),
+            _handler_cmd(scenario, "prepare-clone", sample_id=str(distant_sample.id)),
+            "sample is not reachable",
+        ),
+        (
+            LayEggHandler(),
+            _handler_cmd(
+                scenario,
+                "lay-egg",
+                character_id="not-an-id",
+                parent_id=str(fertile_parent.id),
+            ),
+            "invalid character or parent id",
+        ),
+        (
+            LayEggHandler(),
+            _handler_cmd(scenario, "lay-egg", parent_id="entity_999"),
+            "parent does not exist",
+        ),
+        (
+            LayEggHandler(),
+            _handler_cmd(scenario, "lay-egg", parent_id=str(distant_parent.id)),
+            "parent is not reachable",
+        ),
+        (
+            LayEggHandler(),
+            _handler_cmd(scenario, "lay-egg", parent_id=str(species_parent.id)),
+            "",
+        ),
+        (
+            FertilizeEggHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize-egg",
+                character_id="not-an-id",
+                egg_id=str(egg.id),
+                parent_id=str(fertile_parent.id),
+            ),
+            "invalid character, egg, or parent id",
+        ),
+        (
+            FertilizeEggHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize-egg",
+                egg_id="entity_999",
+                parent_id=str(fertile_parent.id),
+            ),
+            "egg or parent does not exist",
+        ),
+        (
+            FertilizeEggHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize-egg",
+                egg_id=str(distant_egg.id),
+                parent_id=str(fertile_parent.id),
+            ),
+            "egg or parent is not reachable",
+        ),
+        (
+            IncubateEggHandler(),
+            _handler_cmd(
+                scenario,
+                "incubate-egg",
+                character_id="not-an-id",
+                egg_id=str(egg.id),
+            ),
+            "invalid character or egg id",
+        ),
+        (
+            IncubateEggHandler(),
+            _handler_cmd(scenario, "incubate-egg", egg_id="entity_999"),
+            "egg does not exist",
+        ),
+        (
+            IncubateEggHandler(),
+            _handler_cmd(scenario, "incubate-egg", egg_id=str(distant_egg.id)),
+            "egg is not reachable",
+        ),
+        (
+            HatchEggHandler(),
+            _handler_cmd(
+                scenario,
+                "hatch-egg",
+                character_id="not-an-id",
+                egg_id=str(egg.id),
+            ),
+            "invalid character or egg id",
+        ),
+        (
+            HatchEggHandler(),
+            _handler_cmd(scenario, "hatch-egg", egg_id="entity_999"),
+            "egg does not exist",
+        ),
+        (
+            HatchEggHandler(),
+            _handler_cmd(scenario, "hatch-egg", egg_id=str(distant_egg.id)),
+            "egg is not reachable",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        if reason:
+            assert result.ok is False
+            assert result.reason == reason
+        else:
+            assert result.ok is True
 
 
 async def test_storyteller_selects_kaiju_attack_only_when_colonysim_and_dinosim_are_enabled():

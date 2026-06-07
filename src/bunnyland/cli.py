@@ -212,6 +212,7 @@ async def _serve(args) -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
+    worldgen_provider = args.worldgen_provider or args.llm_provider
     host = api_key = worldgen_api_key = discord_token = None
     openrouter_api_key = openrouter_server_url = None
     if args.llm:
@@ -219,15 +220,21 @@ async def _serve(args) -> None:
         openrouter_server_url = os.environ.get("OPENROUTER_SERVER_URL")
         host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
         api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
-        worldgen_api_key = api_key
-        if args.llm_provider == "openrouter" and args.worldgen_provider == "openrouter":
-            worldgen_api_key = openrouter_api_key
-        if args.worldgen_provider == "ollama" and (not args.load) and not api_key:
-            raise SystemExit("--llm needs OLLAMA_CLOUD_API_KEY (set it in .env or the environment)")
         if args.llm_provider == "openrouter" and not openrouter_api_key:
             raise SystemExit("--llm-provider openrouter needs OPENROUTER_API_KEY")
-        if args.worldgen_provider == "openrouter" and not openrouter_api_key:
+        if args.llm_provider == "ollama" and not api_key:
+            raise SystemExit(
+                "--llm-provider ollama needs OLLAMA_CLOUD_API_KEY "
+                "(set it in .env or the environment)"
+            )
+        if worldgen_provider == "openrouter" and not openrouter_api_key:
             raise SystemExit("--worldgen-provider openrouter needs OPENROUTER_API_KEY")
+        if worldgen_provider == "ollama" and (not args.load) and not api_key:
+            raise SystemExit(
+                "--worldgen-provider ollama needs OLLAMA_CLOUD_API_KEY "
+                "(set it in .env or the environment)"
+            )
+        worldgen_api_key = openrouter_api_key if worldgen_provider == "openrouter" else api_key
     worldgen_model = args.worldgen_model or args.ollama_model or DEFAULT_WORLDGEN_MODEL
     character_model = args.character_model or args.ollama_model or DEFAULT_MODEL
     if args.discord:
@@ -263,12 +270,12 @@ async def _serve(args) -> None:
 
         if args.llm:
             print(
-                f"Generating world with {args.worldgen_provider} model "
+                f"Generating world with {worldgen_provider} model "
                 f"{worldgen_model!r}."
             )
         options = GenOptions(
             llm=args.llm,
-            provider=args.worldgen_provider,
+            provider=worldgen_provider,
             model=worldgen_model,
             host=host,
             api_key=worldgen_api_key,
@@ -441,7 +448,7 @@ async def _serve(args) -> None:
                     save_path=args.save,
                     worldgen_options=GenOptions(
                         llm=args.llm,
-                        provider=args.worldgen_provider,
+                        provider=worldgen_provider,
                         model=worldgen_model,
                         host=host,
                         api_key=worldgen_api_key,
@@ -501,8 +508,8 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument(
         "--worldgen-provider",
         choices=("ollama", "openrouter"),
-        default="ollama",
-        help="LLM provider for world generation (default: ollama)",
+        default=None,
+        help="LLM provider for world generation (default: --llm-provider)",
     )
     serve.add_argument(
         "--ollama-model",

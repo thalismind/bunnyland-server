@@ -18,6 +18,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.environment import CalendarComponent
 from bunnyland.mechanics.gardensim import (
     CropComponent,
@@ -34,6 +35,7 @@ from bunnyland.mechanics.gardensim import (
     SeedComponent,
     SoilComponent,
     SoilTilledEvent,
+    TilledComponent,
     TillHandler,
     WaterCropHandler,
     gardensim_fragments,
@@ -55,6 +57,18 @@ def _install(actor):
 def _cmd(scenario, command_type, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type=command_type,
@@ -234,6 +248,240 @@ async def test_crop_withers_out_of_season():
 
     soil_entity = scenario.actor.world.get_entity(soil)
     assert soil_entity.get_component(CropComponent).dead is True
+
+
+def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="plain stone", kind="prop")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+    soil = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="garden bed", kind="soil"), SoilComponent()],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
+    tilled_soil = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="tilled bed", kind="soil"),
+            SoilComponent(),
+            TilledComponent(tilled_at_epoch=0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), tilled_soil.id)
+    cropped_soil = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="cropped bed", kind="soil"),
+            SoilComponent(),
+            TilledComponent(tilled_at_epoch=0),
+            CropComponent(crop_type="turnip", planted_at_epoch=0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), cropped_soil.id)
+    dead_soil = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="dead crop bed", kind="soil"),
+            CropComponent(crop_type="turnip", planted_at_epoch=0, dead=True),
+            HarvestableComponent(yield_item="turnip", quantity=1, ready=True),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), dead_soil.id)
+    seed = _seed(scenario)
+    fertilizer = _fertilizer(scenario)
+    distant_soil = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far bed", kind="soil"), SoilComponent()],
+    )
+    distant_seed = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far seeds", kind="seed"),
+            SeedComponent(crop_type="carrot", growth_days=1.0, yield_item="carrot"),
+        ],
+    )
+    distant_fertilizer = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far fertilizer", kind="fertilizer"),
+            FertilizerComponent(),
+        ],
+    )
+
+    cases = [
+        (
+            TillHandler(),
+            _handler_cmd(
+                scenario,
+                "till",
+                character_id="not-an-id",
+                soil_id=str(soil.id),
+            ),
+            "invalid character or soil id",
+        ),
+        (
+            TillHandler(),
+            _handler_cmd(scenario, "till", soil_id="entity_999"),
+            "soil does not exist",
+        ),
+        (
+            TillHandler(),
+            _handler_cmd(scenario, "till", soil_id=str(distant_soil.id)),
+            "soil is not reachable",
+        ),
+        (
+            TillHandler(),
+            _handler_cmd(scenario, "till", soil_id=str(wrong_kind.id)),
+            "target is not soil",
+        ),
+        (
+            TillHandler(),
+            _handler_cmd(scenario, "till", soil_id=str(tilled_soil.id)),
+            "soil is already tilled",
+        ),
+        (
+            PlantHandler(),
+            _handler_cmd(
+                scenario,
+                "plant",
+                character_id="not-an-id",
+                soil_id=str(tilled_soil.id),
+                seed_id=str(seed),
+            ),
+            "invalid character, soil, or seed id",
+        ),
+        (
+            PlantHandler(),
+            _handler_cmd(
+                scenario,
+                "plant",
+                soil_id="entity_999",
+                seed_id=str(seed),
+            ),
+            "soil or seed does not exist",
+        ),
+        (
+            PlantHandler(),
+            _handler_cmd(
+                scenario,
+                "plant",
+                soil_id=str(distant_soil.id),
+                seed_id=str(seed),
+            ),
+            "soil or seed is not reachable",
+        ),
+        (
+            PlantHandler(),
+            _handler_cmd(
+                scenario,
+                "plant",
+                soil_id=str(tilled_soil.id),
+                seed_id=str(distant_seed.id),
+            ),
+            "soil or seed is not reachable",
+        ),
+        (
+            PlantHandler(),
+            _handler_cmd(scenario, "plant", soil_id=str(soil.id), seed_id=str(seed)),
+            "soil is not prepared",
+        ),
+        (
+            PlantHandler(),
+            _handler_cmd(
+                scenario,
+                "plant",
+                soil_id=str(cropped_soil.id),
+                seed_id=str(seed),
+            ),
+            "soil already has a crop",
+        ),
+        (
+            PlantHandler(),
+            _handler_cmd(
+                scenario,
+                "plant",
+                soil_id=str(tilled_soil.id),
+                seed_id=str(wrong_kind.id),
+            ),
+            "target seed is not plantable",
+        ),
+        (
+            WaterCropHandler(),
+            _handler_cmd(scenario, "water-crop", soil_id=str(distant_soil.id)),
+            "soil is not reachable",
+        ),
+        (
+            WaterCropHandler(),
+            _handler_cmd(scenario, "water-crop", soil_id=str(wrong_kind.id)),
+            "target is not soil",
+        ),
+        (
+            FertilizeHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize",
+                soil_id=str(distant_soil.id),
+                fertilizer_id=str(fertilizer),
+            ),
+            "soil or fertilizer is not reachable",
+        ),
+        (
+            FertilizeHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize",
+                soil_id=str(soil.id),
+                fertilizer_id=str(distant_fertilizer.id),
+            ),
+            "soil or fertilizer is not reachable",
+        ),
+        (
+            FertilizeHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize",
+                soil_id=str(wrong_kind.id),
+                fertilizer_id=str(fertilizer),
+            ),
+            "target is not soil",
+        ),
+        (
+            FertilizeHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize",
+                soil_id=str(soil.id),
+                fertilizer_id=str(wrong_kind.id),
+            ),
+            "target fertilizer is not usable",
+        ),
+        (
+            HarvestCropHandler(),
+            _handler_cmd(scenario, "harvest-crop", soil_id=str(distant_soil.id)),
+            "soil is not reachable",
+        ),
+        (
+            HarvestCropHandler(),
+            _handler_cmd(scenario, "harvest-crop", soil_id=str(soil.id)),
+            "soil has no harvestable crop",
+        ),
+        (
+            HarvestCropHandler(),
+            _handler_cmd(scenario, "harvest-crop", soil_id=str(dead_soil.id)),
+            "crop is dead",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
 
 
 def test_gardensim_fragments_show_nearby_crop_state():

@@ -12,10 +12,12 @@ from bunnyland.core import (
     Lane,
     build_submitted_command,
     container_of,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.components import CharacterComponent
 from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.barbariansim import CorruptionComponent, CorruptionGainedEvent
 from bunnyland.mechanics.voidsim import (
     AirlockComponent,
@@ -117,6 +119,18 @@ def _install(actor):
 def _cmd(scenario, command_type, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type=command_type,
@@ -266,6 +280,727 @@ async def test_repair_system_rejects_healthy_system():
     await scenario.actor.submit(_cmd(scenario, "repair-system", system_id=str(system_id)))
     await scenario.actor.tick(HOUR)
     assert any(event.reason == "system is not damaged" for event in rejects)
+
+
+def test_voidsim_ship_system_handlers_reject_invalid_targets_and_payloads():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    airlock_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="open lock", kind="airlock"),
+            AirlockComponent(state="open"),
+        ],
+    )
+    sealed_bulkhead_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="sealed hatch", kind="bulkhead"),
+            BulkheadComponent(sealed=True),
+        ],
+    )
+    wrong_kind_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="plain crate", kind="item")],
+    )
+    distant_airlock = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant lock", kind="airlock"),
+            AirlockComponent(state="sealed"),
+        ],
+    )
+    grid_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="main bus", kind="power-grid"),
+            PowerGridComponent(available=5.0),
+        ],
+    )
+    system_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="shields", kind="ship-system"),
+            ShipSystemComponent(system_type="shields", online=False),
+        ],
+    )
+    ship_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="courier", kind="ship"), ShipComponent(name="courier")],
+    )
+    station_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="anchor station", kind="station"),
+            StationComponent(name="anchor station"),
+        ],
+    )
+    docked_ship_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="docked shuttle", kind="ship"),
+            ShipComponent(name="docked shuttle"),
+        ],
+    )
+    docked_ship = scenario.actor.world.get_entity(docked_ship_id)
+    docked_ship.add_relationship(DockedTo(port="main"), station_id)
+    module_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="crew module", kind="habitat"),
+            HabitatModuleComponent(module_type="crew"),
+        ],
+    )
+    cargo_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="cargo pallet", kind="cargo")],
+    ).id
+    scenario.actor.world.get_entity(module_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), cargo_id
+    )
+
+    cases = [
+        (
+            OpenAirlockHandler(),
+            _handler_cmd(
+                scenario,
+                "open-airlock",
+                character_id="not-an-id",
+                airlock_id=str(airlock_id),
+            ),
+            "invalid character id",
+        ),
+        (
+            OpenAirlockHandler(),
+            _handler_cmd(scenario, "open-airlock", airlock_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            OpenAirlockHandler(),
+            _handler_cmd(scenario, "open-airlock", airlock_id=str(distant_airlock.id)),
+            "target is not reachable",
+        ),
+        (
+            OpenAirlockHandler(),
+            _handler_cmd(scenario, "open-airlock", airlock_id=str(wrong_kind_id)),
+            "target is the wrong kind",
+        ),
+        (
+            OpenAirlockHandler(),
+            _handler_cmd(scenario, "open-airlock", airlock_id=str(airlock_id)),
+            "airlock is already open",
+        ),
+        (
+            SealBulkheadHandler(),
+            _handler_cmd(scenario, "seal-bulkhead", bulkhead_id=str(wrong_kind_id)),
+            "target is the wrong kind",
+        ),
+        (
+            SealBulkheadHandler(),
+            _handler_cmd(scenario, "seal-bulkhead", bulkhead_id=str(sealed_bulkhead_id)),
+            "bulkhead is already sealed",
+        ),
+        (
+            CycleAirlockHandler(),
+            _handler_cmd(scenario, "cycle-airlock", airlock_id=str(wrong_kind_id)),
+            "target is the wrong kind",
+        ),
+        (
+            RepairSystemHandler(),
+            _handler_cmd(scenario, "repair-system", system_id=str(wrong_kind_id)),
+            "target is the wrong kind",
+        ),
+        (
+            ReroutePowerHandler(),
+            _handler_cmd(
+                scenario,
+                "reroute-power",
+                grid_id=str(wrong_kind_id),
+                system_id=str(system_id),
+                amount=1,
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            ReroutePowerHandler(),
+            _handler_cmd(
+                scenario,
+                "reroute-power",
+                grid_id=str(grid_id),
+                system_id=str(wrong_kind_id),
+                amount=1,
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            ReroutePowerHandler(),
+            _handler_cmd(
+                scenario,
+                "reroute-power",
+                grid_id=str(grid_id),
+                system_id=str(system_id),
+                amount="oops",
+            ),
+            "invalid power amount",
+        ),
+        (
+            ReroutePowerHandler(),
+            _handler_cmd(
+                scenario,
+                "reroute-power",
+                grid_id=str(grid_id),
+                system_id=str(system_id),
+                amount=0,
+            ),
+            "power amount must be positive",
+        ),
+        (
+            ReroutePowerHandler(),
+            _handler_cmd(
+                scenario,
+                "reroute-power",
+                grid_id=str(grid_id),
+                system_id=str(system_id),
+                amount=10,
+            ),
+            "not enough power available",
+        ),
+        (
+            InspectShipSystemHandler(),
+            _handler_cmd(scenario, "inspect-ship-system", system_id=str(wrong_kind_id)),
+            "target is the wrong kind",
+        ),
+        (
+            DockHandler(),
+            _handler_cmd(
+                scenario,
+                "dock",
+                ship_id=str(wrong_kind_id),
+                station_id=str(station_id),
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            DockHandler(),
+            _handler_cmd(
+                scenario,
+                "dock",
+                ship_id=str(ship_id),
+                station_id=str(wrong_kind_id),
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            DockHandler(),
+            _handler_cmd(
+                scenario,
+                "dock",
+                ship_id=str(docked_ship_id),
+                station_id=str(station_id),
+            ),
+            "ship is already docked here",
+        ),
+        (
+            UndockHandler(),
+            _handler_cmd(
+                scenario,
+                "undock",
+                ship_id=str(wrong_kind_id),
+                station_id=str(station_id),
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            UndockHandler(),
+            _handler_cmd(
+                scenario,
+                "undock",
+                ship_id=str(ship_id),
+                station_id=str(wrong_kind_id),
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            UndockHandler(),
+            _handler_cmd(
+                scenario,
+                "undock",
+                ship_id=str(ship_id),
+                station_id=str(station_id),
+            ),
+            "ship is not docked here",
+        ),
+        (
+            EvacuateModuleHandler(),
+            _handler_cmd(scenario, "evacuate-module", module_id=str(wrong_kind_id)),
+            "target is the wrong kind",
+        ),
+        (
+            EvacuateModuleHandler(),
+            _handler_cmd(
+                scenario,
+                "evacuate-module",
+                module_id=str(module_id),
+                destination_id="entity_999",
+            ),
+            "destination does not exist",
+        ),
+        (
+            EvacuateModuleHandler(),
+            _handler_cmd(
+                scenario,
+                "evacuate-module",
+                module_id=str(module_id),
+                destination_id=str(module_id),
+            ),
+            "destination is the module being evacuated",
+        ),
+        (
+            EvacuateModuleHandler(),
+            _handler_cmd(
+                scenario,
+                "evacuate-module",
+                module_id=str(module_id),
+                destination_id=str(scenario.room_b),
+            ),
+            "no one to evacuate",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_voidsim_handlers_reject_invalid_character_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    cases = [
+        (OpenAirlockHandler(), "open-airlock", {"airlock_id": str(scenario.room_a)}),
+        (CycleAirlockHandler(), "cycle-airlock", {"airlock_id": str(scenario.room_a)}),
+        (SealBulkheadHandler(), "seal-bulkhead", {"bulkhead_id": str(scenario.room_a)}),
+        (RepairSystemHandler(), "repair-system", {"system_id": str(scenario.room_a)}),
+        (
+            ReroutePowerHandler(),
+            "reroute-power",
+            {
+                "grid_id": str(scenario.room_a),
+                "system_id": str(scenario.character),
+                "amount": 1,
+            },
+        ),
+        (
+            InspectShipSystemHandler(),
+            "inspect-ship-system",
+            {"system_id": str(scenario.room_a)},
+        ),
+        (
+            DockHandler(),
+            "dock",
+            {"ship_id": str(scenario.room_a), "station_id": str(scenario.room_b)},
+        ),
+        (UndockHandler(), "undock", {"ship_id": str(scenario.room_a)}),
+        (
+            EvacuateModuleHandler(),
+            "evacuate-module",
+            {"module_id": str(scenario.room_a)},
+        ),
+        (
+            PlotCourseHandler(),
+            "plot-course",
+            {"ship_id": str(scenario.room_a), "destination": "Sol"},
+        ),
+        (JumpHandler(), "jump", {"ship_id": str(scenario.room_a)}),
+        (ScanHandler(), "scan", {"ship_id": str(scenario.room_a)}),
+        (
+            AnswerDistressSignalHandler(),
+            "answer-distress-signal",
+            {"signal_id": str(scenario.room_a)},
+        ),
+        (RefuelHandler(), "refuel", {"ship_id": str(scenario.room_a)}),
+        (
+            EnterOrbitHandler(),
+            "enter-orbit",
+            {"ship_id": str(scenario.room_a), "body_id": str(scenario.room_b)},
+        ),
+        (LeaveOrbitHandler(), "leave-orbit", {"ship_id": str(scenario.room_a)}),
+        (
+            LandHandler(),
+            "land",
+            {"ship_id": str(scenario.room_a), "body_id": str(scenario.room_b)},
+        ),
+        (LaunchHandler(), "launch", {"ship_id": str(scenario.room_a)}),
+    ]
+
+    for handler, command_type, payload in cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                command_type,
+                character_id="not-an-id",
+                **payload,
+            ),
+        )
+        assert result.ok is False
+        assert result.reason == "invalid character id"
+
+
+def test_voidsim_navigation_orbit_and_signal_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    wrong_kind_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="plain crate", kind="item")],
+    )
+    ship_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="courier", kind="ship"), ShipComponent(name="courier")],
+    )
+    inventory_ship_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="pocket shuttle", kind="ship"),
+            ShipComponent(name="pocket shuttle"),
+        ],
+    ).id
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), inventory_ship_id
+    )
+    inventory_sensor_ship_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="pocket scanner", kind="ship"),
+            ShipComponent(name="pocket scanner"),
+            SensorComponent(scan_range=1.0),
+        ],
+    ).id
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), inventory_sensor_ship_id
+    )
+    destination_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Vega", kind="star-system"),
+            StarSystemComponent(name="Vega"),
+        ],
+    ).id
+    body_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="rocky moon", kind="orbital-body"),
+            OrbitalBodyComponent(body_type="moon", landable=False),
+        ],
+    )
+    signal_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="weak signal", kind="signal"),
+            DistressSignalComponent(text="help", detected=False),
+        ],
+    )
+    answered_signal_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="answered signal", kind="signal"),
+            DistressSignalComponent(text="safe", detected=True, answered=True),
+        ],
+    )
+    full_fuel_ship_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="full tanker", kind="ship"),
+            ShipComponent(name="full tanker"),
+            FuelComponent(level=10.0, maximum=10.0),
+        ],
+    )
+    orbit_ship_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="orbiter", kind="ship"),
+            ShipComponent(name="orbiter"),
+            OrbitComponent(body_id=str(body_id), altitude="orbit"),
+        ],
+    )
+    landed_ship_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="lander", kind="ship"),
+            ShipComponent(name="lander"),
+            OrbitComponent(body_id=str(body_id), altitude="surface"),
+        ],
+    )
+    broken_orbit_ship_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="lost orbiter", kind="ship"),
+            ShipComponent(name="lost orbiter"),
+            OrbitComponent(body_id="entity_999", altitude="orbit"),
+        ],
+    )
+
+    cases = [
+        (
+            PlotCourseHandler(),
+            _handler_cmd(
+                scenario,
+                "plot-course",
+                ship_id=str(wrong_kind_id),
+                destination_id=str(destination_id),
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            PlotCourseHandler(),
+            _handler_cmd(
+                scenario,
+                "plot-course",
+                ship_id=str(ship_id),
+                destination_id="entity_999",
+            ),
+            "destination does not exist",
+        ),
+        (
+            PlotCourseHandler(),
+            _handler_cmd(
+                scenario,
+                "plot-course",
+                ship_id=str(ship_id),
+                destination_id=str(scenario.room_b),
+            ),
+            "destination is not a star system",
+        ),
+        (
+            PlotCourseHandler(),
+            _handler_cmd(
+                scenario,
+                "plot-course",
+                ship_id=str(inventory_ship_id),
+                destination_id=str(destination_id),
+            ),
+            "no jump route to destination",
+        ),
+        (
+            JumpHandler(),
+            _handler_cmd(scenario, "jump", ship_id=str(ship_id)),
+            "no course plotted",
+        ),
+        (
+            ScanHandler(),
+            _handler_cmd(scenario, "scan", ship_id=str(wrong_kind_id)),
+            "target is the wrong kind",
+        ),
+        (
+            ScanHandler(),
+            _handler_cmd(scenario, "scan", ship_id=str(inventory_sensor_ship_id)),
+            "scan finds nothing",
+        ),
+        (
+            AnswerDistressSignalHandler(),
+            _handler_cmd(
+                scenario,
+                "answer-distress-signal",
+                signal_id=str(wrong_kind_id),
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            AnswerDistressSignalHandler(),
+            _handler_cmd(
+                scenario,
+                "answer-distress-signal",
+                signal_id=str(signal_id),
+            ),
+            "signal has not been detected",
+        ),
+        (
+            AnswerDistressSignalHandler(),
+            _handler_cmd(
+                scenario,
+                "answer-distress-signal",
+                signal_id=str(answered_signal_id),
+            ),
+            "signal already answered",
+        ),
+        (
+            RefuelHandler(),
+            _handler_cmd(scenario, "refuel", ship_id=str(wrong_kind_id)),
+            "target is the wrong kind",
+        ),
+        (
+            RefuelHandler(),
+            _handler_cmd(scenario, "refuel", ship_id=str(full_fuel_ship_id)),
+            "fuel tank is already full",
+        ),
+        (
+            RefuelHandler(),
+            _handler_cmd(
+                scenario,
+                "refuel",
+                ship_id=str(ship_id),
+                amount="oops",
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            EnterOrbitHandler(),
+            _handler_cmd(
+                scenario,
+                "enter-orbit",
+                ship_id=str(wrong_kind_id),
+                body_id=str(body_id),
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            EnterOrbitHandler(),
+            _handler_cmd(
+                scenario,
+                "enter-orbit",
+                ship_id=str(ship_id),
+                body_id=str(wrong_kind_id),
+            ),
+            "target is the wrong kind",
+        ),
+        (
+            LeaveOrbitHandler(),
+            _handler_cmd(scenario, "leave-orbit", ship_id=str(ship_id)),
+            "ship is not in orbit",
+        ),
+        (
+            LandHandler(),
+            _handler_cmd(scenario, "land", ship_id=str(ship_id)),
+            "ship must be in orbit to land",
+        ),
+        (
+            LandHandler(),
+            _handler_cmd(scenario, "land", ship_id=str(landed_ship_id)),
+            "ship is already landed",
+        ),
+        (
+            LandHandler(),
+            _handler_cmd(scenario, "land", ship_id=str(broken_orbit_ship_id)),
+            "orbital body no longer exists",
+        ),
+        (
+            LandHandler(),
+            _handler_cmd(scenario, "land", ship_id=str(orbit_ship_id)),
+            "body cannot be landed on",
+        ),
+        (
+            LaunchHandler(),
+            _handler_cmd(scenario, "launch", ship_id=str(ship_id)),
+            "ship is not landed",
+        ),
+        (
+            LaunchHandler(),
+            _handler_cmd(scenario, "launch", ship_id=str(orbit_ship_id)),
+            "ship is not on a surface",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    result = PlotCourseHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "plot-course",
+            ship_id=str(ship_id),
+            destination_id=str(destination_id),
+        ),
+    )
+    assert result.ok is False
+    assert result.reason == "no jump route to destination"
+
+    routed_ship_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="routed ship", kind="ship"),
+            ShipComponent(name="routed ship"),
+            NavigationRouteComponent(
+                destination_id=str(destination_id),
+                fuel_cost=5.0,
+                status="jumping",
+            ),
+        ],
+    )
+    result = JumpHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "jump", ship_id=str(routed_ship_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "ship is already jumping"
+
+    replace_component(
+        scenario.actor.world.get_entity(routed_ship_id),
+        NavigationRouteComponent(destination_id=str(destination_id), fuel_cost=5.0),
+    )
+    result = JumpHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "jump", ship_id=str(routed_ship_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "jump drive is not charged"
+
+    scenario.actor.world.get_entity(routed_ship_id).add_component(JumpDriveComponent(charged=True))
+    result = JumpHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "jump", ship_id=str(routed_ship_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "ship has no fuel tank"
+
+    scenario.actor.world.get_entity(routed_ship_id).add_component(
+        FuelComponent(level=1.0, maximum=10.0)
+    )
+    result = JumpHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "jump", ship_id=str(routed_ship_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "not enough fuel to jump"
+
+    empty_sensor_ship_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="empty scanner", kind="ship"),
+            ShipComponent(name="empty scanner"),
+            SensorComponent(scan_range=1.0),
+        ],
+    )
+    replace_component(
+        scenario.actor.world.get_entity(signal_id),
+        DistressSignalComponent(text="help", detected=True),
+    )
+    result = ScanHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "scan", ship_id=str(empty_sensor_ship_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "scan finds nothing"
+
+    low_fuel_ship_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="low tanker", kind="ship"),
+            ShipComponent(name="low tanker"),
+            FuelComponent(level=1.0, maximum=10.0),
+        ],
+    )
+    result = RefuelHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "refuel", ship_id=str(low_fuel_ship_id), amount="oops"),
+    )
+    assert result.ok is False
+    assert result.reason == "invalid fuel amount"
 
 
 async def test_reroute_power_brings_system_online():

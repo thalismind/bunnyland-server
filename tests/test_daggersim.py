@@ -21,7 +21,7 @@ from bunnyland.core import (
 )
 from bunnyland.core.components import CharacterComponent, HealthComponent
 from bunnyland.core.events import CommandRejectedEvent
-from bunnyland.core.handlers import SayHandler, TellHandler
+from bunnyland.core.handlers import HandlerContext, SayHandler, TellHandler
 from bunnyland.mechanics.daggersim import (
     AcceptGeneratedQuestHandler,
     AccountOpenedEvent,
@@ -197,6 +197,18 @@ def _install(actor):
 def _cmd(scenario, command_type, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type=command_type,
@@ -458,6 +470,1180 @@ async def test_false_rumor_is_disproven_without_expansion_request():
     rumor = scenario.actor.world.get_entity(rumor_id).get_component(RumorComponent)
     assert rumor.state == "disproven"
     assert requested == []
+
+
+def test_investigate_rumor_rejects_invalid_targets_and_states():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    site_id = _site(scenario)
+    rumor_id = _rumor(scenario, site_id)
+    object_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="notice board", kind="prop")],
+    ).id
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), object_id
+    )
+    distant_rumor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant rumor", kind="rumor"),
+            RumorComponent(text="A far-off story."),
+        ],
+    )
+    resolved_rumor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="resolved rumor", kind="rumor"),
+            RumorComponent(
+                text="This one is settled.",
+                heard_by=(str(scenario.character),),
+                state="verified",
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), resolved_rumor.id
+    )
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    handler = InvestigateRumorHandler()
+
+    cases = [
+        (
+            _handler_cmd(
+                scenario,
+                "investigate-rumor",
+                character_id="not-an-id",
+                rumor_id=str(rumor_id),
+            ),
+            "invalid character or rumor id",
+        ),
+        (
+            _handler_cmd(scenario, "investigate-rumor", rumor_id="entity_999"),
+            "rumor does not exist",
+        ),
+        (
+            _handler_cmd(scenario, "investigate-rumor", rumor_id=str(distant_rumor.id)),
+            "rumor is not reachable",
+        ),
+        (
+            _handler_cmd(scenario, "investigate-rumor", rumor_id=str(object_id)),
+            "target is not a rumor",
+        ),
+        (
+            _handler_cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id)),
+            "rumor has not been heard",
+        ),
+        (
+            _handler_cmd(scenario, "investigate-rumor", rumor_id=str(resolved_rumor.id)),
+            "rumor is already resolved",
+        ),
+    ]
+
+    for command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    wrong_kind_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="notice board", kind="prop")],
+    ).id
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind_id
+    )
+    distant_site = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant ruin", kind="site"),
+            ProceduralSiteComponent(site_type="ruin", seed="far"),
+            UnrealizedLocationComponent(summary="too far away", region_id="moss-road"),
+        ],
+    )
+    realized_site = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="realized camp", kind="site"),
+            ProceduralSiteComponent(site_type="camp", seed="realized"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), realized_site.id
+    )
+    heard_rumor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="heard rumor", kind="rumor"),
+            RumorComponent(text="Already heard.", heard_by=(str(scenario.character),)),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), heard_rumor.id
+    )
+
+    cases = [
+        (
+            ExpandSiteHandler(),
+            _handler_cmd(scenario, "expand-site", site_id="entity_999"),
+            "site does not exist",
+        ),
+        (
+            ExpandSiteHandler(),
+            _handler_cmd(scenario, "expand-site", site_id=str(distant_site.id)),
+            "site is not reachable",
+        ),
+        (
+            ExpandSiteHandler(),
+            _handler_cmd(scenario, "expand-site", site_id=str(wrong_kind_id)),
+            "target is not a procedural site",
+        ),
+        (
+            ExpandSiteHandler(),
+            _handler_cmd(scenario, "expand-site", site_id=str(realized_site.id)),
+            "target is already realized",
+        ),
+        (
+            AskRumorHandler(),
+            _handler_cmd(scenario, "ask-rumor", rumor_id=str(wrong_kind_id)),
+            "target is not a rumor",
+        ),
+        (
+            AskRumorHandler(),
+            _handler_cmd(scenario, "ask-rumor", rumor_id=str(heard_rumor.id)),
+            "rumor already heard",
+        ),
+        (
+            PlanTravelHandler(),
+            _handler_cmd(scenario, "plan-travel", destination_id="entity_999"),
+            "destination does not exist",
+        ),
+        (
+            PlanTravelHandler(),
+            _handler_cmd(scenario, "plan-travel", destination_id=str(scenario.room_b)),
+            "origin is not a travel hub",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    no_rumor_scenario = build_scenario()
+    no_rumor_ctx = HandlerContext(
+        no_rumor_scenario.actor.world,
+        no_rumor_scenario.actor.epoch,
+    )
+    result = AskRumorHandler().execute(
+        no_rumor_ctx,
+        _handler_cmd(no_rumor_scenario, "ask-rumor"),
+    )
+    assert result.ok is False
+    assert result.reason == "rumor does not exist"
+
+    traveling_scenario = build_scenario()
+    traveling_character = traveling_scenario.actor.world.get_entity(
+        traveling_scenario.character
+    )
+    traveling_character.add_component(
+        TravelPlanComponent(
+            destination_id=str(traveling_scenario.room_b),
+            started_at_epoch=0,
+            arrive_at_epoch=HOUR,
+        )
+    )
+    result = PlanTravelHandler().execute(
+        HandlerContext(traveling_scenario.actor.world, traveling_scenario.actor.epoch),
+        _handler_cmd(
+            traveling_scenario,
+            "plan-travel",
+            destination_id=str(traveling_scenario.room_b),
+        ),
+    )
+    assert result.ok is False
+    assert result.reason == "character is already traveling"
+
+    no_route_scenario = build_scenario()
+    no_route_scenario.actor.world.get_entity(no_route_scenario.room_a).add_component(
+        TravelHubComponent(name="Origin", region_id="moss-road")
+    )
+    result = PlanTravelHandler().execute(
+        HandlerContext(no_route_scenario.actor.world, no_route_scenario.actor.epoch),
+        _handler_cmd(
+            no_route_scenario,
+            "plan-travel",
+            destination_id=str(no_route_scenario.room_b),
+        ),
+    )
+    assert result.ok is False
+    assert result.reason == "destination is not a travel hub"
+
+    no_route_scenario.actor.world.get_entity(no_route_scenario.room_b).add_component(
+        TravelHubComponent(name="Destination", region_id="moss-road")
+    )
+    result = PlanTravelHandler().execute(
+        HandlerContext(no_route_scenario.actor.world, no_route_scenario.actor.epoch),
+        _handler_cmd(
+            no_route_scenario,
+            "plan-travel",
+            destination_id=str(no_route_scenario.room_b),
+        ),
+    )
+    assert result.ok is False
+    assert result.reason == "no travel route to destination"
+
+
+def test_daggersim_institution_quest_and_bank_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    wrong_kind_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="notice board", kind="prop")],
+    ).id
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind_id
+    )
+    distant_institution = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Distant Guild", kind="institution"),
+            InstitutionComponent(name="Distant Guild", institution_type="guild"),
+        ],
+    )
+    distant_service = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant service", kind="service"),
+            InstitutionServiceComponent(service_name="distant"),
+        ],
+    )
+    distant_institution.add_relationship(
+        Contains(mode=ContainmentMode.CONTAINER), distant_service.id
+    )
+    institution_id, service_id = _institution(scenario, required_rank="officer")
+    loose_service = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="loose service", kind="service"),
+            InstitutionServiceComponent(service_name="loose"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), loose_service.id
+    )
+    bad_parent_service = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="bad parent service", kind="service"),
+            InstitutionServiceComponent(service_name="bad parent"),
+        ],
+    )
+    wrong_parent = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="counter", kind="prop")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_parent.id
+    )
+    wrong_parent.add_relationship(Contains(mode=ContainmentMode.CONTAINER), bad_parent_service.id)
+    _quest_template(scenario)
+    distant_template = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far errand", kind="quest-template"),
+            QuestTemplateComponent(
+                title="Far Errand",
+                objective="Go far",
+                reward_item_name="far writ",
+            ),
+        ],
+    )
+    distant_offered_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant offered quest", kind="quest"),
+            GeneratedQuestComponent(title="Distant Offered", objective="Help"),
+        ],
+    )
+    distant_active_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant active quest", kind="quest"),
+            GeneratedQuestComponent(
+                title="Distant Active",
+                objective="Help",
+                status="active",
+                accepted_by=str(scenario.character),
+            ),
+        ],
+    )
+    offered_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="offered quest", kind="quest"),
+            GeneratedQuestComponent(title="Offered", objective="Help"),
+        ],
+    )
+    active_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="active quest", kind="quest"),
+            GeneratedQuestComponent(
+                title="Active",
+                objective="Help",
+                status="active",
+                accepted_by=str(scenario.character),
+            ),
+            DaggerQuestRewardComponent(item_name="writ"),
+        ],
+    )
+    completed_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="completed quest", kind="quest"),
+            GeneratedQuestComponent(title="Done", objective="Help", status="completed"),
+        ],
+    )
+    no_reward_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="rewardless quest", kind="quest"),
+            GeneratedQuestComponent(
+                title="Rewardless",
+                objective="Help",
+                status="active",
+                accepted_by=str(scenario.character),
+            ),
+        ],
+    )
+    late_quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="late quest", kind="quest"),
+            GeneratedQuestComponent(
+                title="Late",
+                objective="Help",
+                status="active",
+                accepted_by=str(scenario.character),
+            ),
+            QuestDeadlineComponent(due_at_epoch=scenario.actor.epoch - 1),
+            DaggerQuestRewardComponent(item_name="late writ"),
+        ],
+    )
+    for quest_id in (
+        offered_quest.id,
+        active_quest.id,
+        completed_quest.id,
+        no_reward_quest.id,
+        late_quest.id,
+    ):
+        scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+            Contains(mode=ContainmentMode.ROOM_CONTENT), quest_id
+        )
+    bank_id = _bank(scenario)
+    distant_bank = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Far Bank", kind="bank"),
+            BankComponent(name="Far Bank", region_id="moss-road"),
+        ],
+    )
+    account = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="bank account", kind="bank-account"),
+            BankAccountComponent(bank_id=str(bank_id), owner_id=str(scenario.character)),
+        ],
+    )
+
+    cases = [
+        (
+            JoinInstitutionHandler(),
+            _handler_cmd(scenario, "join-institution", institution_id="entity_999"),
+            "institution does not exist",
+        ),
+        (
+            JoinInstitutionHandler(),
+            _handler_cmd(
+                scenario,
+                "join-institution",
+                institution_id=str(distant_institution.id),
+            ),
+            "institution is not reachable",
+        ),
+        (
+            JoinInstitutionHandler(),
+            _handler_cmd(scenario, "join-institution", institution_id=str(wrong_kind_id)),
+            "target is not an institution",
+        ),
+        (
+            UseInstitutionServiceHandler(),
+            _handler_cmd(scenario, "use-institution-service", service_id="entity_999"),
+            "service does not exist",
+        ),
+        (
+            UseInstitutionServiceHandler(),
+            _handler_cmd(
+                scenario,
+                "use-institution-service",
+                service_id=str(distant_service.id),
+            ),
+            "service is not reachable",
+        ),
+        (
+            UseInstitutionServiceHandler(),
+            _handler_cmd(
+                scenario,
+                "use-institution-service",
+                service_id=str(wrong_kind_id),
+            ),
+            "target is not an institution service",
+        ),
+        (
+            UseInstitutionServiceHandler(),
+            _handler_cmd(
+                scenario,
+                "use-institution-service",
+                service_id=str(loose_service.id),
+            ),
+            "service institution is invalid",
+        ),
+        (
+            UseInstitutionServiceHandler(),
+            _handler_cmd(
+                scenario,
+                "use-institution-service",
+                service_id=str(bad_parent_service.id),
+            ),
+            "service institution is invalid",
+        ),
+        (
+            UseInstitutionServiceHandler(),
+            _handler_cmd(scenario, "use-institution-service", service_id=str(service_id)),
+            "not an institution member",
+        ),
+        (
+            AskForWorkHandler(),
+            _handler_cmd(scenario, "ask-for-work", template_id="entity_999"),
+            "quest template does not exist",
+        ),
+        (
+            AskForWorkHandler(),
+            _handler_cmd(
+                scenario,
+                "ask-for-work",
+                template_id=str(distant_template.id),
+            ),
+            "quest template is not reachable",
+        ),
+        (
+            AskForWorkHandler(),
+            _handler_cmd(scenario, "ask-for-work", template_id=str(wrong_kind_id)),
+            "target is not a quest template",
+        ),
+        (
+            AcceptGeneratedQuestHandler(),
+            _handler_cmd(scenario, "accept-generated-quest", quest_id="entity_999"),
+            "quest does not exist",
+        ),
+        (
+            AcceptGeneratedQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "accept-generated-quest",
+                quest_id=str(distant_offered_quest.id),
+            ),
+            "quest is not reachable",
+        ),
+        (
+            AcceptGeneratedQuestHandler(),
+            _handler_cmd(scenario, "accept-generated-quest", quest_id=str(wrong_kind_id)),
+            "target is not a generated quest",
+        ),
+        (
+            AcceptGeneratedQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "accept-generated-quest",
+                quest_id=str(completed_quest.id),
+            ),
+            "quest is not offered",
+        ),
+        (
+            CompleteGeneratedQuestHandler(),
+            _handler_cmd(scenario, "complete-generated-quest", quest_id="entity_999"),
+            "quest does not exist",
+        ),
+        (
+            CompleteGeneratedQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-generated-quest",
+                quest_id=str(distant_active_quest.id),
+            ),
+            "quest is not reachable",
+        ),
+        (
+            CompleteGeneratedQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-generated-quest",
+                quest_id=str(wrong_kind_id),
+            ),
+            "target is not a generated quest",
+        ),
+        (
+            CompleteGeneratedQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-generated-quest",
+                quest_id=str(offered_quest.id),
+            ),
+            "quest is not active",
+        ),
+        (
+            CompleteGeneratedQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-generated-quest",
+                quest_id=str(late_quest.id),
+            ),
+            "quest deadline has passed",
+        ),
+        (
+            CompleteGeneratedQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-generated-quest",
+                quest_id=str(no_reward_quest.id),
+            ),
+            "quest has no reward",
+        ),
+        (
+            OpenBankAccountHandler(),
+            _handler_cmd(scenario, "open-bank-account", bank_id="entity_999"),
+            "bank does not exist",
+        ),
+        (
+            OpenBankAccountHandler(),
+            _handler_cmd(
+                scenario,
+                "open-bank-account",
+                bank_id=str(distant_bank.id),
+            ),
+            "bank is not reachable",
+        ),
+        (
+            OpenBankAccountHandler(),
+            _handler_cmd(scenario, "open-bank-account", bank_id=str(wrong_kind_id)),
+            "target is not a bank",
+        ),
+        (
+            DepositHandler(),
+            _handler_cmd(scenario, "deposit", bank_id=str(bank_id), amount=0),
+            "deposit amount must be positive",
+        ),
+        (
+            WithdrawHandler(),
+            _handler_cmd(scenario, "withdraw", bank_id=str(bank_id), amount=0),
+            "withdrawal amount must be positive",
+        ),
+        (
+            TakeLoanHandler(),
+            _handler_cmd(scenario, "take-loan", bank_id=str(bank_id), amount=0),
+            "loan amount must be positive",
+        ),
+        (
+            RepayLoanHandler(),
+            _handler_cmd(scenario, "repay-loan", loan_id="entity_999", amount=0),
+            "repayment amount must be positive",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    character.add_relationship(MemberOfInstitution(rank="member", since_epoch=0), institution_id)
+    result = UseInstitutionServiceHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "use-institution-service", service_id=str(service_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "institution rank is too low"
+
+    result = JoinInstitutionHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "join-institution", institution_id=str(institution_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "already an institution member"
+
+    scenario.actor.world.get_entity(bank_id).add_relationship(
+        Contains(mode=ContainmentMode.CONTAINER), account.id
+    )
+    for handler, command, reason in (
+        (
+            OpenBankAccountHandler(),
+            _handler_cmd(scenario, "open-bank-account", bank_id=str(bank_id)),
+            "bank account already exists",
+        ),
+        (
+            WithdrawHandler(),
+            _handler_cmd(scenario, "withdraw", bank_id=str(bank_id), amount=1),
+            "insufficient bank balance",
+        ),
+    ):
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    wrong_kind_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="notice board", kind="prop")],
+    ).id
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind_id
+    )
+    class_template_id = _class_template(scenario)
+    spell_template_id = _spell_template(scenario)
+    distant_class_template = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far class", kind="class-template"),
+            ClassTemplateComponent(
+                class_name="Far Class",
+                primary_skills=(),
+                major_skills=(),
+                minor_skills=(),
+            ),
+        ],
+    )
+    distant_spell = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant spell", kind="spell"),
+            CustomSpellComponent(
+                spell_name="Distant Spark",
+                effect_type="harm",
+                magnitude=1.0,
+                creator_id=str(scenario.character),
+            ),
+        ],
+    )
+    distant_spell_template = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far spell template", kind="spell-template"),
+            SpellTemplateComponent(
+                spell_name="Far Spark",
+                effect_type="harm",
+                magnitude=1.0,
+            ),
+        ],
+    )
+    distant_item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far ring", kind="item"), PortableComponent()],
+    )
+    item_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="iron ring", kind="item"), PortableComponent()],
+    ).id
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+    custom_spell_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="mend sprout", kind="spell"),
+            CustomSpellComponent(
+                spell_name="Mend Sprout",
+                effect_type="heal",
+                magnitude=4.0,
+                creator_id=str(scenario.character),
+            ),
+        ],
+    ).id
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), custom_spell_id)
+    hostile_id = _hostile_creature(scenario)
+    distant_creature = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far moth", kind="creature"),
+            CreatureLanguageComponent(language="Mothwing", pacification_difficulty=1),
+        ],
+    )
+    bank_id = _bank(scenario)
+    account = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="bank account", kind="bank-account"),
+            BankAccountComponent(
+                bank_id=str(bank_id),
+                owner_id=str(scenario.character),
+                balance=0,
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(bank_id).add_relationship(
+        Contains(mode=ContainmentMode.CONTAINER), account.id
+    )
+    open_crime = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="open crime", kind="crime-record"),
+            CrimeRecordComponent(crime_type="trespass", region_id="moss-road", fine=5),
+        ],
+    )
+    distant_crime = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant crime", kind="crime-record"),
+            CrimeRecordComponent(crime_type="trespass", region_id="moss-road", fine=5),
+        ],
+    )
+    paid_crime = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="paid crime", kind="crime-record"),
+            CrimeRecordComponent(
+                crime_type="trespass",
+                region_id="moss-road",
+                fine=5,
+                status="paid",
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), open_crime.id
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), paid_crime.id
+    )
+
+    cases = [
+        (
+            CommitCrimeHandler(),
+            _handler_cmd(scenario, "commit-crime", crime_type="trespass"),
+            "no law region applies",
+        ),
+        (
+            PayFineHandler(),
+            _handler_cmd(scenario, "pay-fine", crime_id="entity_999"),
+            "crime record does not exist",
+        ),
+        (
+            PayFineHandler(),
+            _handler_cmd(scenario, "pay-fine", crime_id=str(distant_crime.id)),
+            "crime record is not reachable",
+        ),
+        (
+            PayFineHandler(),
+            _handler_cmd(scenario, "pay-fine", crime_id=str(wrong_kind_id)),
+            "target is not a crime record",
+        ),
+        (
+            PayFineHandler(),
+            _handler_cmd(scenario, "pay-fine", crime_id=str(paid_crime.id)),
+            "crime record is not open",
+        ),
+        (
+            PayFineHandler(),
+            _handler_cmd(scenario, "pay-fine", crime_id=str(open_crime.id)),
+            "insufficient bank balance",
+        ),
+        (
+            CreateCustomClassHandler(),
+            _handler_cmd(scenario, "create-custom-class", template_id="entity_999"),
+            "class template does not exist",
+        ),
+        (
+            CreateCustomClassHandler(),
+            _handler_cmd(
+                scenario,
+                "create-custom-class",
+                template_id=str(distant_class_template.id),
+            ),
+            "class template is not reachable",
+        ),
+        (
+            CreateCustomClassHandler(),
+            _handler_cmd(
+                scenario,
+                "create-custom-class",
+                template_id=str(wrong_kind_id),
+            ),
+            "target is not a class template",
+        ),
+        (
+            CreateSpellHandler(),
+            _handler_cmd(scenario, "create-spell", template_id="entity_999"),
+            "spell template does not exist",
+        ),
+        (
+            CreateSpellHandler(),
+            _handler_cmd(
+                scenario,
+                "create-spell",
+                template_id=str(distant_spell_template.id),
+            ),
+            "spell template is not reachable",
+        ),
+        (
+            CreateSpellHandler(),
+            _handler_cmd(scenario, "create-spell", template_id=str(wrong_kind_id)),
+            "target is not a spell template",
+        ),
+        (
+            CastSpellHandler(),
+            _handler_cmd(scenario, "cast-spell", spell_id="entity_999"),
+            "spell or target does not exist",
+        ),
+        (
+            CastSpellHandler(),
+            _handler_cmd(scenario, "cast-spell", spell_id=str(distant_spell.id)),
+            "spell is not reachable",
+        ),
+        (
+            CastSpellHandler(),
+            _handler_cmd(scenario, "cast-spell", spell_id=str(wrong_kind_id)),
+            "target is not a spell or enchanted item",
+        ),
+        (
+            EnchantItemHandler(),
+            _handler_cmd(
+                scenario,
+                "enchant-item",
+                item_id=str(distant_item.id),
+                spell_id=str(custom_spell_id),
+            ),
+            "item is not reachable",
+        ),
+        (
+            EnchantItemHandler(),
+            _handler_cmd(
+                scenario,
+                "enchant-item",
+                item_id=str(item_id),
+                spell_id=str(distant_spell.id),
+            ),
+            "spell is not reachable",
+        ),
+        (
+            EnchantItemHandler(),
+            _handler_cmd(
+                scenario,
+                "enchant-item",
+                item_id=str(item_id),
+                spell_id="entity_999",
+            ),
+            "item or spell does not exist",
+        ),
+        (
+            EnchantItemHandler(),
+            _handler_cmd(
+                scenario,
+                "enchant-item",
+                item_id=str(wrong_kind_id),
+                spell_id=str(custom_spell_id),
+            ),
+            "target is not an item",
+        ),
+        (
+            EnchantItemHandler(),
+            _handler_cmd(
+                scenario,
+                "enchant-item",
+                item_id=str(spell_template_id),
+                spell_id=str(custom_spell_id),
+            ),
+            "target is not an item",
+        ),
+        (
+            EnchantItemHandler(),
+            _handler_cmd(
+                scenario,
+                "enchant-item",
+                item_id=str(item_id),
+                spell_id=str(wrong_kind_id),
+            ),
+            "source is not a spell",
+        ),
+        (
+            AttemptPacifyHandler(),
+            _handler_cmd(scenario, "attempt-pacify", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            AttemptPacifyHandler(),
+            _handler_cmd(
+                scenario,
+                "attempt-pacify",
+                target_id=str(distant_creature.id),
+            ),
+            "target is not reachable",
+        ),
+        (
+            AttemptPacifyHandler(),
+            _handler_cmd(scenario, "attempt-pacify", target_id=str(wrong_kind_id)),
+            "target has no creature language",
+        ),
+        (
+            AttemptPacifyHandler(),
+            _handler_cmd(scenario, "attempt-pacify", target_id=str(hostile_id)),
+            "character knows no creature languages",
+        ),
+        (
+            ContractAfflictionHandler(),
+            _handler_cmd(scenario, "contract-affliction", affliction_type=" "),
+            "invalid character or affliction type",
+        ),
+        (
+            TransformHandler(),
+            _handler_cmd(scenario, "transform"),
+            "character has no supernatural affliction",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    _law_region(scenario)
+    replace_component(
+        scenario.actor.world.get_entity(scenario.room_a),
+        LawRegionComponent(region_id="moss-road", fines={"trespass": 15}),
+    )
+    result = CommitCrimeHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "commit-crime", crime_type="unknown"),
+    )
+    assert result.ok is False
+    assert result.reason == "crime is not fineable"
+
+    character.add_component(CustomClassComponent(class_name="Moonlit Forager"))
+    result = CreateCustomClassHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "create-custom-class",
+            template_id=str(class_template_id),
+        ),
+    )
+    assert result.ok is False
+    assert result.reason == "character already has a custom class"
+
+    character.add_component(
+        SupernaturalAfflictionComponent(
+            affliction_type="werehare",
+            contracted_at_epoch=scenario.actor.epoch,
+        )
+    )
+    result = ContractAfflictionHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "contract-affliction", affliction_type="vampire"),
+    )
+    assert result.ok is False
+    assert result.reason == "character already has a supernatural affliction"
+
+    character.add_component(
+        WereformComponent(form_name="werehare", transformed_at_epoch=scenario.actor.epoch)
+    )
+    result = TransformHandler().execute(ctx, _handler_cmd(scenario, "transform"))
+    assert result.ok is False
+    assert result.reason == "character is already transformed"
+
+
+def test_daggersim_handlers_reject_invalid_character_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    cases = [
+        (
+            ExpandSiteHandler(),
+            "expand-site",
+            {"site_id": str(scenario.room_a)},
+            "invalid character or site id",
+        ),
+        (
+            AskRumorHandler(),
+            "ask-rumor",
+            {"rumor_id": str(scenario.room_a)},
+            "invalid character id",
+        ),
+        (
+            PlanTravelHandler(),
+            "plan-travel",
+            {"destination_id": str(scenario.room_a)},
+            "invalid character or destination id",
+        ),
+        (
+            JoinInstitutionHandler(),
+            "join-institution",
+            {"institution_id": str(scenario.room_a)},
+            "invalid character or institution id",
+        ),
+        (
+            UseInstitutionServiceHandler(),
+            "use-institution-service",
+            {"service_id": str(scenario.room_a)},
+            "invalid character or service id",
+        ),
+        (
+            AskForWorkHandler(),
+            "ask-for-work",
+            {"template_id": str(scenario.room_a)},
+            "invalid character or template id",
+        ),
+        (
+            AcceptGeneratedQuestHandler(),
+            "accept-generated-quest",
+            {"quest_id": str(scenario.room_a)},
+            "invalid character or quest id",
+        ),
+        (
+            CompleteGeneratedQuestHandler(),
+            "complete-generated-quest",
+            {"quest_id": str(scenario.room_a)},
+            "invalid character or quest id",
+        ),
+        (
+            OpenBankAccountHandler(),
+            "open-bank-account",
+            {"bank_id": str(scenario.room_a)},
+            "invalid character or bank id",
+        ),
+        (
+            DepositHandler(),
+            "deposit",
+            {"bank_id": str(scenario.room_a), "amount": 1},
+            "invalid character or bank id",
+        ),
+        (
+            WithdrawHandler(),
+            "withdraw",
+            {"bank_id": str(scenario.room_a), "amount": 1},
+            "invalid character or bank id",
+        ),
+        (
+            TakeLoanHandler(),
+            "take-loan",
+            {"bank_id": str(scenario.room_a), "amount": 1},
+            "invalid character or bank id",
+        ),
+        (
+            RepayLoanHandler(),
+            "repay-loan",
+            {"loan_id": str(scenario.room_a), "amount": 1},
+            "invalid character or loan id",
+        ),
+        (
+            CommitCrimeHandler(),
+            "commit-crime",
+            {"crime_type": "trespass"},
+            "invalid character or crime type",
+        ),
+        (
+            PayFineHandler(),
+            "pay-fine",
+            {"crime_id": str(scenario.room_a)},
+            "invalid character or crime id",
+        ),
+        (
+            CreateCustomClassHandler(),
+            "create-custom-class",
+            {"template_id": str(scenario.room_a), "name": "Scout"},
+            "invalid character or class template id",
+        ),
+        (
+            CreateSpellHandler(),
+            "create-spell",
+            {"template_id": str(scenario.room_a), "name": "Spark"},
+            "invalid character or spell template id",
+        ),
+        (
+            CastSpellHandler(),
+            "cast-spell",
+            {"spell_id": str(scenario.room_a), "target_id": str(scenario.character)},
+            "invalid character, spell, or target id",
+        ),
+        (
+            EnchantItemHandler(),
+            "enchant-item",
+            {"item_id": str(scenario.room_a), "spell_id": str(scenario.character)},
+            "invalid character, item, or spell id",
+        ),
+        (
+            AttemptPacifyHandler(),
+            "attempt-pacify",
+            {"target_id": str(scenario.character)},
+            "invalid character or target id",
+        ),
+        (
+            ContractAfflictionHandler(),
+            "contract-affliction",
+            {"affliction_type": "moon-form"},
+            "invalid character or affliction type",
+        ),
+        (TransformHandler(), "transform", {"form_name": "moon hare"}, "invalid character id"),
+        (
+            RequestDungeonHandler(),
+            "request-dungeon",
+            {"dungeon_id": str(scenario.room_a)},
+            "invalid character or dungeon id",
+        ),
+        (
+            EnterDungeonHandler(),
+            "enter-dungeon",
+            {"dungeon_id": str(scenario.room_a)},
+            "invalid character or dungeon id",
+        ),
+        (SearchRoomHandler(), "search-room", {}, "invalid character id"),
+        (
+            OpenSecretDoorHandler(),
+            "open-secret-door",
+            {"door_id": str(scenario.room_a)},
+            "invalid character or door id",
+        ),
+        (MarkPathHandler(), "mark-path", {}, "invalid character id"),
+        (ViewMapHandler(), "view-map", {}, "invalid character id"),
+        (SetRecallHandler(), "set-recall", {}, "invalid character id"),
+        (UseRecallHandler(), "use-recall", {}, "invalid character id"),
+        (RestHandler(), "rest", {}, "invalid character id"),
+        (
+            LeaveDungeonHandler(),
+            "leave-dungeon",
+            {"dungeon_id": str(scenario.room_a)},
+            "invalid character or dungeon id",
+        ),
+    ]
+
+    for handler, command_type, payload, reason in cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                command_type,
+                character_id="not-an-id",
+                **payload,
+            ),
+        )
+        assert result.ok is False
+        assert result.reason == reason
 
 
 async def test_plan_travel_moves_character_after_route_time():

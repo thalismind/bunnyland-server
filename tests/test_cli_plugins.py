@@ -9,7 +9,13 @@ from types import ModuleType
 import pytest
 
 import bunnyland.cli as cli
-from bunnyland.cli import assign_discord_controller, configure_memory_backend, main, select_plugins
+from bunnyland.cli import (
+    assign_discord_controller,
+    build_actor,
+    configure_memory_backend,
+    main,
+    select_plugins,
+)
 from bunnyland.core import (
     CharacterComponent,
     ControlledBy,
@@ -30,6 +36,7 @@ from bunnyland.plugins.builtin import (
     DRAGONSIM,
     GARDENSIM,
     LIFESIM,
+    MCP,
     NUKESIM,
     VOIDSIM,
     WORLDGEN,
@@ -81,6 +88,21 @@ def test_unknown_starter_pack_raises_plugin_error():
         select_plugins([], None, starter_pack="cozy")
 
 
+def test_select_plugins_adds_extra_plugin_without_disabling_defaults():
+    selected = select_plugins([], None, extra_enabled_ids=(MCP,))
+    ids = {plugin.id for plugin in selected}
+
+    assert MCP in ids
+    assert WORLDGEN in ids
+
+
+def test_build_actor_applies_requested_plugins():
+    actor, applied = build_actor([], [WORLDGEN])
+
+    assert actor is not None
+    assert [plugin.id for plugin in applied] == [WORLDGEN]
+
+
 def test_cli_starter_pack_records_loaded_plugins(tmp_path):
     path = tmp_path / "world.json"
 
@@ -101,6 +123,27 @@ def test_cli_starter_pack_records_loaded_plugins(tmp_path):
     assert result == 0
     _actor, meta = load_world(path)
     assert meta.plugins == (CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM)
+
+
+def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
+    path = tmp_path / "world.json"
+    monkeypatch.setenv("BUNNYLAND_STARTER_PACK", "futuristic")
+
+    result = main(
+        [
+            "serve",
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+            "--save",
+            str(path),
+        ]
+    )
+
+    assert result == 0
+    _actor, meta = load_world(path)
+    assert meta.plugins == (CORE_VERBS, WORLDGEN, LIFESIM, NUKESIM, VOIDSIM)
 
 
 def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):
@@ -146,6 +189,99 @@ def test_cli_rejects_incompatible_discord_playtest_modes(tmp_path):
 def test_cli_mcp_requires_api_port():
     with pytest.raises(SystemExit, match="--mcp mounts on the HTTP API and needs --api-port"):
         main(["serve", "--mcp", "--ticks", "1"])
+
+
+def test_cli_rejects_unknown_generator():
+    with pytest.raises(SystemExit, match="unknown generator 'missing'"):
+        main(["serve", "--generator", "missing", "--ticks", "1"])
+
+
+def test_cli_llm_credential_validation(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OLLAMA_CLOUD_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    with pytest.raises(SystemExit, match="--llm-provider ollama needs OLLAMA_CLOUD_API_KEY"):
+        main(["serve", "--llm", "--generator", "empty", "--ticks", "1"])
+
+    with pytest.raises(SystemExit, match="--llm-provider openrouter needs OPENROUTER_API_KEY"):
+        main(
+            [
+                "serve",
+                "--llm",
+                "--llm-provider",
+                "openrouter",
+                "--generator",
+                "empty",
+                "--ticks",
+                "1",
+            ]
+        )
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    result = main(
+        [
+            "serve",
+            "--llm",
+            "--llm-provider",
+            "openrouter",
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+        ]
+    )
+
+    assert result == 0
+
+    with pytest.raises(SystemExit, match="--worldgen-provider ollama needs OLLAMA_CLOUD_API_KEY"):
+        main(
+            [
+                "serve",
+                "--llm",
+                "--llm-provider",
+                "openrouter",
+                "--worldgen-provider",
+                "ollama",
+                "--generator",
+                "empty",
+                "--ticks",
+                "1",
+            ]
+        )
+
+    monkeypatch.setenv("OLLAMA_CLOUD_API_KEY", "ollama-key")
+    result = main(
+        [
+            "serve",
+            "--llm",
+            "--llm-provider",
+            "openrouter",
+            "--worldgen-provider",
+            "ollama",
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+        ]
+    )
+
+    assert result == 0
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(SystemExit, match="--worldgen-provider openrouter needs OPENROUTER_API_KEY"):
+        main(
+            [
+                "serve",
+                "--llm",
+                "--worldgen-provider",
+                "openrouter",
+                "--generator",
+                "empty",
+                "--ticks",
+                "1",
+            ]
+        )
 
 
 def test_cli_env_parsers_and_dotenv(monkeypatch, tmp_path):

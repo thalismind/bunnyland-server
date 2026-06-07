@@ -40,7 +40,7 @@ from ..server.models import (
 )
 from ..server.serialization import event_message, serialize_world
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover - import-only typing aliases
     from ..core.world_actor import WorldActor
     from ..engine import GameLoop
     from ..persistence import WorldMeta

@@ -21,6 +21,7 @@ from bunnyland.core import (
     SuspendedComponent,
     WakeHandler,
     build_submitted_command,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import (
@@ -32,6 +33,7 @@ from bunnyland.core.events import (
     PartnershipEndedEvent,
     PartnershipStartedEvent,
 )
+from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.lifesim import (
     AdoptChildHandler,
     AgeComponent,
@@ -210,6 +212,18 @@ def _cmd_for(scenario, character_id, command_type, **payload):
     )
 
 
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
 async def test_aspiration_milestone_completion_can_reward_inventory_item():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -243,6 +257,934 @@ async def test_aspiration_milestone_completion_can_reward_inventory_item():
     assert reward_id is not None
     inventory_ids = {str(target_id) for _edge, target_id in character.get_relationships(Contains)}
     assert reward_id in inventory_ids
+
+
+def test_aspiration_and_milestone_handlers_reject_invalid_commands():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    choose = ChooseAspirationHandler()
+    complete = CompleteMilestoneHandler()
+
+    cases = [
+        (
+            choose,
+            _handler_cmd(
+                scenario,
+                "choose-aspiration",
+                character_id="not-an-id",
+                name="Cozy Homemaker",
+            ),
+            "invalid character id",
+        ),
+        (
+            choose,
+            _handler_cmd(scenario, "choose-aspiration", name=" "),
+            "aspiration name is required",
+        ),
+        (
+            complete,
+            _handler_cmd(scenario, "complete-milestone", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            complete,
+            _handler_cmd(scenario, "complete-milestone", milestone="meet a friend"),
+            "no aspiration selected",
+        ),
+    ]
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(
+        AspirationComponent(
+            name="Cozy Homemaker",
+            milestones=("meet a friend",),
+            completed=("meet a friend",),
+        )
+    )
+    for command, reason in (
+        (
+            _handler_cmd(scenario, "complete-milestone", milestone=" "),
+            "milestone is required",
+        ),
+        (
+            _handler_cmd(scenario, "complete-milestone", milestone="cook dinner"),
+            "milestone is not part of aspiration",
+        ),
+        (
+            _handler_cmd(scenario, "complete-milestone", milestone="meet a friend"),
+            "milestone already completed",
+        ),
+    ):
+        result = complete.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_lifesim_economy_and_skill_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    actor = scenario.actor.world.get_entity(scenario.character)
+    worker_id = _co_parent(scenario)
+    distant_worker_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Distant Worker", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    ).id
+
+    cases = [
+        (
+            PracticeSkillHandler(),
+            _handler_cmd(scenario, "practice-skill", skill=" "),
+            "skill is required",
+        ),
+        (
+            PracticeSkillHandler(),
+            _handler_cmd(scenario, "practice-skill", skill="cooking", xp=0),
+            "xp must be positive",
+        ),
+        (
+            StudySkillHandler(),
+            _handler_cmd(scenario, "study-skill", skill=" "),
+            "skill is required",
+        ),
+        (
+            StudySkillHandler(),
+            _handler_cmd(scenario, "study-skill", skill="logic", xp=-1),
+            "xp must be positive",
+        ),
+        (
+            MentorSkillHandler(),
+            _handler_cmd(scenario, "mentor-skill", student_id="entity_999"),
+            "student does not exist",
+        ),
+        (
+            MentorSkillHandler(),
+            _handler_cmd(
+                scenario,
+                "mentor-skill",
+                student_id=str(distant_worker_id),
+                skill="logic",
+            ),
+            "student is not present",
+        ),
+        (
+            MentorSkillHandler(),
+            _handler_cmd(scenario, "mentor-skill", student_id=str(worker_id), skill=" "),
+            "skill is required",
+        ),
+        (
+            MentorSkillHandler(),
+            _handler_cmd(
+                scenario,
+                "mentor-skill",
+                student_id=str(worker_id),
+                skill="logic",
+                xp=-1,
+            ),
+            "xp must be positive",
+        ),
+        (
+            FindJobHandler(),
+            _handler_cmd(scenario, "find-job", title=" "),
+            "job title is required",
+        ),
+        (
+            FindJobHandler(),
+            _handler_cmd(scenario, "find-job", title="Archivist", hourly_pay=0),
+            "hourly pay must be positive",
+        ),
+        (
+            GoToWorkHandler(),
+            _handler_cmd(scenario, "go-to-work"),
+            "character has no job",
+        ),
+        (
+            QuitJobHandler(),
+            _handler_cmd(scenario, "quit-job"),
+            "character has no job",
+        ),
+        (
+            PayWageHandler(),
+            _handler_cmd(scenario, "pay-wage", worker_id="entity_999", amount=1),
+            "worker does not exist",
+        ),
+        (
+            PayWageHandler(),
+            _handler_cmd(
+                scenario,
+                "pay-wage",
+                worker_id=str(distant_worker_id),
+                amount=1,
+            ),
+            "worker is not present",
+        ),
+        (
+            PayWageHandler(),
+            _handler_cmd(scenario, "pay-wage", worker_id=str(worker_id), amount=0),
+            "wage amount must be positive",
+        ),
+        (
+            PayWageHandler(),
+            _handler_cmd(scenario, "pay-wage", worker_id=str(worker_id), amount=1),
+            "insufficient household funds",
+        ),
+        (
+            AssessTaxHandler(),
+            _handler_cmd(scenario, "assess-tax", amount=0),
+            "tax amount must be positive",
+        ),
+        (
+            ChargeRentHandler(),
+            _handler_cmd(scenario, "charge-rent", tenant_id="entity_999", amount=1),
+            "tenant does not exist",
+        ),
+        (
+            ChargeRentHandler(),
+            _handler_cmd(
+                scenario,
+                "charge-rent",
+                tenant_id=str(distant_worker_id),
+                amount=1,
+            ),
+            "tenant is not present",
+        ),
+        (
+            ChargeRentHandler(),
+            _handler_cmd(scenario, "charge-rent", tenant_id=str(worker_id), amount=0),
+            "rent amount must be positive",
+        ),
+        (
+            OpenBusinessHandler(),
+            _handler_cmd(scenario, "open-business", name=" "),
+            "business name is required",
+        ),
+        (
+            OpenBusinessHandler(),
+            _handler_cmd(scenario, "open-business", name="Market", default_price=0),
+            "default price must be positive",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    actor.add_component(CareerComponent(title="Archivist", active=False))
+    actor.add_component(JobScheduleComponent(next_shift_epoch=scenario.actor.epoch))
+    result = GoToWorkHandler().execute(ctx, _handler_cmd(scenario, "go-to-work"))
+    assert result.ok is False
+    assert result.reason == "career is inactive"
+
+    replace_component(actor, CareerComponent(title="Archivist", active=True))
+    replace_component(actor, JobScheduleComponent(next_shift_epoch=scenario.actor.epoch + HOUR))
+    result = GoToWorkHandler().execute(ctx, _handler_cmd(scenario, "go-to-work"))
+    assert result.ok is False
+    assert result.reason == "shift is not scheduled yet"
+
+
+def test_lifesim_pay_bill_handler_rejects_invalid_bills_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    actor = scenario.actor.world.get_entity(scenario.character)
+
+    result = PayBillHandler().execute(ctx, _handler_cmd(scenario, "pay-bill"))
+    assert result.ok is False
+    assert result.reason == "no unpaid bills"
+
+    cases = [
+        (
+            _handler_cmd(scenario, "pay-bill", bill_id="entity_999"),
+            "bill does not exist",
+        ),
+    ]
+
+    other_bill = spawn_entity(
+        scenario.actor.world,
+        [BillComponent(amount=5, reason="not yours")],
+    )
+    cases.append(
+        (
+            _handler_cmd(scenario, "pay-bill", bill_id=str(other_bill.id)),
+            "bill does not belong to character",
+        )
+    )
+
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="paper scrap", kind="prop")],
+    )
+    actor.add_relationship(HasBill(), wrong_kind.id)
+    cases.append(
+        (
+            _handler_cmd(scenario, "pay-bill", bill_id=str(wrong_kind.id)),
+            "target is not a bill",
+        )
+    )
+
+    paid_bill = spawn_entity(
+        scenario.actor.world,
+        [BillComponent(amount=5, reason="paid", paid_at_epoch=scenario.actor.epoch)],
+    )
+    actor.add_relationship(HasBill(), paid_bill.id)
+    cases.append(
+        (
+            _handler_cmd(scenario, "pay-bill", bill_id=str(paid_bill.id)),
+            "bill is already paid",
+        )
+    )
+
+    unpaid_bill = spawn_entity(
+        scenario.actor.world,
+        [BillComponent(amount=5, reason="due")],
+    )
+    actor.add_relationship(HasBill(), unpaid_bill.id)
+    cases.append(
+        (
+            _handler_cmd(scenario, "pay-bill", bill_id=str(unpaid_bill.id)),
+            "insufficient household funds",
+        )
+    )
+
+    for command, reason in cases:
+        result = PayBillHandler().execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_lifesim_business_household_and_social_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    actor = scenario.actor.world.get_entity(scenario.character)
+    worker_id = _co_parent(scenario)
+    distant_worker_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Distant Worker", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    ).id
+    item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="jam jar", kind="item")],
+    )
+    customer_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="shopper", kind="customer"),
+            CustomerComponent(budget=0),
+        ],
+    ).id
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), customer_id
+    )
+    non_customer_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="display rack", kind="prop")],
+    ).id
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), non_customer_id
+    )
+
+    cases = [
+        (
+            SellItemHandler(),
+            _handler_cmd(
+                scenario,
+                "sell-item",
+                item_id=str(item.id),
+                customer_id="entity_999",
+            ),
+            "item or customer does not exist",
+        ),
+        (
+            SellItemHandler(),
+            _handler_cmd(
+                scenario,
+                "sell-item",
+                item_id=str(item.id),
+                customer_id=str(customer_id),
+            ),
+            "character has no business",
+        ),
+        (
+            BuyItemHandler(),
+            _handler_cmd(
+                scenario,
+                "buy-item",
+                seller_id="entity_999",
+                item_id=str(item.id),
+            ),
+            "seller or item does not exist",
+        ),
+        (
+            BuyItemHandler(),
+            _handler_cmd(
+                scenario,
+                "buy-item",
+                seller_id=str(distant_worker_id),
+                item_id=str(item.id),
+            ),
+            "seller is not reachable",
+        ),
+        (
+            PromoteBusinessHandler(),
+            _handler_cmd(scenario, "promote-business"),
+            "character has no business",
+        ),
+        (
+            JoinHouseholdHandler(),
+            _handler_cmd(scenario, "join-household", household_id=" "),
+            "household id is required",
+        ),
+        (
+            ClaimHomeHandler(),
+            _handler_cmd(scenario, "claim-home", room_id="entity_999"),
+            "room does not exist",
+        ),
+        (
+            ClaimRoomHandler(),
+            _handler_cmd(scenario, "claim-room", room_id="entity_999"),
+            "room does not exist",
+        ),
+        (
+            SetRoutineHandler(),
+            _handler_cmd(scenario, "set-routine", activity=" "),
+            "activity is required",
+        ),
+        (
+            SetRoutineHandler(),
+            _handler_cmd(scenario, "set-routine", activity="water herbs", interval_seconds=0),
+            "routine interval must be positive",
+        ),
+        (
+            SetRelationshipStatusHandler(),
+            _handler_cmd(
+                scenario,
+                "set-relationship-status",
+                target_id="entity_999",
+                status="friend",
+            ),
+            "target does not exist",
+        ),
+        (
+            SetRelationshipStatusHandler(),
+            _handler_cmd(
+                scenario,
+                "set-relationship-status",
+                target_id=str(worker_id),
+                status="enemy",
+            ),
+            "unsupported relationship status",
+        ),
+        (
+            SetRelationshipStatusHandler(),
+            _handler_cmd(
+                scenario,
+                "set-relationship-status",
+                target_id=str(non_customer_id),
+                status="friend",
+            ),
+            "target cannot participate",
+        ),
+        (
+            SetRelationshipStatusHandler(),
+            _handler_cmd(
+                scenario,
+                "set-relationship-status",
+                target_id=str(distant_worker_id),
+                status="friend",
+            ),
+            "target is not present",
+        ),
+        (
+            SpreadGossipHandler(),
+            _handler_cmd(scenario, "spread-gossip", target_id="entity_999", text="news"),
+            "target does not exist",
+        ),
+        (
+            SpreadGossipHandler(),
+            _handler_cmd(
+                scenario,
+                "spread-gossip",
+                target_id=str(distant_worker_id),
+                text="news",
+            ),
+            "target is not present",
+        ),
+        (
+            SpreadGossipHandler(),
+            _handler_cmd(scenario, "spread-gossip", target_id=str(worker_id), text=" "),
+            "gossip text is required",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    business = spawn_entity(
+        scenario.actor.world,
+        [BusinessOwnerComponent(name="Jam Stand", default_price=2)],
+    )
+    actor.add_relationship(OwnsBusiness(), business.id)
+    for command, reason in (
+        (
+            _handler_cmd(
+                scenario,
+                "sell-item",
+                item_id=str(item.id),
+                customer_id=str(customer_id),
+            ),
+            "item is not in inventory",
+        ),
+        (
+            _handler_cmd(
+                scenario,
+                "sell-item",
+                item_id=str(item.id),
+                customer_id=str(non_customer_id),
+            ),
+            "item is not in inventory",
+        ),
+    ):
+        result = SellItemHandler().execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    actor.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    for command, reason in (
+        (
+            _handler_cmd(
+                scenario,
+                "sell-item",
+                item_id=str(item.id),
+                customer_id=str(non_customer_id),
+            ),
+            "target is not a customer",
+        ),
+        (
+            _handler_cmd(
+                scenario,
+                "sell-item",
+                item_id=str(item.id),
+                customer_id=str(customer_id),
+                price=0,
+            ),
+            "price must be positive",
+        ),
+        (
+            _handler_cmd(
+                scenario,
+                "sell-item",
+                item_id=str(item.id),
+                customer_id=str(customer_id),
+                price=2,
+            ),
+            "customer cannot afford item",
+        ),
+    ):
+        result = SellItemHandler().execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    seller = scenario.actor.world.get_entity(worker_id)
+    seller_item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="muffin", kind="item")],
+    )
+    for command, reason in (
+        (
+            _handler_cmd(
+                scenario,
+                "buy-item",
+                seller_id=str(worker_id),
+                item_id=str(seller_item.id),
+            ),
+            "item is not for sale",
+        ),
+    ):
+        result = BuyItemHandler().execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    seller.add_relationship(Contains(mode=ContainmentMode.INVENTORY), seller_item.id)
+    for command, reason in (
+        (
+            _handler_cmd(
+                scenario,
+                "buy-item",
+                seller_id=str(worker_id),
+                item_id=str(seller_item.id),
+            ),
+            "price must be positive",
+        ),
+        (
+            _handler_cmd(
+                scenario,
+                "buy-item",
+                seller_id=str(worker_id),
+                item_id=str(seller_item.id),
+                price=1,
+            ),
+            "insufficient household funds",
+        ),
+    ):
+        result = BuyItemHandler().execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    actor = scenario.actor.world.get_entity(scenario.character)
+    partner_id = _co_parent(scenario)
+    rival_id = _co_parent(scenario)
+    distant_partner_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Distant Partner", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    ).id
+    prop_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="stone marker", kind="prop")],
+    ).id
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), prop_id
+    )
+    child_id = _child(scenario)
+    adult_id = _co_parent(scenario)
+
+    cases = [
+        (
+            WitnessRomanceHandler(),
+            _handler_cmd(
+                scenario,
+                "witness-romance",
+                partner_id="entity_999",
+                rival_id=str(rival_id),
+            ),
+            "partner or rival does not exist",
+        ),
+        (
+            WitnessRomanceHandler(),
+            _handler_cmd(
+                scenario,
+                "witness-romance",
+                partner_id=str(partner_id),
+                rival_id=str(rival_id),
+            ),
+            "witness is not partners with partner",
+        ),
+        (
+            StartPartnershipHandler(),
+            _handler_cmd(scenario, "start-partnership", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            StartPartnershipHandler(),
+            _handler_cmd(scenario, "start-partnership", target_id=str(prop_id)),
+            "target cannot participate",
+        ),
+        (
+            StartPartnershipHandler(),
+            _handler_cmd(
+                scenario,
+                "start-partnership",
+                target_id=str(distant_partner_id),
+            ),
+            "target is not present",
+        ),
+        (
+            EndPartnershipHandler(),
+            _handler_cmd(scenario, "end-partnership", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            EndPartnershipHandler(),
+            _handler_cmd(scenario, "end-partnership", target_id=str(partner_id)),
+            "not partners",
+        ),
+        (
+            StartPregnancyHandler(),
+            _handler_cmd(scenario, "start-pregnancy", co_parent_id="entity_999"),
+            "co-parent does not exist",
+        ),
+        (
+            StartPregnancyHandler(),
+            _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(prop_id)),
+            "participant cannot participate",
+        ),
+        (
+            StartPregnancyHandler(),
+            _handler_cmd(
+                scenario,
+                "start-pregnancy",
+                co_parent_id=str(distant_partner_id),
+            ),
+            "co-parent is not present",
+        ),
+        (
+            ResolveBirthHandler(),
+            _handler_cmd(scenario, "resolve-birth"),
+            "birth is not due",
+        ),
+        (
+            AdoptChildHandler(),
+            _handler_cmd(scenario, "adopt-child", child_id="entity_999"),
+            "child does not exist",
+        ),
+        (
+            AdoptChildHandler(),
+            _handler_cmd(scenario, "adopt-child", child_id=str(prop_id)),
+            "participant cannot participate",
+        ),
+        (
+            AdoptChildHandler(),
+            _handler_cmd(scenario, "adopt-child", child_id=str(distant_partner_id)),
+            "child is not present",
+        ),
+        (
+            AdoptChildHandler(),
+            _handler_cmd(scenario, "adopt-child", child_id=str(adult_id)),
+            "target is not a child",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    actor.add_relationship(PartnerOf(since_epoch=scenario.actor.epoch), partner_id)
+    scenario.actor.world.get_entity(partner_id).add_relationship(
+        PartnerOf(since_epoch=scenario.actor.epoch), scenario.character
+    )
+    result = StartPartnershipHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "start-partnership", target_id=str(partner_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "already partners"
+
+    far_rival_id = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Far Rival", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    ).id
+    result = WitnessRomanceHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "witness-romance",
+            partner_id=str(partner_id),
+            rival_id=str(far_rival_id),
+        ),
+    )
+    assert result.ok is False
+    assert result.reason == "participants are not present"
+
+    actor.add_component(
+        ReproductiveComponent(can_be_pregnant=True, species_group="bunny")
+    )
+    actor.add_component(
+        PregnancyComponent(
+            started_at_epoch=scenario.actor.epoch,
+            due_at_epoch=scenario.actor.epoch + HOUR,
+            co_parent_ids=(str(partner_id),),
+        )
+    )
+    result = StartPregnancyHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "already pregnant"
+    actor.remove_component(PregnancyComponent)
+
+    replace_component(
+        actor,
+        ReproductiveComponent(can_be_pregnant=False, species_group="bunny"),
+    )
+    result = StartPregnancyHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "character cannot become pregnant"
+
+    replace_component(
+        actor,
+        ReproductiveComponent(can_be_pregnant=True, species_group="bunny"),
+    )
+    co_parent = scenario.actor.world.get_entity(partner_id)
+    replace_component(
+        co_parent,
+        ReproductiveComponent(can_cause_pregnancy=False, species_group="bunny"),
+    )
+    result = StartPregnancyHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "co-parent cannot cause pregnancy"
+
+    replace_component(
+        co_parent,
+        ReproductiveComponent(can_cause_pregnancy=True, species_group="hare"),
+    )
+    result = StartPregnancyHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "participants are not reproductively compatible"
+
+    replace_component(
+        co_parent,
+        ReproductiveComponent(
+            can_cause_pregnancy=True,
+            species_group="bunny",
+            fertility=0.0,
+        ),
+    )
+    result = StartPregnancyHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "fertility prevents pregnancy"
+
+    replace_component(
+        co_parent,
+        ReproductiveComponent(can_cause_pregnancy=True, species_group="bunny"),
+    )
+    result = StartPregnancyHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "start-pregnancy",
+            co_parent_id=str(partner_id),
+            due_in_seconds=0,
+        ),
+    )
+    assert result.ok is False
+    assert result.reason == "due time must be in the future"
+
+    actor.add_relationship(ParentOf(), child_id)
+    result = AdoptChildHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "adopt-child", child_id=str(child_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "already parent of child"
+
+
+def test_lifesim_handlers_reject_invalid_character_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    cases = [
+        (PracticeSkillHandler(), "practice-skill", {"skill": "cooking"}, "invalid character id"),
+        (StudySkillHandler(), "study-skill", {"skill": "cooking"}, "invalid character id"),
+        (FindJobHandler(), "find-job", {"title": "Archivist"}, "invalid character id"),
+        (GoToWorkHandler(), "go-to-work", {}, "invalid character id"),
+        (QuitJobHandler(), "quit-job", {}, "invalid character id"),
+        (AssessTaxHandler(), "assess-tax", {"amount": 1}, "invalid character id"),
+        (PayBillHandler(), "pay-bill", {}, "invalid character id"),
+        (OpenBusinessHandler(), "open-business", {"name": "Market"}, "invalid character id"),
+        (
+            PromoteBusinessHandler(),
+            "promote-business",
+            {"business_id": str(scenario.room_a)},
+            "invalid character id",
+        ),
+        (
+            JoinHouseholdHandler(),
+            "join-household",
+            {"household_id": "burrow", "name": "Burrow"},
+            "invalid character id",
+        ),
+        (
+            ClaimHomeHandler(),
+            "claim-home",
+            {"room_id": str(scenario.room_a)},
+            "invalid character id",
+        ),
+        (
+            ClaimRoomHandler(),
+            "claim-room",
+            {"room_id": str(scenario.room_a)},
+            "invalid character id",
+        ),
+        (
+            SetRoutineHandler(),
+            "set-routine",
+            {"activity": "water herbs"},
+            "invalid character id",
+        ),
+        (
+            SetRelationshipStatusHandler(),
+            "set-relationship-status",
+            {"target_id": str(scenario.character), "status": "friend"},
+            "invalid character or target id",
+        ),
+        (
+            SpreadGossipHandler(),
+            "spread-gossip",
+            {"target_id": str(scenario.character), "claim": "helpful"},
+            "invalid character or target id",
+        ),
+        (
+            StartPartnershipHandler(),
+            "start-partnership",
+            {"target_id": str(scenario.character)},
+            "invalid character or target id",
+        ),
+        (
+            EndPartnershipHandler(),
+            "end-partnership",
+            {"target_id": str(scenario.character)},
+            "invalid character or target id",
+        ),
+        (
+            StartPregnancyHandler(),
+            "start-pregnancy",
+            {"co_parent_id": str(scenario.character)},
+            "invalid character or co-parent id",
+        ),
+        (ResolveBirthHandler(), "resolve-birth", {"child_name": "Clover"}, "invalid character id"),
+    ]
+
+    for handler, command_type, payload, reason in cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                command_type,
+                character_id="not-an-id",
+                **payload,
+            ),
+        )
+        assert result.ok is False
+        assert result.reason == reason
 
 
 async def test_lifesim_aging_is_disabled_by_default():
