@@ -8,6 +8,7 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    HandlerContext,
     IdentityComponent,
     Lane,
     PortableComponent,
@@ -75,6 +76,18 @@ def _cmd(scenario, command_type, **payload):
     )
 
 
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
 def _resource_node(scenario, resource_type="wood", current=3):
     node = spawn_entity(
         scenario.actor.world,
@@ -116,6 +129,290 @@ def _job(scenario, job_type="haul", priority=5):
         Contains(mode=ContainmentMode.ROOM_CONTENT), job.id
     )
     return job.id
+
+
+def test_colonysim_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Other", kind="character")],
+    )
+
+    node = _resource_node(scenario, current=2)
+    empty_node = _resource_node(scenario, resource_type="stone", current=0)
+    reserved_node = _resource_node(scenario, resource_type="berries", current=2)
+    scenario.actor.world.get_entity(reserved_node).add_relationship(
+        ReservedBy(since_epoch=0), other.id
+    )
+    already_reserved_node = _resource_node(scenario, resource_type="clay", current=2)
+    scenario.actor.world.get_entity(already_reserved_node).add_relationship(
+        ReservedBy(since_epoch=0), scenario.character
+    )
+
+    distant_node = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant ore", kind="resource_node"),
+            ResourceNodeComponent(resource_type="ore", current=2, maximum=2),
+        ],
+    )
+    distant_target = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="distant crate", kind="prop")],
+    )
+    distant_job = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant job", kind="job"),
+            JobComponent(job_type="haul", priority=1),
+        ],
+    )
+    room_b = scenario.actor.world.get_entity(scenario.room_b)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_node.id)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_target.id)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_job.id)
+
+    complete_job = _job(scenario, job_type="complete")
+    replace_component(
+        scenario.actor.world.get_entity(complete_job),
+        JobComponent(job_type="complete", priority=1, completed=True),
+    )
+    assigned_job = _job(scenario, job_type="assigned")
+    scenario.actor.world.get_entity(assigned_job).add_relationship(
+        AssignedTo(since_epoch=0), other.id
+    )
+    own_job = _job(scenario, job_type="own")
+    scenario.actor.world.get_entity(own_job).add_relationship(
+        AssignedTo(since_epoch=0), scenario.character
+    )
+    unassigned_job = _job(scenario, job_type="unassigned")
+
+    owned_target = _resource_node(scenario, resource_type="owned", current=1)
+    character.add_relationship(Owns(since_epoch=0), owned_target)
+    other_owned_target = _resource_node(scenario, resource_type="other-owned", current=1)
+    other.add_relationship(Owns(since_epoch=0), other_owned_target)
+
+    spawn_entity(
+        scenario.actor.world,
+        [RecipeComponent(recipe_id="wood-tool", inputs={"wood": 1}, outputs={"tool": 1})],
+    )
+    spawn_entity(
+        scenario.actor.world,
+        [
+            RecipeComponent(
+                recipe_id="bench-tool",
+                inputs={},
+                outputs={"tool": 1},
+                required_station="bench",
+            )
+        ],
+    )
+
+    cases = [
+        (
+            ReserveHandler(),
+            _handler_cmd(scenario, "reserve", target_id="not-an-id"),
+            "invalid character or target id",
+        ),
+        (
+            ReserveHandler(),
+            _handler_cmd(scenario, "reserve", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            ReserveHandler(),
+            _handler_cmd(scenario, "reserve", target_id=str(distant_target.id)),
+            "target is not reachable",
+        ),
+        (
+            ReserveHandler(),
+            _handler_cmd(scenario, "reserve", target_id=str(reserved_node)),
+            "target is reserved",
+        ),
+        (
+            ReserveHandler(),
+            _handler_cmd(scenario, "reserve", target_id=str(already_reserved_node)),
+            "already reserved",
+        ),
+        (
+            ReleaseReservationHandler(),
+            _handler_cmd(scenario, "release-reservation", target_id="not-an-id"),
+            "invalid character or target id",
+        ),
+        (
+            ReleaseReservationHandler(),
+            _handler_cmd(scenario, "release-reservation", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            ReleaseReservationHandler(),
+            _handler_cmd(scenario, "release-reservation", target_id=str(node)),
+            "not reserved by you",
+        ),
+        (
+            GatherResourceHandler(),
+            _handler_cmd(scenario, "gather-resource", node_id="not-an-id"),
+            "invalid character or resource node id",
+        ),
+        (
+            GatherResourceHandler(),
+            _handler_cmd(scenario, "gather-resource", node_id=str(node), quantity=0),
+            "quantity must be positive",
+        ),
+        (
+            GatherResourceHandler(),
+            _handler_cmd(scenario, "gather-resource", node_id="entity_999"),
+            "resource node does not exist",
+        ),
+        (
+            GatherResourceHandler(),
+            _handler_cmd(scenario, "gather-resource", node_id=str(distant_node.id)),
+            "resource node is not reachable",
+        ),
+        (
+            GatherResourceHandler(),
+            _handler_cmd(scenario, "gather-resource", node_id=str(scenario.room_a)),
+            "target is not a resource node",
+        ),
+        (
+            GatherResourceHandler(),
+            _handler_cmd(scenario, "gather-resource", node_id=str(reserved_node)),
+            "resource node is reserved",
+        ),
+        (
+            GatherResourceHandler(),
+            _handler_cmd(scenario, "gather-resource", node_id=str(empty_node)),
+            "not enough resource",
+        ),
+        (
+            CraftHandler(),
+            _handler_cmd(scenario, "craft", character_id="not-an-id", recipe_id="wood-tool"),
+            "invalid character id",
+        ),
+        (
+            CraftHandler(),
+            _handler_cmd(scenario, "craft", recipe_id=" "),
+            "missing recipe id",
+        ),
+        (
+            CraftHandler(),
+            _handler_cmd(scenario, "craft", recipe_id="missing"),
+            "recipe does not exist",
+        ),
+        (
+            CraftHandler(),
+            _handler_cmd(scenario, "craft", recipe_id="bench-tool"),
+            "required workstation is not reachable",
+        ),
+        (
+            CraftHandler(),
+            _handler_cmd(scenario, "craft", recipe_id="wood-tool"),
+            "missing recipe inputs",
+        ),
+        (
+            AssignJobHandler(),
+            _handler_cmd(scenario, "assign-job", job_id="not-an-id"),
+            "invalid character or job id",
+        ),
+        (
+            AssignJobHandler(),
+            _handler_cmd(scenario, "assign-job", job_id="entity_999"),
+            "job does not exist",
+        ),
+        (
+            AssignJobHandler(),
+            _handler_cmd(scenario, "assign-job", job_id=str(distant_job.id)),
+            "job is not reachable",
+        ),
+        (
+            AssignJobHandler(),
+            _handler_cmd(scenario, "assign-job", job_id=str(scenario.room_a)),
+            "target is not a job",
+        ),
+        (
+            AssignJobHandler(),
+            _handler_cmd(scenario, "assign-job", job_id=str(complete_job)),
+            "job is already complete",
+        ),
+        (
+            AssignJobHandler(),
+            _handler_cmd(scenario, "assign-job", job_id=str(assigned_job)),
+            "job is assigned",
+        ),
+        (
+            AssignJobHandler(),
+            _handler_cmd(scenario, "assign-job", job_id=str(own_job)),
+            "job already assigned to you",
+        ),
+        (
+            CompleteJobHandler(),
+            _handler_cmd(scenario, "complete-job", job_id="not-an-id"),
+            "invalid character or job id",
+        ),
+        (
+            CompleteJobHandler(),
+            _handler_cmd(scenario, "complete-job", job_id="entity_999"),
+            "job does not exist",
+        ),
+        (
+            CompleteJobHandler(),
+            _handler_cmd(scenario, "complete-job", job_id=str(scenario.room_a)),
+            "target is not a job",
+        ),
+        (
+            CompleteJobHandler(),
+            _handler_cmd(scenario, "complete-job", job_id=str(unassigned_job)),
+            "job is not assigned to you",
+        ),
+        (
+            ClaimOwnershipHandler(),
+            _handler_cmd(scenario, "claim-ownership", target_id="not-an-id"),
+            "invalid character or target id",
+        ),
+        (
+            ClaimOwnershipHandler(),
+            _handler_cmd(scenario, "claim-ownership", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            ClaimOwnershipHandler(),
+            _handler_cmd(scenario, "claim-ownership", target_id=str(distant_target.id)),
+            "target is not reachable",
+        ),
+        (
+            ClaimOwnershipHandler(),
+            _handler_cmd(scenario, "claim-ownership", target_id=str(owned_target)),
+            "already owned by you",
+        ),
+        (
+            ClaimOwnershipHandler(),
+            _handler_cmd(scenario, "claim-ownership", target_id=str(other_owned_target)),
+            "target is already owned",
+        ),
+        (
+            ReleaseOwnershipHandler(),
+            _handler_cmd(scenario, "release-ownership", target_id="not-an-id"),
+            "invalid character or target id",
+        ),
+        (
+            ReleaseOwnershipHandler(),
+            _handler_cmd(scenario, "release-ownership", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            ReleaseOwnershipHandler(),
+            _handler_cmd(scenario, "release-ownership", target_id=str(node)),
+            "not owned by you",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
 
 
 async def test_reservation_blocks_other_characters_until_released():
