@@ -169,6 +169,57 @@ def test_cli_discord_requires_token(monkeypatch, tmp_path):
         main(["serve", "--discord", "--ticks", "1"])
 
 
+def test_cli_discord_starts_bot_with_filters_and_closes(monkeypatch, tmp_path):
+    import bunnyland.discord as discord
+
+    calls = {}
+
+    class FakeDiscordBot:
+        def __init__(self, actor, **kwargs):
+            calls["actor"] = actor
+            calls["kwargs"] = kwargs
+            calls["closed"] = False
+
+        async def start(self):
+            while not calls["closed"]:
+                await asyncio.sleep(0)
+
+        async def close(self):
+            calls["closed"] = True
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DISCORD_TOKEN", "discord-token")
+    monkeypatch.setattr(discord, "DiscordBot", FakeDiscordBot)
+
+    result = main(
+        [
+            "serve",
+            "--discord",
+            "--discord-allowed-guild-id",
+            "11",
+            "--discord-allowed-channel-id",
+            "22",
+            "--discord-allowed-dm-user-id",
+            "33",
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+            "--claim-timeout-seconds",
+            "0",
+        ]
+    )
+
+    filters = calls["kwargs"]["message_filters"]
+    assert result == 0
+    assert calls["closed"] is True
+    assert calls["kwargs"]["token"] == "discord-token"
+    assert calls["kwargs"]["allow_child_claims"] is False
+    assert filters.guild_ids == (11,)
+    assert filters.channel_ids == (22,)
+    assert filters.dm_user_ids == (33,)
+
+
 def test_cli_rejects_incompatible_discord_playtest_modes(tmp_path):
     spec = tmp_path / "playtest.json"
     spec.write_text("{}")
@@ -183,6 +234,127 @@ def test_cli_rejects_incompatible_discord_playtest_modes(tmp_path):
 def test_cli_mcp_requires_api_port():
     with pytest.raises(SystemExit, match="--mcp mounts on the HTTP API and needs --api-port"):
         main(["serve", "--mcp", "--ticks", "1"])
+
+
+def test_cli_mcp_runs_api_with_admin_token(monkeypatch, tmp_path):
+    import bunnyland.server.runtime as runtime
+
+    calls = {}
+
+    async def fake_run_loop_with_api(loop, actor, meta, **kwargs):
+        calls["loop"] = loop
+        calls["actor"] = actor
+        calls["meta"] = meta
+        calls["kwargs"] = kwargs
+        return 4
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runtime, "run_loop_with_api", fake_run_loop_with_api)
+
+    result = main(
+        [
+            "serve",
+            "--mcp",
+            "--mcp-admin-token",
+            "admin-token",
+            "--api-port",
+            "9876",
+            "--generator",
+            "empty",
+            "--ticks",
+            "4",
+            "--claim-timeout-seconds",
+            "0",
+        ]
+    )
+
+    assert result == 0
+    assert calls["kwargs"]["host"] == "127.0.0.1"
+    assert calls["kwargs"]["port"] == 9876
+    assert calls["kwargs"]["mcp_admin_token"] == "admin-token"
+    assert calls["kwargs"]["max_ticks"] == 4
+    assert MCP in {plugin.id for plugin in calls["kwargs"]["plugins"]}
+
+
+def test_cli_api_runtime_error_exits(monkeypatch, tmp_path):
+    import bunnyland.server.runtime as runtime
+
+    async def fake_run_loop_with_api(*args, **kwargs):
+        raise RuntimeError("server unavailable")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runtime, "run_loop_with_api", fake_run_loop_with_api)
+
+    with pytest.raises(SystemExit, match="server unavailable"):
+        main(
+            [
+                "serve",
+                "--mcp",
+                "--api-port",
+                "9876",
+                "--generator",
+                "empty",
+                "--ticks",
+                "1",
+                "--claim-timeout-seconds",
+                "0",
+            ]
+        )
+
+
+def test_cli_discord_playtest_loads_runs_and_reports(monkeypatch, tmp_path, capsys):
+    import bunnyland.discord.playtest as playtest
+
+    spec_path = tmp_path / "playtest.json"
+    spec_path.write_text("{}")
+    calls = {}
+
+    class FakePlaytest:
+        def resolved_ticks(self, max_ticks):
+            calls["max_ticks"] = max_ticks
+            return 7
+
+    class FakeResult:
+        ticks = 5
+        inputs = ("input",)
+        messages = ("first", "second")
+
+    def fake_load_discord_playtest(path):
+        calls["path"] = path
+        return FakePlaytest()
+
+    async def fake_run_discord_playtest(loop, spec, *, max_ticks):
+        calls["loop"] = loop
+        calls["spec"] = spec
+        calls["run_max_ticks"] = max_ticks
+        return FakeResult()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(playtest, "load_discord_playtest", fake_load_discord_playtest)
+    monkeypatch.setattr(playtest, "run_discord_playtest", fake_run_discord_playtest)
+
+    result = main(
+        [
+            "serve",
+            "--discord-playtest",
+            str(spec_path),
+            "--generator",
+            "empty",
+            "--ticks",
+            "5",
+            "--claim-timeout-seconds",
+            "0",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert calls["path"] == str(spec_path)
+    assert calls["max_ticks"] == 5
+    assert calls["run_max_ticks"] == 5
+    assert calls["spec"].__class__ is FakePlaytest
+    assert "Running game loop (7 ticks)..." in output
+    assert "Discord playtest passed: 1 input(s), 2 message(s)." in output
 
 
 def test_cli_rejects_unknown_generator():
