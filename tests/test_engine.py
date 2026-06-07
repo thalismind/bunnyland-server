@@ -22,9 +22,12 @@ async def test_game_loop_drives_an_llm_character_through_a_move():
     dispatch = ControllerDispatch(actor, builder, agent)
     loop = GameLoop(actor, dispatch, tick_seconds=1.0, time_scale=3600.0)
 
+    assert loop.running is False
+
     # tick 1 lets the agent submit; tick 2 executes the queued move.
     ticks = await loop.run(max_ticks=2)
     assert ticks == 2
+    assert loop.running is False
 
     hazel = actor.world.get_entity(result.characters["hazel"])
     assert container_of(hazel) == result.rooms["tunnel"]

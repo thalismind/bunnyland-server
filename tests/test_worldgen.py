@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from bunnyland.core import (
@@ -44,7 +47,7 @@ from bunnyland.worldgen import (
     validate_proposal,
     waiting_room_generator,
 )
-from bunnyland.worldgen.ollama_builder import repair_world_proposal
+from bunnyland.worldgen.ollama_builder import OllamaWorldBuilder, repair_world_proposal
 
 HOUR = 3600.0
 
@@ -97,6 +100,24 @@ def test_character_spec_defaults_to_flash_controller_model():
     )
 
     assert spec.llm_model == "deepseek-v4-flash"
+
+
+def test_ollama_world_builder_initializes_client_with_host_and_auth(monkeypatch):
+    captured = {}
+
+    class Client:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(Client=Client))
+
+    builder = OllamaWorldBuilder(model="world-model", host="https://ollama.example", api_key="k")
+
+    assert builder._model == "world-model"
+    assert captured == {
+        "host": "https://ollama.example",
+        "headers": {"Authorization": "Bearer k"},
+    }
 
 
 def test_story_event_proposal_accepts_common_severity_labels():

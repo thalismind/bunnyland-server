@@ -41,6 +41,7 @@ from bunnyland.mechanics.dinosim import (
     SettlementDamageComponent,
     SpeciesComponent,
     SpeciesIdentificationComponent,
+    _entity_room_id,
     dinosim_fragments,
     install_dinosim,
 )
@@ -103,6 +104,15 @@ def _collect_rejections(actor) -> list[CommandRejectedEvent]:
     rejects: list[CommandRejectedEvent] = []
     actor.bus.subscribe(CommandRejectedEvent, rejects.append)
     return rejects
+
+
+def test_entity_room_id_returns_containing_room_or_none():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    loose = spawn_entity(scenario.actor.world, [IdentityComponent(name="loose", kind="item")])
+
+    assert _entity_room_id(character) == str(scenario.room_a)
+    assert _entity_room_id(loose) is None
 
 
 async def test_fossil_identification_extracts_sample_and_prepares_clone_egg():

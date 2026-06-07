@@ -21,8 +21,14 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.components import AffectDelta
+from bunnyland.core.events import CharacterDownedEvent
 from bunnyland.mechanics import install_affect, install_needs
-from bunnyland.mechanics.affect import THOUGHT_TTL_SECONDS, apply_delta, labels_for
+from bunnyland.mechanics.affect import (
+    THOUGHT_TTL_SECONDS,
+    AffectReactor,
+    apply_delta,
+    labels_for,
+)
 from bunnyland.mechanics.consumables import ConsumableComponent, FoodComponent
 
 HOUR = 3600.0
@@ -144,6 +150,26 @@ async def test_thoughts_decay_and_mood_returns_to_baseline():
     await scenario.actor.tick(HOUR)  # now past expiry -> thought decays
     assert char.get_component(AffectComponent).labels == ()
     assert len(char.get_relationships(HasThought)) == 0
+
+
+def test_downed_event_creates_pain_thought():
+    scenario = affect_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+
+    AffectReactor(scenario.actor.world)._on_downed(
+        CharacterDownedEvent(
+            event_id="downed",
+            world_epoch=12,
+            created_at="2026-01-01T00:00:00Z",
+            actor_id=str(scenario.character),
+            cause="test",
+        )
+    )
+
+    _edge, thought_id = char.get_relationships(HasThought)[0]
+    thought = scenario.actor.world.get_entity(thought_id).get_component(ThoughtComponent)
+    assert thought.label == "in pain"
+    assert thought.affect_delta.stress == 12
 
 
 def test_thought_ttl_is_positive():

@@ -39,6 +39,7 @@ from bunnyland.core.controllers import (
     SuspendedControllerComponent,
     WebControllerComponent,
 )
+from bunnyland.core.ecs import get_or_none
 from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent, ControllerChangedEvent
 from bunnyland.core.systems import ClaimTimeoutSystem
 
@@ -62,6 +63,18 @@ def collect(actor, event_type):
     seen = []
     actor.bus.subscribe(event_type, seen.append)
     return seen
+
+
+def test_get_or_none_and_nowait_submission_cover_absent_paths():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    assert get_or_none(character, IdentityComponent).name == "Juniper"
+    assert get_or_none(character, SuspendedComponent) is None
+
+    command = move_command(scenario)
+    scenario.actor.submit_nowait(command)
+    assert scenario.actor._inbox.get_nowait() is command
 
 
 # -- regeneration -----------------------------------------------------------------------

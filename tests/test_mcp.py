@@ -450,6 +450,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     captured = {}
     registered_tools = {}
     registered_resources = {}
+    registered_low_server = {}
 
     class FakeLowServer:
         def __init__(self):
@@ -459,12 +460,14 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
 
         def subscribe_resource(self):
             def decorate(func):
+                registered_low_server["subscribe_resource"] = func
                 return func
 
             return decorate
 
         def unsubscribe_resource(self):
             def decorate(func):
+                registered_low_server["unsubscribe_resource"] = func
                 return func
 
             return decorate
@@ -490,7 +493,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
             return decorate
 
         def get_context(self):
-            raise AssertionError("not used during app creation")
+            return SimpleNamespace(session=object())
 
         def streamable_http_app(self):
             async def asgi_app(scope, receive, send):
@@ -529,6 +532,8 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     assert registered_resources[EVENTS_RESOURCE_URI].__name__ == "recent_world_events_resource"
     recent_events = json.loads(registered_resources[EVENTS_RESOURCE_URI]())
     assert recent_events == {"ok": True, "events": []}
+    assert registered_low_server["unsubscribe_resource"].__name__ == "unsubscribe_resource"
+    asyncio.run(registered_low_server["unsubscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
 
     patch_world_admin = registered_tools["patch_world_admin"]
     with pytest.raises(RuntimeError, match="invalid MCP admin token"):
@@ -721,6 +726,11 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert calls["generate_world"].seed == "seed-a"
     assert calls["generate_world"].max_rooms == 2
     assert calls["generate_world"].confirm_reset is True
+
+    generation = await registered_tools["world_generation_status_admin"](
+        admin_token="secret",
+    )
+    assert generation["world_epoch"] == scenario.actor.epoch
 
     room = registered_tools["generate_room_patch_admin"](
         admin_token="secret",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -295,6 +296,68 @@ async def test_remote_backend_claims_web_controller():
             },
         )
     ]
+
+
+async def test_remote_backend_http_methods_use_async_client(monkeypatch):
+    class Response:
+        def __init__(self, *, is_success=True, payload=None):
+            self.is_success = is_success
+            self.payload = payload or {}
+            self.raised = False
+
+        def raise_for_status(self):
+            self.raised = True
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+            self.closed = False
+            self.requests: list[tuple[str, str, dict | None]] = []
+
+        async def get(self, url: str):
+            self.requests.append(("GET", url, None))
+            return Response(payload={"world_epoch": 7})
+
+        async def post(self, url: str, json: dict):
+            self.requests.append(("POST", url, json))
+            return Response(is_success=False)
+
+        async def aclose(self):
+            self.closed = True
+
+    clients = []
+
+    def async_client(*, timeout):
+        client = Client(timeout=timeout)
+        clients.append(client)
+        return client
+
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(AsyncClient=async_client))
+    backend = RemoteBackend("http://server.example/")
+
+    await backend.start()
+    snapshot = await backend.fetch_snapshot()
+    submitted = await backend.submit({"command_type": "wait"})
+    await backend.close()
+
+    assert snapshot == {"world_epoch": 7}
+    assert submitted is False
+    assert clients[0].closed is True
+    assert clients[0].requests == [
+        ("GET", "http://server.example/world/snapshot", None),
+        ("POST", "http://server.example/world/commands", {"command_type": "wait"}),
+    ]
+
+
+async def test_remote_backend_close_without_client_is_noop():
+    backend = RemoteBackend("http://server.example")
+
+    await backend.close()
+
+    assert backend._client is None
 
 
 # ── the app (Textual pilot) ───────────────────────────────────────────────────

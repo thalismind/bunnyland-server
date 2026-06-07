@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
@@ -51,7 +53,12 @@ from bunnyland.discord import (
     split_discord_text,
     suspend_discord_character,
 )
-from bunnyland.discord.bot import PAUSED_REACTION, QUEUED_REACTION, DiscordBot
+from bunnyland.discord.bot import (
+    PAUSED_REACTION,
+    QUEUED_REACTION,
+    DiscordBot,
+    _minutes_to_timeout_seconds,
+)
 from bunnyland.discord.claim import discord_controlled_character
 from bunnyland.memory import InMemoryStore, install_memory
 
@@ -280,6 +287,15 @@ def test_discord_message_filters_allow_all_when_unconfigured():
 
     assert filters.allows(_message(guild_id=789))
     assert filters.allows(_message(guild_id=None))
+
+
+def test_minutes_to_timeout_seconds_normalizes_and_rejects_bad_values():
+    assert _minutes_to_timeout_seconds(None) is None
+    assert _minutes_to_timeout_seconds("15") == 900
+
+    for value in ("not-a-number", 0):
+        with pytest.raises(ValueError):
+            _minutes_to_timeout_seconds(value)
 
 
 def test_discord_message_filters_require_allowed_guild_and_channel():

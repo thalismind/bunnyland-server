@@ -43,6 +43,7 @@ from bunnyland.llm_agents.agent import (
     DEFAULT_MODEL,
     OllamaAgent,
     _call_provider_with_retries,
+    _message_to_history,
     normalize_model,
 )
 from bunnyland.prompts.builder import PromptBuilder
@@ -256,6 +257,32 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
 def test_parse_natural_command_returns_none_for_ambiguous_text():
     assert parse_natural_command("") is None
     assert parse_natural_command("maybe Hazel knows") is None
+
+
+def test_message_to_history_uses_model_dump_or_message_attributes():
+    class DumpableMessage:
+        def model_dump(self, **kwargs):
+            assert kwargs == {"mode": "json", "exclude_none": True}
+            return {"role": "assistant", "content": "dumped"}
+
+    class AttributeMessage:
+        role = "assistant"
+        content = "plain"
+        tool_calls = [{"function": {"name": "wait", "arguments": {}}}]
+
+    class EmptyMessage:
+        pass
+
+    assert _message_to_history(DumpableMessage()) == {
+        "role": "assistant",
+        "content": "dumped",
+    }
+    assert _message_to_history(AttributeMessage()) == {
+        "role": "assistant",
+        "content": "plain",
+        "tool_calls": [{"function": {"name": "wait", "arguments": {}}}],
+    }
+    assert _message_to_history(EmptyMessage()) == {"role": "assistant"}
 
 
 def test_parse_natural_command_uses_action_definition_patterns():

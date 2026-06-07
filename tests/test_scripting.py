@@ -12,12 +12,18 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    ControlledBy,
     Lane,
     build_submitted_command,
     container_of,
+    parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.components import IdentityComponent
+from bunnyland.core.controllers import (
+    DiscordControllerComponent,
+    SuspendedControllerComponent,
+)
 from bunnyland.core.events import SpeechSaidEvent
 from bunnyland.plugins import ContentContribution, Plugin, apply_plugins, bunnyland_plugins
 from bunnyland.plugins.builtin import CORE_VERBS
@@ -43,6 +49,7 @@ from bunnyland.scripting import (
     load_scripts,
     write_script_state,
 )
+from bunnyland.scripting.runtime import install_scripting
 
 
 async def test_epoch_trigger_submits_normal_command_once():
@@ -158,6 +165,24 @@ def test_standalone_script_json_and_state_round_trip(tmp_path: Path):
     write_script_state(state_path, runtime.state)
     assert load_script_state(state_path).model_dump() == runtime.state.model_dump()
     assert load_scripts([path]) == [loaded]
+
+
+def test_script_runtime_add_script_and_install_helper_register_bindings():
+    scenario = build_scenario()
+    script = ScriptDefinition(
+        id="test.bindings",
+        bindings={"room": str(scenario.room_a)},
+        blocks=(ScriptBlock(name="tick", trigger=Trigger(tick=True)),),
+    )
+    runtime = ScriptRuntime()
+
+    runtime.add_script(script)
+    installed = install_scripting(scenario.actor, [script], bindings={"actor": "Juniper"})
+
+    assert runtime.scripts == (script,)
+    assert runtime.bindings["room"] == str(scenario.room_a)
+    assert installed.bindings["actor"] == "Juniper"
+    assert installed.bindings["room"] == str(scenario.room_a)
 
 
 def test_plugin_script_contributions_are_collectable(tmp_path: Path):
@@ -307,6 +332,48 @@ def test_script_runtime_selector_modes_and_query_filters():
             ),
             runtime.bindings,
         )
+
+
+def test_script_runtime_controller_kind_query_filter_paths():
+    scenario = build_scenario()
+    runtime = ScriptRuntime()
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    assert runtime._controller_kind(scenario.actor, character) == "llm"
+    assert runtime._resolve_query(
+        scenario.actor,
+        EntityQuery(components=("CharacterComponent",), controller_kind="llm"),
+        {},
+    ) == [character]
+
+    discord = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=123, default_channel_id=456)],
+    )
+    scenario.actor.assign_controller(scenario.character, discord.id)
+    assert runtime._controller_kind(scenario.actor, character) == "discord"
+
+    suspended = spawn_entity(
+        scenario.actor.world,
+        [SuspendedControllerComponent(reason="offline")],
+    )
+    scenario.actor.assign_controller(scenario.character, suspended.id)
+    assert runtime._controller_kind(scenario.actor, character) == "suspended"
+
+    blank = spawn_entity(scenario.actor.world)
+    scenario.actor.assign_controller(scenario.character, blank.id)
+    assert runtime._controller_kind(scenario.actor, character) == "unknown"
+
+    stray = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Stray", kind="character"), CharacterComponent()],
+    )
+    assert runtime._controller_kind(scenario.actor, stray) is None
+
+    scenario.actor.world._relationships.setdefault(stray.id, {}).setdefault(ControlledBy, {})[
+        parse_entity_id("entity_999")
+    ] = ControlledBy(generation=0)
+    assert runtime._controller_kind(scenario.actor, stray) is None
 
 
 async def test_script_runtime_records_block_errors_without_marking_fired():

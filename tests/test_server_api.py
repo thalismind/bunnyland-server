@@ -31,6 +31,7 @@ from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.events import (
     ActorMovedEvent,
     WorldGenerationCompletedEvent,
+    WorldGenerationFailedEvent,
     WorldGenerationStartedEvent,
 )
 from bunnyland.engine import GameLoop
@@ -40,6 +41,7 @@ from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
+from bunnyland.server import admin as server_admin
 from bunnyland.server import app as server_app
 from bunnyland.server.admin import (
     generate_replacement_world,
@@ -162,6 +164,23 @@ async def test_event_stream_records_recent_events_and_fans_out_to_subscribers(sc
         message["data"]["event_type"] == "ActorMovedEvent"
         for message in stream.recent_messages()
     )
+
+
+async def test_generation_failed_publisher_emits_failure_event(scenario):
+    events: list[WorldGenerationFailedEvent] = []
+    scenario.actor.bus.subscribe(WorldGenerationFailedEvent, events.append)
+    job = server_admin.WorldGenerationJob(
+        job_id="job-failed",
+        seed="bad seed",
+        generator="stub",
+        status="failed",
+        error="boom",
+    )
+
+    await server_admin._publish_generation_failed(scenario.actor, job)
+
+    assert events[0].job_id == "job-failed"
+    assert events[0].error == "boom"
 
 
 def test_event_serialization_includes_type_and_json_fields(scenario):
@@ -1190,6 +1209,31 @@ def test_world_patch_updates_component_and_edge(scenario):
     assert any(edge.direction == "east" and target == scenario.room_b for edge, target in exits)
 
 
+def test_world_patch_adds_component_to_existing_entity(scenario):
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "add_component",
+                        "entity_id": str(scenario.character),
+                        "component": {
+                            "type": "SuspendedComponent",
+                            "fields": {"reason": "editor"},
+                        },
+                    },
+                ]
+            }
+        ),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert response.ok is True
+    assert response.changed_entities[0]["id"] == str(scenario.character)
+    assert character.get_component(SuspendedComponent).reason == "editor"
+
+
 def test_world_patch_adds_and_deletes_entity(scenario):
     add_response = apply_world_patch(
         scenario.actor,
@@ -1482,6 +1526,19 @@ async def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypat
     assert snapshot["type"] == "snapshot"
     assert snapshot["data"]["world_epoch"] == scenario.actor.epoch
     assert heartbeat == {"type": "heartbeat", "data": {"world_epoch": scenario.actor.epoch}}
+
+
+def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"))
+    client = testclient.TestClient(app)
+
+    with client.websocket_connect("/world/updates") as websocket:
+        message = websocket.receive_json()
+
+    assert message["type"] == "snapshot"
+    assert message["data"]["metadata"]["seed"] == "moss"
+    assert message["data"]["world_epoch"] == scenario.actor.epoch
 
 
 async def test_event_stream_fans_out_pause_status_events(scenario):

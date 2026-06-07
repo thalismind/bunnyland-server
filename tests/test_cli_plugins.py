@@ -119,6 +119,28 @@ def test_cli_starter_pack_records_loaded_plugins(tmp_path):
     assert meta.plugins == (CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM)
 
 
+def test_cli_autosaves_during_game_loop(tmp_path, capsys):
+    path = tmp_path / "autosave-world.json"
+
+    result = main(
+        [
+            "serve",
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+            "--save",
+            str(path),
+            "--autosave-every",
+            "1",
+        ]
+    )
+
+    assert result == 0
+    assert "[autosave] tick 1" in capsys.readouterr().out
+    assert path.exists()
+
+
 def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
     path = tmp_path / "world.json"
     monkeypatch.setenv("BUNNYLAND_STARTER_PACK", "futuristic")

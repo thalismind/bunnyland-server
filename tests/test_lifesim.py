@@ -107,6 +107,7 @@ from bunnyland.mechanics.lifesim import (
     WellRestedEvent,
     WitnessRomanceHandler,
     WorkShiftCompletedEvent,
+    children_of,
     configure_lifesim_aging,
     install_lifesim,
     kinship_label,
@@ -2162,6 +2163,9 @@ def test_kinship_queries_return_parent_child_partner_and_sibling_labels():
     parent.add_relationship(ParentOf(), sibling)
     parent.add_relationship(PartnerOf(since_epoch=0), partner)
 
+    assert children_of(scenario.actor.world, scenario.character) == tuple(
+        sorted((str(child), str(sibling)))
+    )
     assert kinship_label(scenario.actor.world, child, scenario.character) == "parent"
     assert kinship_label(scenario.actor.world, scenario.character, child) == "child"
     assert kinship_label(scenario.actor.world, scenario.character, partner) == "partner"
