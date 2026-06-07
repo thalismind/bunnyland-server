@@ -12,6 +12,7 @@ from bunnyland.core import (
     Lane,
     PortableComponent,
     build_submitted_command,
+    container_of,
     parse_entity_id,
     replace_component,
     spawn_entity,
@@ -25,6 +26,7 @@ from bunnyland.core.events import (
     OwnershipReleasedEvent,
     ResourceGatheredEvent,
 )
+from bunnyland.mechanics import colonysim
 from bunnyland.mechanics.colonysim import (
     AssignedTo,
     AssignJobHandler,
@@ -153,6 +155,25 @@ async def test_gather_resource_decrements_node_and_adds_inventory_stack():
     assert stack.get_component(ResourceStackComponent).quantity == 2
 
 
+async def test_gather_resource_merges_existing_inventory_stack():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    existing_stack = _stack(scenario, "wood", 1)
+    node = _resource_node(scenario, current=4)
+    gathered: list[ResourceGatheredEvent] = []
+    scenario.actor.bus.subscribe(ResourceGatheredEvent, gathered.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "gather-resource", node_id=str(node), quantity=2)
+    )
+    await scenario.actor.tick(HOUR)
+
+    stack = scenario.actor.world.get_entity(existing_stack)
+    assert gathered[0].stack_id == str(existing_stack)
+    assert stack.get_component(ResourceStackComponent).quantity == 3
+    assert stack.get_component(IdentityComponent).name == "wood x3"
+
+
 async def test_resource_nodes_regenerate_to_maximum():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -187,7 +208,7 @@ async def test_gather_rejects_when_resource_reserved_by_someone_else():
 async def test_craft_consumes_inputs_at_reachable_workstation_and_creates_outputs():
     scenario = build_scenario()
     _install(scenario.actor)
-    _stack(scenario, "wood", 2)
+    input_stack = _stack(scenario, "wood", 2)
     recipe = spawn_entity(
         scenario.actor.world,
         [
@@ -220,6 +241,116 @@ async def test_craft_consumes_inputs_at_reachable_workstation_and_creates_output
     output = scenario.actor.world.get_entity(parse_entity_id(crafted[0].output_ids[0]))
     assert output.get_component(ResourceStackComponent).resource_type == "club"
     assert output.get_component(ResourceStackComponent).quantity == 1
+    assert container_of(scenario.actor.world.get_entity(input_stack)) is None
+
+
+async def test_craft_consumes_partial_stack_and_merges_output_stack():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    input_stack = _stack(scenario, "wood", 3)
+    output_stack = _stack(scenario, "plank", 1)
+    spawn_entity(
+        scenario.actor.world,
+        [
+            RecipeComponent(
+                recipe_id="planks",
+                inputs={"wood": 2},
+                outputs={"plank": 2},
+            )
+        ],
+    )
+    crafted: list[ItemCraftedEvent] = []
+    scenario.actor.bus.subscribe(ItemCraftedEvent, crafted.append)
+
+    await scenario.actor.submit(_cmd(scenario, "craft", recipe_id="planks"))
+    await scenario.actor.tick(HOUR)
+
+    input_entity = scenario.actor.world.get_entity(input_stack)
+    output_entity = scenario.actor.world.get_entity(output_stack)
+    assert input_entity.get_component(ResourceStackComponent).quantity == 1
+    assert input_entity.get_component(IdentityComponent).name == "wood x1"
+    assert crafted[0].output_ids == (str(output_stack),)
+    assert output_entity.get_component(ResourceStackComponent).quantity == 3
+    assert output_entity.get_component(IdentityComponent).name == "plank x3"
+
+
+async def test_craft_rejects_missing_recipe_and_unreachable_workstation():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _stack(scenario, "wood", 2)
+    spawn_entity(
+        scenario.actor.world,
+        [RecipeComponent(recipe_id="known", inputs={"wood": 1}, outputs={"club": 1})],
+    )
+    bench_recipe = spawn_entity(
+        scenario.actor.world,
+        [
+            RecipeComponent(
+                recipe_id="bench-work",
+                inputs={"wood": 1},
+                outputs={"club": 1},
+                required_station="bench",
+            )
+        ],
+    )
+    wrong_station = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Loom", kind="workstation"),
+            WorkstationComponent(station_type="loom"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_station.id
+    )
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "craft", recipe_id="missing"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "craft", recipe_id="bench-work"))
+    await scenario.actor.tick(HOUR)
+
+    assert bench_recipe.has_component(RecipeComponent)
+    assert [event.reason for event in rejects] == [
+        "recipe does not exist",
+        "required workstation is not reachable",
+    ]
+
+
+async def test_craft_rejects_missing_or_short_input_stacks():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _stack(scenario, "wood", 1)
+    spawn_entity(
+        scenario.actor.world,
+        [RecipeComponent(recipe_id="stone-tool", inputs={"stone": 1}, outputs={"tool": 1})],
+    )
+    spawn_entity(
+        scenario.actor.world,
+        [RecipeComponent(recipe_id="wood-tool", inputs={"wood": 2}, outputs={"tool": 1})],
+    )
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "craft", recipe_id="stone-tool"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "craft", recipe_id="wood-tool"))
+    await scenario.actor.tick(HOUR)
+
+    assert [event.reason for event in rejects] == [
+        "missing recipe inputs",
+        "missing recipe inputs",
+    ]
+
+
+def test_consume_resource_stack_returns_false_for_missing_or_short_stacks():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    _stack(scenario, "wood", 1)
+
+    assert colonysim._consume_resource_stack(character, scenario.actor.world, "stone", 1) is False
+    assert colonysim._consume_resource_stack(character, scenario.actor.world, "wood", 2) is False
 
 
 async def test_assign_and_complete_job_updates_assignment_state():
