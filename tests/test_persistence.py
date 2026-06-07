@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from enum import Enum
 
 import pytest
+from pydantic import BaseModel
 from relics import EntityId, World
 
 from bunnyland.core import (
@@ -32,6 +35,21 @@ from bunnyland.persistence import (
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.worldgen import StubWorldBuilder, instantiate
+
+
+class _YamlFlavor(Enum):
+    SWEET = "sweet"
+
+
+class _YamlNestedModel(BaseModel):
+    label: str
+
+
+@dataclass
+class _YamlNestedData:
+    flavor: _YamlFlavor
+    hidden: str
+    _private: str = "ignored"
 
 
 async def _build_and_play():
@@ -179,6 +197,108 @@ entity_2:
     ]
 
 
+def test_yaml_driver_save_serializes_world_prefabs_entities_and_relationships(tmp_path):
+    driver = YAMLPersistenceDriver()
+    world = World()
+    world.register_edge_type(ExitTo)
+    world.register_prefab("room", {IdentityComponent: IdentityComponent(name="Room", kind="room")})
+    source = world.spawn("room", {IdentityComponent: IdentityComponent(name="Source", kind="room")})
+    target = world.spawn("room", {IdentityComponent: IdentityComponent(name="Target", kind="room")})
+    source.add_relationship(ExitTo(direction="north", label="North"), target.id)
+
+    path = tmp_path / "world.yaml"
+    driver.save(world, path, relic_name="saved-room")
+    snapshot = driver.read_snapshot(path)
+
+    assert snapshot["metadata"]["relic_name"] == "saved-room"
+    assert snapshot["prefabs"]["room"]["components"]["IdentityComponent"]["name"] == "Room"
+    assert snapshot["entities"][str(source.id)]["prefab"] == "room"
+    assert snapshot["components"]["IdentityComponent"][str(source.id)]["name"] == "Source"
+    assert snapshot["relationships"]["ExitTo"][str(source.id)] == [
+        {
+            "target": str(target.id),
+            "edge": {
+                "action_cost": 1,
+                "direction": "north",
+                "hidden": False,
+                "label": "North",
+                "locked": False,
+            },
+        }
+    ]
+
+
+def test_yaml_driver_dumps_plain_values_and_quoted_keys():
+    driver = YAMLPersistenceDriver()
+
+    text = driver.dumps_snapshot(
+        {
+            "metadata": None,
+            "bunnyland": {
+                "model": _YamlNestedModel(label="nested"),
+                "data": _YamlNestedData(flavor=_YamlFlavor.SWEET, hidden="visible"),
+                "items": {"tuple": ("a", _YamlFlavor.SWEET), "set": {"b"}},
+                7: "numeric key",
+            },
+            "prefabs": {},
+            "entities": {
+                "plain_1": {},
+                "room-with-dash_2": {},
+            },
+            "components": {
+                "Odd Component": {
+                    "room-with-dash_2": {"value": _YamlFlavor.SWEET},
+                },
+            },
+        }
+    )
+
+    assert "__metadata__: {}" in text
+    assert '"7": "numeric key"' in text
+    assert '"flavor": "sweet"' in text
+    assert '"label": "nested"' in text
+    assert '"_private"' not in text
+    assert "plain_1: {}" in text
+    assert '"Odd Component": {"value": "sweet"}' in text
+
+
+def test_yaml_driver_parses_compact_reserved_sections_and_empty_yaml(tmp_path):
+    driver = YAMLPersistenceDriver()
+    path = tmp_path / "empty.yaml"
+    path.write_text("")
+
+    assert driver.read_snapshot(path) == {
+        "metadata": {},
+        "bunnyland": {},
+        "prefabs": {},
+        "entities": {},
+        "components": {},
+        "relationships": {},
+        "relics": [],
+    }
+
+    snapshot = driver.snapshot_from_document(
+        {
+            "__metadata__": {"epoch": 3},
+            "__bunnyland__": {"seed": "marsh"},
+            "__prefabs__": {"room": {"components": {}}},
+            "room_1": {
+                "IdentityComponent": {"name": "Room", "kind": "room"},
+                "ExitTo -> room_2": {"direction": "east", "label": "East"},
+            },
+            "room_2": {},
+        }
+    )
+
+    assert snapshot["metadata"] == {"epoch": 3}
+    assert snapshot["bunnyland"] == {"seed": "marsh"}
+    assert snapshot["prefabs"] == {"room": {"components": {}}}
+    assert snapshot["components"]["IdentityComponent"]["room_1"]["name"] == "Room"
+    assert snapshot["relationships"]["ExitTo"]["room_1"] == [
+        {"target": "room_2", "edge": {"direction": "east", "label": "East"}}
+    ]
+
+
 def test_yaml_driver_rejects_malformed_snapshot_sections():
     driver = YAMLPersistenceDriver()
 
@@ -195,6 +315,20 @@ def test_yaml_driver_rejects_malformed_snapshot_sections():
                 "relationships": {"Contains": {"entity_1": {"target": "entity_2"}}},
             }
         )
+
+    with pytest.raises(ValueError, match="Contains edge must be a YAML mapping"):
+        driver.dumps_snapshot(
+            {
+                "entities": {"entity_1": {}},
+                "relationships": {"Contains": {"entity_1": ["not a mapping"]}},
+            }
+        )
+
+    with pytest.raises(ValueError, match="entity_1.IdentityComponent must be a YAML mapping"):
+        driver.snapshot_from_document({"entity_1": {"IdentityComponent": ["bad"]}})
+
+    with pytest.raises(ValueError, match="__bunnyland__ must be a YAML mapping"):
+        driver.snapshot_from_document({"__bunnyland__": []})
 
 
 def test_yaml_driver_handles_relic_listing_errors_and_duplicates(tmp_path):
@@ -214,14 +348,129 @@ def test_yaml_driver_handles_relic_listing_errors_and_duplicates(tmp_path):
     relics = driver.list_relics(relics_dir)
     assert [relic.name for relic in relics] == ["smoke"]
 
+    driver.load_relic(World(), "smoke", relics_dir)
+
     with pytest.raises(FileNotFoundError, match="Relic 'missing' not found"):
         driver.load_relic(world, "missing", relics_dir)
+
+
+def test_yaml_driver_loads_yml_relic_fallback(tmp_path):
+    driver = YAMLPersistenceDriver()
+    relics_dir = tmp_path / "relics"
+    relics_dir.mkdir()
+    (relics_dir / "smoke.yml").write_text(
+        """
+__metadata__: {"version": "1.0", "epoch": 5}
+__prefabs__: {}
+entity_1:
+  IdentityComponent: {"name": "Smoke", "kind": "room"}
+""".lstrip()
+    )
+    world = World()
+
+    driver.load_relic(world, "smoke", relics_dir, *type_registries())
+
+    assert world.epoch == 5
+    assert (
+        world.get_entity(EntityId.parse("entity_1")).get_component(IdentityComponent).name
+        == "Smoke"
+    )
 
 
 def test_yaml_driver_returns_regular_relics_snapshot_unchanged():
     snapshot = {"metadata": {"epoch": 12}, "entities": {"entity_1": {}}}
 
     assert YAMLPersistenceDriver().snapshot_from_document(snapshot) == snapshot
+
+
+def test_yaml_driver_load_snapshot_uses_world_registries_and_skips_unknowns():
+    driver = YAMLPersistenceDriver()
+    world = World()
+    world.register_component_type(IdentityComponent)
+    world.register_edge_type(ExitTo)
+
+    driver.load_snapshot(
+        world,
+        {
+            "metadata": {"epoch": 9},
+            "prefabs": {
+                "room": {
+                    "components": {
+                        "IdentityComponent": {"name": "Prefab Room", "kind": "room"},
+                        "MissingComponent": {"ignored": True},
+                    }
+                }
+            },
+            "entities": {
+                "room_1": {},
+                "room_2": {"prefab": "room"},
+            },
+            "components": {
+                "IdentityComponent": {
+                    "room_1": {"name": "Start", "kind": "room"},
+                    "missing_1": {"name": "Missing", "kind": "room"},
+                },
+                "MissingComponent": {
+                    "room_1": {"ignored": True},
+                },
+            },
+            "relationships": {
+                "ExitTo": {
+                    "room_1": [
+                        {
+                            "target": "room_2",
+                            "edge": {"direction": "north", "label": "North"},
+                        },
+                        {
+                            "target": "missing_1",
+                            "edge": {"direction": "south", "label": "Missing"},
+                        },
+                    ],
+                    "missing_1": [
+                        {
+                            "target": "room_2",
+                            "edge": {"direction": "east", "label": "Ignored"},
+                        }
+                    ],
+                },
+                "MissingEdge": {
+                    "room_1": [{"target": "room_2", "edge": {}}],
+                },
+            },
+        },
+    )
+
+    room_1 = world.get_entity(EntityId.parse("room_1"))
+    room_2_id = EntityId.parse("room_2")
+    assert world.epoch == 9
+    assert world._prefabs["room"][IdentityComponent].name == "Prefab Room"
+    assert room_1.get_component(IdentityComponent).name == "Start"
+    assert room_1.get_relationships(ExitTo) == [
+        (ExitTo(direction="north", label="North"), room_2_id)
+    ]
+
+
+def test_yaml_driver_load_snapshot_rejects_malformed_sections():
+    driver = YAMLPersistenceDriver()
+    world = World()
+    world.register_edge_type(ExitTo)
+
+    with pytest.raises(ValueError, match="prefab room components must be a YAML mapping"):
+        driver.load_snapshot(
+            world,
+            {
+                "prefabs": {"room": {"components": []}},
+            },
+        )
+
+    with pytest.raises(ValueError, match="ExitTo edges for room_1 must be a list"):
+        driver.load_snapshot(
+            world,
+            {
+                "entities": {"room_1": {}, "room_2": {}},
+                "relationships": {"ExitTo": {"room_1": {"target": "room_2"}}},
+            },
+        )
 
 
 async def test_reload_starts_with_empty_command_queues(tmp_path):
