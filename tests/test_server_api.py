@@ -217,6 +217,261 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/updates" in paths
 
 
+def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    meta = WorldMeta(seed="moss", generator="oneshot", plugins=("bunnyland.core_verbs",))
+    app = create_app(scenario.actor, meta=meta)
+    client = testclient.TestClient(app)
+
+    health = client.get("/health")
+    snapshot = client.get("/world/snapshot")
+    schema = client.get("/world/schema")
+    library = client.get("/world/library")
+    recent = client.get("/world/events/recent")
+
+    assert health.status_code == 200
+    assert health.json() == {"ok": True, "world_epoch": scenario.actor.epoch}
+    assert snapshot.status_code == 200
+    assert snapshot.json()["metadata"]["seed"] == "moss"
+    assert schema.status_code == 200
+    assert schema.json()["components"]["RoomComponent"]["count"] == 2
+    assert library.status_code == 200
+    assert library.json() == load_content_library().model_dump(mode="json")
+    assert recent.status_code == 200
+    assert recent.json() == {"events": []}
+
+
+def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    response = client.post(
+        "/world/commands",
+        json={
+            "character_id": str(scenario.character),
+            "controller_id": str(scenario.controller),
+            "controller_generation": scenario.generation,
+            "command_type": "move",
+            "payload": {"direction": "north"},
+            "cost": {"action": 1},
+            "command_id": "cmd-http-move",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {"queued": True, "command_id": "cmd-http-move"}
+
+    asyncio.run(scenario.actor.tick(0.0))
+
+    recent = client.get("/world/events/recent")
+    assert scenario.character_room() == scenario.room_b
+    assert recent.status_code == 200
+    assert any(
+        message["data"]["event_type"] == "ActorMovedEvent"
+        for message in recent.json()["events"]
+    )
+
+
+def test_fastapi_world_generation_status_endpoint_reports_idle(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    response = client.get("/admin/world/generation")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "idle"
+    assert response.json()["world_epoch"] == scenario.actor.epoch
+
+
+def test_fastapi_runtime_endpoint_reports_attached_loop(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+
+    class FakeLoop:
+        paused = True
+        running = False
+
+    app = create_app(scenario.actor, loop=FakeLoop())
+    client = testclient.TestClient(app)
+
+    response = client.get("/admin/runtime")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "world_epoch": scenario.actor.epoch,
+        "paused": True,
+        "running": False,
+    }
+
+
+def test_fastapi_pause_and_resume_endpoints_update_runtime(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+
+    class FakeLoop:
+        paused = False
+        running = True
+
+        def __init__(self) -> None:
+            self.published: list[str] = []
+
+        def pause(self):
+            self.paused = True
+
+            async def publish():
+                self.published.append("pause")
+
+            return publish()
+
+        def resume(self):
+            self.paused = False
+
+            async def publish():
+                self.published.append("resume")
+
+            return publish()
+
+    loop = FakeLoop()
+    app = create_app(scenario.actor, loop=loop)
+    client = testclient.TestClient(app)
+
+    paused = client.post("/admin/pause")
+    resumed = client.post("/admin/resume")
+
+    assert paused.status_code == 200
+    assert paused.json()["paused"] is True
+    assert resumed.status_code == 200
+    assert resumed.json()["paused"] is False
+    assert loop.published == ["pause", "resume"]
+
+
+def test_fastapi_web_controller_claim_reports_bad_requests(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    non_character = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Small Stone", kind="object")],
+    )
+
+    missing = client.post(
+        "/world/controllers/web/claim",
+        json={"character_id": "entity_999", "client_id": "client-a"},
+    )
+    not_character = client.post(
+        "/world/controllers/web/claim",
+        json={"character_id": str(non_character.id), "client_id": "client-a"},
+    )
+    blank_client = client.post(
+        "/world/controllers/web/claim",
+        json={"character_id": str(scenario.character), "client_id": " "},
+    )
+
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "character does not exist"
+    assert not_character.status_code == 400
+    assert not_character.json()["detail"] == "entity is not a character"
+    assert blank_client.status_code == 400
+    assert blank_client.json()["detail"] == "client_id must not be blank"
+
+
+def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+
+    async def runtime_error(*args, **kwargs):
+        raise RuntimeError("generator is already busy")
+
+    monkeypatch.setattr(server_app, "start_world_generation", runtime_error)
+    app = create_app(scenario.actor, plugins=plugins)
+    client = testclient.TestClient(app)
+
+    conflict = client.post(
+        "/admin/world/generate",
+        json={"confirm_reset": True, "generator": "oneshot"},
+    )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == "generator is already busy"
+
+    async def unexpected_error(*args, **kwargs):
+        raise ValueError("generator failed")
+
+    monkeypatch.setattr(server_app, "start_world_generation", unexpected_error)
+
+    failed = client.post(
+        "/admin/world/generate",
+        json={"confirm_reset": True, "generator": "oneshot"},
+    )
+
+    assert failed.status_code == 500
+    assert failed.json()["detail"] == "generator failed"
+
+
+@pytest.mark.parametrize(
+    ("target", "path", "payload"),
+    [
+        (
+            "generate_room_patch",
+            "/admin/world/generate-room",
+            {"door_entity_id": "entity_999"},
+        ),
+        (
+            "generate_character_patch",
+            "/admin/world/generate-character",
+            {"room_entity_id": "entity_999"},
+        ),
+        (
+            "generate_item_patch",
+            "/admin/world/generate-item",
+            {"container_entity_id": "entity_999"},
+        ),
+        (
+            "generate_event_patch",
+            "/admin/world/generate-event",
+            {"room_entity_id": "entity_999"},
+        ),
+    ],
+)
+def test_fastapi_entity_generation_translates_unexpected_errors(
+    monkeypatch,
+    scenario,
+    target,
+    path,
+    payload,
+):
+    testclient = pytest.importorskip("fastapi.testclient")
+
+    def raise_unexpected(*args, **kwargs):
+        raise RuntimeError("dm unavailable")
+
+    monkeypatch.setattr(server_app, target, raise_unexpected)
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    response = client.post(path, json=payload)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "dm unavailable"
+
+
+def test_fastapi_save_endpoint_translates_save_errors(monkeypatch, scenario, tmp_path):
+    testclient = pytest.importorskip("fastapi.testclient")
+
+    def raise_save_error(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(server_app, "save_configured_world", raise_save_error)
+    app = create_app(scenario.actor, save_path=tmp_path / "world.json")
+    client = testclient.TestClient(app)
+
+    response = client.post("/admin/world/save")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "disk full"
+
+
 async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
     monkeypatch,
     scenario,
