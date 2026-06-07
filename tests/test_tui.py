@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,7 @@ from bunnyland.core import (
 from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
+from bunnyland.tui import app as tui_app
 from bunnyland.tui.app import BunnylandTUI, TargetPicker, TextPrompt
 from bunnyland.tui.backend import Backend, LocalBackend, RemoteBackend, persistent_client_id
 from bunnyland.tui.model import World, entity_icon, entity_name, entity_type
@@ -317,11 +319,79 @@ class RecordingBackend(Backend):
         return world.control(player_id)
 
 
+class FailingBackend(RecordingBackend):
+    async def fetch_snapshot(self) -> dict:
+        raise RuntimeError("snapshot failed")
+
+
 async def _select_player(app, pilot):
     from textual.widgets import Select
 
     app.query_one("#player", Select).value = PLAYER
     await pilot.pause()
+
+
+async def test_target_picker_selects_and_cancels():
+    from textual.widgets import OptionList
+
+    move = next(v for v in ACTION_VERBS if v.tool == "move")
+    candidates = World.parse(_snapshot()).target_candidates(PLAYER, "exits")
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+
+    async with app.run_test() as pilot:
+        screen = TargetPicker(move, candidates)
+        app.push_screen(screen, callback=results.append)
+        await pilot.pause()
+        screen.query_one("#picker-list", OptionList).highlighted = 0
+        await pilot.press("enter")
+        await pilot.pause()
+        assert results[-1] == HALL
+
+        empty_screen = TargetPicker(move, [])
+        app.push_screen(empty_screen, callback=results.append)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert results[-1] is None
+
+
+async def test_text_prompt_submits_text_and_cancel():
+    from textual.widgets import Input
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+
+    async with app.run_test() as pilot:
+        prompt = TextPrompt("Say — text")
+        app.push_screen(prompt, callback=results.append)
+        await pilot.pause()
+        prompt.query_one("#prompt-input", Input).value = "hello"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert results[-1] == "hello"
+
+        blank_prompt = TextPrompt("Say — text")
+        app.push_screen(blank_prompt, callback=results.append)
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert results[-1] is None
+
+        cancelled = TextPrompt("Say — text")
+        app.push_screen(cancelled, callback=results.append)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert results[-1] is None
+
+
+async def test_app_reports_refresh_errors():
+    from textual.widgets import Static
+
+    app = BunnylandTUI(FailingBackend(_snapshot()))
+    async with app.run_test():
+        assert "snapshot failed" in str(app.query_one("#status", Static).render())
 
 
 async def test_app_renders_room_and_actions():
@@ -340,6 +410,60 @@ async def test_app_renders_room_and_actions():
         assert "5/5 AP" in text("#points")
 
 
+async def test_app_rendering_restores_highlight_and_handles_missing_room():
+    from textual.widgets import OptionList, Static
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        app.selected_id = MARLOW
+        app._render_room()
+        members = app.query_one("#members", OptionList)
+        assert members.get_option_at_index(members.highlighted).id == MARLOW
+
+        app.selected_id = "missing"
+        app._render_room()
+        assert members.option_count == 3
+
+        app.view_room_id = "room:missing"
+        app.follow = False
+        app.player_id = ""
+        app._render_room()
+        assert str(app.query_one("#room-title", Static).render()) == "No room"
+
+
+async def test_app_door_selection_spectating_and_follow():
+    from textual.widgets import Static
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        app._door_selected(SimpleNamespace(option=SimpleNamespace(id=f"door:{HALL}")))
+        assert app.view_room_id == HALL
+        assert not app.follow
+        assert "spectating" in str(app.query_one("#room-title", Static).render())
+
+        app.action_follow()
+        assert app.follow
+        assert app.view_room_id == PARLOR
+        assert "spectating" not in str(app.query_one("#room-title", Static).render())
+
+
+async def test_app_member_and_verb_selection_handlers():
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+
+        app._member_selected(SimpleNamespace(option=SimpleNamespace(id=APPLE)))
+        assert app.selected_id == APPLE
+
+        await app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="wait")))
+        assert app.backend.commands[-1]["command_type"] == "wait"
+
+        await app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="missing")))
+        assert app.backend.commands[-1]["command_type"] == "wait"
+
+
 async def test_app_wait_submits_a_command():
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test() as pilot:
@@ -348,6 +472,37 @@ async def test_app_wait_submits_a_command():
         await app._do_verb(wait)
         assert app.backend.commands[-1]["command_type"] == "wait"
         assert app.backend.commands[-1]["controller_generation"] == 2
+
+
+async def test_app_refresh_action_resyncs_existing_player():
+    from textual.widgets import Select
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app.action_refresh()
+        assert app.query_one("#player", Select).value == PLAYER
+
+
+async def test_app_refresh_preserves_valid_room_view_and_noops_same_player():
+    from textual.widgets import Select
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test():
+        app.world = World.parse(_snapshot())
+        app.player_id = PLAYER
+        app._player_choice_ids = [MARLOW]
+        app._sync_players()
+        assert app.query_one("#player", Select).value == PLAYER
+
+        app.view_room_id = HALL
+        app.follow = False
+        await app.refresh_world()
+        assert app.view_room_id == HALL
+
+        app.selected_id = APPLE
+        await app._player_changed(SimpleNamespace(value=PLAYER))
+        assert app.selected_id == APPLE
 
 
 async def test_app_move_uses_target_picker(monkeypatch):
@@ -365,6 +520,34 @@ async def test_app_move_uses_target_picker(monkeypatch):
         cmd = app.backend.commands[-1]
         assert cmd["command_type"] == "move"
         assert cmd["payload"] == {"exit_id": HALL}
+
+
+async def test_app_target_and_prompt_cancellations_submit_nothing(monkeypatch):
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        choices = iter([MARLOW, None])
+
+        async def fake_pick(screen):
+            return next(choices)
+
+        monkeypatch.setattr(app, "push_screen_wait", fake_pick)
+        tell = next(v for v in ACTION_VERBS if v.tool == "tell")
+        await app._do_verb(tell)
+        assert app.backend.commands == []
+
+
+async def test_app_verb_without_player_or_control_submits_nothing():
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test():
+        wait = next(v for v in ACTION_VERBS if v.tool == "wait")
+        await app._do_verb(wait)
+        assert app.backend.commands == []
+
+        app.player_id = MARLOW
+        app.control = None
+        await app._do_verb(wait)
+        assert app.backend.commands == []
 
 
 async def test_app_say_collects_text(monkeypatch):
@@ -412,3 +595,82 @@ async def test_app_disables_unaffordable_verbs():
         assert verbs["move"].disabled  # costs 1 AP
         assert verbs["say"].disabled   # costs 1 AP + 1 FP
         assert not verbs["wait"].disabled  # free
+
+
+async def test_app_clears_missing_player_after_refresh():
+    snapshot = _snapshot()
+    snapshot["entities"] = [entity for entity in snapshot["entities"] if entity["id"] != PLAYER]
+    app = BunnylandTUI(RecordingBackend(snapshot))
+
+    async with app.run_test():
+        app.player_id = PLAYER
+        app.control = ("controller:1", 2)
+        await app.refresh_world()
+        assert app.player_id == ""
+        assert app.control is None
+
+
+# ── TUI CLI wiring ────────────────────────────────────────────────────────────
+def test_main_runs_remote_backend(monkeypatch):
+    backends = []
+    runs = []
+
+    class BackendStub:
+        def __init__(self, server, *, fallback_controller=None, timeout_seconds=None):
+            self.server = server
+            self.fallback_controller = fallback_controller
+            self.timeout_seconds = timeout_seconds
+            backends.append(self)
+
+    class AppStub:
+        def __init__(self, backend):
+            self.backend = backend
+
+        def run(self):
+            runs.append(self.backend)
+
+    monkeypatch.setattr(tui_app, "RemoteBackend", BackendStub)
+    monkeypatch.setattr(tui_app, "BunnylandTUI", AppStub)
+
+    assert tui_app.main([
+        "--server", "http://example.test",
+        "--claim-fallback", "llm",
+        "--claim-timeout-minutes", "10",
+    ]) == 0
+    assert runs == backends
+    assert backends[0].server == "http://example.test"
+    assert backends[0].fallback_controller == "llm"
+    assert backends[0].timeout_seconds == 600
+
+
+def test_main_runs_local_backend(monkeypatch):
+    backends = []
+
+    class BackendStub:
+        def __init__(
+            self, *, seed=None, generator=None, fallback_controller=None, timeout_seconds=None
+        ):
+            self.seed = seed
+            self.generator = generator
+            self.fallback_controller = fallback_controller
+            self.timeout_seconds = timeout_seconds
+            backends.append(self)
+
+    class AppStub:
+        def __init__(self, backend):
+            self.backend = backend
+
+        def run(self): ...
+
+    monkeypatch.setattr(tui_app, "LocalBackend", BackendStub)
+    monkeypatch.setattr(tui_app, "BunnylandTUI", AppStub)
+
+    assert tui_app.main([
+        "--seed", "test seed",
+        "--generator", "empty",
+        "--claim-fallback", "suspend",
+    ]) == 0
+    assert backends[0].seed == "test seed"
+    assert backends[0].generator == "empty"
+    assert backends[0].fallback_controller == "suspend"
+    assert backends[0].timeout_seconds is None
