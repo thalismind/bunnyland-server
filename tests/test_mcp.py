@@ -16,24 +16,38 @@ from bunnyland.core import (
     CharacterComponent,
     ControlledBy,
     IdentityComponent,
+    LLMControllerComponent,
     MCPControllerComponent,
     SuspendedComponent,
     WorldActor,
+    parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.events import ActorMovedEvent
 from bunnyland.mcp import (
     EVENTS_RESOURCE_URI,
     assign_mcp_controller,
+    create_bunnyland_mcp_app,
     mcp_controlled_character,
     mcp_enabled,
     release_mcp_controller,
     render_mcp_agent_prompt,
 )
 from bunnyland.mechanics.lifesim import LifeStageComponent
+from bunnyland.persistence import WorldMeta
 from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.plugins.builtin import MCP, WORLDGEN
 from bunnyland.server.app import create_app
+from bunnyland.server.models import (
+    WorldCharacterGenerationResponse,
+    WorldEventGenerationResponse,
+    WorldGenerateResponse,
+    WorldGenerationStatusResponse,
+    WorldItemGenerationResponse,
+    WorldPatchRequest,
+    WorldPatchResponse,
+    WorldRoomGenerationResponse,
+)
 
 
 def _free_port() -> int:
@@ -91,6 +105,46 @@ def test_mcp_uri_and_character_summary_helpers_cover_edge_cases():
         item["name"]: item["controller_status"]
         for item in mcp_server.list_mcp_characters(actor)
     } == {"Clover": "suspended", "Juniper": "other"}
+
+
+def test_active_controller_kind_covers_controller_relationship_paths():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+
+    assert mcp_server._active_controller_kind(actor, character) == "other"
+
+    actor.world._relationships.setdefault(character.id, {}).setdefault(ControlledBy, {})[
+        parse_entity_id("entity_999")
+    ] = ControlledBy(generation=0)
+
+    assert mcp_server._active_controller_kind(actor, character) == "other"
+
+    llm_controller = spawn_entity(
+        actor.world,
+        [
+            LLMControllerComponent(
+                profile_name="test",
+                model="tiny",
+            )
+        ],
+    )
+    character.add_relationship(ControlledBy(generation=1), llm_controller.id)
+
+    assert mcp_server._active_controller_kind(actor, character) == "other"
+
+    mcp_controller = spawn_entity(
+        actor.world,
+        [MCPControllerComponent(agent_id="agent-a")],
+    )
+    character.add_relationship(ControlledBy(generation=2), mcp_controller.id)
+
+    assert mcp_server._active_controller_kind(actor, character) == "MCP controller"
 
 
 def test_mcp_match_and_controlled_character_helpers_cover_edge_cases():
@@ -394,8 +448,8 @@ async def test_mcp_event_bridge_filters_and_notifies_agent_resources(scenario):
 
 def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario):
     captured = {}
-    registered_tools = []
-    registered_resources = []
+    registered_tools = {}
+    registered_resources = {}
 
     class FakeLowServer:
         def __init__(self):
@@ -423,14 +477,14 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
 
         def tool(self):
             def decorate(func):
-                registered_tools.append(func.__name__)
+                registered_tools[func.__name__] = func
                 return func
 
             return decorate
 
         def resource(self, uri, **_kwargs):
             def decorate(func):
-                registered_resources.append((uri, func.__name__))
+                registered_resources[uri] = func
                 return func
 
             return decorate
@@ -472,7 +526,234 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     assert "send_command" in registered_tools
     assert "agent_prompt" in registered_tools
     assert "patch_world_admin" in registered_tools
-    assert (EVENTS_RESOURCE_URI, "recent_world_events_resource") in registered_resources
+    assert registered_resources[EVENTS_RESOURCE_URI].__name__ == "recent_world_events_resource"
+    recent_events = json.loads(registered_resources[EVENTS_RESOURCE_URI]())
+    assert recent_events == {"ok": True, "events": []}
+
+    patch_world_admin = registered_tools["patch_world_admin"]
+    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+        asyncio.run(patch_world_admin(admin_token=None, operations=[]))
+    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+        asyncio.run(patch_world_admin(admin_token="wrong", operations=[]))
+
+    patched = asyncio.run(patch_world_admin(admin_token="secret", operations=[]))
+    assert patched["ok"] is True
+
+    registered_tools.clear()
+    monkeypatch.delenv(mcp_server.ADMIN_TOKEN_ENV, raising=False)
+    create_app(
+        scenario.actor,
+        plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
+        mcp_admin_token=None,
+    )
+    patch_world_admin = registered_tools["patch_world_admin"]
+    with pytest.raises(RuntimeError, match="BUNNYLAND_MCP_ADMIN_TOKEN is not configured"):
+        asyncio.run(patch_world_admin(admin_token="secret", operations=[]))
+
+    monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "env-secret")
+    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+        asyncio.run(patch_world_admin(admin_token="secret", operations=[]))
+
+    patched = asyncio.run(patch_world_admin(admin_token="env-secret", operations=[]))
+    assert patched["ok"] is True
+
+
+async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenario):
+    registered_tools = {}
+    calls = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _notifications, _experimental: SimpleNamespace(
+                resources=SimpleNamespace(subscribe=False, listChanged=False)
+            )
+
+        def subscribe_resource(self):
+            def decorate(func):
+                return func
+
+            return decorate
+
+        def unsubscribe_resource(self):
+            def decorate(func):
+                return func
+
+            return decorate
+
+    class FakeFastMCP:
+        def __init__(self, *_args, **_kwargs):
+            self._mcp_server = FakeLowServer()
+
+        def tool(self):
+            def decorate(func):
+                registered_tools[func.__name__] = func
+                return func
+
+            return decorate
+
+        def resource(self, _uri, **_kwargs):
+            def decorate(func):
+                return func
+
+            return decorate
+
+        def streamable_http_app(self):
+            return SimpleNamespace()
+
+    mcp_module = ModuleType("mcp")
+    server_module = ModuleType("mcp.server")
+    fastmcp_module = ModuleType("mcp.server.fastmcp")
+    exceptions_module = ModuleType("mcp.server.fastmcp.exceptions")
+    fastmcp_module.FastMCP = FakeFastMCP
+    exceptions_module.ToolError = RuntimeError
+    monkeypatch.setitem(sys.modules, "mcp", mcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.server", server_module)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
+
+    async def patch_world(request):
+        calls["patch_world"] = request
+        return WorldPatchResponse(world_epoch=scenario.actor.epoch)
+
+    async def generate_world(request):
+        calls["generate_world"] = request
+        return WorldGenerateResponse(
+            job_id="job-1",
+            status="running",
+            seed=request.seed or "",
+            generator=request.generator or "",
+            world_epoch=scenario.actor.epoch,
+        )
+
+    async def generation_status():
+        return WorldGenerationStatusResponse(world_epoch=scenario.actor.epoch)
+
+    def generate_room(request):
+        calls["generate_room"] = request
+        return WorldRoomGenerationResponse(
+            source_room_id=str(scenario.room_a),
+            door_entity_id=request.door_entity_id,
+            generated_title="Generated Room",
+            patch=WorldPatchRequest(),
+        )
+
+    def generate_character(request):
+        calls["generate_character"] = request
+        return WorldCharacterGenerationResponse(
+            room_entity_id=request.room_entity_id,
+            generated_name="Generated Character",
+            patch=WorldPatchRequest(),
+        )
+
+    def generate_item(request):
+        calls["generate_item"] = request
+        return WorldItemGenerationResponse(
+            container_entity_id=request.container_entity_id,
+            generated_name="Generated Item",
+            patch=WorldPatchRequest(),
+        )
+
+    def generate_event(request):
+        calls["generate_event"] = request
+        return WorldEventGenerationResponse(
+            room_entity_id=request.room_entity_id,
+            generated_title="Generated Event",
+            generated_kind="scene",
+            patch=WorldPatchRequest(),
+        )
+
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=SimpleNamespace(running=True, paused=False),
+        admin_token="secret",
+        patch_world=patch_world,
+        generate_world=generate_world,
+        generation_status=generation_status,
+        generate_room=generate_room,
+        generate_character=generate_character,
+        generate_item=generate_item,
+        generate_event=generate_event,
+    )
+
+    characters = registered_tools["list_characters"]()
+    assert characters["ok"] is True
+    assert [character["name"] for character in characters["characters"]] == ["Juniper"]
+
+    snapshot = registered_tools["world_snapshot"]()
+    assert snapshot["metadata"]["seed"] == "moss"
+    assert any(entity["id"] == str(scenario.character) for entity in snapshot["entities"])
+
+    status = registered_tools["runtime_status"]()
+    assert status == {
+        "ok": True,
+        "world_epoch": scenario.actor.epoch,
+        "running": True,
+        "paused": False,
+    }
+
+    claimed = await registered_tools["claim_character"](
+        agent_id="agent-a",
+        character_name="Juniper",
+    )
+    assert claimed["character_id"] == str(scenario.character)
+
+    prompt = registered_tools["agent_prompt"](agent_id="agent-a")
+    assert prompt["character_id"] == str(scenario.character)
+    assert "You are Juniper" in prompt["prompt"]
+
+    released = await registered_tools["release_character"](agent_id="agent-a")
+    assert released["controller_kind"] == "suspended"
+
+    patched = await registered_tools["patch_world_admin"](admin_token="secret", operations=[])
+    assert patched["world_epoch"] == scenario.actor.epoch
+    assert calls["patch_world"].operations == []
+
+    generated_world = await registered_tools["generate_world_admin"](
+        admin_token="secret",
+        seed="seed-a",
+        generator="stub",
+        max_rooms=2,
+        confirm_reset=True,
+        save=True,
+    )
+    assert generated_world["job_id"] == "job-1"
+    assert calls["generate_world"].seed == "seed-a"
+    assert calls["generate_world"].max_rooms == 2
+    assert calls["generate_world"].confirm_reset is True
+
+    room = registered_tools["generate_room_patch_admin"](
+        admin_token="secret",
+        door_entity_id="door-1",
+        direction="north",
+        prompt="room prompt",
+    )
+    assert room["generated_title"] == "Generated Room"
+    assert calls["generate_room"].direction == "north"
+
+    character = registered_tools["generate_character_patch_admin"](
+        admin_token="secret",
+        room_entity_id=str(scenario.room_a),
+        prompt="character prompt",
+    )
+    assert character["generated_name"] == "Generated Character"
+    assert calls["generate_character"].prompt == "character prompt"
+
+    item = registered_tools["generate_item_patch_admin"](
+        admin_token="secret",
+        container_entity_id=str(scenario.room_a),
+        prompt="item prompt",
+    )
+    assert item["generated_name"] == "Generated Item"
+    assert calls["generate_item"].container_entity_id == str(scenario.room_a)
+
+    event = registered_tools["generate_event_patch_admin"](
+        admin_token="secret",
+        room_entity_id=str(scenario.room_a),
+        prompt="event prompt",
+    )
+    assert event["generated_kind"] == "scene"
+    assert calls["generate_event"].prompt == "event prompt"
 
 
 async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(scenario):
