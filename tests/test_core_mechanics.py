@@ -5,35 +5,54 @@ from __future__ import annotations
 import pytest
 from conftest import build_scenario
 
+import bunnyland.core.world_actor as world_actor_module
 from bunnyland.core import (
     ActionPointsComponent,
     AttentionComponent,
     BleedingComponent,
     BodyPlanComponent,
     CharacterComponent,
+    ClaimTimeoutComponent,
     CommandCost,
     ContainmentMode,
     Contains,
+    DeadComponent,
+    DiscordControllerComponent,
+    DownedComponent,
     EncumbranceComponent,
+    HandlerResult,
     HasInjury,
     HealthComponent,
     HearingComponent,
     IdentityComponent,
     Lane,
+    MCPControllerComponent,
     NoiseComponent,
+    OnInsufficientPoints,
     PainComponent,
     PerceptionComponent,
+    SleepingComponent,
     StealthComponent,
     StimulusComponent,
+    SuspendedComponent,
+    SuspendedControllerComponent,
+    WebControllerComponent,
     WeightComponent,
+    WorldActor,
     build_submitted_command,
     parse_entity_id,
     spawn_entity,
 )
+from bunnyland.core.edges import ControlledBy
 from bunnyland.core.events import (
+    ActionPointsChangedEvent,
     AttentionShiftedEvent,
+    CommandExecutedEvent,
+    CommandExpiredEvent,
+    CommandRejectedEvent,
     EncumbranceChangedEvent,
     EntitySeenEvent,
+    FocusPointsChangedEvent,
     InjuryAddedEvent,
     NoiseHeardEvent,
 )
@@ -46,6 +65,314 @@ def collect(actor, event_type):
     seen = []
     actor.bus.subscribe(event_type, seen.append)
     return seen
+
+
+def _command(scenario, command_type="move", **kwargs):
+    payload = kwargs.pop("payload", None)
+    if payload is None and command_type == "move":
+        payload = {"direction": "north"}
+    return build_submitted_command(
+        character_id=kwargs.pop("character_id", str(scenario.character)),
+        controller_id=kwargs.pop("controller_id", str(scenario.controller)),
+        controller_generation=kwargs.pop("controller_generation", scenario.generation),
+        command_type=command_type,
+        cost=kwargs.pop("cost", CommandCost(action=0)),
+        lane=kwargs.pop("lane", Lane.WORLD),
+        payload=payload,
+        on_insufficient_points=kwargs.pop(
+            "on_insufficient_points", OnInsufficientPoints.QUEUE
+        ),
+        submitted_at_epoch=kwargs.pop("submitted_at_epoch", 0),
+        expires_at_epoch=kwargs.pop("expires_at_epoch", None),
+        command_id=kwargs.pop("command_id", None),
+    )
+
+
+async def test_world_actor_hooks_available_commands_and_submit_nowait():
+    scenario = build_scenario()
+    calls = []
+
+    def sync_hook(actor):
+        calls.append(("sync", actor.epoch))
+
+    async def async_hook(actor):
+        calls.append(("async", actor.epoch))
+
+    scenario.actor.register_after_tick(sync_hook)
+    scenario.actor.register_after_tick(async_hook)
+    executed = collect(scenario.actor, CommandExecutedEvent)
+
+    assert "move" in scenario.actor.available_command_types()
+    assert "take-control" in scenario.actor.available_command_types()
+
+    scenario.actor.submit_nowait(_command(scenario))
+    await scenario.actor.tick(0.0)
+
+    assert [event.command_type for event in executed] == ["move"]
+    assert calls == [("sync", 0), ("async", 0)]
+
+
+def test_world_actor_registration_helpers_and_bind_clock_paths():
+    actor = WorldActor()
+    definition = type("Definition", (), {"command_type": "custom"})()
+    consequence = type("Consequence", (), {"process": lambda self, world, epoch: ()})()
+
+    actor.register_action_definition(definition)
+    actor.register_consequence(consequence)
+
+    assert actor.action_definitions() == (definition,)
+    assert actor._consequences[-1] is consequence
+
+    actor.bind_clock()
+    assert actor.epoch == 0
+
+    actor.world.remove(actor._clock_entity.id)
+
+    with pytest.raises(RuntimeError, match="expected exactly one world clock"):
+        actor.bind_clock()
+
+
+async def test_world_actor_records_claim_activity_for_current_controller(monkeypatch):
+    scenario = build_scenario()
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    controller.add_component(ClaimTimeoutComponent(claimed_at_unix=1, last_command_unix=1))
+    monkeypatch.setattr(world_actor_module.time, "time", lambda: 1234)
+
+    scenario.actor.submit_nowait(_command(scenario))
+    await scenario.actor.tick(0.0)
+
+    assert controller.get_component(ClaimTimeoutComponent).last_command_unix == 1234
+
+    stale = _command(scenario, controller_generation=scenario.generation + 1)
+    scenario.actor._record_controller_activity(stale)
+    assert controller.get_component(ClaimTimeoutComponent).last_command_unix == 1234
+
+    missing = _command(
+        scenario,
+        character_id="not-an-entity",
+        controller_id="entity_999",
+    )
+    scenario.actor._record_controller_activity(missing)
+    assert controller.get_component(ClaimTimeoutComponent).last_command_unix == 1234
+
+
+async def test_world_actor_rejects_expired_missing_and_state_blocked_commands():
+    scenario = build_scenario()
+    rejected = collect(scenario.actor, CommandRejectedEvent)
+    expired = collect(scenario.actor, CommandExpiredEvent)
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    scenario.actor.submit_nowait(_command(scenario, character_id="entity_999"))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "character does not exist"
+
+    scenario.actor.submit_nowait(_command(scenario, expires_at_epoch=0))
+    await scenario.actor.tick(1.0)
+    assert expired[-1].command_type == "move"
+
+    scenario.actor.submit_nowait(_command(scenario, controller_generation=scenario.generation + 1))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "stale controller generation"
+
+    character.add_component(SuspendedComponent(reason="test"))
+    scenario.actor.submit_nowait(_command(scenario))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "character is suspended"
+    character.remove_component(SuspendedComponent)
+
+    character.add_component(DownedComponent(downed_at_epoch=scenario.actor.epoch, cause="test"))
+    scenario.actor.submit_nowait(_command(scenario))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "character is downed"
+    character.remove_component(DownedComponent)
+
+    character.add_component(SleepingComponent(started_at_epoch=scenario.actor.epoch))
+    scenario.actor.submit_nowait(_command(scenario))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "character is asleep"
+    character.remove_component(SleepingComponent)
+
+    character.add_component(DeadComponent(died_at_epoch=scenario.actor.epoch, cause="test"))
+    scenario.actor.submit_nowait(_command(scenario))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "character is dead"
+
+
+async def test_world_actor_rejects_gate_affordability_missing_handler_and_handler_failure():
+    scenario = build_scenario(action_current=0.0)
+    rejected = collect(scenario.actor, CommandRejectedEvent)
+
+    scenario.actor.register_gate(lambda _world, _command: (True, None))
+    scenario.actor.register_gate(lambda _world, _command: (False, "gate closed"))
+    scenario.actor.submit_nowait(_command(scenario))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "gate closed"
+
+    scenario = build_scenario(action_current=0.0)
+    rejected = collect(scenario.actor, CommandRejectedEvent)
+    queued = _command(scenario, cost=CommandCost(action=1))
+    scenario.actor.submit_nowait(queued)
+    await scenario.actor.tick(0.0)
+    assert scenario.actor.queues.peek(str(scenario.character), Lane.WORLD) == queued
+    assert rejected == []
+
+    deny = _command(
+        scenario,
+        cost=CommandCost(action=10),
+        on_insufficient_points=OnInsufficientPoints.DENY,
+    )
+    scenario.actor.queues.flush_character(str(scenario.character))
+    scenario.actor.submit_nowait(deny)
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "insufficient points"
+
+    scenario = build_scenario()
+    rejected = collect(scenario.actor, CommandRejectedEvent)
+    scenario.actor.submit_nowait(_command(scenario, "missing-command", payload={}))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "no handler for missing-command"
+
+    class FailingHandler:
+        command_type = "fail"
+
+        def execute(self, _ctx, _command):
+            return HandlerResult(ok=False)
+
+    scenario.actor.register_handler(FailingHandler())
+    scenario.actor.submit_nowait(_command(scenario, "fail", payload={}))
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "rejected by handler"
+
+
+def test_world_actor_initiative_order_handles_missing_and_unscored_entities():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [IdentityComponent(name="No Initiative", kind="character"), CharacterComponent()],
+    )
+
+    ordered = actor._initiative_order(["not-an-entity", str(character.id)])
+
+    assert set(ordered) == {"not-an-entity", str(character.id)}
+
+
+async def test_world_actor_spends_action_and_focus_on_success():
+    scenario = build_scenario(action_current=5.0, focus_current=3.0)
+    action_changes = collect(scenario.actor, ActionPointsChangedEvent)
+    focus_changes = collect(scenario.actor, FocusPointsChangedEvent)
+
+    class FocusHandler:
+        command_type = "focus-test"
+
+        def execute(self, _ctx, _command):
+            return HandlerResult(ok=True)
+
+    scenario.actor.register_handler(FocusHandler())
+    scenario.actor.submit_nowait(
+        _command(scenario, "focus-test", cost=CommandCost(action=2, focus=1), payload={})
+    )
+    await scenario.actor.tick(0.0)
+
+    assert action_changes[-1].current == pytest.approx(3.0)
+    assert focus_changes[-1].current == pytest.approx(2.0)
+
+
+async def test_world_actor_control_commands_and_controller_kinds():
+    scenario = build_scenario()
+    controller_events = collect(scenario.actor, CommandExecutedEvent)
+    changes = collect(scenario.actor, world_actor_module.ControllerChangedEvent)
+    rejected = collect(scenario.actor, CommandRejectedEvent)
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    assert (
+        scenario.actor.current_generation(scenario.character, parse_entity_id("entity_999"))
+        is None
+    )
+    assert (
+        scenario.actor._generation_current(character, _command(scenario, controller_id="bad"))
+        is False
+    )
+
+    discord = spawn_entity(
+        scenario.actor.world, [DiscordControllerComponent(discord_user_id=1, default_channel_id=2)]
+    )
+    mcp = spawn_entity(scenario.actor.world, [MCPControllerComponent(agent_id="agent")])
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    suspended = spawn_entity(
+        scenario.actor.world, [SuspendedControllerComponent(reason="already suspended")]
+    )
+    unknown = spawn_entity(scenario.actor.world, [IdentityComponent(name="Unknown", kind="test")])
+
+    assert scenario.actor._controller_kind(discord.id) == "discord"
+    assert scenario.actor._controller_kind(scenario.controller) == "llm"
+    assert scenario.actor._controller_kind(mcp.id) == "mcp"
+    assert scenario.actor._controller_kind(web.id) == "web"
+    assert scenario.actor._controller_kind(suspended.id) == "suspended"
+    assert scenario.actor._controller_kind(unknown.id) == "unknown"
+    assert (
+        scenario.actor._generation_current(
+            character, _command(scenario, controller_id=str(mcp.id))
+        )
+        is False
+    )
+    character.add_relationship(ControlledBy(generation=7), mcp.id)
+    assert (
+        scenario.actor._generation_current(
+            character,
+            _command(scenario, controller_id=str(mcp.id), controller_generation=7),
+        )
+        is True
+    )
+
+    scenario.actor.submit_nowait(
+        _command(
+            scenario,
+            "take-control",
+            payload={"controller_id": str(web.id)},
+            cost=CommandCost(action=99, focus=99),
+        )
+    )
+    await scenario.actor.tick(0.0)
+    assert controller_events[-1].command_type == "take-control"
+    assert changes[-1].controller_kind == "web"
+
+    scenario.actor.submit_nowait(
+        _command(
+            scenario,
+            "suspend",
+            payload={"controller_id": str(suspended.id), "reason": "away"},
+        )
+    )
+    await scenario.actor.tick(0.0)
+    assert character.has_component(SuspendedComponent)
+    assert changes[-1].controller_kind == "suspended"
+
+    scenario.actor.submit_nowait(
+        _command(scenario, "resume", payload={"controller_id": str(web.id)})
+    )
+    await scenario.actor.tick(0.0)
+    assert not character.has_component(SuspendedComponent)
+    assert changes[-1].controller_kind == "web"
+
+    scenario.actor.submit_nowait(
+        _command(scenario, "take-control", payload={"controller_id": "entity_999"})
+    )
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "controller does not exist"
+
+    character.add_component(DeadComponent(died_at_epoch=scenario.actor.epoch, cause="test"))
+    scenario.actor.submit_nowait(
+        _command(scenario, "take-control", payload={"controller_id": str(web.id)})
+    )
+    await scenario.actor.tick(0.0)
+    assert rejected[-1].reason == "character is dead"
+
+    other_suspended = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="Suspended", kind="controller")]
+    )
+    generation = scenario.actor.suspend(scenario.character, other_suspended.id)
+    assert generation >= 0
+    assert other_suspended.has_component(SuspendedControllerComponent)
 
 
 async def test_carried_weight_updates_load_and_reduces_speed_when_over_capacity():
