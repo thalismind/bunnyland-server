@@ -32,6 +32,7 @@ from bunnyland.llm_agents import (
     command_from_tool_call,
     did_you_mean,
     name_candidates,
+    natural_language,
     parse_natural_command,
     resolve_reference,
     resolve_reference_args,
@@ -260,6 +261,85 @@ def test_parse_natural_command_returns_none_for_ambiguous_text():
     assert parse_natural_command("maybe Hazel knows") is None
 
 
+def test_parse_natural_command_covers_alternate_command_shapes(monkeypatch):
+    assert parse_natural_command("go old gate") == ToolCall("move", {"exit_id": "old gate"})
+    assert parse_natural_command("north") == ToolCall("move", {"direction": "north"})
+    assert parse_natural_command("drop brass key") == ToolCall("drop", {"item_id": "brass key"})
+    assert parse_natural_command("put brass key into oak chest") == ToolCall(
+        "put", {"item_id": "brass key", "target_container_id": "oak chest"}
+    )
+    assert parse_natural_command("put brass key onto oak shelf") == ToolCall(
+        "put", {"item_id": "brass key", "target_container_id": "oak shelf"}
+    )
+    assert parse_natural_command("put brass key away") == ToolCall(
+        "drop", {"item_id": "brass key away"}
+    )
+    assert parse_natural_command("put brass key in") == ToolCall(
+        "drop", {"item_id": "brass key in"}
+    )
+    assert parse_natural_command("use brass key with old lock") == ToolCall(
+        "use", {"target_id": "brass key", "tool_id": "old lock"}
+    )
+    assert parse_natural_command("use brass key") == ToolCall("use", {"target_id": "brass key"})
+    monkeypatch.setattr(natural_language, "_parse_definition_pattern", lambda *_: None)
+    assert parse_natural_command("enchant moss charm with Mend Moss") == ToolCall(
+        "enchant_item", {"item_id": "moss charm", "spell_id": "Mend Moss"}
+    )
+    assert parse_natural_command("cast ember charm at Hazel") == ToolCall(
+        "cast_spell", {"spell_id": "ember charm", "target_id": "Hazel"}
+    )
+    assert parse_natural_command("cast ember charm on") == ToolCall(
+        "cast_spell", {"spell_id": "ember charm on"}
+    )
+    assert parse_natural_command("cast ember charm") == ToolCall(
+        "cast_spell", {"spell_id": "ember charm"}
+    )
+    assert parse_natural_command("plant carrot seed into garden bed") == ToolCall(
+        "plant", {"seed_id": "carrot seed", "soil_id": "garden bed"}
+    )
+    assert parse_natural_command("fertilize garden bed with compost") == ToolCall(
+        "fertilize", {"soil_id": "garden bed", "fertilizer_id": "compost"}
+    )
+    assert parse_natural_command("eat stew") == ToolCall("eat", {"item_id": "stew"})
+    assert parse_natural_command("drink spring") == ToolCall("drink", {"source_id": "spring"})
+    assert parse_natural_command("remember basin") == ToolCall("remember", {"query": "basin"})
+    assert parse_natural_command("write hello on slate") == ToolCall(
+        "write", {"target_id": "slate", "text": "hello"}
+    )
+
+    monkeypatch.setattr(natural_language, "_split", lambda _: [])
+    assert parse_natural_command("not empty") is None
+
+
+def test_parse_natural_command_rejects_incomplete_command_shapes():
+    assert parse_natural_command("go") is None
+    assert parse_natural_command("drop") is None
+    assert parse_natural_command("use brass key with") == ToolCall(
+        "use", {"target_id": "brass key with"}
+    )
+    assert parse_natural_command("enchant moss charm with Mend Moss") == ToolCall(
+        "enchant_item", {"item_id": "moss charm", "spell_id": "Mend Moss"}
+    )
+    assert parse_natural_command("enchant moss charm") is None
+    assert parse_natural_command("enchant moss charm with") is None
+    assert parse_natural_command("plant carrot seed") is None
+    assert parse_natural_command("plant carrot seed in") is None
+    assert parse_natural_command("fertilize garden bed") is None
+    assert parse_natural_command("fertilize garden bed with") is None
+    assert parse_natural_command("buy radish seeds") is None
+    assert parse_natural_command("buy radish seeds near Marigold") is None
+    assert parse_natural_command("buy radish seeds from") is None
+    assert parse_natural_command("sell radish seeds") is None
+    assert parse_natural_command("sell radish seeds near Marigold") is None
+    assert parse_natural_command("sell radish seeds to") is None
+    assert parse_natural_command("charge rent Hazel twelve") is None
+    assert parse_natural_command("eat") is None
+    assert parse_natural_command("drink") is None
+    assert parse_natural_command("remember") is None
+    assert parse_natural_command("write hello") is None
+    assert parse_natural_command("write hello on") is None
+
+
 def test_message_to_history_uses_model_dump_or_message_attributes():
     class DumpableMessage:
         def model_dump(self, **kwargs):
@@ -318,6 +398,17 @@ def test_parse_natural_command_rejects_adjacent_pattern_slots():
     )
 
     assert parse_natural_command("give carrot Hazel", (definition,)) is None
+
+
+def test_parse_natural_command_ignores_patterns_without_slots():
+    definition = ActionDefinition(
+        command_type="wave",
+        tool_name="wave",
+        arguments={},
+        natural_patterns=(ActionPattern("wave"),),
+    )
+
+    assert parse_natural_command("wave", (definition,)) is None
 
 
 def test_scripted_agent_replays_then_waits():
