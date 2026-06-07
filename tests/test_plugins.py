@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType
+
 import pytest
-from conftest import build_scenario
+from conftest import build_scenario, install_plugin_module
 
 from bunnyland.core import (
     DEFAULT_ACTION_DEFINITIONS,
@@ -12,6 +15,7 @@ from bunnyland.core import (
     ActionExample,
     ActionPattern,
     CommandCost,
+    Contains,
     HandlerContext,
     HandlerResult,
     Lane,
@@ -25,12 +29,15 @@ from bunnyland.core.handlers import ok
 from bunnyland.llm_agents.tools import tool_schemas
 from bunnyland.plugins import (
     CommandContribution,
+    ContentContribution,
     DependencyContribution,
     EcsContribution,
     Plugin,
     PluginError,
     apply_plugins,
     bunnyland_plugins,
+    load_and_apply,
+    load_modules,
     resolve_order,
     select,
 )
@@ -56,6 +63,7 @@ from bunnyland.plugins.builtin import (
     VOIDSIM,
     WORLDGEN,
 )
+from bunnyland.plugins.contributions import collect_content_items, collect_ecs_types
 
 
 def test_builtin_plugins_declared():
@@ -97,6 +105,39 @@ def test_collect_prompt_fragments_gathers_providers():
     # needs, environment, and social each contribute one.
     assert len(providers) >= 3
     assert all(callable(p) for p in providers)
+
+
+def test_collect_content_items_preserves_plugin_order():
+    first = object()
+    second = object()
+    plugins = [
+        Plugin(
+            id="one",
+            name="One",
+            content=ContentContribution(prompt_fragments=(first,)),
+        ),
+        Plugin(
+            id="two",
+            name="Two",
+            content=ContentContribution(prompt_fragments=(second,)),
+        ),
+    ]
+
+    assert collect_content_items(plugins, "prompt_fragments") == (first, second)
+    assert collect_content_items([], "prompt_fragments") == ()
+
+
+def test_collect_ecs_types_preserves_plugin_order():
+    plugins = [
+        Plugin(
+            id="one",
+            name="One",
+            ecs=EcsContribution(components=(MemoryProfileComponent,), edges=(Contains,)),
+        )
+    ]
+
+    assert collect_ecs_types(plugins) == ((MemoryProfileComponent,), (Contains,))
+    assert collect_ecs_types([]) == ((), ())
 
 
 def test_worldgen_plugin_contributes_named_generators():
@@ -273,14 +314,7 @@ def test_builtin_handler_command_types_are_in_the_shared_action_catalog():
 
 
 def test_imported_plugin_ids_are_namespaced_and_selectable_by_short_id(monkeypatch):
-    import sys
-    from types import ModuleType
-
-    from bunnyland.plugins import load_modules
-
-    module = ModuleType("module_foo")
-    module.bunnyland_plugins = lambda: [Plugin(id="bar", name="Bar")]
-    monkeypatch.setitem(sys.modules, "module_foo", module)
+    install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
 
     plugins = load_modules(["module_foo"])
 
@@ -289,27 +323,62 @@ def test_imported_plugin_ids_are_namespaced_and_selectable_by_short_id(monkeypat
 
 
 def test_imported_plugin_dependencies_are_namespaced(monkeypatch):
-    import sys
-    from types import ModuleType
-
-    from bunnyland.plugins import load_modules
-
-    module = ModuleType("module_foo")
-    module.bunnyland_plugins = lambda: [
-        Plugin(id="base", name="Base"),
-        Plugin(
-            id="bar",
-            name="Bar",
-            dependencies=DependencyContribution(requires=("base",), recommends=("extra",)),
-        ),
-    ]
-    monkeypatch.setitem(sys.modules, "module_foo", module)
+    install_plugin_module(
+        monkeypatch,
+        "module_foo",
+        [
+            Plugin(id="base", name="Base"),
+            Plugin(
+                id="bar",
+                name="Bar",
+                dependencies=DependencyContribution(requires=("base",), recommends=("extra",)),
+            ),
+        ],
+    )
 
     plugins = load_modules(["module_foo"])
     bar = next(plugin for plugin in plugins if plugin.id == "module_foo.bar")
 
     assert bar.dependencies.requires == ("module_foo.base",)
     assert bar.dependencies.recommends == ("module_foo.extra",)
+
+
+def test_load_modules_requires_entrypoint(monkeypatch):
+    module = ModuleType("module_empty")
+    monkeypatch.setitem(sys.modules, "module_empty", module)
+
+    with pytest.raises(PluginError, match="has no bunnyland_plugins"):
+        load_modules(["module_empty"])
+
+
+def test_short_plugin_id_must_not_be_ambiguous(monkeypatch):
+    install_plugin_module(monkeypatch, "module_one", [Plugin(id="bar", name="Bar One")])
+    install_plugin_module(monkeypatch, "module_two", [Plugin(id="bar", name="Bar Two")])
+
+    plugins = load_modules(["module_one", "module_two"])
+
+    with pytest.raises(PluginError, match="ambiguous plugin id"):
+        select(plugins, ["bar"])
+
+
+def test_load_and_apply_imports_selects_and_applies_plugin(monkeypatch):
+    install_plugin_module(
+        monkeypatch,
+        "module_wave",
+        [
+            Plugin(
+                id="wave",
+                name="Wave",
+                commands=CommandContribution(action_handlers=(_WaveHandler,)),
+            )
+        ],
+    )
+    actor = WorldActor()
+
+    applied = load_and_apply(actor, modules=["module_wave"], enabled_ids=["wave"])
+
+    assert [plugin.id for plugin in applied] == ["module_wave.wave"]
+    assert actor.action_definitions()[0].command_type == "wave"
 
 
 async def test_applying_core_verbs_enables_move():

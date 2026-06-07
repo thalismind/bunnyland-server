@@ -13,6 +13,7 @@ from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING
 
 from ..core.actions import action_definition_for_command_type, inferred_action_definition
+from .contributions import collect_content_items
 from .model import Plugin
 
 if TYPE_CHECKING:
@@ -109,7 +110,7 @@ def resolve_order(plugins: Sequence[Plugin]) -> list[Plugin]:
 
 def collect_prompt_fragments(plugins: Sequence[Plugin]) -> list:
     """Gather all prompt fragment providers contributed by the given plugins (spec 16.3)."""
-    return [provider for plugin in plugins for provider in plugin.content.prompt_fragments]
+    return list(collect_content_items(plugins, "prompt_fragments"))
 
 
 def _instantiate(item):

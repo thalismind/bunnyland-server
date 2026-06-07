@@ -472,10 +472,11 @@ async def recursive_generator(
 
 def collect_generators(plugins: Iterable) -> dict[str, WorldGenerator]:
     """Build a name -> generator registry from the enabled plugins' contributions."""
+    from ..plugins.contributions import collect_content_items
+
     registry: dict[str, WorldGenerator] = {}
-    for plugin in plugins:
-        for generator in plugin.content.world_generators:
-            registry[generator.name] = generator
+    for generator in collect_content_items(plugins, "world_generators"):
+        registry[generator.name] = generator
     return registry
 
 

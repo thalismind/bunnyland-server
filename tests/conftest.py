@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from types import ModuleType
+from typing import Any
 
 import pytest
 from relics import EntityId
@@ -84,3 +87,9 @@ def build_scenario(
 @pytest.fixture
 def scenario() -> Scenario:
     return build_scenario()
+
+
+def install_plugin_module(monkeypatch, name: str, plugins: list[Any]) -> None:
+    module = ModuleType(name)
+    module.bunnyland_plugins = lambda: plugins
+    monkeypatch.setitem(sys.modules, name, module)

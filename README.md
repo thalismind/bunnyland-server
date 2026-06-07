@@ -209,9 +209,13 @@ fossil cloning, eggs, hatching, and kaiju incidents; it does not have a demo gen
 ## Development
 
 ```bash
-uv run pytest
+uv run -m pytest
 uv run ruff check src tests
 ```
+
+Use `uv run -m pytest` instead of `uv run pytest`; with some `uv` environments the console
+entrypoint can run without the same import path as the module form, which shows up as
+missing installed dependencies such as `relics`.
 
 Optional live LLM checks are marked and skipped by default. They load `.env` before
 checking credentials. To exercise real Ollama and OpenRouter SDK calls, install the `llm`
@@ -219,7 +223,7 @@ extra, set `BUNNYLAND_LIVE_LLM=1` plus `OLLAMA_HOST` or `OLLAMA_CLOUD_API_KEY` a
 `OPENROUTER_API_KEY`, then run:
 
 ```bash
-uv run pytest -m live_llm
+uv run -m pytest -m live_llm
 ```
 
 `tests/test_e2e.py` is the best place to see the whole stack exercised: generate a world,

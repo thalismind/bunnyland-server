@@ -21,6 +21,7 @@ from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_e
 from ..core.edges import ContainmentMode, Contains, ControlledBy
 from ..core.events import DomainEvent
 from ..persistence import type_registries
+from ..plugins.contributions import collect_content_items
 from .model import (
     AddComponentPatch,
     AddEntityPatch,
@@ -387,16 +388,15 @@ def load_script_state(path: str | Path) -> ScriptState:
 
 def collect_scripts(plugins: Iterable) -> list[ScriptDefinition]:
     scripts: list[ScriptDefinition] = []
-    for plugin in plugins:
-        for item in plugin.content.scripts:
-            if isinstance(item, ScriptDefinition):
-                scripts.append(item)
-            elif isinstance(item, (str, Path)):
-                scripts.append(load_script(item))
-            elif isinstance(item, Mapping):
-                scripts.append(ScriptDefinition.model_validate(item))
-            else:
-                raise ScriptRuntimeError(f"unsupported script contribution {item!r}")
+    for item in collect_content_items(plugins, "scripts"):
+        if isinstance(item, ScriptDefinition):
+            scripts.append(item)
+        elif isinstance(item, (str, Path)):
+            scripts.append(load_script(item))
+        elif isinstance(item, Mapping):
+            scripts.append(ScriptDefinition.model_validate(item))
+        else:
+            raise ScriptRuntimeError(f"unsupported script contribution {item!r}")
     return scripts
 
 

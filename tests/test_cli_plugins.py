@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from types import ModuleType
 
 import pytest
+from conftest import install_plugin_module
 
 import bunnyland.cli as cli
 from bunnyland.cli import (
@@ -43,14 +43,8 @@ from bunnyland.plugins.builtin import (
 )
 
 
-def _install_module(monkeypatch, name: str, plugins: list[Plugin]) -> None:
-    module = ModuleType(name)
-    module.bunnyland_plugins = lambda: plugins
-    monkeypatch.setitem(sys.modules, name, module)
-
-
 def test_select_plugins_records_imported_module_namespace(monkeypatch):
-    _install_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
+    install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
 
     selected = select_plugins(["module_foo"], ["bar"])
 
@@ -147,7 +141,7 @@ def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
 
 
 def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):
-    _install_module(
+    install_plugin_module(
         monkeypatch,
         "module_foo",
         [
@@ -507,7 +501,7 @@ def test_configure_memory_backend_can_install_chroma(monkeypatch, tmp_path):
 
 
 def test_cli_save_records_namespaced_imported_plugin(monkeypatch, tmp_path):
-    _install_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
+    install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
     path = tmp_path / "world.json"
 
     result = main(

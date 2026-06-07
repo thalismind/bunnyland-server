@@ -32,6 +32,7 @@ from relics import Component, Edge
 from .core.world_actor import WorldActor
 from .persistence_yaml import YAMLPersistenceDriver
 from .plugins import PluginError, apply_plugins
+from .plugins.contributions import collect_ecs_types
 
 if TYPE_CHECKING:
     from .plugins.model import Plugin
@@ -109,11 +110,11 @@ def type_registries(
                 edges[obj.__name__] = obj
             elif issubclass(obj, Component) and obj is not Component:
                 components[obj.__name__] = obj
-    for plugin in plugins or ():
-        for component in plugin.ecs.components:
-            components[component.__name__] = component
-        for edge in plugin.ecs.edges:
-            edges[edge.__name__] = edge
+    plugin_components, plugin_edges = collect_ecs_types(plugins or ())
+    for component in plugin_components:
+        components[component.__name__] = component
+    for edge in plugin_edges:
+        edges[edge.__name__] = edge
     return components, edges
 
 
