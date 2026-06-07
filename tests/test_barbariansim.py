@@ -10,13 +10,17 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DownedComponent,
+    HandlerContext,
     HealthComponent,
     IdentityComponent,
     Lane,
     PortableComponent,
+    RoomComponent,
     TemperatureComponent,
+    Wearing,
     build_submitted_command,
     container_of,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import (
@@ -149,6 +153,18 @@ def _cmd(scenario, command_type, **payload):
     )
 
 
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
 async def test_attack_is_blocked_when_pvp_not_enabled():
     scenario = build_scenario()
     _install(scenario.actor, enabled=frozenset())
@@ -181,6 +197,114 @@ async def test_attack_damage_respects_weapon_armor_and_defense():
     assert attacked[0].damage == 5.0
     assert target_entity.get_component(HealthComponent).current == 15.0
     assert not target_entity.has_component(DefendingComponent)
+
+
+async def test_attack_rejects_unreachable_or_non_weapon_weapon_ids():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _target(scenario)
+    distant_weapon = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Far Axe", kind="weapon"),
+            PortableComponent(can_pick_up=True),
+            WeaponComponent(damage=10.0, damage_type="slash", lethal_capable=True),
+        ],
+    )
+    non_weapon = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Rock", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), non_weapon.id
+    )
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "attack", target_id=str(target), weapon_id=str(distant_weapon.id))
+    )
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(
+        _cmd(scenario, "attack", target_id=str(target), weapon_id=str(non_weapon.id))
+    )
+    await scenario.actor.tick(0.0)
+
+    assert [event.reason for event in rejects] == [
+        "weapon is not usable",
+        "weapon is not usable",
+    ]
+    assert scenario.actor.world.get_entity(target).get_component(HealthComponent).current == 20.0
+
+
+async def test_attack_damage_accumulates_worn_armor_rating():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _target(scenario, health=20.0, armor=2.0)
+    armor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="hide vest", kind="armor"),
+            PortableComponent(can_pick_up=True),
+            ArmorComponent(rating=3.0),
+        ],
+    )
+    target_entity = scenario.actor.world.get_entity(target)
+    target_entity.add_relationship(Contains(mode=ContainmentMode.INVENTORY), armor.id)
+    target_entity.add_relationship(Wearing(slot="torso"), armor.id)
+    weapon = _weapon(scenario, damage=10.0)
+    attacked: list[CharacterAttackedEvent] = []
+    scenario.actor.bus.subscribe(CharacterAttackedEvent, attacked.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "attack", target_id=str(target), weapon_id=str(weapon))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert attacked[0].damage == 5.0
+    assert target_entity.get_component(HealthComponent).current == 15.0
+
+
+async def test_attack_rejects_bad_targets_before_damage_resolution():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    missing_target = "entity_999"
+    downed_target = _target(scenario)
+    scenario.actor.world.get_entity(downed_target).add_component(
+        DownedComponent(downed_at_epoch=0, cause="test")
+    )
+    distant_target = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Far Ash", kind="character"),
+            CharacterComponent(species="bunny"),
+            HealthComponent(current=20.0, maximum=20.0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant_target.id
+    )
+    no_health_target = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Training Dummy", kind="character"),
+            CharacterComponent(species="dummy"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), no_health_target.id
+    )
+    for target_id, reason in (
+        ("not-an-id", "invalid attacker or target id"),
+        (missing_target, "target does not exist"),
+        (str(downed_target), "target cannot fight"),
+        (str(distant_target.id), "target is not present"),
+        (str(no_health_target.id), "target has no health"),
+    ):
+        result = AttackHandler().execute(ctx, _cmd(scenario, "attack", target_id=target_id))
+        assert result.ok is False
+        assert result.reason == reason
 
 
 async def test_stamina_regenerates_before_attack_and_spends_on_combat():
@@ -316,6 +440,46 @@ async def test_temperature_resistance_and_shelter_prevent_exposure_damage():
     assert damage == []
 
 
+async def test_character_shelter_and_indoor_room_buffer_temperature():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    replace_component(room, RoomComponent(title="Mosslit Burrow", indoor=True))
+    room.add_component(TemperatureComponent(celsius=40.0))
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=20.0, maximum=20.0))
+    character.add_component(TemperatureExposureComponent())
+    character.add_component(ShelterComponent(temperature_buffer=6.0))
+    damage: list[ExposureDamageEvent] = []
+    scenario.actor.bus.subscribe(ExposureDamageEvent, damage.append)
+
+    await scenario.actor.tick(HOUR)
+
+    exposure = character.get_component(TemperatureExposureComponent)
+    assert exposure.heat == 0.0
+    assert character.get_component(HealthComponent).current == 20.0
+    assert damage == []
+
+
+async def test_temperature_exposure_recovers_without_ambient_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains,
+        scenario.character,
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(TemperatureExposureComponent(heat=6.0, cold=3.0))
+
+    await scenario.actor.tick(HOUR)
+
+    exposure = character.get_component(TemperatureExposureComponent)
+    assert exposure.heat == 2.0
+    assert exposure.cold == 0.0
+    assert exposure.heat_danger is False
+    assert exposure.cold_danger is False
+
+
 async def test_poison_progresses_damages_health_and_can_be_treated():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -425,6 +589,277 @@ async def test_challenge_emits_roleplay_event_without_pvp_gate():
 
     assert challenges[0].target_id == str(target)
     assert challenges[0].terms == "first touch"
+
+
+def test_barbariansim_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = _target(scenario)
+    downed_target = _target(scenario)
+    scenario.actor.world.get_entity(downed_target).add_component(
+        DownedComponent(downed_at_epoch=0, cause="test")
+    )
+    distant_target = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Far Ash", kind="character"),
+            CharacterComponent(species="bunny"),
+            HealthComponent(current=20.0, maximum=20.0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant_target.id
+    )
+    unreachable_target = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="hidden cache", kind="cache")],
+    )
+    non_durable_item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="plain rock", kind="item"), PortableComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), non_durable_item.id
+    )
+    durable_item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="cracked axe", kind="weapon"),
+            PortableComponent(),
+            DurabilityComponent(current=1.0, maximum=2.0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), durable_item.id
+    )
+    distant_item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far coin", kind="item"),
+            PortableComponent(),
+            DurabilityComponent(current=1.0, maximum=2.0),
+        ],
+    )
+    inventory_item = _target_item(scenario, target, name="Coin")
+    stuck_item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="stuck charm", kind="item"),
+            PortableComponent(can_pick_up=False),
+        ],
+    )
+    scenario.actor.world.get_entity(target).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), stuck_item.id
+    )
+
+    cases = [
+        (
+            DefendHandler(),
+            _handler_cmd(scenario, "defend", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            ChallengeHandler(),
+            _handler_cmd(scenario, "challenge", target_id="not-an-id"),
+            "invalid challenger or target id",
+        ),
+        (
+            ChallengeHandler(),
+            _handler_cmd(scenario, "challenge", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            ChallengeHandler(),
+            _handler_cmd(scenario, "challenge", target_id=str(distant_target.id)),
+            "target is not present",
+        ),
+        (
+            FortifyHandler(),
+            _handler_cmd(scenario, "fortify", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            FortifyHandler(),
+            _handler_cmd(scenario, "fortify", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            FortifyHandler(),
+            _handler_cmd(scenario, "fortify", target_id=str(unreachable_target.id)),
+            "target is not reachable",
+        ),
+        (
+            FortifyHandler(),
+            _handler_cmd(scenario, "fortify", strength=0),
+            "fortification strength must be positive",
+        ),
+        (
+            RaidHandler(),
+            _handler_cmd(scenario, "raid", target_id="not-an-id"),
+            "invalid raider or target id",
+        ),
+        (
+            RaidHandler(),
+            _handler_cmd(scenario, "raid", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            RaidHandler(),
+            _handler_cmd(scenario, "raid", target_id=str(unreachable_target.id)),
+            "target is not reachable",
+        ),
+        (
+            RaidHandler(),
+            _handler_cmd(scenario, "raid", target_id=str(target), intensity=0),
+            "raid intensity must be positive",
+        ),
+        (
+            RepairItemHandler(),
+            _handler_cmd(scenario, "repair-item", item_id="not-an-id"),
+            "invalid character or item id",
+        ),
+        (
+            RepairItemHandler(),
+            _handler_cmd(scenario, "repair-item", item_id="entity_999"),
+            "item does not exist",
+        ),
+        (
+            RepairItemHandler(),
+            _handler_cmd(scenario, "repair-item", item_id=str(distant_item.id)),
+            "item is not reachable",
+        ),
+        (
+            RepairItemHandler(),
+            _handler_cmd(scenario, "repair-item", item_id=str(non_durable_item.id)),
+            "item has no durability",
+        ),
+        (
+            RepairItemHandler(),
+            _handler_cmd(scenario, "repair-item", item_id=str(durable_item.id), amount=0),
+            "repair amount must be positive",
+        ),
+        (
+            PoisonCharacterHandler(),
+            _handler_cmd(scenario, "poison-character", target_id="not-an-id"),
+            "invalid actor or target id",
+        ),
+        (
+            PoisonCharacterHandler(),
+            _handler_cmd(scenario, "poison-character", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            PoisonCharacterHandler(),
+            _handler_cmd(scenario, "poison-character", target_id=str(distant_target.id)),
+            "target is not present",
+        ),
+        (
+            PoisonCharacterHandler(),
+            _handler_cmd(scenario, "poison-character", target_id=str(target), severity=0),
+            "poison severity must be positive",
+        ),
+        (
+            TreatPoisonHandler(),
+            _handler_cmd(scenario, "treat-poison", target_id="not-an-id"),
+            "invalid actor or target id",
+        ),
+        (
+            TreatPoisonHandler(),
+            _handler_cmd(scenario, "treat-poison", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            TreatPoisonHandler(),
+            _handler_cmd(scenario, "treat-poison", target_id=str(distant_target.id)),
+            "target is not present",
+        ),
+        (
+            TreatPoisonHandler(),
+            _handler_cmd(scenario, "treat-poison", target_id=str(target)),
+            "target is not poisoned",
+        ),
+        (
+            GainCorruptionHandler(),
+            _handler_cmd(scenario, "gain-corruption", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            GainCorruptionHandler(),
+            _handler_cmd(scenario, "gain-corruption", amount=0),
+            "corruption amount must be positive",
+        ),
+        (
+            CleanseCorruptionHandler(),
+            _handler_cmd(scenario, "cleanse-corruption", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            CleanseCorruptionHandler(),
+            _handler_cmd(scenario, "cleanse-corruption"),
+            "character is not corrupted",
+        ),
+        (
+            PickpocketHandler(),
+            _handler_cmd(
+                scenario,
+                "pickpocket",
+                target_id="not-an-id",
+                item_id=str(inventory_item),
+            ),
+            "invalid thief, target, or item id",
+        ),
+        (
+            PickpocketHandler(),
+            _handler_cmd(
+                scenario,
+                "pickpocket",
+                target_id="entity_999",
+                item_id=str(inventory_item),
+            ),
+            "target or item does not exist",
+        ),
+        (
+            PickpocketHandler(),
+            _handler_cmd(
+                scenario,
+                "pickpocket",
+                target_id=str(downed_target),
+                item_id=str(inventory_item),
+            ),
+            "target cannot be pickpocketed",
+        ),
+        (
+            PickpocketHandler(),
+            _handler_cmd(
+                scenario,
+                "pickpocket",
+                target_id=str(distant_target.id),
+                item_id=str(inventory_item),
+            ),
+            "target is not present",
+        ),
+        (
+            PickpocketHandler(),
+            _handler_cmd(
+                scenario,
+                "pickpocket",
+                target_id=str(target),
+                item_id=str(durable_item.id),
+            ),
+            "item is not in target inventory",
+        ),
+        (
+            PickpocketHandler(),
+            _handler_cmd(scenario, "pickpocket", target_id=str(target), item_id=str(stuck_item.id)),
+            "item cannot be taken",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
 
 
 async def test_fortify_current_room_and_raid_damage_fortification():
