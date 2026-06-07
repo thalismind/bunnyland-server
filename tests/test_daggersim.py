@@ -147,6 +147,7 @@ from bunnyland.mechanics.daggersim import (
     ViewMapHandler,
     WereformComponent,
     WithdrawHandler,
+    _apply_spell_effect,
     daggersim_fragments,
     install_daggersim,
 )
@@ -2215,6 +2216,43 @@ async def test_create_and_cast_custom_spell_heals_target_health():
     assert container_of(spell) == scenario.character
     assert character.get_component(HealthComponent).current == 7.0
     assert cast[0].target_health == 7.0
+
+
+def test_apply_spell_effect_handles_health_branches():
+    scenario = build_scenario()
+    target = scenario.actor.world.get_entity(scenario.character)
+    no_health = spawn_entity(scenario.actor.world, [IdentityComponent(name="rock", kind="item")])
+
+    assert (
+        _apply_spell_effect(
+            no_health,
+            CustomSpellComponent(spell_name="Mend", effect_type="heal", magnitude=4.0),
+        )
+        is None
+    )
+
+    target.add_component(HealthComponent(current=8.0, maximum=10.0))
+    assert (
+        _apply_spell_effect(
+            target,
+            CustomSpellComponent(spell_name="Mend", effect_type="heal", magnitude=4.0),
+        )
+        == 10.0
+    )
+    assert (
+        _apply_spell_effect(
+            target,
+            EnchantedItemComponent(spell_name="Bolt", effect_type="harm", magnitude=12.0),
+        )
+        == 0.0
+    )
+    assert (
+        _apply_spell_effect(
+            target,
+            CustomSpellComponent(spell_name="Glow", effect_type="light", magnitude=1.0),
+        )
+        == 0.0
+    )
 
 
 async def test_enchant_item_with_created_spell_and_cast_from_item():

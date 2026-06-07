@@ -16,6 +16,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     ControlledBy,
+    DescriptionComponent,
     DoorComponent,
     ExitTo,
     IdentityComponent,
@@ -63,6 +64,7 @@ from bunnyland.server.patches import WorldPatchError, apply_world_patch
 from bunnyland.server.runtime import run_loop_with_api
 from bunnyland.server.schema import world_schema
 from bunnyland.server.worldgen import (
+    _room_description,
     generate_character_patch,
     generate_event_patch,
     generate_item_patch,
@@ -258,6 +260,26 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
     assert library.json() == load_content_library().model_dump(mode="json")
     assert recent.status_code == 200
     assert recent.json() == {"events": []}
+
+
+def test_room_description_prefers_long_then_short_description(scenario):
+    world = scenario.actor.world
+    bare = spawn_entity(world, [RoomComponent(title="Bare Room")])
+    short = spawn_entity(
+        world,
+        [RoomComponent(title="Short Room"), DescriptionComponent(short="brief")],
+    )
+    long = spawn_entity(
+        world,
+        [
+            RoomComponent(title="Long Room"),
+            DescriptionComponent(short="brief", long="detailed"),
+        ],
+    )
+
+    assert _room_description(bare) == "Bare Room"
+    assert _room_description(short) == "Short Room - brief"
+    assert _room_description(long) == "Long Room - detailed"
 
 
 def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):

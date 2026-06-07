@@ -58,6 +58,7 @@ from bunnyland.discord.bot import (
     QUEUED_REACTION,
     DiscordBot,
     _minutes_to_timeout_seconds,
+    _split,
 )
 from bunnyland.discord.claim import discord_controlled_character
 from bunnyland.memory import InMemoryStore, install_memory
@@ -296,6 +297,11 @@ def test_minutes_to_timeout_seconds_normalizes_and_rejects_bad_values():
     for value in ("not-a-number", 0):
         with pytest.raises(ValueError):
             _minutes_to_timeout_seconds(value)
+
+
+def test_split_falls_back_when_shell_quoting_is_invalid():
+    assert _split('say "hello there"') == ["say", "hello there"]
+    assert _split('say "unterminated') == ["say", '"unterminated']
 
 
 def test_discord_message_filters_require_allowed_guild_and_channel():

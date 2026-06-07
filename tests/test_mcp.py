@@ -535,6 +535,9 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     assert registered_low_server["unsubscribe_resource"].__name__ == "unsubscribe_resource"
     asyncio.run(registered_low_server["unsubscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
 
+    with pytest.raises(RuntimeError, match="agent is not controlling"):
+        registered_tools["agent_prompt"](agent_id="missing")
+
     patch_world_admin = registered_tools["patch_world_admin"]
     with pytest.raises(RuntimeError, match="invalid MCP admin token"):
         asyncio.run(patch_world_admin(admin_token=None, operations=[]))

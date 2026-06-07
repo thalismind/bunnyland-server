@@ -21,6 +21,7 @@ from bunnyland.core import (
     SuspendedComponent,
     WakeHandler,
     build_submitted_command,
+    parse_entity_id,
     replace_component,
     spawn_entity,
 )
@@ -85,6 +86,7 @@ from bunnyland.mechanics.lifesim import (
     PromoteBusinessHandler,
     PromotionEarnedEvent,
     QuitJobHandler,
+    RelationshipStatus,
     ReproductiveComponent,
     ReputationComponent,
     ResolveBirthHandler,
@@ -107,6 +109,8 @@ from bunnyland.mechanics.lifesim import (
     WellRestedEvent,
     WitnessRomanceHandler,
     WorkShiftCompletedEvent,
+    _routine_for_activity,
+    _status_edge,
     children_of,
     configure_lifesim_aging,
     install_lifesim,
@@ -2151,6 +2155,38 @@ def test_lifesim_fragments_describe_parents():
     fragments = lifesim_fragments(scenario.actor.world, scenario.actor.world.get_entity(child))
 
     assert any("Your parents: Juniper" in line for line in fragments)
+
+
+def test_status_edge_and_routine_lookup_cover_match_and_miss_paths():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    target = _co_parent(scenario)
+    matching = RelationshipStatus(status="friendly", intensity=2.0, since_epoch=1)
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Poppy", kind="character"), CharacterComponent()],
+    )
+    wrong_routine = spawn_entity(
+        scenario.actor.world,
+        [RoutineComponent(activity="sleep", next_due_epoch=10)],
+    )
+    matching_routine = spawn_entity(
+        scenario.actor.world,
+        [RoutineComponent(activity="tend shop", next_due_epoch=20)],
+    )
+
+    character.add_relationship(RelationshipStatus(status="awkward", since_epoch=0), other.id)
+    character.add_relationship(matching, target)
+    character.add_relationship(HasRoutine(), wrong_routine.id)
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(HasRoutine, {})[
+        parse_entity_id("entity_999")
+    ] = HasRoutine()
+    character.add_relationship(HasRoutine(), matching_routine.id)
+
+    assert _status_edge(character, target) == matching
+    assert _status_edge(character, parse_entity_id("entity_999")) is None
+    assert _routine_for_activity(scenario.actor.world, character, "tend shop") == matching_routine
+    assert _routine_for_activity(scenario.actor.world, character, "garden") is None
 
 
 def test_kinship_queries_return_parent_child_partner_and_sibling_labels():

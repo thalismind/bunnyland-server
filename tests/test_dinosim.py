@@ -42,6 +42,7 @@ from bunnyland.mechanics.dinosim import (
     SpeciesComponent,
     SpeciesIdentificationComponent,
     _entity_room_id,
+    _species_name,
     dinosim_fragments,
     install_dinosim,
 )
@@ -113,6 +114,43 @@ def test_entity_room_id_returns_containing_room_or_none():
 
     assert _entity_room_id(character) == str(scenario.room_a)
     assert _entity_room_id(loose) is None
+
+
+def test_species_name_prefers_specific_components():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    species = spawn_entity(
+        world,
+        [
+            SpeciesComponent(common_name="ankylosaurus"),
+            DinosaurComponent(species_name="wrong"),
+            CharacterComponent(species="also wrong"),
+            IdentityComponent(name="still wrong", kind="creature"),
+        ],
+    )
+    dinosaur = spawn_entity(
+        world,
+        [
+            DinosaurComponent(species_name="velociraptor"),
+            CharacterComponent(species="wrong"),
+            IdentityComponent(name="also wrong", kind="creature"),
+        ],
+    )
+    character = spawn_entity(
+        world,
+        [
+            CharacterComponent(species="iguanodon"),
+            IdentityComponent(name="wrong", kind="character"),
+        ],
+    )
+    named = spawn_entity(world, [IdentityComponent(name="mystery lizard", kind="creature")])
+    unknown = spawn_entity(world)
+
+    assert _species_name(species) == "ankylosaurus"
+    assert _species_name(dinosaur) == "velociraptor"
+    assert _species_name(character) == "iguanodon"
+    assert _species_name(named) == "mystery lizard"
+    assert _species_name(unknown) == "unknown reptile"
 
 
 async def test_fossil_identification_extracts_sample_and_prepares_clone_egg():

@@ -44,6 +44,7 @@ from bunnyland.llm_agents.agent import (
     OllamaAgent,
     _call_provider_with_retries,
     _message_to_history,
+    _openrouter_arguments,
     normalize_model,
 )
 from bunnyland.prompts.builder import PromptBuilder
@@ -283,6 +284,13 @@ def test_message_to_history_uses_model_dump_or_message_attributes():
         "tool_calls": [{"function": {"name": "wait", "arguments": {}}}],
     }
     assert _message_to_history(EmptyMessage()) == {"role": "assistant"}
+
+
+def test_openrouter_arguments_accept_json_mapping_and_other_values():
+    assert _openrouter_arguments('{"item_id": "basket"}') == {"item_id": "basket"}
+    assert _openrouter_arguments("") == {}
+    assert _openrouter_arguments({"direction": "north"}) == {"direction": "north"}
+    assert _openrouter_arguments(("direction", "north")) == {}
 
 
 def test_parse_natural_command_uses_action_definition_patterns():

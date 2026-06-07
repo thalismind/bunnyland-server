@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import sys
 import types
+from types import SimpleNamespace
 
+import pytest
+
+import bunnyland.worldgen.generators as generator_module
 from bunnyland.core import (
     CharacterComponent,
     ContainerComponent,
@@ -24,14 +28,17 @@ from bunnyland.worldgen import (
     DanglingResolution,
     DoorProposal,
     GenOptions,
+    InstantiatedWorld,
     OllamaWorldAgent,
     OpenRouterWorldAgent,
     RecursiveWorldGenerator,
     RoomNodeProposal,
     StubWorldAgent,
+    StubWorldBuilder,
     oneshot_generator,
     recursive_generator,
 )
+from bunnyland.worldgen.recursive_builder import _message_to_history
 
 
 def _exits(world, room_id):
@@ -195,6 +202,25 @@ def test_dangling_resolution_defaults_to_seal():
     assert DanglingResolution().action == "seal"
 
 
+def test_recursive_message_to_history_uses_model_dump_or_message_attributes():
+    class DumpableMessage:
+        def model_dump(self, **kwargs):
+            assert kwargs == {"mode": "json", "exclude_none": True}
+            return {"role": "assistant", "content": "dumped"}
+
+    assert _message_to_history(DumpableMessage()) == {
+        "role": "assistant",
+        "content": "dumped",
+    }
+    assert _message_to_history(SimpleNamespace(role="tool", content="done")) == {
+        "role": "tool",
+        "content": "done",
+    }
+    assert _message_to_history(SimpleNamespace(role="assistant")) == {
+        "role": "assistant",
+    }
+
+
 async def test_builtin_generator_functions_produce_worlds_offline():
     options = GenOptions(llm=False, max_rooms=3)
 
@@ -203,6 +229,98 @@ async def test_builtin_generator_functions_produce_worlds_offline():
 
     many = await recursive_generator(WorldActor(), "seed", options)
     assert len(many.rooms) == 3 and many.characters
+
+
+async def test_oneshot_generator_rejects_openrouter_and_uses_ollama_builder(monkeypatch):
+    import bunnyland.worldgen.ollama_builder as ollama_builder
+
+    captured = {}
+
+    class FakeOllamaWorldBuilder:
+        system_prompt = "fake prompt"
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def propose(self, seed):
+            return StubWorldBuilder().propose(seed)
+
+    monkeypatch.setattr(ollama_builder, "OllamaWorldBuilder", FakeOllamaWorldBuilder)
+
+    with pytest.raises(RuntimeError, match="recursive generator"):
+        await oneshot_generator(
+            WorldActor(),
+            "seed",
+            GenOptions(llm=True, provider="openrouter"),
+        )
+
+    result = await oneshot_generator(
+        WorldActor(),
+        "seed",
+        GenOptions(llm=True, provider="ollama", model="world", host="host", api_key="key"),
+    )
+
+    assert result.rooms
+    assert result.prompt == "fake prompt"
+    assert captured == {"model": "world", "host": "host", "api_key": "key"}
+
+
+async def test_recursive_generator_selects_llm_provider_builders(monkeypatch):
+    import bunnyland.worldgen.recursive_builder as recursive_builder
+
+    captured = {}
+
+    class FakeOpenRouterWorldAgent(StubWorldAgent):
+        system_prompt = "openrouter prompt"
+
+        def __init__(self, **kwargs):
+            captured["openrouter"] = kwargs
+
+    class FakeOllamaWorldAgent(StubWorldAgent):
+        system_prompt = "ollama prompt"
+
+        def __init__(self, **kwargs):
+            captured["ollama"] = kwargs
+
+    class FakeRecursiveWorldGenerator:
+        def __init__(self, actor, builder, *, max_rooms):
+            self.actor = actor
+            self.builder = builder
+            self.max_rooms = max_rooms
+
+        async def generate(self, seed):
+            del seed
+            return InstantiatedWorld()
+
+    monkeypatch.setattr(recursive_builder, "OpenRouterWorldAgent", FakeOpenRouterWorldAgent)
+    monkeypatch.setattr(recursive_builder, "OllamaWorldAgent", FakeOllamaWorldAgent)
+    monkeypatch.setattr(generator_module, "RecursiveWorldGenerator", FakeRecursiveWorldGenerator)
+
+    openrouter = await recursive_generator(
+        WorldActor(),
+        "seed",
+        GenOptions(
+            llm=True,
+            provider="openrouter",
+            model="world",
+            api_key="key",
+            server_url="https://openrouter.example",
+        ),
+    )
+    ollama = await recursive_generator(
+        WorldActor(),
+        "seed",
+        GenOptions(llm=True, provider="ollama", model="world", host="host", api_key="key"),
+    )
+
+    assert openrouter.prompt == "openrouter prompt"
+    assert ollama.prompt == "ollama prompt"
+    assert captured["openrouter"] == {
+        "model": "world",
+        "api_key": "key",
+        "server_url": "https://openrouter.example",
+    }
+    assert captured["ollama"] == {"model": "world", "host": "host", "api_key": "key"}
 
 
 async def test_generators_record_the_dm_system_prompt():
