@@ -242,6 +242,67 @@ def test_cli_discord_starts_bot_with_filters_and_closes(monkeypatch, tmp_path):
     assert filters.dm_user_ids == (33,)
 
 
+def test_cli_discord_startup_claim_assigns_configured_user(monkeypatch, tmp_path, capsys):
+    import bunnyland.discord as discord
+
+    calls = {}
+
+    class FakeDiscordBot:
+        def __init__(self, actor, **kwargs):
+            calls["bot_actor"] = actor
+            calls["bot_kwargs"] = kwargs
+            calls["closed"] = False
+
+        async def start(self):
+            while not calls["closed"]:
+                await asyncio.sleep(0)
+
+        async def close(self):
+            calls["closed"] = True
+
+    def fake_assign_discord_controller(actor, **kwargs):
+        calls["claim_actor"] = actor
+        calls["claim_kwargs"] = kwargs
+        return "Juniper"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DISCORD_TOKEN", "discord-token")
+    monkeypatch.setattr(discord, "DiscordBot", FakeDiscordBot)
+    monkeypatch.setattr(cli, "assign_discord_controller", fake_assign_discord_controller)
+
+    result = main(
+        [
+            "serve",
+            "--discord",
+            "--discord-user-id",
+            "123",
+            "--discord-channel-id",
+            "456",
+            "--discord-character",
+            "Juniper",
+            "--discord-allow-child-claims",
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+            "--claim-timeout-seconds",
+            "0",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert calls["claim_actor"] is calls["bot_actor"]
+    assert calls["claim_kwargs"] == {
+        "discord_user_id": 123,
+        "default_channel_id": 456,
+        "character_name": "Juniper",
+        "allow_child_claims": True,
+    }
+    assert calls["closed"] is True
+    assert "Assigned Discord user 123 to 'Juniper'." in output
+
+
 def test_cli_rejects_incompatible_discord_playtest_modes(tmp_path):
     spec = tmp_path / "playtest.json"
     spec.write_text("{}")
@@ -503,6 +564,103 @@ bad line
     cli.load_dotenv(dotenv)
     assert cli.os.environ["BUNNYLAND_FROM_ENV"] == "existing"
     assert cli.os.environ["BUNNYLAND_NEW_VALUE"] == "loaded"
+
+
+def test_cli_tui_command_forwards_remote_options(monkeypatch):
+    import bunnyland.tui as tui
+
+    calls = {}
+
+    def fake_tui_main(argv):
+        calls["argv"] = argv
+        return 17
+
+    monkeypatch.setattr(tui, "main", fake_tui_main)
+
+    result = main(
+        [
+            "tui",
+            "--server",
+            "http://localhost:8765",
+            "--claim-fallback",
+            "llm",
+            "--claim-timeout-minutes",
+            "12",
+        ]
+    )
+
+    assert result == 17
+    assert calls["argv"] == [
+        "--server",
+        "http://localhost:8765",
+        "--claim-fallback",
+        "llm",
+        "--claim-timeout-minutes",
+        "12",
+    ]
+
+
+def test_cli_tui_command_forwards_local_options(monkeypatch):
+    import bunnyland.tui as tui
+
+    calls = {}
+
+    def fake_tui_main(argv):
+        calls["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(tui, "main", fake_tui_main)
+
+    result = main(["tui", "--seed", "misty den", "--generator", "empty"])
+
+    assert result == 0
+    assert calls["argv"] == ["--seed", "misty den", "--generator", "empty"]
+
+
+def test_cli_without_command_prints_help(capsys):
+    result = main([])
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "usage: bunnyland" in output
+
+
+def test_cli_verbose_configures_logging_before_serving(monkeypatch):
+    calls = {}
+
+    class FakeLogger:
+        def setLevel(self, level):
+            calls["httpx_level"] = level
+
+    def fake_run(coro):
+        calls["coroutine_name"] = coro.cr_code.co_name
+        coro.close()
+
+    def fake_basic_config(**kwargs):
+        calls["basic_config"] = kwargs
+
+    original_get_logger = cli.logging.getLogger
+
+    def fake_get_logger(name=None):
+        if name is None:
+            return original_get_logger()
+        calls["logger_name"] = name
+        return FakeLogger()
+
+    monkeypatch.setattr(cli.asyncio, "run", fake_run)
+    monkeypatch.setattr(cli.logging, "basicConfig", fake_basic_config)
+    monkeypatch.setattr(cli.logging, "getLogger", fake_get_logger)
+
+    result = main(["serve", "--verbose"])
+
+    assert result == 0
+    assert calls["basic_config"] == {
+        "level": cli.logging.INFO,
+        "format": "%(name)s %(message)s",
+    }
+    assert calls["logger_name"] == "httpx"
+    assert calls["httpx_level"] == cli.logging.WARNING
+    assert calls["coroutine_name"] == "_serve"
 
 
 def test_configure_memory_backend_rejects_unknown_backend():
