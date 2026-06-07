@@ -8,6 +8,7 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    HandlerContext,
     IdentityComponent,
     Lane,
     PortableComponent,
@@ -64,6 +65,18 @@ def _install(actor):
 def _cmd(scenario, command_type, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
+def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
+    return build_submitted_command(
+        character_id=str(scenario.character) if character_id is None else character_id,
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type=command_type,
@@ -319,3 +332,270 @@ def test_nukesim_prompt_fragments_surface_local_wasteland_state():
 
     assert any("Radiation dose" in line for line in fragments)
     assert any("Radiation source" in line for line in fragments)
+
+
+def test_nukesim_handlers_reject_invalid_character_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    cases = [
+        (ScanRadiationHandler(), "scan-radiation", {"target_id": str(scenario.room_a)}),
+        (
+            SealRadiationSourceHandler(),
+            "seal-radiation-source",
+            {"target_id": str(scenario.room_a)},
+        ),
+        (DecontaminateHandler(), "decontaminate", {}),
+        (UseRadMedicineHandler(), "use-rad-medicine", {"item_id": str(scenario.room_a)}),
+        (ScavengeHandler(), "scavenge", {"site_id": str(scenario.room_a)}),
+        (ScrapItemHandler(), "scrap-item", {"item_id": str(scenario.room_a)}),
+        (StabilizeMutationHandler(), "stabilize-mutation", {}),
+    ]
+
+    for handler, command_type, payload in cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                command_type,
+                character_id="not-an-id",
+                **payload,
+            ),
+        )
+        assert result.ok is False
+        assert result.reason == "invalid character id"
+
+
+def test_nukesim_handlers_reject_missing_and_wrong_kind_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    cases = [
+        (
+            ScanRadiationHandler(),
+            _handler_cmd(scenario, "scan-radiation", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            ScanRadiationHandler(),
+            _handler_cmd(scenario, "scan-radiation", target_id=str(scenario.character)),
+            "target is the wrong kind",
+        ),
+        (
+            SealRadiationSourceHandler(),
+            _handler_cmd(scenario, "seal-radiation-source", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            DecontaminateHandler(),
+            _handler_cmd(scenario, "decontaminate", target_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            DecontaminateHandler(),
+            _handler_cmd(scenario, "decontaminate", station_id=str(scenario.character)),
+            "target is the wrong kind",
+        ),
+        (
+            UseRadMedicineHandler(),
+            _handler_cmd(scenario, "use-rad-medicine", item_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            ScavengeHandler(),
+            _handler_cmd(scenario, "scavenge", site_id="entity_999"),
+            "target does not exist",
+        ),
+        (
+            ScrapItemHandler(),
+            _handler_cmd(scenario, "scrap-item", item_id=str(scenario.character)),
+            "target is the wrong kind",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_nukesim_handlers_reject_unreachable_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    distant_source = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant isotope", kind="radiation-source"),
+            RadiationSourceComponent(),
+        ],
+    )
+    distant_station = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant decon arch", kind="decontamination"),
+            DecontaminationComponent(),
+        ],
+    )
+    distant_meds = _inventory_entity(
+        scenario,
+        "rad-away",
+        "medicine",
+        [RadMedicineComponent()],
+    )
+    distant_site = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant cache", kind="scavenge-site"),
+            ScavengeSiteComponent(),
+            LootTableComponent(outputs={"scrap": 1}),
+        ],
+    )
+    distant_junk = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant junk", kind="junk"),
+            JunkComponent(outputs={"scrap": 1}),
+        ],
+    )
+    distant_patient = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Clover", kind="character")],
+    )
+    room_b = scenario.actor.world.get_entity(scenario.room_b)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_patient.id)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_source.id)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_station.id)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_site.id)
+    room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_junk.id)
+
+    cases = [
+        (
+            ScanRadiationHandler(),
+            _handler_cmd(scenario, "scan-radiation", target_id=str(distant_source.id)),
+        ),
+        (
+            SealRadiationSourceHandler(),
+            _handler_cmd(
+                scenario,
+                "seal-radiation-source",
+                target_id=str(distant_source.id),
+            ),
+        ),
+        (
+            DecontaminateHandler(),
+            _handler_cmd(
+                scenario,
+                "decontaminate",
+                target_id=str(distant_patient.id),
+                station_id=str(distant_meds),
+            ),
+        ),
+        (
+            UseRadMedicineHandler(),
+            _handler_cmd(
+                scenario,
+                "use-rad-medicine",
+                item_id=str(distant_meds),
+                target_id=str(distant_patient.id),
+            ),
+        ),
+        (
+            ScavengeHandler(),
+            _handler_cmd(scenario, "scavenge", site_id=str(distant_site.id)),
+        ),
+        (
+            ScrapItemHandler(),
+            _handler_cmd(scenario, "scrap-item", item_id=str(distant_junk.id)),
+        ),
+    ]
+
+    for handler, command in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == "target is not reachable"
+
+
+def test_nukesim_handlers_reject_spent_empty_and_invalid_states_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    spent_station = _room_entity(
+        scenario,
+        "spent decon arch",
+        "decontamination",
+        [DecontaminationComponent(uses=0)],
+    )
+    spent_meds = _inventory_entity(
+        scenario,
+        "empty rad-away",
+        "medicine",
+        [RadMedicineComponent(uses=0)],
+    )
+    depleted_site = _room_entity(
+        scenario,
+        "depleted cache",
+        "scavenge-site",
+        [ScavengeSiteComponent(depleted=True), LootTableComponent(outputs={"scrap": 1})],
+    )
+    empty_site = _room_entity(
+        scenario,
+        "empty cache",
+        "scavenge-site",
+        [ScavengeSiteComponent()],
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    cases = [
+        (
+            DecontaminateHandler(),
+            _handler_cmd(scenario, "decontaminate", station_id=str(spent_station)),
+            "decontamination station is spent",
+        ),
+        (
+            UseRadMedicineHandler(),
+            _handler_cmd(scenario, "use-rad-medicine", item_id=str(spent_meds)),
+            "rad medicine is spent",
+        ),
+        (
+            ScavengeHandler(),
+            _handler_cmd(scenario, "scavenge", site_id=str(depleted_site)),
+            "scavenge site is depleted",
+        ),
+        (
+            ScavengeHandler(),
+            _handler_cmd(scenario, "scavenge", site_id=str(empty_site)),
+            "scavenge site has no loot",
+        ),
+        (
+            StabilizeMutationHandler(),
+            _handler_cmd(scenario, "stabilize-mutation"),
+            "no mutation to stabilize",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    character.add_component(
+        MutationComponent(mutation_id="rad-adapted", label="Rad-Adapted", stable=False)
+    )
+    result = StabilizeMutationHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "stabilize-mutation", mutation_id="wrong"),
+    )
+    assert result.ok is False
+    assert result.reason == "mutation does not match"
+
+    character.remove_component(MutationComponent)
+    character.add_component(
+        MutationComponent(mutation_id="rad-adapted", label="Rad-Adapted", stable=True)
+    )
+    result = StabilizeMutationHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "stabilize-mutation", mutation_id="rad-adapted"),
+    )
+    assert result.ok is False
+    assert result.reason == "mutation is already stable"
