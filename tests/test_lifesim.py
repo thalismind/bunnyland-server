@@ -362,6 +362,11 @@ def test_lifesim_economy_and_skill_handlers_reject_bad_state_directly():
         ),
         (
             MentorSkillHandler(),
+            _handler_cmd(scenario, "mentor-skill", student_id="not-an-id"),
+            "invalid mentor or student id",
+        ),
+        (
+            MentorSkillHandler(),
             _handler_cmd(scenario, "mentor-skill", student_id="entity_999"),
             "student does not exist",
         ),
@@ -413,6 +418,11 @@ def test_lifesim_economy_and_skill_handlers_reject_bad_state_directly():
         ),
         (
             PayWageHandler(),
+            _handler_cmd(scenario, "pay-wage", worker_id="not-an-id", amount=1),
+            "invalid payer or worker id",
+        ),
+        (
+            PayWageHandler(),
             _handler_cmd(scenario, "pay-wage", worker_id="entity_999", amount=1),
             "worker does not exist",
         ),
@@ -440,6 +450,11 @@ def test_lifesim_economy_and_skill_handlers_reject_bad_state_directly():
             AssessTaxHandler(),
             _handler_cmd(scenario, "assess-tax", amount=0),
             "tax amount must be positive",
+        ),
+        (
+            ChargeRentHandler(),
+            _handler_cmd(scenario, "charge-rent", tenant_id="not-an-id", amount=1),
+            "invalid landlord or tenant id",
         ),
         (
             ChargeRentHandler(),
@@ -595,8 +610,25 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), non_customer_id
     )
+    unplaced_actor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="No Room", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
 
     cases = [
+        (
+            SellItemHandler(),
+            _handler_cmd(
+                scenario,
+                "sell-item",
+                item_id="not-an-id",
+                customer_id=str(customer_id),
+            ),
+            "invalid seller, item, or customer id",
+        ),
         (
             SellItemHandler(),
             _handler_cmd(
@@ -616,6 +648,16 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
                 customer_id=str(customer_id),
             ),
             "character has no business",
+        ),
+        (
+            BuyItemHandler(),
+            _handler_cmd(
+                scenario,
+                "buy-item",
+                seller_id="not-an-id",
+                item_id=str(item.id),
+            ),
+            "invalid buyer, seller, or item id",
         ),
         (
             BuyItemHandler(),
@@ -653,8 +695,26 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
             "room does not exist",
         ),
         (
+            ClaimHomeHandler(),
+            _handler_cmd(
+                scenario,
+                "claim-home",
+                character_id=str(unplaced_actor.id),
+            ),
+            "room does not exist",
+        ),
+        (
             ClaimRoomHandler(),
             _handler_cmd(scenario, "claim-room", room_id="entity_999"),
+            "room does not exist",
+        ),
+        (
+            ClaimRoomHandler(),
+            _handler_cmd(
+                scenario,
+                "claim-room",
+                character_id=str(unplaced_actor.id),
+            ),
             "room does not exist",
         ),
         (
@@ -876,6 +936,16 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
             _handler_cmd(
                 scenario,
                 "witness-romance",
+                partner_id="not-an-id",
+                rival_id=str(rival_id),
+            ),
+            "invalid witness, partner, or rival id",
+        ),
+        (
+            WitnessRomanceHandler(),
+            _handler_cmd(
+                scenario,
+                "witness-romance",
                 partner_id="entity_999",
                 rival_id=str(rival_id),
             ),
@@ -943,6 +1013,11 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
             ResolveBirthHandler(),
             _handler_cmd(scenario, "resolve-birth"),
             "birth is not due",
+        ),
+        (
+            AdoptChildHandler(),
+            _handler_cmd(scenario, "adopt-child", child_id="not-an-id"),
+            "invalid parent or child id",
         ),
         (
             AdoptChildHandler(),
@@ -1102,14 +1177,56 @@ def test_lifesim_handlers_reject_invalid_character_ids_directly():
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     cases = [
+        (
+            ChooseAspirationHandler(),
+            "choose-aspiration",
+            {"name": "Cozy Homemaker"},
+            "invalid character id",
+        ),
+        (
+            CompleteMilestoneHandler(),
+            "complete-milestone",
+            {"milestone": "meet a friend"},
+            "invalid character id",
+        ),
         (PracticeSkillHandler(), "practice-skill", {"skill": "cooking"}, "invalid character id"),
         (StudySkillHandler(), "study-skill", {"skill": "cooking"}, "invalid character id"),
+        (
+            MentorSkillHandler(),
+            "mentor-skill",
+            {"student_id": str(scenario.character), "skill": "logic"},
+            "invalid mentor or student id",
+        ),
         (FindJobHandler(), "find-job", {"title": "Archivist"}, "invalid character id"),
         (GoToWorkHandler(), "go-to-work", {}, "invalid character id"),
         (QuitJobHandler(), "quit-job", {}, "invalid character id"),
+        (
+            PayWageHandler(),
+            "pay-wage",
+            {"worker_id": str(scenario.character), "amount": 1},
+            "invalid payer or worker id",
+        ),
         (AssessTaxHandler(), "assess-tax", {"amount": 1}, "invalid character id"),
+        (
+            ChargeRentHandler(),
+            "charge-rent",
+            {"tenant_id": str(scenario.character), "amount": 1},
+            "invalid landlord or tenant id",
+        ),
         (PayBillHandler(), "pay-bill", {}, "invalid character id"),
         (OpenBusinessHandler(), "open-business", {"name": "Market"}, "invalid character id"),
+        (
+            SellItemHandler(),
+            "sell-item",
+            {"item_id": str(scenario.room_a), "customer_id": str(scenario.character)},
+            "invalid seller, item, or customer id",
+        ),
+        (
+            BuyItemHandler(),
+            "buy-item",
+            {"seller_id": str(scenario.character), "item_id": str(scenario.room_a)},
+            "invalid buyer, seller, or item id",
+        ),
         (
             PromoteBusinessHandler(),
             "promote-business",
@@ -1149,8 +1266,17 @@ def test_lifesim_handlers_reject_invalid_character_ids_directly():
         (
             SpreadGossipHandler(),
             "spread-gossip",
-            {"target_id": str(scenario.character), "claim": "helpful"},
+            {"target_id": str(scenario.character), "text": "helpful"},
             "invalid character or target id",
+        ),
+        (
+            WitnessRomanceHandler(),
+            "witness-romance",
+            {
+                "partner_id": str(scenario.character),
+                "rival_id": str(scenario.character),
+            },
+            "invalid witness, partner, or rival id",
         ),
         (
             StartPartnershipHandler(),
@@ -1171,6 +1297,12 @@ def test_lifesim_handlers_reject_invalid_character_ids_directly():
             "invalid character or co-parent id",
         ),
         (ResolveBirthHandler(), "resolve-birth", {"child_name": "Clover"}, "invalid character id"),
+        (
+            AdoptChildHandler(),
+            "adopt-child",
+            {"child_id": str(scenario.character)},
+            "invalid parent or child id",
+        ),
     ]
 
     for handler, command_type, payload, reason in cases:
