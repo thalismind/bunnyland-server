@@ -769,6 +769,119 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert calls["generate_event"].prompt == "event prompt"
 
 
+async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
+    registered_tools = {}
+
+    class FakeToolError(RuntimeError):
+        pass
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _notifications, _experimental: SimpleNamespace(
+                resources=SimpleNamespace(subscribe=False, listChanged=False)
+            )
+
+        def subscribe_resource(self):
+            def decorate(func):
+                return func
+
+            return decorate
+
+        def unsubscribe_resource(self):
+            def decorate(func):
+                return func
+
+            return decorate
+
+    class FakeFastMCP:
+        def __init__(self, *_args, **_kwargs):
+            self._mcp_server = FakeLowServer()
+
+        def tool(self):
+            def decorate(func):
+                registered_tools[func.__name__] = func
+                return func
+
+            return decorate
+
+        def resource(self, _uri, **_kwargs):
+            def decorate(func):
+                return func
+
+            return decorate
+
+        def streamable_http_app(self):
+            return SimpleNamespace()
+
+    mcp_module = ModuleType("mcp")
+    server_module = ModuleType("mcp.server")
+    fastmcp_module = ModuleType("mcp.server.fastmcp")
+    exceptions_module = ModuleType("mcp.server.fastmcp.exceptions")
+    fastmcp_module.FastMCP = FakeFastMCP
+    exceptions_module.ToolError = FakeToolError
+    monkeypatch.setitem(sys.modules, "mcp", mcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.server", server_module)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
+
+    async def patch_world(_request):
+        raise AssertionError("patch_world should not be called")
+
+    async def generate_world(_request):
+        raise AssertionError("generate_world should not be called")
+
+    async def generation_status():
+        raise AssertionError("generation_status should not be called")
+
+    def generate_room(_request):
+        raise AssertionError("generate_room should not be called")
+
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        admin_token="secret",
+        patch_world=patch_world,
+        generate_world=generate_world,
+        generation_status=generation_status,
+        generate_room=generate_room,
+        generate_character=generate_room,
+        generate_item=generate_room,
+        generate_event=generate_room,
+    )
+
+    with pytest.raises(FakeToolError, match="agent is not controlling") as prompt_error:
+        registered_tools["agent_prompt"](agent_id="missing")
+    assert isinstance(prompt_error.value.__cause__, RuntimeError)
+
+    with pytest.raises(FakeToolError, match="agent_id is required") as claim_error:
+        await registered_tools["claim_character"](agent_id=" ")
+    assert isinstance(claim_error.value.__cause__, RuntimeError)
+
+    with pytest.raises(FakeToolError, match="agent is not controlling") as release_error:
+        await registered_tools["release_character"](agent_id="missing")
+    assert isinstance(release_error.value.__cause__, RuntimeError)
+
+    with pytest.raises(FakeToolError, match="agent is not controlling") as command_error:
+        await registered_tools["send_command"](
+            agent_id="missing",
+            command_type="move",
+        )
+    assert isinstance(command_error.value.__cause__, RuntimeError)
+
+    await registered_tools["claim_character"](
+        agent_id="agent-a",
+        character_name="Juniper",
+    )
+    with pytest.raises(FakeToolError, match="'not-a-lane' is not a valid Lane") as lane_error:
+        await registered_tools["send_command"](
+            agent_id="agent-a",
+            command_type="move",
+            lane="not-a-lane",
+        )
+    assert isinstance(lane_error.value.__cause__, ValueError)
+
+
 async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(scenario):
     import uvicorn
     from mcp import ClientSession
