@@ -10,16 +10,20 @@ from bunnyland.core import (
     ContainerComponent,
     ContainmentMode,
     Contains,
+    Holding,
     IdentityComponent,
+    InventoryComponent,
     Lane,
     PortableComponent,
     PutHandler,
     TakeHandler,
+    Wearing,
     build_submitted_command,
     container_of,
     contents,
     spawn_entity,
 )
+from bunnyland.core.handlers.base import HandlerContext
 
 HOUR = 3600.0
 
@@ -68,6 +72,40 @@ def put_cmd(scenario, item_id, target=None):
         lane=Lane.WORLD,
         payload=payload,
     )
+
+
+def handler_context(scenario):
+    return HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+
+def execute_take(scenario, item_id, *, character_id=None):
+    command = take_cmd(scenario, item_id)
+    if character_id is not None:
+        command = build_submitted_command(
+            character_id=character_id,
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="take",
+            cost=CommandCost(action=1),
+            lane=Lane.WORLD,
+            payload={"item_id": str(item_id)},
+        )
+    return TakeHandler().execute(handler_context(scenario), command)
+
+
+def execute_put(scenario, item_id, target=None, *, character_id=None, raw_payload=None):
+    command = put_cmd(scenario, item_id, target)
+    if character_id is not None or raw_payload is not None:
+        command = build_submitted_command(
+            character_id=character_id or str(scenario.character),
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="put",
+            cost=CommandCost(action=1),
+            lane=Lane.WORLD,
+            payload=raw_payload if raw_payload is not None else command.payload,
+        )
+    return PutHandler().execute(handler_context(scenario), command)
 
 
 async def test_take_moves_item_into_inventory():
@@ -168,3 +206,166 @@ async def test_cannot_put_item_not_in_inventory():
 
     char = scenario.actor.world.get_entity(scenario.character)
     assert char.get_component(ActionPointsComponent).current == pytest.approx(5.0)
+
+
+def test_take_rejects_item_with_no_container():
+    scenario = setup_inventory_scenario()
+    item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="loose pebble", kind="item"), PortableComponent()],
+    )
+
+    assert execute_take(scenario, item.id).reason == "item is nowhere"
+
+
+def test_take_rejects_room_item_when_character_has_no_room():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a)
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains,
+        scenario.character,
+    )
+
+    assert execute_take(scenario, item).reason == "item is not reachable"
+
+
+def test_take_rejects_invalid_and_missing_item_ids():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a)
+
+    assert execute_take(scenario, item, character_id="not-an-id").reason == (
+        "invalid character or item id"
+    )
+    assert execute_take(scenario, "entity_999").reason == "item does not exist"
+
+
+def test_take_rejects_item_already_in_inventory():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a)
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, item)
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY),
+        item,
+    )
+
+    assert execute_take(scenario, item).reason == "already holding item"
+
+
+def test_take_rejects_closed_or_non_removable_source_container():
+    scenario = setup_inventory_scenario()
+    world = scenario.actor.world
+    chest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="sealed chest", kind="container"),
+            ContainerComponent(open=True, allow_remove=False),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        chest.id,
+    )
+    item = spawn_entity(
+        world,
+        [IdentityComponent(name="coin", kind="item"), PortableComponent()],
+    )
+    chest.add_relationship(Contains(mode=ContainmentMode.CONTAINER), item.id)
+
+    assert execute_take(scenario, item.id).reason == "container does not allow removal"
+
+    chest.remove_component(ContainerComponent)
+    chest.add_component(ContainerComponent(open=False))
+
+    assert execute_take(scenario, item.id).reason == "container is closed"
+
+
+def test_take_rejects_full_inventory():
+    scenario = setup_inventory_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(InventoryComponent(max_slots=1))
+    carried = place_item(scenario, scenario.room_a, name="carried")
+    target = place_item(scenario, scenario.room_a, name="target")
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, carried)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried)
+
+    assert execute_take(scenario, target).reason == "inventory is full"
+
+
+def test_put_rejects_invalid_and_missing_item_ids():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a)
+
+    assert execute_put(scenario, item, character_id="not-an-id").reason == (
+        "invalid character or item id"
+    )
+    assert execute_put(scenario, "entity_999").reason == "item does not exist"
+
+
+def test_put_drop_rejects_when_character_has_no_room():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    character = scenario.actor.world.get_entity(scenario.character)
+    room.remove_relationship(Contains, scenario.character)
+    room.remove_relationship(Contains, item)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item)
+
+    assert execute_put(scenario, item).reason == "character is not in a room"
+
+
+def test_put_rejects_unreachable_self_and_non_container_targets():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a)
+    target = place_item(scenario, scenario.room_a, name="flat rock")
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    character = scenario.actor.world.get_entity(scenario.character)
+    room.remove_relationship(Contains, item)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item)
+
+    assert execute_put(scenario, item, target=item).reason == "target is not reachable"
+    assert execute_put(scenario, item, target=target).reason == "target is not a container"
+
+
+def test_put_rejects_container_add_constraints():
+    scenario = setup_inventory_scenario()
+    world = scenario.actor.world
+    item = place_item(scenario, scenario.room_a)
+    filler = place_item(scenario, scenario.room_a, name="filler")
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    room.remove_relationship(Contains, item)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item)
+    chest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="full chest", kind="container"),
+            ContainerComponent(open=True, allow_add=False),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), chest.id)
+
+    assert execute_put(scenario, item, target=chest.id).reason == "container does not allow adding"
+
+    chest.remove_component(ContainerComponent)
+    chest.add_component(ContainerComponent(open=True, max_slots=1))
+    room.remove_relationship(Contains, filler)
+    chest.add_relationship(Contains(mode=ContainmentMode.CONTAINER), filler)
+
+    assert execute_put(scenario, item, target=chest.id).reason == "container is full"
+
+
+def test_put_removes_holding_and_wearing_overlays_when_relocating_item():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    character = scenario.actor.world.get_entity(scenario.character)
+    room.remove_relationship(Contains, item)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item)
+    character.add_relationship(Holding(), item)
+    character.add_relationship(Wearing(), item)
+
+    result = execute_put(scenario, item)
+
+    assert result.ok is True
+    assert not character.has_relationship(Holding, item)
+    assert not character.has_relationship(Wearing, item)

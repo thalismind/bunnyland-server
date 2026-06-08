@@ -20,6 +20,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent, SpeechSaidEvent
+from bunnyland.core.handlers.base import HandlerContext
 
 HOUR = 3600.0
 
@@ -47,6 +48,10 @@ def collect(actor, event_type):
     seen = []
     actor.bus.subscribe(event_type, seen.append)
     return seen
+
+
+def handler_context(scenario):
+    return HandlerContext(scenario.actor.world, scenario.actor.epoch)
 
 
 async def test_sleep_then_wake():
@@ -110,3 +115,34 @@ async def test_wait_yields_turn_without_state_change():
     assert len(executed) == 1
     char = scenario.actor.world.get_entity(scenario.character)
     assert not char.has_component(SleepingComponent)
+
+
+def test_lifecycle_handlers_reject_invalid_character_ids():
+    scenario = lifecycle_scenario()
+    invalid = build_submitted_command(
+        character_id="not-an-id",
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="sleep",
+        cost=CommandCost(),
+        lane=Lane.WORLD,
+    )
+    ctx = handler_context(scenario)
+
+    assert SleepHandler().execute(ctx, invalid).reason == "invalid character id"
+    assert WakeHandler().execute(ctx, invalid).reason == "invalid character id"
+    assert WaitHandler().execute(ctx, invalid).reason == "invalid character id"
+
+
+def test_sleep_and_wake_reject_repeated_or_unmatched_state():
+    scenario = lifecycle_scenario()
+    sleep = cmd(scenario, "sleep")
+    wake = cmd(scenario, "wake", cost=CommandCost())
+    ctx = handler_context(scenario)
+
+    assert WakeHandler().execute(ctx, wake).reason == "not asleep"
+
+    assert SleepHandler().execute(ctx, sleep).ok is True
+    assert SleepHandler().execute(ctx, sleep).reason == "already asleep"
+
+    assert WakeHandler().execute(ctx, wake).ok is True
