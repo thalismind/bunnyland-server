@@ -27,6 +27,7 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     MCPControllerComponent,
+    MoveHandler,
     NoiseComponent,
     OnInsufficientPoints,
     PainComponent,
@@ -56,6 +57,7 @@ from bunnyland.core.events import (
     InjuryAddedEvent,
     NoiseHeardEvent,
 )
+from bunnyland.core.handlers.base import HandlerContext
 from bunnyland.mechanics.barbariansim import AttackHandler
 
 HOUR = 3600.0
@@ -110,6 +112,51 @@ async def test_world_actor_hooks_available_commands_and_submit_nowait():
 
     assert [event.command_type for event in executed] == ["move"]
     assert calls == [("sync", 0), ("async", 0)]
+
+
+def test_move_handler_rejects_invalid_detached_and_unmatched_exits():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    handler = MoveHandler()
+
+    invalid = _command(scenario, character_id="not-an-id")
+    assert handler.execute(ctx, invalid).reason == "invalid character id"
+
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains,
+        scenario.character,
+    )
+    assert handler.execute(ctx, _command(scenario)).reason == "character is not in a room"
+
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        scenario.character,
+    )
+    assert (
+        handler.execute(ctx, _command(scenario, payload={"direction": "west"})).reason
+        == "no matching exit"
+    )
+
+
+def test_move_handler_can_select_exit_by_target_id_and_custom_noise():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    command = _command(
+        scenario,
+        payload={"exit_id": str(scenario.room_b), "noise": 2.5},
+    )
+
+    result = MoveHandler().execute(ctx, command)
+
+    assert result.ok is True
+    event = result.events[0]
+    assert event.to_room_id == str(scenario.room_b)
+    assert event.direction == "north"
+
+    noises = scenario.actor.world.query().with_all([NoiseComponent]).execute_entities()
+    noise = next(iter(noises)).get_component(NoiseComponent)
+    assert noise.loudness == 2.5
+    assert noise.room_id == str(scenario.room_b)
 
 
 def test_world_actor_registration_helpers_and_bind_clock_paths():
