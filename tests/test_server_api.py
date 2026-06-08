@@ -888,6 +888,48 @@ async def test_admin_world_generate_can_create_empty_world(scenario):
     assert len(list(scenario.actor.world.query().execute_entities())) == 1
 
 
+async def test_admin_world_generate_saves_replacement_world(scenario, tmp_path):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+    meta = WorldMeta(seed="old seed", generator="oneshot")
+    path = tmp_path / "generated.json"
+
+    response = await generate_replacement_world(
+        scenario.actor,
+        plugins=plugins,
+        generator=registry["empty"],
+        seed="saved blank slate",
+        options=GenOptions(),
+        meta=meta,
+        save_path=path,
+        save=True,
+    )
+
+    reloaded, saved_meta = load_world(path)
+    assert response.status == "succeeded"
+    assert reloaded.epoch == scenario.actor.epoch
+    assert saved_meta.seed == "saved blank slate"
+    assert saved_meta.generator == "empty"
+    assert saved_meta.plugins == ("bunnyland.worldgen",)
+    assert saved_meta.saved_at_epoch == scenario.actor.epoch
+
+
+async def test_admin_world_generate_requires_save_path_when_saving(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+
+    with pytest.raises(RuntimeError, match="server was not started with --save"):
+        await generate_replacement_world(
+            scenario.actor,
+            plugins=plugins,
+            generator=registry["empty"],
+            seed="unsaved blank slate",
+            options=GenOptions(),
+            meta=WorldMeta(),
+            save=True,
+        )
+
+
 async def test_admin_world_generation_job_starts_and_publishes_completion(scenario):
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
     registry = collect_generators(plugins)

@@ -301,6 +301,11 @@ def test_minutes_to_timeout_seconds_normalizes_and_rejects_bad_values():
 
 
 def test_parse_discord_claim_args_covers_flag_forms_and_errors():
+    empty_args = _parse_discord_claim_args(None)
+    assert empty_args.character_name is None
+    assert empty_args.fallback_controller is None
+    assert empty_args.timeout_seconds is None
+
     args = _parse_discord_claim_args(
         '"Juniper Moss" --fallback-controller llm --timeout-minutes=15'
     )
@@ -313,9 +318,13 @@ def test_parse_discord_claim_args_covers_flag_forms_and_errors():
     assert equals_args.fallback_controller == "suspend"
     assert equals_args.timeout_seconds == 1200
 
-    timeout_alias = _parse_discord_claim_args("Clover --claim-timeout 30")
+    timeout_alias = _parse_discord_claim_args("Clover --claim-timeout 30 --timeout=45")
     assert timeout_alias.character_name == "Clover"
-    assert timeout_alias.timeout_seconds == 1800
+    assert timeout_alias.timeout_seconds == 2700
+
+    separated_alias = _parse_discord_claim_args("Clover --timeout-minutes 30")
+    assert separated_alias.character_name == "Clover"
+    assert separated_alias.timeout_seconds == 1800
 
     for text, message in (
         ("Juniper --fallback", "--fallback requires suspend or llm"),
