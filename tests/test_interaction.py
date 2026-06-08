@@ -22,6 +22,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import ItemUsedEvent, PhysicalWriteEvent
+from bunnyland.core.handlers.base import HandlerContext
 
 HOUR = 3600.0
 
@@ -74,6 +75,40 @@ def write(scenario, target_id, text):
         lane=Lane.WORLD,
         payload={"target_id": str(target_id), "text": text},
     )
+
+
+def handler_context(scenario):
+    return HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+
+def execute_use(scenario, target_id, tool_id=None, *, character_id=None):
+    command = use(scenario, target_id, tool_id)
+    if character_id is not None:
+        command = build_submitted_command(
+            character_id=character_id,
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="use",
+            cost=CommandCost(action=1),
+            lane=Lane.WORLD,
+            payload=command.payload,
+        )
+    return UseHandler().execute(handler_context(scenario), command)
+
+
+def execute_write(scenario, target_id, text, *, character_id=None):
+    command = write(scenario, target_id, text)
+    if character_id is not None:
+        command = build_submitted_command(
+            character_id=character_id,
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="write",
+            cost=CommandCost(action=1, focus=1),
+            lane=Lane.WORLD,
+            payload=command.payload,
+        )
+    return WriteHandler().execute(handler_context(scenario), command)
 
 
 def collect(actor, event_type):
@@ -157,6 +192,75 @@ async def test_use_button_presses_it():
     assert button.get_component(ButtonComponent).pressed is True
 
 
+def test_use_rejects_invalid_missing_and_unreachable_targets():
+    scenario = interaction_scenario()
+    target = in_room(scenario, [IdentityComponent(name="lever", kind="button"), ButtonComponent()])
+    far = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far lever", kind="button"), ButtonComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        far.id,
+    )
+
+    assert execute_use(scenario, target.id, character_id="not-an-id").reason == (
+        "invalid character or target id"
+    )
+    assert execute_use(scenario, "entity_999").reason == "target does not exist"
+    assert execute_use(scenario, far.id).reason == "target is not reachable"
+
+
+def test_use_rejects_unreachable_tool_and_wrong_key():
+    scenario = interaction_scenario()
+    door = in_room(
+        scenario,
+        [
+            IdentityComponent(name="vault door", kind="door"),
+            LockableComponent(locked=True, key_name="brass"),
+        ],
+    )
+    far_key = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="brass key", kind="key"), KeyComponent(key_name="brass")],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        far_key.id,
+    )
+    wrong_key = in_inventory(
+        scenario,
+        [IdentityComponent(name="iron key", kind="key"), KeyComponent(key_name="iron")],
+    )
+
+    assert execute_use(scenario, door.id, tool_id=far_key.id).reason == "tool is not reachable"
+    assert execute_use(scenario, door.id, tool_id=wrong_key.id).reason == "it is locked"
+
+
+def test_use_closes_open_door_rejects_inactive_button_and_plain_item():
+    scenario = interaction_scenario()
+    door = in_room(
+        scenario,
+        [IdentityComponent(name="open door", kind="door"), DoorComponent(open=True)],
+    )
+    inactive = in_room(
+        scenario,
+        [
+            IdentityComponent(name="dead button", kind="button"),
+            ButtonComponent(active=False),
+        ],
+    )
+    rock = in_room(scenario, [IdentityComponent(name="rock", kind="item")])
+
+    closed = execute_use(scenario, door.id)
+    assert closed.ok is True
+    assert closed.events[0].affordance == "door_closed"
+    assert door.get_component(DoorComponent).open is False
+
+    assert execute_use(scenario, inactive.id).reason == "nothing happens"
+    assert execute_use(scenario, rock.id).reason == "you can't use that"
+
+
 # -- write ------------------------------------------------------------------------------
 
 
@@ -183,3 +287,51 @@ async def test_write_on_non_writable_is_rejected():
     await scenario.actor.tick(HOUR)
 
     assert not rock.has_component(ReadableComponent)
+
+
+def test_write_rejects_invalid_empty_missing_unreachable_and_oversized_text():
+    scenario = interaction_scenario()
+    paper = in_inventory(
+        scenario,
+        [
+            IdentityComponent(name="small paper", kind="item"),
+            WritableComponent(remaining_space=4),
+        ],
+    )
+    far_paper = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far paper", kind="item"),
+            WritableComponent(),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        far_paper.id,
+    )
+
+    assert execute_write(scenario, paper.id, "hi", character_id="not-an-id").reason == (
+        "invalid character or target id"
+    )
+    assert execute_write(scenario, paper.id, "   ").reason == "nothing to write"
+    assert execute_write(scenario, "entity_999", "hi").reason == "target does not exist"
+    assert execute_write(scenario, far_paper.id, "hi").reason == "target is not reachable"
+    assert execute_write(scenario, paper.id, "hello").reason == "not enough room to write that"
+
+
+def test_write_appends_existing_text_and_updates_remaining_space():
+    scenario = interaction_scenario()
+    paper = in_inventory(
+        scenario,
+        [
+            IdentityComponent(name="paper", kind="item"),
+            WritableComponent(remaining_space=20),
+            ReadableComponent(text="first line"),
+        ],
+    )
+
+    result = execute_write(scenario, paper.id, "second")
+
+    assert result.ok is True
+    assert paper.get_component(ReadableComponent).text == "first line\nsecond"
+    assert paper.get_component(WritableComponent).remaining_space == 14
