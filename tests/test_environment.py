@@ -5,23 +5,29 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    CharacterComponent,
     CommandCost,
     ContainmentMode,
     Contains,
+    DeadComponent,
     HealthComponent,
     IdentityComponent,
     Lane,
     LightComponent,
     PortableComponent,
     RoomComponent,
+    SuspendedComponent,
     WorldActor,
     build_submitted_command,
+    parse_entity_id,
     spawn_entity,
 )
+from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.environment import (
     CalendarComponent,
     ExtinguishHandler,
     FireComponent,
+    FireConsequence,
     FireDamageEvent,
     FireExtinguishedEvent,
     FireSpreadEvent,
@@ -239,3 +245,168 @@ async def test_extinguish_removes_fire_and_stops_damage():
     assert not room.has_component(FireComponent)
     assert character.get_component(HealthComponent).current == 20.0
     assert extinguished[0].target_id == str(scenario.room_a)
+
+
+def test_ignite_and_extinguish_handlers_reject_invalid_state_directly():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    unreachable = spawn_entity(
+        scenario.actor.world,
+        [RoomComponent(title="Far Field"), FlammableComponent(fuel=1.0)],
+    )
+    target = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="kindling", kind="item"), FlammableComponent(fuel=1.0)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), target.id)
+
+    ignite_cases = [
+        (
+            _cmd(scenario, "ignite", target_id=str(target.id), character_id="ignored"),
+            "invalid character id",
+            "not-an-id",
+        ),
+        (_cmd(scenario, "ignite", target_id="entity_999"), "target does not exist", None),
+        (
+            _cmd(scenario, "ignite", target_id=str(unreachable.id)),
+            "target is not reachable",
+            None,
+        ),
+        (
+            _cmd(scenario, "ignite", target_id=str(scenario.character)),
+            "target is not flammable",
+            None,
+        ),
+        (
+            _cmd(scenario, "ignite", target_id=str(target.id), intensity=0),
+            "fire intensity must be positive",
+            None,
+        ),
+    ]
+
+    for command, reason, character_id in ignite_cases:
+        if character_id is not None:
+            command = build_submitted_command(
+                character_id=character_id,
+                controller_id=str(scenario.controller),
+                controller_generation=scenario.generation,
+                command_type=command.command_type,
+                cost=CommandCost(action=1),
+                lane=Lane.WORLD,
+                payload=command.payload,
+            )
+        result = IgniteHandler().execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    result = IgniteHandler().execute(ctx, _cmd(scenario, "ignite", target_id=str(target.id)))
+    assert result.ok is True
+    assert target.has_component(FireComponent)
+    result = IgniteHandler().execute(ctx, _cmd(scenario, "ignite", target_id=str(target.id)))
+    assert result.ok is False
+    assert result.reason == "target is already burning"
+
+    extinguish_cases = [
+        (
+            _cmd(scenario, "extinguish", target_id=str(target.id)),
+            "invalid character id",
+            "not-an-id",
+        ),
+        (_cmd(scenario, "extinguish", target_id="entity_999"), "target does not exist", None),
+        (
+            _cmd(scenario, "extinguish", target_id=str(unreachable.id)),
+            "target is not reachable",
+            None,
+        ),
+        (
+            _cmd(scenario, "extinguish", target_id=str(scenario.character)),
+            "target is not burning",
+            None,
+        ),
+    ]
+    for command, reason, character_id in extinguish_cases:
+        if character_id is not None:
+            command = build_submitted_command(
+                character_id=character_id,
+                controller_id=str(scenario.controller),
+                controller_generation=scenario.generation,
+                command_type=command.command_type,
+                cost=CommandCost(action=1),
+                lane=Lane.WORLD,
+                payload=command.payload,
+            )
+        result = ExtinguishHandler().execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_ignite_and_extinguish_default_to_current_room():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(FlammableComponent(fuel=1.0))
+
+    result = IgniteHandler().execute(ctx, _cmd(scenario, "ignite"))
+    assert result.ok is True
+    assert room.has_component(FireComponent)
+
+    result = ExtinguishHandler().execute(ctx, _cmd(scenario, "extinguish"))
+    assert result.ok is True
+    assert not room.has_component(FireComponent)
+
+
+def test_fire_consequence_covers_edge_damage_and_extinguish_paths():
+    scenario = build_scenario()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=20.0, maximum=20.0))
+    item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="burning coat", kind="item"),
+            CharacterComponent(species="animated coat"),
+            HealthComponent(current=10.0, maximum=10.0),
+            FireComponent(intensity=0.0, fuel=0.05, last_updated_epoch=0),
+        ],
+    )
+    dead = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ash", kind="character"),
+            CharacterComponent(species="bunny"),
+            HealthComponent(current=4.0, maximum=4.0),
+            DeadComponent(died_at_epoch=0, cause="fire"),
+        ],
+    )
+    suspended = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="paused", kind="character"),
+            CharacterComponent(species="bunny"),
+            HealthComponent(current=5.0, maximum=5.0),
+            SuspendedComponent(reason="offline"),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), dead.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), suspended.id)
+    room.add_component(FireComponent(intensity=1.0, fuel=0.05, last_updated_epoch=0))
+    scenario.actor.world._relationships.setdefault(room.id, {}).setdefault(Contains, {})[
+        parse_entity_id("entity_999")
+    ] = Contains(mode=ContainmentMode.ROOM_CONTENT)
+
+    assert FireConsequence().process(scenario.actor.world, 0) == []
+
+    events = FireConsequence().process(scenario.actor.world, HOUR)
+
+    assert not room.has_component(FireComponent)
+    assert not item.has_component(FireComponent)
+    assert character.get_component(HealthComponent).current == 12.0
+    assert item.get_component(HealthComponent).current == 2.0
+    assert dead.get_component(HealthComponent).current == 4.0
+    assert suspended.get_component(HealthComponent).current == 5.0
+    assert sum(isinstance(event, FireExtinguishedEvent) for event in events) == 2
+    assert any(
+        isinstance(event, FireDamageEvent) and event.target_id == str(item.id)
+        for event in events
+    )
