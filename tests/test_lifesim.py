@@ -38,6 +38,7 @@ from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.lifesim import (
     AdoptChildHandler,
     AgeComponent,
+    AgingConsequence,
     AspirationComponent,
     AssessTaxHandler,
     BillComponent,
@@ -1406,6 +1407,80 @@ def test_install_lifesim_can_enable_natural_aging_server_wide():
     assert policies[0].get_component(LifesimAgingPolicyComponent).natural_aging is True
 
 
+def test_aging_consequence_covers_stage_and_terminal_edge_paths():
+    scenario = build_scenario()
+    configure_lifesim_aging(
+        scenario.actor,
+        natural_aging=True,
+        adult_age_seconds=10,
+        elder_age_seconds=30,
+        natural_death_age_seconds=50,
+        natural_death_checks=2,
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(AgeComponent(born_at_epoch=0))
+
+    young_adult = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Fern", kind="character"),
+            CharacterComponent(species="bunny"),
+            AgeComponent(born_at_epoch=40),
+            LifeStageComponent(stage="child"),
+        ],
+    )
+    young_child = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Twig", kind="character"),
+            CharacterComponent(species="bunny"),
+            AgeComponent(born_at_epoch=55),
+            LifeStageComponent(stage="child"),
+        ],
+    )
+    already_downed = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Bramble", kind="character"),
+            CharacterComponent(species="bunny"),
+            AgeComponent(born_at_epoch=0),
+            DownedComponent(downed_at_epoch=1, cause="fall", checks_remaining=1),
+            HealthComponent(current=7.0, maximum=10.0),
+        ],
+    )
+    suspended = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Mallow", kind="character"),
+            CharacterComponent(species="bunny"),
+            AgeComponent(born_at_epoch=0),
+            LifeStageComponent(stage="child"),
+            SuspendedComponent(reason="paused"),
+        ],
+    )
+    dead = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Sorrel", kind="character"),
+            CharacterComponent(species="bunny"),
+            AgeComponent(born_at_epoch=0),
+            LifeStageComponent(stage="child"),
+            DeadComponent(died_at_epoch=1, cause="old age"),
+        ],
+    )
+
+    assert AgingConsequence().process(scenario.actor.world, 60) == []
+
+    assert character.get_component(LifeStageComponent).stage == "elder"
+    assert character.get_component(HealthComponent).current == 0.0
+    assert character.get_component(DownedComponent).checks_remaining == 2
+    assert young_adult.get_component(LifeStageComponent).stage == "adult"
+    assert young_child.get_component(LifeStageComponent).stage == "child"
+    assert already_downed.get_component(HealthComponent).current == 7.0
+    assert suspended.get_component(LifeStageComponent).stage == "child"
+    assert dead.get_component(LifeStageComponent).stage == "child"
+
+
 async def test_practice_and_study_progress_skill_and_emit_level_up():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -2155,6 +2230,162 @@ def test_lifesim_fragments_describe_parents():
     fragments = lifesim_fragments(scenario.actor.world, scenario.actor.world.get_entity(child))
 
     assert any("Your parents: Juniper" in line for line in fragments)
+
+
+def test_lifesim_fragments_skip_empty_reputation_labels():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(ReputationComponent(score=0.5))
+
+    fragments = lifesim_fragments(scenario.actor.world, character)
+
+    assert not any(line.startswith("You are known for:") for line in fragments)
+
+
+def test_lifesim_fragments_cover_fallbacks_and_skipped_relationships():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(LifeStageComponent(stage="adult"))
+    character.add_component(AspirationComponent(name="Quiet Life"))
+    character.add_component(CareerComponent(title="Retired Scout", active=False))
+    character.add_component(HouseholdComponent(household_id="burrow-1"))
+    character.add_component(WellRestedComponent(expires_at_epoch=100))
+    character.add_component(ReputationComponent(score=1.0, known_for=("kindness", "craft")))
+    character.add_component(
+        SkillSetComponent(levels={"cooking": 2, "logic": 1}, xp={"logic": 3.5})
+    )
+    character.add_component(
+        PregnancyComponent(started_at_epoch=0, due_at_epoch=10, co_parent_ids=())
+    )
+    character.add_component(BirthDueComponent(due_since_epoch=10))
+
+    unpaid = spawn_entity(
+        scenario.actor.world,
+        [BillComponent(amount=12, reason="burrow rent")],
+    )
+    paid = spawn_entity(
+        scenario.actor.world,
+        [BillComponent(amount=5, reason="tea", paid_at_epoch=3)],
+    )
+    not_a_bill = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Receipt", kind="item")],
+    )
+    character.add_relationship(HasBill(), unpaid.id)
+    character.add_relationship(HasBill(), paid.id)
+    character.add_relationship(HasBill(), not_a_bill.id)
+
+    business = spawn_entity(
+        scenario.actor.world,
+        [BusinessOwnerComponent(name="Moon Market", sales_count=4)],
+    )
+    not_a_business = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Market Stall", kind="item")],
+    )
+    character.add_relationship(OwnsBusiness(), business.id)
+    character.add_relationship(OwnsBusiness(), not_a_business.id)
+
+    room_a = scenario.actor.world.get_entity(scenario.room_a)
+    room_b = scenario.actor.world.get_entity(scenario.room_b)
+    room_a.add_component(HomeComponent(owner_id=str(character.id)))
+    room_a.add_component(RoomClaimComponent(claimed_by_id=str(character.id), claimed_at_epoch=1))
+    room_b.add_component(HomeComponent(owner_id="someone-else"))
+    room_b.add_component(RoomClaimComponent(claimed_by_id="someone-else", claimed_at_epoch=1))
+
+    routine = spawn_entity(
+        scenario.actor.world,
+        [RoutineComponent(activity="garden", next_due_epoch=44)],
+    )
+    not_a_routine = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Checklist", kind="item")],
+    )
+    character.add_relationship(HasRoutine(), routine.id)
+    character.add_relationship(HasRoutine(), not_a_routine.id)
+
+    rival = spawn_entity(scenario.actor.world, [CharacterComponent(species="bunny")])
+    partner = spawn_entity(scenario.actor.world, [CharacterComponent(species="bunny")])
+    character.add_relationship(
+        JealousOf(partner_id=str(partner.id), intensity=0.25, triggered_at_epoch=1),
+        rival.id,
+    )
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(JealousOf, {})[
+        parse_entity_id("entity_998")
+    ] = JealousOf(partner_id="not-an-id", intensity=0.5, triggered_at_epoch=2)
+
+    partner_without_name = spawn_entity(
+        scenario.actor.world,
+        [CharacterComponent(species="bunny")],
+    )
+    partner_with_wrong_status = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent(species="bunny")],
+    )
+    character.add_relationship(PartnerOf(since_epoch=0), partner_without_name.id)
+    character.add_relationship(
+        PartnerOf(since_epoch=0, status="apart"),
+        partner_with_wrong_status.id,
+    )
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(PartnerOf, {})[
+        parse_entity_id("entity_997")
+    ] = PartnerOf(since_epoch=0)
+
+    relationship_target = spawn_entity(
+        scenario.actor.world,
+        [CharacterComponent(species="bunny")],
+    )
+    character.add_relationship(
+        RelationshipStatus(status="neighbor", since_epoch=1),
+        relationship_target.id,
+    )
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(
+        RelationshipStatus, {}
+    )[parse_entity_id("entity_996")] = RelationshipStatus(status="rival", since_epoch=1)
+
+    child_without_name = spawn_entity(
+        scenario.actor.world,
+        [CharacterComponent(species="bunny")],
+    )
+    character.add_relationship(ParentOf(), child_without_name.id)
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(ParentOf, {})[
+        parse_entity_id("entity_995")
+    ] = ParentOf()
+    unnamed_parent = spawn_entity(scenario.actor.world, [CharacterComponent(species="bunny")])
+    unnamed_parent.add_relationship(ParentOf(), character.id)
+
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(HasBill, {})[
+        parse_entity_id("entity_994")
+    ] = HasBill()
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(OwnsBusiness, {})[
+        parse_entity_id("entity_993")
+    ] = OwnsBusiness()
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(HasRoutine, {})[
+        parse_entity_id("entity_992")
+    ] = HasRoutine()
+
+    fragments = lifesim_fragments(scenario.actor.world, character)
+
+    assert "Your life stage is adult." in fragments
+    assert "Your aspiration is Quiet Life." in fragments
+    assert "Household funds: 0." not in fragments
+    assert "Your career is Retired Scout, level 1." not in fragments
+    assert "Unpaid bills: burrow rent (12)." in fragments
+    assert "You own Moon Market; 4 sales." in fragments
+    assert "Your household is burrow-1." in fragments
+    assert "Your home is Mosslit Burrow." in fragments
+    assert "Rooms you claim: Mosslit Burrow." in fragments
+    assert "You are well-rested after sleeping in your own home." in fragments
+    assert "Routine: garden due at epoch 44." in fragments
+    assert "You are known for: kindness, craft." in fragments
+    assert "Skill cooking: level 2, 0 xp." in fragments
+    assert "Skill logic: level 1, 3.5 xp." in fragments
+    assert "You feel jealous of someone over someone." in fragments
+    assert "You are pregnant (due now)." in fragments
+    assert "You are partners with someone." in fragments
+    assert "someone is your neighbor." in fragments
+    assert "Your children: someone." in fragments
+    assert "Your parents: someone." in fragments
 
 
 def test_status_edge_and_routine_lookup_cover_match_and_miss_paths():
