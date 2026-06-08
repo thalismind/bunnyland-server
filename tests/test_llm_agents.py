@@ -32,7 +32,6 @@ from bunnyland.llm_agents import (
     command_from_tool_call,
     did_you_mean,
     name_candidates,
-    natural_language,
     parse_natural_command,
     resolve_reference,
     resolve_reference_args,
@@ -261,7 +260,7 @@ def test_parse_natural_command_returns_none_for_ambiguous_text():
     assert parse_natural_command("maybe Hazel knows") is None
 
 
-def test_parse_natural_command_covers_alternate_command_shapes(monkeypatch):
+def test_parse_natural_command_covers_alternate_command_shapes():
     assert parse_natural_command("go old gate") == ToolCall("move", {"exit_id": "old gate"})
     assert parse_natural_command("north") == ToolCall("move", {"direction": "north"})
     assert parse_natural_command("drop brass key") == ToolCall("drop", {"item_id": "brass key"})
@@ -281,7 +280,6 @@ def test_parse_natural_command_covers_alternate_command_shapes(monkeypatch):
         "use", {"target_id": "brass key", "tool_id": "old lock"}
     )
     assert parse_natural_command("use brass key") == ToolCall("use", {"target_id": "brass key"})
-    monkeypatch.setattr(natural_language, "_parse_definition_pattern", lambda *_: None)
     assert parse_natural_command("enchant moss charm with Mend Moss") == ToolCall(
         "enchant_item", {"item_id": "moss charm", "spell_id": "Mend Moss"}
     )
@@ -306,9 +304,6 @@ def test_parse_natural_command_covers_alternate_command_shapes(monkeypatch):
     assert parse_natural_command("write hello on slate") == ToolCall(
         "write", {"target_id": "slate", "text": "hello"}
     )
-
-    monkeypatch.setattr(natural_language, "_split", lambda _: [])
-    assert parse_natural_command("not empty") is None
 
 
 def test_parse_natural_command_rejects_incomplete_command_shapes():

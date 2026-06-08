@@ -52,6 +52,8 @@ class ActionPattern:
     """Natural-language pattern with named slots, e.g. ``give {item_id} to {target_id}``."""
 
     text: str
+    fixed_arguments: dict[str, Any] | None = None
+    argument_aliases: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -220,7 +222,7 @@ def _definition(
     description: str | None = None,
     lane: Lane = Lane.WORLD,
     cost: CommandCost = _ACTION,
-    patterns: tuple[str, ...] = (),
+    patterns: tuple[str | ActionPattern, ...] = (),
     examples: tuple[str, ...] = (),
 ) -> ActionDefinition:
     title = command_type.replace("-", " ").title()
@@ -232,29 +234,109 @@ def _definition(
         lane=lane,
         cost=cost,
         arguments={key: _argument_for_key(key) for key in args},
-        natural_patterns=tuple(ActionPattern(pattern) for pattern in patterns),
+        natural_patterns=tuple(
+            pattern if isinstance(pattern, ActionPattern) else ActionPattern(pattern)
+            for pattern in patterns
+        ),
         examples=tuple(ActionExample(example, natural=True) for example in examples),
     )
 
 
 DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     # Core verbs.
-    _definition("move", ("direction", "exit_id"), tool_name="move", examples=("go north",)),
-    _definition("take", ("item_id",), tool_name="take", examples=("take brass key",)),
-    _definition("put", ("item_id", "target_container_id"), tool_name="put"),
-    _definition("put", ("item_id",), tool_name="drop", examples=("drop brass key",)),
-    _definition("use", ("target_id", "tool_id"), tool_name="use"),
-    _definition("write", ("target_id", "text"), tool_name="write", cost=_SPEECH),
-    _definition("sleep", tool_name="sleep", cost=_FREE),
-    _definition("wake", tool_name="wake", cost=_FREE),
-    _definition("wait", tool_name="wait", cost=_FREE, examples=("wait",)),
+    _definition(
+        "move",
+        ("direction", "exit_id"),
+        tool_name="move",
+        patterns=(
+            "go {direction}",
+            "move {direction}",
+            "walk {direction}",
+            "run {direction}",
+            "go {exit_id}",
+            "move {exit_id}",
+            "walk {exit_id}",
+            "run {exit_id}",
+            ActionPattern("north", {"direction": "north"}),
+            ActionPattern("south", {"direction": "south"}),
+            ActionPattern("east", {"direction": "east"}),
+            ActionPattern("west", {"direction": "west"}),
+            ActionPattern("up", {"direction": "up"}),
+            ActionPattern("down", {"direction": "down"}),
+            ActionPattern("inside", {"direction": "inside"}),
+            ActionPattern("outside", {"direction": "outside"}),
+            ActionPattern("in", {"direction": "in"}),
+            ActionPattern("out", {"direction": "out"}),
+        ),
+        examples=("go north",),
+    ),
+    _definition(
+        "take",
+        ("item_id",),
+        tool_name="take",
+        patterns=(
+            "take {item_id}",
+            "get {item_id}",
+            "grab {item_id}",
+            "pick up {item_id}",
+            "pick {item_id}",
+        ),
+        examples=("take brass key",),
+    ),
+    _definition(
+        "put",
+        ("item_id", "target_container_id"),
+        tool_name="put",
+        patterns=(
+            "put {item_id} in {target_container_id}",
+            "put {item_id} into {target_container_id}",
+            "put {item_id} on {target_container_id}",
+            "put {item_id} onto {target_container_id}",
+        ),
+    ),
+    _definition(
+        "put",
+        ("item_id",),
+        tool_name="drop",
+        patterns=("drop {item_id}", "put {item_id}"),
+        examples=("drop brass key",),
+    ),
+    _definition(
+        "use",
+        ("target_id", "tool_id"),
+        tool_name="use",
+        patterns=("use {target_id} with {tool_id}", "use {target_id}"),
+    ),
+    _definition(
+        "write",
+        ("target_id", "text"),
+        tool_name="write",
+        cost=_SPEECH,
+        patterns=("write {text} on {target_id}",),
+    ),
+    _definition("sleep", tool_name="sleep", cost=_FREE, patterns=(ActionPattern("sleep", {}),)),
+    _definition("wake", tool_name="wake", cost=_FREE, patterns=(ActionPattern("wake", {}),)),
+    _definition(
+        "wait",
+        tool_name="wait",
+        cost=_FREE,
+        patterns=(ActionPattern("wait", {}), ActionPattern("yield", {})),
+        examples=("wait",),
+    ),
     _definition("move-sprite", ("x", "y"), tool_name="move_sprite", cost=_FREE),
-    _definition("say", ("text", "intent", "approach"), tool_name="say", cost=_SPEECH),
+    _definition(
+        "say",
+        ("text", "intent", "approach"),
+        tool_name="say",
+        cost=_SPEECH,
+        patterns=("say {text}",),
+    ),
     _definition(
         "tell",
         ("target_id", "text", "intent", "approach", "audible"),
         tool_name="tell",
         cost=_SPEECH,
+        patterns=("tell {target_id:word} {text}",),
     ),
     # Memory.
     _definition(
@@ -263,6 +345,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="take_note",
         lane=Lane.FOCUS,
         cost=_FOCUS,
+        patterns=("take note {text}", "note {text}"),
     ),
     _definition(
         "remember",
@@ -270,6 +353,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="remember",
         lane=Lane.FOCUS,
         cost=_FOCUS,
+        patterns=("remember {query}",),
     ),
     _definition(
         "forget",
@@ -277,6 +361,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="forget",
         lane=Lane.FOCUS,
         cost=_FOCUS,
+        patterns=("forget {note_id}",),
     ),
     _definition(
         "reflect",
@@ -284,15 +369,36 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="reflect",
         lane=Lane.FOCUS,
         cost=_FOCUS,
+        patterns=("reflect {text}",),
     ),
     # Environment and garden.
     _definition("ignite", ("target_id", "intensity"), tool_name="ignite"),
     _definition("extinguish", ("target_id",), tool_name="extinguish"),
-    _definition("till", ("soil_id",), tool_name="till"),
-    _definition("plant", ("soil_id", "seed_id"), tool_name="plant"),
-    _definition("water-crop", ("soil_id",), tool_name="water_crop"),
-    _definition("fertilize", ("soil_id", "fertilizer_id"), tool_name="fertilize"),
-    _definition("harvest-crop", ("soil_id",), tool_name="harvest_crop"),
+    _definition("till", ("soil_id",), tool_name="till", patterns=("till {soil_id}",)),
+    _definition(
+        "plant",
+        ("soil_id", "seed_id"),
+        tool_name="plant",
+        patterns=("plant {seed_id} in {soil_id}", "plant {seed_id} into {soil_id}"),
+    ),
+    _definition(
+        "water-crop",
+        ("soil_id",),
+        tool_name="water_crop",
+        patterns=("water {soil_id}",),
+    ),
+    _definition(
+        "fertilize",
+        ("soil_id", "fertilizer_id"),
+        tool_name="fertilize",
+        patterns=("fertilize {soil_id} with {fertilizer_id}",),
+    ),
+    _definition(
+        "harvest-crop",
+        ("soil_id",),
+        tool_name="harvest_crop",
+        patterns=("harvest {soil_id}",),
+    ),
     # Dino sim.
     _definition(
         "identify-fossil",
@@ -314,8 +420,8 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     _definition("hatch-egg", ("egg_id",), tool_name="hatch_egg"),
     # Life sim.
-    _definition("eat", ("item_id",), tool_name="eat"),
-    _definition("drink", ("source_id",), tool_name="drink"),
+    _definition("eat", ("item_id",), tool_name="eat", patterns=("eat {item_id}",)),
+    _definition("drink", ("source_id",), tool_name="drink", patterns=("drink {source_id}",)),
     _definition("choose-aspiration", ("name", "milestones"), tool_name="choose_aspiration"),
     _definition("complete-milestone", ("milestone", "reward_name"), tool_name="complete_milestone"),
     _definition("practice-skill", ("skill", "xp"), tool_name="practice_skill"),
@@ -337,18 +443,59 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("pay-wage", ("worker_id", "amount"), tool_name="pay_wage"),
     _definition("assess-tax", ("amount", "reason", "due_epoch"), tool_name="assess_tax"),
     _definition(
-        "charge-rent", ("tenant_id", "amount", "reason", "due_epoch"), tool_name="charge_rent"
+        "charge-rent",
+        ("tenant_id", "amount", "reason", "due_epoch"),
+        tool_name="charge_rent",
+        patterns=("charge rent {tenant_id} {amount}",),
     ),
-    _definition("pay-bill", ("bill_id",), tool_name="pay_bill"),
-    _definition("open-business", ("name", "default_price"), tool_name="open_business"),
-    _definition("buy-item", ("seller_id", "item_id", "business_id", "price"), tool_name="buy_item"),
     _definition(
-        "sell-item", ("item_id", "customer_id", "business_id", "price"), tool_name="sell_item"
+        "pay-bill",
+        ("bill_id",),
+        tool_name="pay_bill",
+        patterns=("pay bill {bill_id}", ActionPattern("pay bill", {})),
+    ),
+    _definition(
+        "open-business",
+        ("name", "default_price"),
+        tool_name="open_business",
+        patterns=("open business {name}",),
+    ),
+    _definition(
+        "buy-item",
+        ("seller_id", "item_id", "business_id", "price"),
+        tool_name="buy_item",
+        patterns=("buy {item_id} from {seller_id}",),
+    ),
+    _definition(
+        "sell-item",
+        ("item_id", "customer_id", "business_id", "price"),
+        tool_name="sell_item",
+        patterns=("sell {item_id} to {customer_id}",),
     ),
     _definition("promote-business", ("business_id",), tool_name="promote_business"),
-    _definition("join-household", ("household_id", "name"), tool_name="join_household"),
-    _definition("claim-home", ("room_id",), tool_name="claim_home"),
-    _definition("claim-room", ("room_id",), tool_name="claim_room"),
+    _definition(
+        "join-household",
+        ("household_id", "name"),
+        tool_name="join_household",
+        patterns=(
+            ActionPattern(
+                "join household {household_id}",
+                argument_aliases={"name": "household_id"},
+            ),
+        ),
+    ),
+    _definition(
+        "claim-home",
+        ("room_id",),
+        tool_name="claim_home",
+        patterns=("claim home {room_id}", ActionPattern("claim home", {})),
+    ),
+    _definition(
+        "claim-room",
+        ("room_id",),
+        tool_name="claim_room",
+        patterns=("claim room {room_id}", ActionPattern("claim room", {})),
+    ),
     _definition(
         "set-routine", ("activity", "interval_seconds", "next_due_epoch"), tool_name="set_routine"
     ),
@@ -365,7 +512,12 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("end-partnership", ("target_id",), tool_name="end_partnership"),
     _definition("start-pregnancy", ("co_parent_id", "due_in_seconds"), tool_name="start_pregnancy"),
     _definition("resolve-birth", ("child_name",), tool_name="resolve_birth"),
-    _definition("adopt-child", ("child_id",), tool_name="adopt_child"),
+    _definition(
+        "adopt-child",
+        ("child_id",),
+        tool_name="adopt_child",
+        patterns=("adopt {child_id}",),
+    ),
     # Colony, dragon, and barbarian sims.
     _definition("reserve", ("target_id",), tool_name="reserve"),
     _definition("release-reservation", ("target_id",), tool_name="release_reservation"),
@@ -373,13 +525,48 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("craft", ("recipe_id",), tool_name="craft"),
     _definition("assign-job", ("job_id",), tool_name="assign_job"),
     _definition("complete-job", ("job_id",), tool_name="complete_job"),
-    _definition("claim-ownership", ("target_id",), tool_name="claim_ownership"),
-    _definition("release-ownership", ("target_id",), tool_name="release_ownership"),
-    _definition("discover-location", ("location_id",), tool_name="discover_location"),
-    _definition("accept-quest", ("quest_id",), tool_name="accept_quest"),
-    _definition("complete-objective", ("objective_id",), tool_name="complete_objective"),
-    _definition("join-faction", ("faction_id", "rank"), tool_name="join_faction"),
-    _definition("leave-faction", ("faction_id",), tool_name="leave_faction"),
+    _definition(
+        "claim-ownership",
+        ("target_id",),
+        tool_name="claim_ownership",
+        patterns=("claim {target_id}",),
+    ),
+    _definition(
+        "release-ownership",
+        ("target_id",),
+        tool_name="release_ownership",
+        patterns=("release ownership {target_id}",),
+    ),
+    _definition(
+        "discover-location",
+        ("location_id",),
+        tool_name="discover_location",
+        patterns=("discover {location_id}",),
+    ),
+    _definition(
+        "accept-quest",
+        ("quest_id",),
+        tool_name="accept_quest",
+        patterns=("accept quest {quest_id}",),
+    ),
+    _definition(
+        "complete-objective",
+        ("objective_id",),
+        tool_name="complete_objective",
+        patterns=("complete objective {objective_id}",),
+    ),
+    _definition(
+        "join-faction",
+        ("faction_id", "rank"),
+        tool_name="join_faction",
+        patterns=("join faction {faction_id}",),
+    ),
+    _definition(
+        "leave-faction",
+        ("faction_id",),
+        tool_name="leave_faction",
+        patterns=("leave faction {faction_id}",),
+    ),
     _definition(
         "attack",
         ("target_id", "weapon_id", "lethal", "body_part", "stamina_cost", "durability_cost"),
@@ -403,7 +590,12 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("treat-poison", ("target_id",), tool_name="treat_poison"),
     _definition("gain-corruption", ("amount",), tool_name="gain_corruption"),
     _definition("cleanse-corruption", tool_name="cleanse_corruption"),
-    _definition("pickpocket", ("target_id", "item_id"), tool_name="pickpocket"),
+    _definition(
+        "pickpocket",
+        ("target_id", "item_id"),
+        tool_name="pickpocket",
+        patterns=("pickpocket {target_id:word} {item_id}",),
+    ),
     # Dagger sim.
     _definition("expand-site", ("site_id", "generator_id", "trigger"), tool_name="expand_site"),
     _definition("ask-rumor", ("rumor_id",), tool_name="ask_rumor"),
@@ -439,7 +631,11 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "cast-spell",
         ("spell_id", "target_id"),
         tool_name="cast_spell",
-        patterns=("cast {spell_id} on {target_id}", "cast {spell_id} at {target_id}"),
+        patterns=(
+            "cast {spell_id} on {target_id}",
+            "cast {spell_id} at {target_id}",
+            "cast {spell_id}",
+        ),
         examples=("cast moss charm on Juniper",),
     ),
     _definition(
