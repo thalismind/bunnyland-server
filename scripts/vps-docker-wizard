@@ -220,7 +220,10 @@ admin_password="$(prompt_secret_confirm "Admin password")"
 cert_email="$(prompt "Let's Encrypt email (blank is allowed)")"
 world_save="$(prompt "Existing world save path (blank to generate/use data-dir default)")"
 starter_pack="$(prompt_starter_pack "Starter pack (none/peaceful/fantastic/futuristic)" "none")"
-favicon_file="$(prompt "Custom favicon path (blank for default)")"
+favicon_file=""
+if confirm "Use a custom favicon?" "n"; then
+  favicon_file="$(prompt_required "Custom favicon path")"
+fi
 home_domain="$(prompt "Homepage domain served by this frontend container (blank to skip)")"
 home_dir=""
 home_cert_name=""

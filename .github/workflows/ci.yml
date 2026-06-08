@@ -137,7 +137,10 @@ jobs:
           BUNNYLAND_SERVER_TAG: main
         run: |
           data_dir="${{ runner.temp }}/bunnyland-vps-data-dry-run"
-          printf '\nlocalhost\n%s\neditor\nlocal\nlocal\n\n\nnone\n\n\nn\nn\ny\n' "$data_dir" \
+          favicon_file="${{ runner.temp }}/bunnyland-favicon-dry-run.png"
+          printf 'favicon\n' > "$favicon_file"
+          printf '\nlocalhost\n%s\neditor\nlocal\nlocal\n\n\nnone\ny\n%s\n\nn\nn\ny\n' \
+            "$data_dir" "$favicon_file" \
             | scripts/vps-docker-wizard
 
       - name: Run setup script
@@ -154,7 +157,10 @@ jobs:
           BUNNYLAND_SERVER_TAG: main
           BUNNYLAND_ENABLE_LLM: "0"
           BUNNYLAND_ENABLE_DISCORD: "0"
-        run: scripts/vps-docker-setup
+          BUNNYLAND_FAVICON_FILE: ${{ runner.temp }}/bunnyland-favicon.png
+        run: |
+          printf 'favicon\n' > "$BUNNYLAND_FAVICON_FILE"
+          scripts/vps-docker-setup
 
       - name: Restart local deployment
         env:
@@ -184,3 +190,4 @@ jobs:
           sudo docker compose --env-file /dev/null -p bunnyland -f compose.yml -f compose.user.yml down -v --remove-orphans || true
           sudo rm -rf "${{ runner.temp }}/bunnyland-vps-data" "${{ runner.temp }}/bunnyland-vps-data-dry-run"
           sudo rm -rf "${{ runner.temp }}/bunnyland-vps-auth" "${{ runner.temp }}/bunnyland-vps-auth-dry-run"
+          sudo rm -f "${{ runner.temp }}/bunnyland-favicon.png" "${{ runner.temp }}/bunnyland-favicon-dry-run.png"
