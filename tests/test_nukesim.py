@@ -14,6 +14,7 @@ from bunnyland.core import (
     PortableComponent,
     build_submitted_command,
     parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
@@ -332,6 +333,76 @@ def test_nukesim_prompt_fragments_surface_local_wasteland_state():
 
     assert any("Radiation dose" in line for line in fragments)
     assert any("Radiation source" in line for line in fragments)
+
+
+def test_nukesim_fragments_cover_radiation_status_and_reachable_supplies():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(RadiationDoseComponent(amount=0.0))
+    character.add_component(RadiationSicknessComponent(severity=0.0))
+    character.add_component(RadiationMutationPressureComponent(amount=0.0))
+    character.add_component(MutationComponent(mutation_id="glow", label="Glow", stable=False))
+
+    fragments = nukesim_fragments(scenario.actor.world, character)
+
+    assert not any(line.startswith("Radiation dose:") for line in fragments)
+    assert not any(line.startswith("Radiation sickness") for line in fragments)
+    assert not any(line.startswith("Radiation mutation pressure") for line in fragments)
+    assert "Mutation: Glow (unstable)." in fragments
+
+    replace_component(character, RadiationDoseComponent(amount=2.5))
+    replace_component(character, RadiationSicknessComponent(severity=1.5))
+    replace_component(character, RadiationMutationPressureComponent(amount=3.0))
+    replace_component(
+        character,
+        MutationComponent(mutation_id="glow", label="Glow", stable=True),
+    )
+    source = _room_entity(
+        scenario,
+        "sealed isotope",
+        "radiation-source",
+        [RadiationSourceComponent(source_type="isotope case", sealed=True)],
+    )
+    unnamed_site = spawn_entity(
+        scenario.actor.world,
+        [ScavengeSiteComponent(site_type="collapsed shelter", depleted=True)],
+    )
+    decon = _room_entity(
+        scenario,
+        "wash station",
+        "decontamination",
+        [DecontaminationComponent()],
+    )
+    medicine = _room_entity(
+        scenario,
+        "rad pills",
+        "medicine",
+        [RadMedicineComponent()],
+    )
+    junk = _room_entity(
+        scenario,
+        "bent panel",
+        "junk",
+        [JunkComponent(outputs={"scrap": 1})],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unnamed_site.id)
+
+    fragments = nukesim_fragments(scenario.actor.world, character)
+
+    assert "Radiation dose: 2.5 rads." in fragments
+    assert "Radiation sickness severity: 1.5." in fragments
+    assert "Radiation mutation pressure: 3." in fragments
+    assert "Mutation: Glow (stable)." in fragments
+    assert "Radiation source sealed isotope: isotope case, sealed." in fragments
+    assert f"Scavenge site {unnamed_site.id}: collapsed shelter, depleted." in fragments
+    assert "Decontamination available: wash station." in fragments
+    assert "Rad medicine available: rad pills." in fragments
+    assert "Scrappable junk: bent panel." in fragments
+    assert scenario.actor.world.has_entity(source)
+    assert scenario.actor.world.has_entity(decon)
+    assert scenario.actor.world.has_entity(medicine)
+    assert scenario.actor.world.has_entity(junk)
 
 
 def test_nukesim_handlers_reject_invalid_character_ids_directly():
