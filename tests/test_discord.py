@@ -58,9 +58,10 @@ from bunnyland.discord.bot import (
     QUEUED_REACTION,
     DiscordBot,
     _minutes_to_timeout_seconds,
+    _parse_discord_claim_args,
     _split,
 )
-from bunnyland.discord.claim import discord_controlled_character
+from bunnyland.discord.claim import _match_character, discord_controlled_character
 from bunnyland.memory import InMemoryStore, install_memory
 
 
@@ -299,9 +300,68 @@ def test_minutes_to_timeout_seconds_normalizes_and_rejects_bad_values():
             _minutes_to_timeout_seconds(value)
 
 
+def test_parse_discord_claim_args_covers_flag_forms_and_errors():
+    args = _parse_discord_claim_args(
+        '"Juniper Moss" --fallback-controller llm --timeout-minutes=15'
+    )
+    assert args.character_name == "Juniper Moss"
+    assert args.fallback_controller == "llm"
+    assert args.timeout_seconds == 900
+
+    equals_args = _parse_discord_claim_args("Hazel --fallback=suspend --timeout 20")
+    assert equals_args.character_name == "Hazel"
+    assert equals_args.fallback_controller == "suspend"
+    assert equals_args.timeout_seconds == 1200
+
+    timeout_alias = _parse_discord_claim_args("Clover --claim-timeout 30")
+    assert timeout_alias.character_name == "Clover"
+    assert timeout_alias.timeout_seconds == 1800
+
+    for text, message in (
+        ("Juniper --fallback", "--fallback requires suspend or llm"),
+        ("Juniper --timeout", "--timeout requires minutes"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            _parse_discord_claim_args(text)
+
+
 def test_split_falls_back_when_shell_quoting_is_invalid():
     assert _split('say "hello there"') == ["say", "hello there"]
     assert _split('say "unterminated') == ["say", '"unterminated']
+
+
+def test_match_character_handles_exact_prefix_ambiguous_and_missing(scenario):
+    characters = list(
+        scenario.actor.world.query()
+        .with_all([CharacterComponent, IdentityComponent])
+        .execute_entities()
+    )
+    juniper = characters[0]
+    spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Junia", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="June", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    characters = list(
+        scenario.actor.world.query()
+        .with_all([CharacterComponent, IdentityComponent])
+        .execute_entities()
+    )
+
+    assert _match_character(characters, "juniper") == juniper
+    assert _match_character(characters, "junip") == juniper
+    assert _match_character(characters, "missing") is None
+    with pytest.raises(RuntimeError, match="multiple characters match"):
+        _match_character(characters, "jun")
 
 
 def test_discord_message_filters_require_allowed_guild_and_channel():

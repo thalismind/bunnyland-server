@@ -28,6 +28,7 @@ from bunnyland.mechanics.needs import HungerComponent
 from bunnyland.persistence import (
     WorldMeta,
     YAMLPersistenceDriver,
+    _format_for_path,
     load_world,
     save_world,
     type_registries,
@@ -74,6 +75,17 @@ def _inventory(actor, character_id):
         actor.world.get_entity(c).get_component(IdentityComponent).name
         for c in contents(actor.world.get_entity(character_id))
     )
+
+
+def test_format_for_path_respects_explicit_format_and_suffixes(tmp_path):
+    assert _format_for_path(tmp_path / "world.yml", None) == "yaml"
+    assert _format_for_path(tmp_path / "world.yaml", None) == "yaml"
+    assert _format_for_path(tmp_path / "world.json", None) == "json"
+    assert _format_for_path(tmp_path / "world.yml", "json") == "json"
+    assert _format_for_path(tmp_path / "world.json", "yaml") == "yaml"
+
+    with pytest.raises(ValueError, match="unknown persistence format"):
+        _format_for_path(tmp_path / "world.json", "toml")
 
 
 async def test_save_reload_preserves_world(tmp_path):

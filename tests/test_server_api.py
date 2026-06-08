@@ -62,7 +62,7 @@ from bunnyland.server.models import (
 )
 from bunnyland.server.patches import WorldPatchError, apply_world_patch
 from bunnyland.server.runtime import run_loop_with_api
-from bunnyland.server.schema import world_schema
+from bunnyland.server.schema import _type_schema, world_schema
 from bunnyland.server.worldgen import (
     _room_description,
     generate_character_patch,
@@ -166,6 +166,40 @@ async def test_event_stream_records_recent_events_and_fans_out_to_subscribers(sc
         message["data"]["event_type"] == "ActorMovedEvent"
         for message in stream.recent_messages()
     )
+
+
+def test_event_stream_broadcast_drops_oldest_when_queue_is_full(scenario):
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe(max_queue_size=1)
+    try:
+        stream.broadcast({"type": "first"})
+        stream.broadcast({"type": "second"})
+
+        assert subscription.queue.get_nowait() == {"type": "second"}
+        assert subscription.queue.empty()
+    finally:
+        subscription.close()
+
+
+def test_type_schema_reports_adapter_errors(monkeypatch):
+    class BadType:
+        pass
+
+    class RaisingAdapter:
+        def __init__(self, type_):
+            self.type_ = type_
+
+        def json_schema(self):
+            raise RuntimeError("cannot adapt")
+
+    monkeypatch.setattr("bunnyland.server.schema.TypeAdapter", RaisingAdapter)
+
+    schema = _type_schema("BadType", BadType, 0)
+
+    assert schema.used is False
+    assert schema.count == 0
+    assert schema.schema_error == "cannot adapt"
+    assert schema.json_schema["additionalProperties"] is True
 
 
 async def test_generation_failed_publisher_emits_failure_event(scenario):

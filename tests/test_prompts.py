@@ -9,9 +9,13 @@ from bunnyland.core import (
     AffectVector,
     ContainmentMode,
     Contains,
+    DeadComponent,
+    DownedComponent,
     IdentityComponent,
     MemoryProfileComponent,
     PortableComponent,
+    SleepingComponent,
+    SuspendedComponent,
     spawn_entity,
 )
 from bunnyland.mechanics.meter import Meter
@@ -19,6 +23,7 @@ from bunnyland.mechanics.needs import HungerComponent, ThirstComponent, need_fra
 from bunnyland.memory import InMemoryStore
 from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
 from bunnyland.prompts import PromptBuilder, render_prompt
+from bunnyland.prompts.builder import _status
 
 
 def add_item(scenario, room_id, name):
@@ -47,6 +52,24 @@ def test_build_context_has_core_sections():
     assert "north" in ctx.exits
     assert "move north" in ctx.commands
     assert "take note" in ctx.commands
+
+
+def test_status_helper_uses_condition_precedence(scenario):
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    assert _status(character) == "active"
+
+    character.add_component(SleepingComponent())
+    assert _status(character) == "asleep"
+
+    character.add_component(DownedComponent(downed_at_epoch=0, cause="test"))
+    assert _status(character) == "downed"
+
+    character.add_component(SuspendedComponent())
+    assert _status(character) == "suspended"
+
+    character.add_component(DeadComponent(died_at_epoch=0, cause="test"))
+    assert _status(character) == "dead"
 
 
 def test_build_context_includes_needs_feelings_and_notes():

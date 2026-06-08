@@ -40,7 +40,12 @@ from bunnyland.core.controllers import (
     WebControllerComponent,
 )
 from bunnyland.core.ecs import get_or_none
-from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent, ControllerChangedEvent
+from bunnyland.core.events import (
+    CommandExecutedEvent,
+    CommandRejectedEvent,
+    ControllerChangedEvent,
+    EventBus,
+)
 from bunnyland.core.systems import ClaimTimeoutSystem
 
 HOUR = 3600.0
@@ -63,6 +68,19 @@ def collect(actor, event_type):
     seen = []
     actor.bus.subscribe(event_type, seen.append)
     return seen
+
+
+def test_event_bus_unsubscribe_ignores_missing_handlers():
+    bus = EventBus()
+    seen = []
+
+    bus.unsubscribe(CommandExecutedEvent, seen.append)
+    bus.subscribe(CommandExecutedEvent, seen.append)
+    bus.unsubscribe(CommandRejectedEvent, seen.append)
+    bus.unsubscribe(CommandExecutedEvent, lambda event: None)
+    bus.unsubscribe(CommandExecutedEvent, seen.append)
+
+    assert bus._handlers[CommandExecutedEvent] == []
 
 
 def test_get_or_none_and_nowait_submission_cover_absent_paths():

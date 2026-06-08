@@ -5,10 +5,15 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    CharacterComponent,
     CommandCost,
+    ContainmentMode,
     Contains,
+    DeadComponent,
     IdentityComponent,
     Lane,
+    RoomComponent,
+    SuspendedComponent,
     build_submitted_command,
     parse_entity_id,
     spawn_entity,
@@ -24,6 +29,7 @@ from bunnyland.mechanics.storyteller import (
     StorytellerComponent,
     StorytellerConsequence,
     ThreatPointsComponent,
+    _target_room,
     install_storyteller,
     storyteller_fragments,
 )
@@ -123,3 +129,41 @@ def test_storyteller_install_registers_consequence():
         isinstance(consequence, StorytellerConsequence)
         for consequence in scenario.actor._consequences
     )
+
+
+def test_target_room_skips_inactive_characters_and_falls_back_to_rooms(scenario):
+    world = scenario.actor.world
+    active = world.get_entity(scenario.character)
+    active.add_component(SuspendedComponent())
+
+    dead = spawn_entity(
+        world,
+            [
+                IdentityComponent(name="Gone", kind="character"),
+                CharacterComponent(species="bunny"),
+                DeadComponent(died_at_epoch=0, cause="test"),
+            ],
+        )
+    suspended = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Waiting", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(),
+        ],
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), dead.id
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), suspended.id
+    )
+
+    assert _target_room(world).has_component(RoomComponent)
+
+    bare_world = type(world)()
+    room = spawn_entity(bare_world, [RoomComponent(title="Empty")])
+    assert _target_room(bare_world) == room
+
+    empty_world = type(world)()
+    assert _target_room(empty_world) is None
