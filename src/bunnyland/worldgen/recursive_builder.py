@@ -275,7 +275,7 @@ class OllamaWorldAgent:
         self._model = model
         self._history: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
 
-    def _ask(self, instruction: str) -> dict:  # pragma: no cover - needs network + extra
+    def _ask(self, instruction: str) -> dict:
         self._history.append({"role": "user", "content": instruction})
         response = self._client.chat(
             model=self._model, format="json", messages=self._history
@@ -294,7 +294,7 @@ class OllamaWorldAgent:
             "details, but still reply ONLY with the requested JSON shape."
         )
 
-    def propose_room(  # pragma: no cover - needs network + extra
+    def propose_room(
         self,
         seed: str,
         *,
@@ -318,7 +318,7 @@ class OllamaWorldAgent:
             self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_doors(  # pragma: no cover - needs network + extra
+    def propose_doors(
         self, room: RoomNodeProposal, *, schema_context: str = ""
     ) -> list[DoorProposal]:
         instruction = (
@@ -330,7 +330,7 @@ class OllamaWorldAgent:
         data = self._ask(self._with_schema_context(instruction, schema_context))
         return [DoorProposal.model_validate(d) for d in data.get("doors", [])]
 
-    def resolve_dangling_door(  # pragma: no cover - needs network + extra
+    def resolve_dangling_door(
         self, door: DoorProposal, *, room: RoomNodeProposal, candidates: Mapping[str, str]
     ) -> DanglingResolution:
         listing = "; ".join(f"{key}={title}" for key, title in candidates.items()) or "(none)"
@@ -342,7 +342,7 @@ class OllamaWorldAgent:
         )
         return DanglingResolution.model_validate(self._ask(instruction))
 
-    def propose_contents(  # pragma: no cover - needs network + extra
+    def propose_contents(
         self,
         room: RoomNodeProposal,
         *,
@@ -360,7 +360,7 @@ class OllamaWorldAgent:
             self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_character(  # pragma: no cover - needs network + extra
+    def propose_character(
         self,
         room: RoomNodeProposal,
         *,
@@ -379,7 +379,7 @@ class OllamaWorldAgent:
             self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_item(  # pragma: no cover - needs network + extra
+    def propose_item(
         self,
         *,
         container_name: str,
@@ -399,7 +399,7 @@ class OllamaWorldAgent:
             self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_event(  # pragma: no cover - needs network + extra
+    def propose_event(
         self,
         room: RoomNodeProposal,
         *,
@@ -424,7 +424,7 @@ class OllamaWorldAgent:
             self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_inventory(  # pragma: no cover - needs network + extra
+    def propose_inventory(
         self, *, name: str, species: str
     ) -> list[ItemProposal]:
         instruction = (
@@ -433,7 +433,7 @@ class OllamaWorldAgent:
         )
         return [ItemProposal.model_validate(o) for o in self._ask(instruction).get("objects", [])]
 
-    def propose_container_contents(  # pragma: no cover - needs network + extra
+    def propose_container_contents(
         self, *, name: str
     ) -> list[ItemProposal]:
         instruction = (
@@ -466,7 +466,7 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
         self._model = model
         self._history: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
 
-    def _ask(self, instruction: str) -> dict:  # pragma: no cover - needs network + extra
+    def _ask(self, instruction: str) -> dict:
         self._history.append({"role": "user", "content": instruction})
         response = self._client.chat.send(
             model=self._model,

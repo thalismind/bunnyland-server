@@ -116,7 +116,7 @@ class OllamaAgent:
         # character_id -> running list of {"role", "content"/"tool_calls"} messages.
         self._history: dict[str, list[dict]] = {}
 
-    async def decide(  # pragma: no cover - needs network + extra
+    async def decide(
         self,
         prompt: str,
         context: PromptContext,
@@ -160,7 +160,7 @@ class OllamaAgent:
         call = tool_calls[0]["function"]
         return ToolCall(name=call["name"], arguments=dict(call.get("arguments", {})))
 
-    def _trim(self, history: list[dict]) -> None:  # pragma: no cover - needs network + extra
+    def _trim(self, history: list[dict]) -> None:
         # Keep the last N exchanges (user + assistant per turn).
         limit = self._history_turns * 2
         if len(history) > limit:
@@ -196,7 +196,7 @@ class OpenRouterAgent:
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
         self._history: dict[str, list[dict]] = {}
 
-    async def decide(  # pragma: no cover - needs network + extra
+    async def decide(
         self,
         prompt: str,
         context: PromptContext,
@@ -251,7 +251,7 @@ class OpenRouterAgent:
         arguments = _openrouter_arguments(getattr(function, "arguments", {}))
         return ToolCall(name=function.name, arguments=arguments)
 
-    def _trim(self, history: list[dict]) -> None:  # pragma: no cover - needs network + extra
+    def _trim(self, history: list[dict]) -> None:
         limit = self._history_turns * 2
         if len(history) > limit:
             del history[: len(history) - limit]

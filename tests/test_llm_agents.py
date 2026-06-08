@@ -622,6 +622,34 @@ async def test_ollama_agent_maps_legacy_default_model_to_flash(monkeypatch):
     assert agent._client.models == [DEFAULT_MODEL]
 
 
+async def test_ollama_agent_records_plain_assistant_reply_and_trims_history(monkeypatch):
+    class PlainOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            del tools
+            self.models.append(model)
+            self.calls.append([dict(m) for m in messages])
+            return {"message": {"role": "assistant", "content": "waiting"}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = PlainOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", history_turns=1)
+
+    assert await agent.decide("turn one", None, character_id="hazel") is None
+    assert agent._history["hazel"] == [
+        {"role": "user", "content": "turn one"},
+        {"role": "assistant", "content": "waiting"},
+    ]
+
+    await agent.decide("turn two", None, character_id="hazel")
+
+    assert agent._history["hazel"] == [
+        {"role": "user", "content": "turn two"},
+        {"role": "assistant", "content": "waiting"},
+    ]
+
+
 async def test_ollama_agent_retries_transient_provider_errors(monkeypatch):
     fake_module = types.ModuleType("ollama")
     fake_module.AsyncClient = _FlakyOllamaClient
@@ -755,6 +783,39 @@ async def test_openrouter_agent_retries_transient_provider_errors(monkeypatch):
     assert call == ToolCall("wait", {"reason": "rest"})
     assert len(agent._client.chat.calls) == 2
     assert agent._history["hazel"][0] == {"role": "user", "content": "turn one"}
+
+
+async def test_openrouter_agent_records_plain_assistant_reply_and_trims_history(monkeypatch):
+    class PlainOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            del tools
+            self.calls.append({"model": model, "messages": [dict(m) for m in messages]})
+            message = types.SimpleNamespace(role="assistant", content="waiting", tool_calls=None)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class PlainOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = PlainOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = PlainOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key", history_turns=1)
+
+    assert await agent.decide("turn one", None, character_id="hazel") is None
+    assert agent._history["hazel"] == [
+        {"role": "user", "content": "turn one"},
+        {"role": "assistant", "content": "waiting"},
+    ]
+
+    await agent.decide("turn two", None, character_id="hazel")
+
+    assert agent._history["hazel"] == [
+        {"role": "user", "content": "turn two"},
+        {"role": "assistant", "content": "waiting"},
+    ]
 
 
 async def test_openrouter_agent_returns_wait_after_transient_provider_retries(monkeypatch):

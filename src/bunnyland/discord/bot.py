@@ -310,10 +310,10 @@ def discord_broadcast_channel_ids(actor: WorldActor) -> tuple[int, ...]:
     return tuple(sorted(channel_ids))
 
 
-class DiscordBot:  # pragma: no cover - needs network + extra
+class DiscordBot:
     """Maps Discord slash commands to character verbs for the controlling user."""
 
-    def __init__(
+    def __init__(  # pragma: no cover - needs Discord client extra/session
         self,
         actor: WorldActor,
         *,
@@ -730,7 +730,7 @@ class DiscordBot:  # pragma: no cover - needs network + extra
             return
         await self._reply(ctx, await self._submit_action(ctx, action))
 
-    def _register_commands(self) -> None:
+    def _register_commands(self) -> None:  # pragma: no cover - needs Discord client extra
         discord, commands = _require_discord()
 
         @self.client.command(name="claim")
@@ -840,15 +840,15 @@ class DiscordBot:  # pragma: no cover - needs network + extra
             print(f"Discord command failed: {cause!r}", flush=True)
             await ctx.send(f"Command failed: {cause}")
 
-    def run(self) -> None:
+    def run(self) -> None:  # pragma: no cover - delegates to Discord client session
         self.client.run(self.token)
 
-    async def start(self) -> None:
+    async def start(self) -> None:  # pragma: no cover - delegates to Discord client session
         """Start the Discord client inside an existing asyncio application."""
 
         await self.client.start(self.token)
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # pragma: no cover - delegates to Discord client session
         """Stop the Discord client when the host game loop is shutting down."""
 
         self.actor.bus.unsubscribe(WorldPauseStatusChangedEvent, self._post_pause_status)

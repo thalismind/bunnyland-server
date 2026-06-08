@@ -453,3 +453,120 @@ def test_openrouter_world_agent_preserves_history(monkeypatch):
     assert second[1]["role"] == "user"
     assert second[2]["role"] == "assistant"
     assert second[3]["role"] == "user"
+
+
+def test_ollama_world_agent_builds_each_proposal_from_json(monkeypatch):
+    from bunnyland.worldgen.proposal import CharacterProposal, ItemProposal, StoryEventProposal
+
+    calls: list[str] = []
+    responses = [
+        {
+            "title": "Root",
+            "biome": "marsh",
+            "indoor": True,
+            "light": 0.4,
+            "celsius": 18,
+            "description": "root room",
+        },
+        {
+            "title": "Blue Hall",
+            "biome": "cave",
+            "indoor": True,
+            "light": 0.2,
+            "celsius": 14,
+            "description": "a blue hall",
+        },
+        {
+            "doors": [
+                {"direction": "north", "beyond_hint": "Blue Hall"},
+                {"direction": "down", "bidirectional": False},
+            ]
+        },
+        {"action": "link", "target_room_key": "room_0"},
+        {
+            "objects": [{"name": "lamp", "kind": "tool"}],
+            "characters": [{"name": "Mira", "species": "bunny", "controller": "suspended"}],
+        },
+        {"name": "Guide", "species": "fox", "controller": "llm", "llm_profile": "sage"},
+        {"name": "silver key", "kind": "key", "portable": True},
+        {
+            "title": "Bell Rings",
+            "kind": "story_event",
+            "summary": "A bell rings.",
+            "severity": 2,
+            "budget_spent": 1,
+            "objects": [{"name": "brass bell"}],
+            "characters": [{"name": "Bellkeeper"}],
+        },
+        {"objects": [{"name": "pocket watch", "kind": "tool", "portable": True}]},
+        {"objects": [{"name": "folded map", "kind": "paper", "portable": True}]},
+    ]
+
+    agent = object.__new__(OllamaWorldAgent)
+
+    def fake_ask(self, instruction):
+        del self
+        calls.append(instruction)
+        return responses.pop(0)
+
+    monkeypatch.setattr(agent, "_ask", fake_ask.__get__(agent, OllamaWorldAgent))
+
+    root = agent.propose_room(
+        "seed",
+        behind=None,
+        known_rooms={},
+        schema_context="RoomComponent",
+    )
+    behind = DoorProposal(direction="north", beyond_hint="Blue Hall")
+    room = agent.propose_room(
+        "seed",
+        behind=behind,
+        known_rooms={"room_0": "Root"},
+    )
+    doors = agent.propose_doors(room)
+    resolution = agent.resolve_dangling_door(
+        doors[0],
+        room=room,
+        candidates={"room_0": "Root"},
+    )
+    contents = agent.propose_contents(
+        room,
+        known_rooms={"room_0": "Root", "room_1": "Blue Hall"},
+    )
+    character = agent.propose_character(
+        room,
+        prompt="a guide",
+        known_rooms={"room_0": "Root"},
+        schema_context="CharacterComponent",
+    )
+    item = agent.propose_item(
+        container_name="chest",
+        container_kind="container",
+        prompt="a key",
+        known_rooms={"room_0": "Root"},
+    )
+    event = agent.propose_event(
+        room,
+        prompt="a bell",
+        known_rooms={"room_0": "Root"},
+    )
+    inventory = agent.propose_inventory(name="Guide", species="fox")
+    container_contents = agent.propose_container_contents(name="chest")
+
+    assert isinstance(root, RoomNodeProposal)
+    assert root.title == "Root"
+    assert room.title == "Blue Hall"
+    assert [door.direction for door in doors] == ["north", "down"]
+    assert resolution.target_room_key == "room_0"
+    assert contents.objects[0].name == "lamp"
+    assert isinstance(character, CharacterProposal)
+    assert character.llm_profile == "sage"
+    assert isinstance(item, ItemProposal)
+    assert item.name == "silver key"
+    assert isinstance(event, StoryEventProposal)
+    assert event.objects[0].name == "brass bell"
+    assert inventory[0].name == "pocket watch"
+    assert container_contents[0].name == "folded map"
+    assert "Live ECS JSON schemas" in calls[0]
+    assert "Through the north door" in calls[1]
+    assert "Rooms so far: Root" in calls[5]
