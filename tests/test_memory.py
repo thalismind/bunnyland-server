@@ -21,8 +21,15 @@ from bunnyland.core.events import (
     NoteTakenEvent,
     ReflectionCreatedEvent,
 )
+from bunnyland.core.handlers.base import HandlerContext
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
+from bunnyland.memory.handlers import (
+    ForgetHandler,
+    ReflectHandler,
+    RememberHandler,
+    TakeNoteHandler,
+)
 
 HOUR = 3600.0
 
@@ -111,6 +118,22 @@ def shared_remember_cmd(scenario, query=None, collection="burrow-board"):
             "scope": "shared",
             "collection": collection,
         },
+    )
+
+
+def handler_context(scenario):
+    return HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+
+def with_character_id(command, scenario, character_id):
+    return build_submitted_command(
+        character_id=character_id,
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command.command_type,
+        cost=command.cost,
+        lane=command.lane,
+        payload=command.payload,
     )
 
 
@@ -305,6 +328,146 @@ async def test_note_without_memory_profile_is_rejected():
     await scenario.actor.tick(0.0)
 
     assert any(r.reason == "character has no memory profile" for r in rejects)
+
+
+def test_memory_handlers_reject_invalid_character_ids():
+    scenario, store = memory_scenario()
+    ctx = handler_context(scenario)
+
+    assert (
+        TakeNoteHandler(store)
+        .execute(ctx, with_character_id(note_cmd(scenario, "note"), scenario, "not-an-id"))
+        .reason
+        == "invalid character id"
+    )
+    assert (
+        RememberHandler(store)
+        .execute(ctx, with_character_id(remember_cmd(scenario), scenario, "not-an-id"))
+        .reason
+        == "invalid character id"
+    )
+    assert (
+        ForgetHandler(store)
+        .execute(ctx, with_character_id(forget_cmd(scenario, "note-1"), scenario, "not-an-id"))
+        .reason
+        == "invalid character id"
+    )
+    assert (
+        ReflectHandler(store)
+        .execute(ctx, with_character_id(reflect_cmd(scenario, text="x"), scenario, "not-an-id"))
+        .reason
+        == "invalid character id"
+    )
+
+
+def test_take_note_rejects_blank_text_and_bad_memory_scopes():
+    scenario, store = memory_scenario()
+    ctx = handler_context(scenario)
+    handler = TakeNoteHandler(store)
+
+    assert handler.execute(ctx, note_cmd(scenario, "   ")).reason == "nothing to note"
+
+    bad_scope = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="take-note",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload={"text": "note", "scope": "guild"},
+    )
+    assert handler.execute(ctx, bad_scope).reason == "memory scope must be private or shared"
+
+    shared_missing = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="take-note",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload={"text": "note", "scope": "shared"},
+    )
+    assert handler.execute(ctx, shared_missing).reason == "shared collection is required"
+
+
+def test_shared_collection_defaults_when_profile_has_one_shared_collection():
+    scenario, store = memory_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    replace_component(
+        character,
+        MemoryProfileComponent(
+            vector_collection="juniper",
+            shared_collections=("burrow-board",),
+        ),
+    )
+    ctx = handler_context(scenario)
+    command = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="take-note",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload={"text": "shared by default", "scope": "shared"},
+    )
+
+    result = TakeNoteHandler(store).execute(ctx, command)
+
+    assert result.ok is True
+    assert result.events[0].collection == "burrow-board"
+    assert result.events[0].scope == "shared"
+
+
+def test_remember_and_forget_reject_collection_errors_and_missing_note_ids():
+    scenario, store = memory_scenario()
+    ctx = handler_context(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.remove_component(MemoryProfileComponent)
+
+    assert RememberHandler(store).execute(ctx, remember_cmd(scenario)).reason == (
+        "character has no memory profile"
+    )
+
+    character.add_component(MemoryProfileComponent(vector_collection="juniper"))
+    assert ForgetHandler(store).execute(ctx, forget_cmd(scenario, " ")).reason == (
+        "note id is required"
+    )
+
+    bad_shared = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="forget",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload={"note_id": "note-1", "scope": "shared", "collection": "unknown"},
+    )
+    assert ForgetHandler(store).execute(ctx, bad_shared).reason == (
+        "shared collection is not available"
+    )
+
+
+def test_reflect_rejects_missing_profile_nonpositive_limit_and_accepts_explicit_text():
+    scenario, store = memory_scenario()
+    ctx = handler_context(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.remove_component(MemoryProfileComponent)
+
+    assert ReflectHandler(store).execute(ctx, reflect_cmd(scenario, text="x")).reason == (
+        "character has no memory profile"
+    )
+
+    character.add_component(MemoryProfileComponent(vector_collection="juniper"))
+    assert ReflectHandler(store).execute(ctx, reflect_cmd(scenario, limit=0)).reason == (
+        "reflection limit must be positive"
+    )
+
+    result = ReflectHandler(store).execute(ctx, reflect_cmd(scenario, text="  I learned.  "))
+
+    assert result.ok is True
+    assert result.events[0].text == "I learned."
+    assert result.events[0].source_note_ids == ()
+    assert store.search("juniper", query="I learned", mode="keyword")[0].source == "reflection"
 
 
 def test_inmemory_store_vector_falls_back_to_keyword():
