@@ -7,7 +7,9 @@ the LLM dispatch uses and is importable (and testable) without it.
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import UTC, datetime
+from types import ModuleType
 
 import pytest
 
@@ -64,6 +66,7 @@ from bunnyland.discord.bot import (
     DiscordBot,
     _minutes_to_timeout_seconds,
     _parse_discord_claim_args,
+    _require_discord,
     _split,
 )
 from bunnyland.discord.claim import _match_character, discord_controlled_character
@@ -150,6 +153,87 @@ def _bot_for_scenario(scenario, **attrs):
     for key, value in attrs.items():
         setattr(bot, key, value)
     return bot
+
+
+class _FakeDiscordIntents:
+    def __init__(self):
+        self.message_content = False
+
+    @classmethod
+    def default(cls):
+        return cls()
+
+
+class _FakeCommandNotFound(Exception):
+    pass
+
+
+class _FakeCommandInvokeError(Exception):
+    def __init__(self, original):
+        super().__init__(str(original))
+        self.original = original
+
+
+class _FakeDiscordBotClient:
+    def __init__(self, *, command_prefix, intents, help_command):
+        self.command_prefix = command_prefix
+        self.intents = intents
+        self.help_command = help_command
+        self.commands = {}
+        self.events = {}
+        self.user = "fake-bot"
+        self.run_tokens = []
+        self.start_tokens = []
+        self.closed = False
+        self.context = None
+
+    def command(self, *, name):
+        def decorate(func):
+            self.commands[name] = func
+            return func
+
+        return decorate
+
+    def event(self, func):
+        self.events[func.__name__] = func
+        return func
+
+    async def get_context(self, message):
+        del message
+        return self.context
+
+    def run(self, token):
+        self.run_tokens.append(token)
+
+    async def start(self, token):
+        self.start_tokens.append(token)
+
+    async def close(self):
+        self.closed = True
+
+
+def _install_fake_discord(monkeypatch):
+    clients = []
+
+    def bot_factory(**kwargs):
+        client = _FakeDiscordBotClient(**kwargs)
+        clients.append(client)
+        return client
+
+    discord_module = ModuleType("discord")
+    discord_module.Intents = _FakeDiscordIntents
+    ext_module = ModuleType("discord.ext")
+    commands_module = ModuleType("discord.ext.commands")
+    commands_module.Bot = bot_factory
+    commands_module.CommandNotFound = _FakeCommandNotFound
+    commands_module.CommandInvokeError = _FakeCommandInvokeError
+    ext_module.commands = commands_module
+    discord_module.ext = ext_module
+
+    monkeypatch.setitem(sys.modules, "discord", discord_module)
+    monkeypatch.setitem(sys.modules, "discord.ext", ext_module)
+    monkeypatch.setitem(sys.modules, "discord.ext.commands", commands_module)
+    return discord_module, commands_module, clients
 
 
 def _message(
@@ -959,6 +1043,19 @@ async def test_discord_queued_ack_uses_requested_reaction():
     assert ctx.message.reactions == [PAUSED_REACTION]
 
 
+async def test_discord_queued_ack_ignores_reaction_failures():
+    class Message:
+        async def add_reaction(self, reaction):
+            del reaction
+            raise RuntimeError("missing reaction permission")
+
+    class Ctx:
+        def __init__(self):
+            self.message = Message()
+
+    await DiscordBot._acknowledge_queued(Ctx(), PAUSED_REACTION)
+
+
 async def test_discord_resume_replaces_paused_reactions_with_hourglass():
     class Message:
         def __init__(self):
@@ -980,6 +1077,34 @@ async def test_discord_resume_replaces_paused_reactions_with_hourglass():
 
     assert message.removed == [(PAUSED_REACTION, "bot-user")]
     assert message.added == [QUEUED_REACTION]
+    assert bot._paused_reactions == {}
+
+
+async def test_discord_resume_ignores_paused_reaction_failures():
+    class Message:
+        def __init__(self):
+            self.add_attempts = 0
+            self.remove_attempts = 0
+
+        async def add_reaction(self, reaction):
+            del reaction
+            self.add_attempts += 1
+            raise RuntimeError("missing add permission")
+
+        async def remove_reaction(self, reaction, user):
+            del reaction, user
+            self.remove_attempts += 1
+            raise RuntimeError("missing remove permission")
+
+    bot = object.__new__(DiscordBot)
+    bot.client = type("Client", (), {"user": "bot-user"})()
+    message = Message()
+    bot._paused_reactions = {"command-1": message}
+
+    await bot._replace_paused_reactions()
+
+    assert message.remove_attempts == 1
+    assert message.add_attempts == 1
     assert bot._paused_reactions == {}
 
 
@@ -1280,3 +1405,130 @@ async def test_discord_bot_handle_text_command_routes_meta_parse_errors_and_acti
 
     assert submitted[0][1].command_type == "say"
     assert ctx.replies[-1][0] == "submitted"
+
+
+def test_discord_require_discord_uses_installed_sdk(monkeypatch):
+    discord_module, commands_module, _clients = _install_fake_discord(monkeypatch)
+
+    assert _require_discord() == (discord_module, commands_module)
+
+
+async def test_discord_bot_init_registers_commands_and_lifecycle_delegates(
+    monkeypatch,
+    scenario,
+):
+    _discord_module, _commands_module, clients = _install_fake_discord(monkeypatch)
+    pause_status = False
+
+    bot = DiscordBot(
+        scenario.actor,
+        token="discord-token",
+        allow_child_claims=True,
+        llm_provider="openrouter",
+        character_model="controller-model",
+        pause_status=lambda: pause_status,
+    )
+
+    client = clients[0]
+    assert bot.client is client
+    assert client.command_prefix == "!"
+    assert client.intents.message_content is True
+    assert set(client.commands) == {
+        "claim",
+        "fallback",
+        "characters",
+        "release",
+        "suspend",
+        "look",
+        "help",
+    }
+    assert {"on_ready", "on_message", "on_command_error"} <= set(client.events)
+
+    bot.run()
+    await bot.start()
+    await bot.close()
+
+    assert client.run_tokens == ["discord-token"]
+    assert client.start_tokens == ["discord-token"]
+    assert client.closed is True
+
+
+async def test_discord_registered_command_callbacks_cover_success_and_error_paths(
+    monkeypatch,
+    scenario,
+):
+    _install_fake_discord(monkeypatch)
+    bot = DiscordBot(scenario.actor, token="discord-token")
+    commands = bot.client.commands
+    ctx = _DiscordThreadCtx()
+
+    await commands["claim"](ctx, character="Juniper")
+    assert ctx.replies[-1][0] == "You are now controlling Juniper."
+
+    await commands["claim"](ctx, character="Hazel")
+    assert ctx.replies[-1][0] == "You are already controlling a character."
+
+    await commands["fallback"](ctx, fallback_controller=None)
+    assert ctx.replies[-1][0].startswith("Usage: !fallback")
+
+    await commands["fallback"](ctx, fallback_controller="llm", minutes=15)
+    assert ctx.replies[-1][0] == "Juniper will fall back to llm after 15 minutes."
+
+    await commands["characters"](ctx)
+    assert "Characters:" in ctx.sent[-1]
+
+    await commands["look"](ctx)
+    assert ctx.sent[-1].startswith("Mosslit Burrow")
+
+    await commands["help"](ctx, topic="verbs")
+    assert "World verbs available now" in ctx.message.thread.sent[-1]
+
+    await commands["release"](ctx)
+    assert ctx.replies[-1][0] == "Juniper is now controlled by the LLM."
+
+    await commands["release"](ctx)
+    assert "not controlling" in ctx.replies[-1][0]
+
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+    await commands["suspend"](ctx)
+    assert ctx.replies[-1][0] == "Juniper is suspended until someone claims them."
+
+    await commands["suspend"](ctx)
+    assert "not controlling" in ctx.replies[-1][0]
+
+
+async def test_discord_registered_events_route_messages_and_errors(
+    monkeypatch,
+    capsys,
+    scenario,
+):
+    _discord_module, commands_module, _clients = _install_fake_discord(monkeypatch)
+    bot = DiscordBot(scenario.actor, token="discord-token")
+    ctx = _DiscordThreadCtx()
+    bot.client.context = ctx
+    handled = []
+
+    async def handle_text_command(ctx_arg, text):
+        handled.append((ctx_arg, text))
+
+    bot.handle_text_command = handle_text_command
+
+    await bot.client.events["on_ready"]()
+    assert "Discord bot connected as fake-bot." in capsys.readouterr().out
+
+    await bot.client.events["on_message"](_message(content="!look"))
+    assert handled == [(ctx, "look")]
+
+    await bot.client.events["on_message"](_message(content="look"))
+    assert handled == [(ctx, "look")]
+
+    await bot.client.events["on_command_error"](ctx, commands_module.CommandNotFound("missing"))
+    assert ctx.sent == []
+
+    await bot.client.events["on_command_error"](
+        ctx,
+        commands_module.CommandInvokeError(RuntimeError("boom")),
+    )
+
+    assert "Discord command failed: RuntimeError('boom')" in capsys.readouterr().out
+    assert ctx.sent[-1] == "Command failed: boom"

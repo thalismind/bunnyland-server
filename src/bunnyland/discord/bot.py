@@ -168,7 +168,7 @@ class DiscordMessageFilters:
         return True
 
 
-def _require_discord():  # pragma: no cover - exercised only with the extra
+def _require_discord():
     try:
         import discord
         from discord.ext import commands
@@ -313,7 +313,7 @@ def discord_broadcast_channel_ids(actor: WorldActor) -> tuple[int, ...]:
 class DiscordBot:
     """Maps Discord slash commands to character verbs for the controlling user."""
 
-    def __init__(  # pragma: no cover - needs Discord client extra/session
+    def __init__(
         self,
         actor: WorldActor,
         *,
@@ -394,11 +394,11 @@ class DiscordBot:
         for message in tuple(self._paused_reactions.values()):
             try:
                 await message.remove_reaction(PAUSED_REACTION, self.client.user)
-            except Exception:  # pragma: no cover - best effort, missing perms are common
+            except Exception:
                 pass
             try:
                 await message.add_reaction(QUEUED_REACTION)
-            except Exception:  # pragma: no cover - reaction is best-effort
+            except Exception:
                 pass
         self._paused_reactions.clear()
 
@@ -445,7 +445,7 @@ class DiscordBot:
         """React to the player's message so they see their command was accepted."""
         try:
             await ctx.message.add_reaction(reaction)
-        except Exception:  # pragma: no cover - reaction is best-effort (e.g. missing perms)
+        except Exception:
             pass
 
     async def _submit_action(self, ctx, action: DiscordAction) -> str:
@@ -730,7 +730,7 @@ class DiscordBot:
             return
         await self._reply(ctx, await self._submit_action(ctx, action))
 
-    def _register_commands(self) -> None:  # pragma: no cover - needs Discord client extra
+    def _register_commands(self) -> None:
         discord, commands = _require_discord()
 
         @self.client.command(name="claim")
@@ -840,15 +840,15 @@ class DiscordBot:
             print(f"Discord command failed: {cause!r}", flush=True)
             await ctx.send(f"Command failed: {cause}")
 
-    def run(self) -> None:  # pragma: no cover - delegates to Discord client session
+    def run(self) -> None:
         self.client.run(self.token)
 
-    async def start(self) -> None:  # pragma: no cover - delegates to Discord client session
+    async def start(self) -> None:
         """Start the Discord client inside an existing asyncio application."""
 
         await self.client.start(self.token)
 
-    async def close(self) -> None:  # pragma: no cover - delegates to Discord client session
+    async def close(self) -> None:
         """Stop the Discord client when the host game loop is shutting down."""
 
         self.actor.bus.unsubscribe(WorldPauseStatusChangedEvent, self._post_pause_status)
