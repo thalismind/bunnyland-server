@@ -66,6 +66,8 @@ from bunnyland.discord.bot import (
     DiscordBot,
     _minutes_to_timeout_seconds,
     _parse_discord_claim_args,
+    _parse_structured_payload,
+    _payload_from_text,
     _require_discord,
     _split,
 )
@@ -79,24 +81,30 @@ class _DiscordObject:
 
 
 class _DiscordThread:
-    def __init__(self, *, parent=None):
+    def __init__(self, *, parent=None, fail_after: int | None = None):
         self.id = 987
         self.parent = parent
         self.owner_id = 654
         self.sent = []
+        self.fail_after = fail_after
 
     async def send(self, body):
+        if self.fail_after is not None and len(self.sent) >= self.fail_after:
+            raise RuntimeError("thread send failed")
         self.sent.append(body)
 
 
 class _DiscordThreadMessage:
-    def __init__(self, thread=None, *, fail_create=False):
+    def __init__(self, thread=None, *, fail_create=False, type_error_once=False):
         self.thread = thread or _DiscordThread()
         self.thread_requests = []
         self.fail_create = fail_create
+        self.type_error_once = type_error_once
 
     async def create_thread(self, **kwargs):
         self.thread_requests.append(kwargs)
+        if self.type_error_once and "auto_archive_duration" in kwargs:
+            raise TypeError("auto archive unsupported")
         if self.fail_create:
             raise RuntimeError("missing thread permissions")
         return self.thread
@@ -453,6 +461,19 @@ def test_split_falls_back_when_shell_quoting_is_invalid():
     assert _split('say "unterminated') == ["say", '"unterminated']
 
 
+def test_discord_payload_parsing_covers_empty_json_and_plain_text(monkeypatch):
+    assert _parse_structured_payload("") == {}
+    assert _parse_structured_payload('{"query": "trust", "limit": 2}') == {
+        "query": "trust",
+        "limit": 2,
+    }
+    assert _payload_from_text("hello there", ("text",)) == {"text": "hello there"}
+
+    monkeypatch.setattr(discord_bot.json, "loads", lambda _value: ["not", "an", "object"])
+    with pytest.raises(ValueError, match="JSON command payload must be an object"):
+        _parse_structured_payload('{"not": "an object"}')
+
+
 def test_match_character_handles_exact_prefix_ambiguous_and_missing(scenario):
     characters = list(
         scenario.actor.world.query()
@@ -638,10 +659,18 @@ def test_discord_action_parser_uses_live_world_verbs(scenario):
     install_memory(scenario.actor, InMemoryStore())
     verbs = scenario.actor.available_command_types()
 
+    with pytest.raises(ValueError, match="No command provided"):
+        parse_discord_action("   ", verbs)
+
     note = parse_discord_action("note Porcupines cannot be trusted", verbs)
     assert note.command_type == "take-note"
     assert note.tool == "take_note"
     assert note.payload == {"text": "Porcupines cannot be trusted"}
+
+    explicit_note = parse_discord_action("take-note Porcupines cannot be trusted", verbs)
+    assert explicit_note.command_type == "take-note"
+    assert explicit_note.tool == "take_note"
+    assert explicit_note.payload == {"text": "Porcupines cannot be trusted"}
 
     remember = parse_discord_action("remember trust", verbs)
     assert remember.command_type == "remember"
@@ -883,6 +912,63 @@ async def test_discord_threaded_reply_logs_thread_creation_failure(caplog):
 
     assert ctx.replies == [("Help body", True)]
     assert "Discord thread creation failed; falling back." in caplog.text
+
+
+def test_discord_thread_detection_and_permission_edges():
+    assert not DiscordBot._is_thread_channel(None)
+    assert DiscordBot._is_thread_channel(_DiscordObject(type="public_thread"))
+
+    Thread = type("Thread", (), {})
+    assert DiscordBot._is_thread_channel(Thread())
+
+    assert not DiscordBot._can_start_thread(_DiscordThreadCtx(guild=None))
+    assert DiscordBot._can_start_thread(
+        _DiscordThreadCtx(channel=_DiscordObject(), permissions=None)
+    )
+
+
+async def test_discord_reply_thread_covers_missing_and_type_error_fallbacks(caplog):
+    permissions = _DiscordObject(create_public_threads=True, send_messages_in_threads=True)
+    no_create = _DiscordThreadCtx(
+        message=_DiscordObject(),
+        permissions=permissions,
+    )
+    assert await DiscordBot._reply_thread(no_create, title="Help") is None
+
+    message = _DiscordThreadMessage(type_error_once=True)
+    ctx = _DiscordThreadCtx(message=message, permissions=permissions)
+    thread = await DiscordBot._reply_thread(ctx, title="Bunnyland help")
+    assert thread is message.thread
+    assert message.thread_requests == [
+        {"name": "Bunnyland help", "auto_archive_duration": 60},
+        {"name": "Bunnyland help"},
+    ]
+
+    caplog.set_level("WARNING", logger="bunnyland.discord")
+    failing_message = _DiscordThreadMessage(type_error_once=True, fail_create=True)
+    failing = _DiscordThreadCtx(message=failing_message, permissions=permissions)
+
+    assert await DiscordBot._reply_thread(failing, title="Bunnyland help") is None
+    assert "Discord thread creation failed; falling back." in caplog.text
+
+
+async def test_discord_thread_send_failure_falls_back_to_remaining_replies(monkeypatch, caplog):
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(discord_bot.asyncio, "sleep", fake_sleep)
+    caplog.set_level("WARNING", logger="bunnyland.discord")
+    thread = _DiscordThread(fail_after=0)
+    ctx = _DiscordThreadCtx(channel=thread)
+
+    await DiscordBot._send_threaded_or_reply(ctx, "x" * 4100, title="Bunnyland help")
+
+    assert thread.sent == []
+    assert len(ctx.replies) == 3
+    assert sleeps == [0.25, 0.25]
+    assert "Discord thread send failed; falling back." in caplog.text
 
 
 def test_render_look_uses_room_summary_projection(scenario):
@@ -1139,6 +1225,15 @@ async def test_discord_bot_complete_pending_resolves_future_and_clears_reaction(
     assert bot._pending == {}
     assert bot._paused_reactions == {}
 
+    done_future = asyncio.get_running_loop().create_future()
+    done_future.set_result("already done")
+    bot._pending = {"cmd-1": done_future}
+    bot._paused_reactions = {}
+
+    bot._complete_pending(event)
+
+    assert done_future.result() == "already done"
+
 
 async def test_discord_bot_posts_pause_status_to_broadcast_channels(scenario):
     assign_discord_controller(
@@ -1187,6 +1282,125 @@ async def test_discord_bot_posts_pause_status_to_broadcast_channels(scenario):
     assert bot.client.fetched == []
 
 
+async def test_discord_bot_pause_status_fetch_and_send_failures_are_nonfatal(
+    capsys,
+    scenario,
+):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+
+    class FetchFailingClient:
+        def get_channel(self, channel_id):
+            del channel_id
+            return None
+
+        async def fetch_channel(self, channel_id):
+            del channel_id
+            raise RuntimeError("fetch failed")
+
+    bot = _bot_for_scenario(scenario, client=FetchFailingClient())
+    await bot._post_pause_status(
+        WorldPauseStatusChangedEvent(
+            event_id="event-1",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            paused=True,
+            state="paused",
+            message="World paused.",
+        )
+    )
+    assert "fetch failed" in capsys.readouterr().out
+
+    class SendFailingChannel:
+        async def send(self, message):
+            del message
+            raise RuntimeError("send failed")
+
+    class SendFailingClient:
+        def get_channel(self, channel_id):
+            del channel_id
+            return SendFailingChannel()
+
+    bot = _bot_for_scenario(scenario, client=SendFailingClient())
+    await bot._post_pause_status(
+        WorldPauseStatusChangedEvent(
+            event_id="event-2",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            paused=True,
+            state="paused",
+            message="World paused.",
+        )
+    )
+    assert "send failed" in capsys.readouterr().out
+
+
+async def test_discord_bot_pause_resume_replaces_cached_reactions(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+
+    class Channel:
+        def __init__(self):
+            self.messages = []
+
+        async def send(self, message):
+            self.messages.append(message)
+
+    class Client:
+        user = "bot-user"
+
+        def __init__(self):
+            self.channel = Channel()
+
+        def get_channel(self, channel_id):
+            del channel_id
+            return self.channel
+
+    class Message:
+        def __init__(self):
+            self.removed = []
+            self.added = []
+
+        async def remove_reaction(self, reaction, user):
+            self.removed.append((reaction, user))
+
+        async def add_reaction(self, reaction):
+            self.added.append(reaction)
+
+    client = Client()
+    paused_message = Message()
+    bot = _bot_for_scenario(
+        scenario,
+        client=client,
+        paused_reactions={"cmd-1": paused_message},
+        world_paused=True,
+    )
+
+    await bot._post_pause_status(
+        WorldPauseStatusChangedEvent(
+            event_id="event-1",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            paused=False,
+            state="running",
+            message="World resumed.",
+        )
+    )
+
+    assert bot._world_paused is False
+    assert paused_message.removed == [(PAUSED_REACTION, "bot-user")]
+    assert paused_message.added == [QUEUED_REACTION]
+    assert client.channel.messages == ["World resumed."]
+
+
 async def test_discord_bot_build_command_resolves_names_and_reports_suggestions(scenario):
     bot = _bot_for_scenario(scenario)
 
@@ -1229,6 +1443,39 @@ async def test_discord_bot_build_command_resolves_names_and_reports_suggestions(
     assert unresolved_command is None
     assert "did you mean" in unresolved_error.lower()
     assert "woven basket" in unresolved_error
+
+
+async def test_discord_bot_build_command_supports_plugin_verbs_without_tool(scenario):
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+    bot = _bot_for_scenario(scenario)
+
+    command, error = await bot._build_command(
+        123,
+        discord_bot.DiscordAction(
+            command_type="smile",
+            payload={"wide": True},
+            tool=None,
+        ),
+    )
+
+    assert error is None
+    assert command.command_type == "smile"
+    assert command.payload == {"wide": True}
+    assert command.cost.action == 1
+    assert command.lane.value == "world"
+
+
+async def test_discord_bot_submit_action_returns_build_errors(scenario):
+    bot = _bot_for_scenario(scenario)
+    ctx = _DiscordThreadCtx(message=_DiscordCommandMessage())
+
+    result = await bot._submit_action(
+        ctx,
+        discord_bot.DiscordAction(command_type="say", payload={"text": "hello"}, tool="say"),
+    )
+
+    assert result == "You are not controlling a character yet."
+    assert ctx.message.reactions == []
 
 
 async def test_discord_bot_submit_action_acknowledges_and_renders_result(scenario):
@@ -1292,6 +1539,50 @@ async def test_discord_bot_submit_action_tracks_paused_reactions(scenario):
     assert list(bot._paused_reactions.values()) == [ctx.message]
 
 
+async def test_discord_bot_submit_action_renders_remember_notes(scenario):
+    install_memory(scenario.actor, InMemoryStore())
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+    bot = _bot_for_scenario(scenario)
+
+    async def submit(command):
+        await scenario.actor.bus.publish(
+            NotesSearchedEvent(
+                event_id="event-notes",
+                world_epoch=1,
+                created_at=datetime.now(UTC),
+                visibility=EventVisibility.PRIVATE,
+                actor_id=command.character_id,
+                query="trust",
+                mode="vector",
+                results=("Trust the moss keeper.",),
+                note_ids=("note-1",),
+            )
+        )
+        bot._complete_pending(
+            CommandExecutedEvent(
+                event_id="event-1",
+                world_epoch=1,
+                created_at=datetime.now(UTC),
+                visibility=EventVisibility.PRIVATE,
+                actor_id=command.character_id,
+                command_id=command.command_id,
+                command_type=command.command_type,
+            )
+        )
+
+    bot.actor.submit = submit
+    ctx = _DiscordThreadCtx(message=_DiscordCommandMessage())
+
+    result = await bot._submit_action(
+        ctx,
+        parse_discord_action("remember trust", scenario.actor.available_command_types()),
+    )
+
+    assert "`note-1`" in result
+    assert "Trust the moss keeper." in result
+    assert ctx.message.reactions == [QUEUED_REACTION]
+
+
 async def test_discord_bot_reply_falls_back_across_context_shapes(caplog):
     class TypeErrorReplyCtx:
         def __init__(self):
@@ -1327,6 +1618,36 @@ async def test_discord_bot_reply_falls_back_across_context_shapes(caplog):
 
     assert fallback.sent == ["<@123> hello"]
     assert "Discord message reply failed; falling back." in caplog.text
+
+
+async def test_discord_bot_reply_logs_context_failure_and_handles_message_type_error(caplog):
+    class Ctx:
+        def __init__(self):
+            self.author = _DiscordObject(mention="<@123>")
+            self.message = _DiscordObject()
+            self.message_calls = []
+
+            async def message_reply(body, mention_author=False):
+                if mention_author:
+                    raise TypeError("mention unsupported")
+                self.message_calls.append(body)
+
+            self.message.reply = message_reply
+
+        async def reply(self, body, mention_author=False):
+            del body, mention_author
+            raise RuntimeError("context reply failed")
+
+        async def send(self, body):
+            raise AssertionError(f"unexpected send: {body}")
+
+    caplog.set_level("WARNING", logger="bunnyland.discord")
+    ctx = Ctx()
+
+    await DiscordBot._reply(ctx, "hello")
+
+    assert ctx.message_calls == ["hello"]
+    assert "Discord context reply failed; falling back." in caplog.text
 
 
 async def test_discord_bot_send_help_splits_and_sleeps(monkeypatch):
@@ -1366,6 +1687,9 @@ async def test_discord_bot_meta_commands_cover_success_and_errors(scenario):
     assert await bot._handle_meta_command(ctx, "look", "") is True
     assert ctx.sent[-1].startswith("Mosslit Burrow")
 
+    assert await bot._handle_meta_command(ctx, "help", "verbs") is True
+    assert "World verbs available now" in ctx.message.thread.sent[-1]
+
     assert await bot._handle_meta_command(ctx, "release", "") is True
     assert ctx.replies[-1][0] == "Juniper is now controlled by the LLM."
 
@@ -1377,6 +1701,20 @@ async def test_discord_bot_meta_commands_cover_success_and_errors(scenario):
     assert ctx.replies[-1][0] == "Juniper is suspended until someone claims them."
 
     assert await bot._handle_meta_command(ctx, "dance", "") is False
+
+
+async def test_discord_bot_meta_commands_report_parse_and_fallback_errors(scenario):
+    bot = _bot_for_scenario(scenario)
+    ctx = _DiscordThreadCtx()
+
+    assert await bot._handle_meta_command(ctx, "claim", "Juniper --timeout nope") is True
+    assert "timeout minutes must be a whole number" in ctx.replies[-1][0]
+
+    assert await bot._handle_meta_command(ctx, "fallback", "llm nope") is True
+    assert "timeout minutes must be a whole number" in ctx.replies[-1][0]
+
+    assert await bot._handle_meta_command(ctx, "suspend", "") is True
+    assert "not controlling" in ctx.replies[-1][0]
 
 
 async def test_discord_bot_handle_text_command_routes_meta_parse_errors_and_actions(
@@ -1411,6 +1749,22 @@ def test_discord_require_discord_uses_installed_sdk(monkeypatch):
     discord_module, commands_module, _clients = _install_fake_discord(monkeypatch)
 
     assert _require_discord() == (discord_module, commands_module)
+
+
+def test_discord_require_discord_reports_missing_extra(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "discord" or name.startswith("discord."):
+            raise ImportError("missing discord")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="requires the 'discord' extra"):
+        _require_discord()
 
 
 async def test_discord_bot_init_registers_commands_and_lifecycle_delegates(
@@ -1497,6 +1851,22 @@ async def test_discord_registered_command_callbacks_cover_success_and_error_path
     assert "not controlling" in ctx.replies[-1][0]
 
 
+async def test_discord_registered_command_callbacks_report_validation_errors(
+    monkeypatch,
+    scenario,
+):
+    _install_fake_discord(monkeypatch)
+    bot = DiscordBot(scenario.actor, token="discord-token")
+    commands = bot.client.commands
+    ctx = _DiscordThreadCtx()
+
+    await commands["claim"](ctx, character="Juniper --timeout nope")
+    assert "timeout minutes must be a whole number" in ctx.replies[-1][0]
+
+    await commands["fallback"](ctx, fallback_controller="llm", minutes=0)
+    assert "timeout_seconds must be between 300 and 3600" in ctx.replies[-1][0]
+
+
 async def test_discord_registered_events_route_messages_and_errors(
     monkeypatch,
     capsys,
@@ -1532,3 +1902,8 @@ async def test_discord_registered_events_route_messages_and_errors(
 
     assert "Discord command failed: RuntimeError('boom')" in capsys.readouterr().out
     assert ctx.sent[-1] == "Command failed: boom"
+
+    await bot.client.events["on_command_error"](ctx, RuntimeError("plain boom"))
+
+    assert "Discord command failed: RuntimeError('plain boom')" in capsys.readouterr().out
+    assert ctx.sent[-1] == "Command failed: plain boom"
