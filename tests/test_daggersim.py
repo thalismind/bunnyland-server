@@ -148,6 +148,14 @@ from bunnyland.mechanics.daggersim import (
     WereformComponent,
     WithdrawHandler,
     _apply_spell_effect,
+    _current_law_region,
+    _institution_membership,
+    _name,
+    _rank_allows,
+    _route_between,
+    _selected_rumor_id,
+    _service_institution,
+    _string_tuple,
     daggersim_fragments,
     install_daggersim,
 )
@@ -368,6 +376,36 @@ def _spell_template(scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), template.id
     )
     return template.id
+
+
+def test_daggersim_small_helpers_cover_default_branches():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    nameless = spawn_entity(world, [])
+
+    assert _name(nameless) == str(nameless.id)
+    assert _string_tuple(7, ("fallback",)) == ("fallback",)
+    assert _current_law_region(world, nameless) is None
+    assert _route_between(world.get_entity(scenario.room_a), scenario.room_b) is None
+    assert _service_institution(world, nameless) is None
+    assert _institution_membership(character, scenario.room_b) is None
+    assert _rank_allows("guest", "master") is False
+    assert _rank_allows("custom", "custom") is True
+
+    rumor = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="unheard rumor", kind="rumor"),
+            RumorComponent(text="A hidden cellar remains."),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), rumor.id
+    )
+
+    assert _selected_rumor_id(ctx, scenario.character, None) == rumor.id
 
 
 def _hostile_creature(scenario):
@@ -745,6 +783,57 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
     )
     assert result.ok is False
     assert result.reason == "no travel route to destination"
+
+
+def test_travel_completion_covers_pending_invalid_and_originless_plans():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    consequence = TravelCompletionConsequence()
+
+    character.add_component(
+        TravelPlanComponent(
+            destination_id=str(scenario.room_b),
+            started_at_epoch=0,
+            arrive_at_epoch=HOUR,
+            mode="walking",
+            route_label="moss road",
+        )
+    )
+    assert consequence.process(scenario.actor.world, HOUR - 1) == []
+
+    replace_component(
+        character,
+        TravelPlanComponent(
+            destination_id="not-an-entity",
+            started_at_epoch=0,
+            arrive_at_epoch=HOUR,
+            mode="walking",
+            route_label="moss road",
+        ),
+    )
+    assert consequence.process(scenario.actor.world, HOUR) == []
+
+    replace_component(
+        character,
+        TravelPlanComponent(
+            destination_id=str(scenario.room_b),
+            started_at_epoch=0,
+            arrive_at_epoch=HOUR,
+            mode="walking",
+            route_label="moss road",
+        ),
+    )
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains,
+        scenario.character,
+    )
+
+    events = consequence.process(scenario.actor.world, HOUR)
+
+    assert len(events) == 1
+    assert isinstance(events[0], TravelCompletedEvent)
+    assert container_of(character) == scenario.room_b
 
 
 def test_daggersim_institution_quest_and_bank_handlers_reject_bad_state_directly():
@@ -1192,6 +1281,91 @@ def test_daggersim_institution_quest_and_bank_handlers_reject_bad_state_directly
         result = handler.execute(ctx, command)
         assert result.ok is False
         assert result.reason == reason
+
+
+def test_investigate_rumor_ignores_invalid_or_non_site_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    prop = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="old marker", kind="prop")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), prop.id
+    )
+    invalid_target_rumor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="invalid target rumor", kind="rumor"),
+            RumorComponent(
+                text="The map points nowhere.",
+                heard_by=(str(scenario.character),),
+            ),
+            RumorReliabilityComponent(score=1.0),
+            RumorTargetComponent(target_id="not-an-entity"),
+        ],
+    )
+    non_site_rumor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="marker rumor", kind="rumor"),
+            RumorComponent(
+                text="The marker is important.",
+                heard_by=(str(scenario.character),),
+            ),
+            RumorReliabilityComponent(score=1.0),
+            RumorTargetComponent(target_id=str(prop.id)),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), invalid_target_rumor.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), non_site_rumor.id)
+
+    for rumor_id in (invalid_target_rumor.id, non_site_rumor.id):
+        result = InvestigateRumorHandler().execute(
+            ctx,
+            _handler_cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id)),
+        )
+
+        assert result.ok is True
+        assert [type(event) for event in result.events] == [RumorVerifiedEvent]
+
+
+def test_use_institution_service_can_succeed_without_output_item():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    institution = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Quiet Guild", kind="institution"),
+            InstitutionComponent(name="Quiet Guild", institution_type="guild"),
+        ],
+    )
+    service = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="advice desk", kind="service"),
+            InstitutionServiceComponent(service_name="advice", output_item_name=""),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), institution.id
+    )
+    institution.add_relationship(Contains(mode=ContainmentMode.CONTAINER), service.id)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(MemberOfInstitution(rank="member", since_epoch=0), institution.id)
+
+    result = UseInstitutionServiceHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "use-institution-service", service_id=str(service.id)),
+    )
+
+    assert result.ok is True
+    event = result.events[0]
+    assert isinstance(event, InstitutionServiceUsedEvent)
+    assert event.output_item_id is None
 
 
 def test_daggersim_repay_loan_handler_rejects_bad_entities_and_components():
@@ -1710,6 +1884,79 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
     result = TransformHandler().execute(ctx, _handler_cmd(scenario, "transform"))
     assert result.ok is False
     assert result.reason == "character is already transformed"
+
+
+def test_pay_fine_succeeds_when_crime_has_no_bounty_component():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    bank_id = _bank(scenario)
+    account = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="bank account", kind="bank-account"),
+            BankAccountComponent(
+                bank_id=str(bank_id),
+                owner_id=str(scenario.character),
+                balance=25,
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(bank_id).add_relationship(
+        Contains(mode=ContainmentMode.CONTAINER), account.id
+    )
+    crime = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="minor trespass", kind="crime-record"),
+            CrimeRecordComponent(crime_type="trespass", region_id="moss-road", fine=10),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), crime.id
+    )
+
+    result = PayFineHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "pay-fine", crime_id=str(crime.id)),
+    )
+
+    assert result.ok is True
+    assert isinstance(result.events[0], FinePaidEvent)
+    assert account.get_component(BankAccountComponent).balance == 15
+    assert crime.get_component(CrimeRecordComponent).status == "paid"
+
+
+def test_enchant_item_can_use_spell_template_as_source():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    spell_id = _spell_template(scenario)
+    charm = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="plain charm", kind="item"),
+            PortableComponent(),
+        ],
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), charm.id)
+
+    result = EnchantItemHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "enchant-item",
+            item_id=str(charm.id),
+            spell_id=str(spell_id),
+        ),
+    )
+
+    assert result.ok is True
+    assert isinstance(result.events[0], ItemEnchantedEvent)
+    enchantment = charm.get_component(EnchantedItemComponent)
+    assert enchantment.spell_name == "Mend Sprout"
+    assert enchantment.source_spell_id == str(spell_id)
 
 
 def test_daggersim_handlers_reject_invalid_character_ids_directly():
@@ -3291,6 +3538,20 @@ def test_dialogue_fragments_surface_register_and_skills():
 
     assert any("Etiquette skill: 2" in line for line in fragments)
     assert any("Social register of Baroness Thistledown: court" in line for line in fragments)
+
+
+def test_social_register_reactor_ignores_invalid_or_unregistered_listeners():
+    scenario = build_scenario()
+    reactor = SocialRegisterReactor(scenario.actor.world)
+    prop = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="silent marker", kind="prop")],
+    )
+
+    reactor._react("not-an-entity", "polite", 0)
+    reactor._react(str(prop.id), "polite", 0)
+
+    assert not prop.has_component(ConversationToneComponent)
 
 
 def test_install_daggersim_registers_plugin_consequences():

@@ -18,6 +18,7 @@ from bunnyland.core import (
     Lane,
     LLMControllerComponent,
     SleepHandler,
+    SleepingComponent,
     SuspendedComponent,
     WakeHandler,
     build_submitted_command,
@@ -91,8 +92,10 @@ from bunnyland.mechanics.lifesim import (
     ReproductiveComponent,
     ReputationComponent,
     ResolveBirthHandler,
+    RestfulSleepConsequence,
     RoomClaimComponent,
     RoutineComponent,
+    RoutineDueConsequence,
     RoutineDueEvent,
     SellItemHandler,
     SetRelationshipStatusHandler,
@@ -110,6 +113,9 @@ from bunnyland.mechanics.lifesim import (
     WellRestedEvent,
     WitnessRomanceHandler,
     WorkShiftCompletedEvent,
+    _first_business,
+    _lifesim_aging_policy,
+    _partner_edge,
     _routine_for_activity,
     _status_edge,
     children_of,
@@ -263,6 +269,25 @@ async def test_aspiration_milestone_completion_can_reward_inventory_item():
     assert reward_id is not None
     inventory_ids = {str(target_id) for _edge, target_id in character.get_relationships(Contains)}
     assert reward_id in inventory_ids
+
+
+def test_complete_milestone_succeeds_without_reward_item():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(AspirationComponent(name="Quiet Life", milestones=("rest",)))
+
+    result = CompleteMilestoneHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "complete-milestone", milestone="rest"),
+    )
+
+    assert result.ok is True
+    event = result.events[0]
+    assert isinstance(event, MilestoneCompletedEvent)
+    assert event.reward_item_id is None
+    assert character.get_component(AspirationComponent).completed == ("rest",)
 
 
 def test_aspiration_and_milestone_handlers_reject_invalid_commands():
@@ -510,6 +535,48 @@ def test_lifesim_economy_and_skill_handlers_reject_bad_state_directly():
     result = GoToWorkHandler().execute(ctx, _handler_cmd(scenario, "go-to-work"))
     assert result.ok is False
     assert result.reason == "shift is not scheduled yet"
+
+
+def test_lifesim_job_handlers_cover_existing_funds_no_promotion_and_quit_success():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    actor = scenario.actor.world.get_entity(scenario.character)
+    actor.add_component(HouseholdFundsComponent(balance=3))
+
+    result = FindJobHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "find-job", title="Archivist", hourly_pay=4),
+    )
+
+    assert result.ok is True
+    assert actor.get_component(HouseholdFundsComponent).balance == 3
+
+    replace_component(
+        actor,
+        CareerComponent(title="Archivist", hourly_pay=4, performance=0.0, active=True),
+    )
+    replace_component(
+        actor,
+        JobScheduleComponent(
+            next_shift_epoch=scenario.actor.epoch,
+            shift_duration_seconds=HOUR,
+            shift_interval_seconds=2 * HOUR,
+        ),
+    )
+    result = GoToWorkHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "go-to-work", performance_gain=0.25),
+    )
+
+    assert result.ok is True
+    assert [type(event) for event in result.events] == [WorkShiftCompletedEvent]
+    assert actor.get_component(CareerComponent).performance == 0.25
+
+    result = QuitJobHandler().execute(ctx, _handler_cmd(scenario, "quit-job"))
+
+    assert result.ok is True
+    assert actor.get_component(CareerComponent).active is False
 
 
 def test_lifesim_pay_bill_handler_rejects_invalid_bills_directly():
@@ -800,6 +867,38 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
         assert result.ok is False
         assert result.reason == reason
 
+    result = SetRelationshipStatusHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "set-relationship-status",
+            target_id=str(worker_id),
+            status="friend",
+        ),
+    )
+    assert result.ok is True
+    result = SetRelationshipStatusHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "set-relationship-status",
+            target_id=str(worker_id),
+            status="rival",
+        ),
+    )
+    assert result.ok is True
+    assert _status_edge(actor, worker_id).status == "rival"
+
+    target = scenario.actor.world.get_entity(worker_id)
+    target.add_component(ReputationComponent(score=0, known_for=("news",)))
+    result = SpreadGossipHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "spread-gossip", target_id=str(worker_id), text="news"),
+    )
+    assert result.ok is True
+    assert isinstance(result.events[0], GossipSpreadEvent)
+    assert target.get_component(ReputationComponent).known_for == ("news",)
+
     business = spawn_entity(
         scenario.actor.world,
         [BusinessOwnerComponent(name="Jam Stand", default_price=2)],
@@ -1082,6 +1181,15 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
     assert result.ok is False
     assert result.reason == "participants are not present"
 
+    actor.add_relationship(PartnerOf(since_epoch=0), partner_id)
+    result = EndPartnershipHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "end-partnership", target_id=str(partner_id)),
+    )
+    assert result.ok is True
+    assert isinstance(result.events[0], PartnershipEndedEvent)
+    assert not actor.has_relationship(PartnerOf, partner_id)
+
     actor.add_component(
         ReproductiveComponent(can_be_pregnant=True, species_group="bunny")
     )
@@ -1323,6 +1431,41 @@ def test_lifesim_handlers_reject_invalid_character_ids_directly():
         )
         assert result.ok is False
         assert result.reason == reason
+
+
+def test_resolve_birth_handles_unplaced_parent_and_invalid_co_parent_id():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    actor = scenario.actor.world.get_entity(scenario.character)
+    actor.add_component(
+        PregnancyComponent(
+            started_at_epoch=0,
+            due_at_epoch=0,
+            co_parent_ids=("not-an-entity",),
+        )
+    )
+    actor.add_component(BirthDueComponent(due_since_epoch=0))
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains,
+        scenario.character,
+    )
+
+    result = ResolveBirthHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "resolve-birth", child_name="Clover"),
+    )
+
+    assert result.ok is True
+    event = result.events[0]
+    assert isinstance(event, BirthResolvedEvent)
+    child_id = parse_entity_id(event.child_id)
+    assert child_id is not None
+    assert actor.has_relationship(ParentOf, child_id)
+    assert not scenario.actor.world.get_entity(scenario.room_a).has_relationship(
+        Contains,
+        child_id,
+    )
 
 
 async def test_lifesim_aging_is_disabled_by_default():
@@ -1634,11 +1777,19 @@ async def test_pay_bill_without_id_selects_first_unpaid_bill_then_rejects_when_c
         scenario.actor.world,
         [BillComponent(amount=5, reason="old fee", paid_at_epoch=1)],
     )
+    not_a_bill = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="bill-shaped note", kind="prop")],
+    )
     unpaid_bill = spawn_entity(
         scenario.actor.world,
-        [BillComponent(amount=12, reason="garden dues")],
+        [BillComponent(amount=12, reason="garden dues", creditor_id="not-an-id")],
     )
+    scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(HasBill, {})[
+        parse_entity_id("entity_999")
+    ] = HasBill()
     character.add_relationship(HasBill(), paid_bill.id)
+    character.add_relationship(HasBill(), not_a_bill.id)
     character.add_relationship(HasBill(), unpaid_bill.id)
     paid: list[BillPaidEvent] = []
     rejects: list[CommandRejectedEvent] = []
@@ -1837,6 +1988,65 @@ async def test_routine_due_consequence_advances_next_due_without_auto_commanding
     assert routine.last_completed_epoch == scenario.actor.epoch
     assert routine.next_due_epoch == scenario.actor.epoch + HOUR
     assert due[0].activity == "water the window herbs"
+
+
+def test_set_routine_updates_existing_routine_for_activity():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    routine = spawn_entity(
+        scenario.actor.world,
+        [RoutineComponent(activity="garden", interval_seconds=HOUR, next_due_epoch=HOUR)],
+    )
+    character.add_relationship(HasRoutine(), routine.id)
+
+    result = SetRoutineHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "set-routine",
+            activity="garden",
+            interval_seconds=2 * HOUR,
+            next_due_epoch=3 * HOUR,
+        ),
+    )
+
+    assert result.ok is True
+    assert character.get_relationships(HasRoutine) == [(HasRoutine(), routine.id)]
+    updated = routine.get_component(RoutineComponent)
+    assert updated.interval_seconds == 2 * HOUR
+    assert updated.next_due_epoch == 3 * HOUR
+
+
+def test_routine_due_consequence_skips_routines_without_live_owners():
+    scenario = build_scenario()
+    routine = spawn_entity(
+        scenario.actor.world,
+        [RoutineComponent(activity="garden", interval_seconds=HOUR, next_due_epoch=0)],
+    )
+
+    assert RoutineDueConsequence().process(scenario.actor.world, HOUR) == []
+    assert routine.get_component(RoutineComponent).last_completed_epoch is None
+
+
+def test_restful_sleep_consequence_removes_home_rest_after_moving_away():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(SleepingComponent(started_at_epoch=0))
+    character.add_component(HomeRestComponent(asleep_since_epoch=0, room_id=str(scenario.room_a)))
+
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains,
+        scenario.character,
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        scenario.character,
+    )
+
+    assert RestfulSleepConsequence().process(scenario.actor.world, HOUR) == []
+    assert not character.has_component(HomeRestComponent)
 
 
 async def test_sleeping_in_claimed_home_grants_well_rested_skill_bonus():
@@ -2401,6 +2611,10 @@ def test_status_edge_and_routine_lookup_cover_match_and_miss_paths():
         scenario.actor.world,
         [RoutineComponent(activity="sleep", next_due_epoch=10)],
     )
+    not_a_routine = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="calendar note", kind="prop")],
+    )
     matching_routine = spawn_entity(
         scenario.actor.world,
         [RoutineComponent(activity="tend shop", next_due_epoch=20)],
@@ -2409,6 +2623,7 @@ def test_status_edge_and_routine_lookup_cover_match_and_miss_paths():
     character.add_relationship(RelationshipStatus(status="awkward", since_epoch=0), other.id)
     character.add_relationship(matching, target)
     character.add_relationship(HasRoutine(), wrong_routine.id)
+    character.add_relationship(HasRoutine(), not_a_routine.id)
     scenario.actor.world._relationships.setdefault(character.id, {}).setdefault(HasRoutine, {})[
         parse_entity_id("entity_999")
     ] = HasRoutine()
@@ -2418,6 +2633,9 @@ def test_status_edge_and_routine_lookup_cover_match_and_miss_paths():
     assert _status_edge(character, parse_entity_id("entity_999")) is None
     assert _routine_for_activity(scenario.actor.world, character, "tend shop") == matching_routine
     assert _routine_for_activity(scenario.actor.world, character, "garden") is None
+    assert _partner_edge(character, target) is None
+    assert _lifesim_aging_policy(scenario.actor.world) == LifesimAgingPolicyComponent()
+    assert _first_business(scenario.actor.world, character) is None
 
 
 def test_kinship_queries_return_parent_child_partner_and_sibling_labels():
@@ -2437,3 +2655,5 @@ def test_kinship_queries_return_parent_child_partner_and_sibling_labels():
     assert kinship_label(scenario.actor.world, scenario.character, child) == "child"
     assert kinship_label(scenario.actor.world, scenario.character, partner) == "partner"
     assert kinship_label(scenario.actor.world, child, sibling) == "sibling"
+    assert kinship_label(scenario.actor.world, child, child) == "self"
+    assert kinship_label(scenario.actor.world, scenario.character, scenario.room_a) is None

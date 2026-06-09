@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import build_scenario
@@ -32,6 +33,7 @@ from bunnyland.scripting import (
     AddEntityPatch,
     ComponentSpec,
     EntityQuery,
+    ExecutionPolicy,
     FanoutMode,
     PatchWorldAction,
     ScriptBlock,
@@ -266,6 +268,45 @@ def test_script_runtime_composed_triggers_and_event_field_matching():
         (event,),
         runtime.bindings,
     )
+    assert not runtime._triggered(
+        scenario.actor,
+        Trigger.model_construct(),
+        (),
+        runtime.bindings,
+    )
+
+
+def test_script_runtime_eligibility_cooldown_and_trigger_skip():
+    scenario = build_scenario()
+    runtime = ScriptRuntime()
+    block = ScriptBlock(
+        name="cooldown",
+        trigger=Trigger(tick=True),
+        execution=ExecutionPolicy.ALWAYS,
+        cooldown_seconds=10,
+    )
+    runtime.state.blocks["test:cooldown"] = ScriptBlockState(count=1, last_fired_epoch=5)
+
+    assert runtime._eligible(scenario.actor, "test:cooldown", block) is False
+
+
+async def test_script_runtime_skips_eligible_block_when_trigger_is_false():
+    scenario = build_scenario()
+    script = ScriptDefinition(
+        id="test.skip-trigger",
+        blocks=(
+            ScriptBlock(
+                name="later",
+                trigger=Trigger(epoch_at_least=999),
+                actions=(),
+            ),
+        ),
+    )
+    runtime = ScriptRuntime([script]).install(scenario.actor)
+
+    await scenario.actor.tick(0.0)
+
+    assert runtime.state.blocks == {}
 
 
 def test_script_runtime_selector_modes_and_query_filters():
@@ -305,6 +346,21 @@ def test_script_runtime_selector_modes_and_query_filters():
         EntityQuery(identity_kind="character", tags=("friend",), in_room="$room"),
         runtime.bindings,
     )
+    wrong_kind = runtime._resolve_query(
+        scenario.actor,
+        EntityQuery(identity_name="Hazel", identity_kind="item"),
+        runtime.bindings,
+    )
+    invalid_id = runtime._resolve_query(
+        scenario.actor,
+        EntityQuery(id="not-an-entity"),
+        runtime.bindings,
+    )
+    wrong_room = runtime._resolve_query(
+        scenario.actor,
+        EntityQuery(identity_name="Hazel", in_room="not-an-entity"),
+        runtime.bindings,
+    )
     room = runtime._resolve_query(
         scenario.actor,
         EntityQuery(room_title="Mosslit Burrow", without_components=("CharacterComponent",)),
@@ -314,7 +370,18 @@ def test_script_runtime_selector_modes_and_query_filters():
     assert first == [scenario.actor.world.get_entity(scenario.character)]
     assert {entity.id for entity in each} == {scenario.character, ally.id}
     assert tagged == [ally]
+    assert wrong_kind == []
+    assert invalid_id == []
+    assert wrong_room == []
     assert [entity.id for entity in room] == [scenario.room_a]
+    resolved = runtime._resolve_value(
+        {"target": "$room", "list": ["$room", "literal"]},
+        runtime.bindings,
+    )
+    assert resolved == {
+        "target": str(scenario.room_a),
+        "list": [str(scenario.room_a), "literal"],
+    }
 
     with pytest.raises(ScriptRuntimeError, match="selector 'actor' expected one match, found 2"):
         runtime._select(
@@ -432,6 +499,14 @@ async def test_script_runtime_rejects_unknown_components_and_uncontrolled_target
         )
 
 
+async def test_script_runtime_rejects_unknown_action_object():
+    scenario = build_scenario()
+    runtime = ScriptRuntime()
+
+    with pytest.raises(ScriptRuntimeError, match="unknown action"):
+        await runtime._run_action(scenario.actor, SimpleNamespace(kind="unknown"), {})
+
+
 def test_script_runtime_patch_validation_errors():
     scenario = build_scenario()
     runtime = ScriptRuntime()
@@ -462,6 +537,57 @@ def test_script_runtime_patch_validation_errors():
                     ),
                 )
             ),
+            {},
+        )
+
+    bindings = {}
+    runtime._patch_world(
+        scenario.actor,
+        PatchWorldAction(
+            operations=(
+                AddComponentPatch(
+                    target=TargetSelector(
+                        query=EntityQuery(identity_name="missing"),
+                        mode=FanoutMode.EACH,
+                    ),
+                    component=ComponentSpec(
+                        type="IdentityComponent",
+                        fields={"name": "ignored", "kind": "item"},
+                    ),
+                ),
+                SetComponentFieldsPatch(
+                    target=TargetSelector(
+                        query=EntityQuery(identity_name="missing"),
+                        mode=FanoutMode.EACH,
+                    ),
+                    component_type="IdentityComponent",
+                    fields={"name": "ignored"},
+                ),
+            )
+        ),
+        bindings,
+    )
+    assert bindings == {}
+
+    runtime._add_entity(
+        scenario.actor,
+        AddEntityPatch(
+            bind="loose",
+            components=(
+                ComponentSpec(
+                    type="IdentityComponent",
+                    fields={"name": "loose item", "kind": "item"},
+                ),
+            ),
+        ),
+        bindings,
+    )
+    assert parse_entity_id(bindings["loose"]) is not None
+
+    with pytest.raises(ScriptRuntimeError, match="unknown patch operation"):
+        runtime._patch_world(
+            scenario.actor,
+            SimpleNamespace(operations=(SimpleNamespace(op="unknown"),)),
             {},
         )
 

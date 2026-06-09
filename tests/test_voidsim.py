@@ -201,6 +201,39 @@ async def test_open_airlock_rejects_already_open_airlock():
     assert any(event.reason == "airlock is already open" for event in rejects)
 
 
+def test_open_airlock_covers_non_decompression_branches():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _make_module(scenario, pressure=0.0)
+    scenario.actor.world.get_entity(scenario.room_b).add_component(
+        HabitatModuleComponent(module_type="cargo")
+    )
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+
+    airlocks = [
+        AirlockComponent(module_id=str(scenario.room_a), exposes_vacuum=False),
+        AirlockComponent(module_id="not-an-entity", exposes_vacuum=True),
+        AirlockComponent(module_id=str(scenario.room_b), exposes_vacuum=True),
+        AirlockComponent(module_id=str(scenario.room_a), exposes_vacuum=True),
+    ]
+
+    for state in airlocks:
+        airlock = spawn_entity(
+            scenario.actor.world,
+            [IdentityComponent(name="test airlock", kind="airlock"), state],
+        )
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), airlock.id)
+
+        result = OpenAirlockHandler().execute(
+            ctx,
+            _handler_cmd(scenario, "open-airlock", airlock_id=str(airlock.id)),
+        )
+
+        assert result.ok is True
+        assert [type(event) for event in result.events] == [AirlockCycledEvent]
+
+
 async def test_cycle_airlock_preserves_pressure():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -1217,6 +1250,23 @@ async def test_life_support_online_replenishes_oxygen():
     assert oxygen.failed is False
 
 
+def test_life_support_consequence_skips_zero_elapsed_and_uses_default_generation():
+    scenario = build_scenario()
+    skipped = spawn_entity(
+        scenario.actor.world,
+        [OxygenComponent(level=10.0, maximum=100.0, last_updated_epoch=HOUR)],
+    )
+    generated = spawn_entity(
+        scenario.actor.world,
+        [OxygenComponent(level=10.0, maximum=100.0, last_updated_epoch=0)],
+    )
+
+    assert LifeSupportConsequence().process(scenario.actor.world, HOUR) == []
+
+    assert skipped.get_component(OxygenComponent).level == 10.0
+    assert generated.get_component(OxygenComponent).level == 15.0
+
+
 async def test_chaos_influence_applies_barbarian_corruption_and_mutation_pressure():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -1428,6 +1478,52 @@ async def test_plot_course_then_jump_completes_travel():
     assert started[0].destination_id == str(scenario.room_b)
     assert completed[0].destination_id == str(scenario.room_b)
     assert fuel[0].level == 90.0
+
+
+def test_jump_travel_consequence_skips_pending_invalid_and_originless_routes():
+    scenario = build_scenario()
+    _system(scenario, scenario.room_b, "Proxima")
+    ship_id = _ship_in(scenario, scenario.room_a)
+    ship = scenario.actor.world.get_entity(ship_id)
+    consequence = JumpTravelConsequence()
+    ship.add_component(
+        NavigationRouteComponent(
+            destination_id=str(scenario.room_b),
+            fuel_cost=1.0,
+            arrive_at_epoch=HOUR,
+            status="plotted",
+        )
+    )
+
+    assert consequence.process(scenario.actor.world, HOUR) == []
+
+    replace_component(
+        ship,
+        NavigationRouteComponent(
+            destination_id="not-an-entity",
+            fuel_cost=1.0,
+            arrive_at_epoch=HOUR,
+            status="jumping",
+        ),
+    )
+    assert consequence.process(scenario.actor.world, HOUR) == []
+
+    replace_component(
+        ship,
+        NavigationRouteComponent(
+            destination_id=str(scenario.room_b),
+            fuel_cost=1.0,
+            arrive_at_epoch=HOUR,
+            status="jumping",
+        ),
+    )
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, ship.id)
+
+    events = consequence.process(scenario.actor.world, HOUR)
+
+    assert len(events) == 1
+    assert isinstance(events[0], JumpCompletedEvent)
+    assert container_of(ship) == scenario.room_b
 
 
 async def test_jump_rejected_without_plotted_course():
