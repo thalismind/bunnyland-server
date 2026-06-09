@@ -16,7 +16,7 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
-from bunnyland.core.components import CharacterComponent
+from bunnyland.core.components import CharacterComponent, RoomComponent
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.colonysim import install_colonysim
@@ -28,11 +28,16 @@ from bunnyland.mechanics.dinosim import (
     ArmorPlateComponent,
     ArmyCalledEvent,
     ArmyResponseComponent,
+    AssignGuardHandler,
+    AssignRanchWorkHandler,
     BaitComponent,
     BaitSetEvent,
+    BoneComponent,
     BuildEnclosureHandler,
     CallForHelpHandler,
     ChargeComponent,
+    CloneCandidateComponent,
+    CollectEggHandler,
     CommandCompanionHandler,
     CommandComponent,
     CommandTrainedEvent,
@@ -44,7 +49,10 @@ from bunnyland.mechanics.dinosim import (
     CreatureAttackedEvent,
     CreatureChargedEvent,
     CreatureEscapedEvent,
+    CreatureMilkComponent,
     CreatureMountedEvent,
+    CreatureProductCollectedEvent,
+    CreatureProductComponent,
     CreatureRecalledEvent,
     CreatureRecapturedEvent,
     CreatureRoaredEvent,
@@ -60,9 +68,13 @@ from bunnyland.mechanics.dinosim import (
     EggLaidEvent,
     EnclosureBuiltEvent,
     EnclosureComponent,
+    EscapeRiskComponent,
+    EscapeRiskConsequence,
     EvacuateRoomHandler,
     ExtractAncientSampleHandler,
     FeedingPenComponent,
+    FeedStockedEvent,
+    FeedStoreComponent,
     FenceComponent,
     FenceRepairedEvent,
     FertilityComponent,
@@ -73,13 +85,19 @@ from bunnyland.mechanics.dinosim import (
     GateComponent,
     GateReinforcedEvent,
     GrappleComponent,
+    GuardAnimalComponent,
+    GuardAssignedEvent,
     GuardBehaviorComponent,
+    HarvestProductHandler,
     HatchEggHandler,
     HiddenFromCreatureEvent,
+    HideComponent,
     HideFromCreatureHandler,
+    HuntBehaviorComponent,
     IdentifyFossilHandler,
     IncubateEggHandler,
     IncubationComponent,
+    IncubationConsequence,
     KaijuArrivedEvent,
     KaijuComponent,
     LayEggHandler,
@@ -93,10 +111,13 @@ from bunnyland.mechanics.dinosim import (
     PredatorDrivenOffEvent,
     PrepareCloneHandler,
     QuarantinePenComponent,
+    RanchLaborComponent,
+    RanchWorkAssignedEvent,
     RecallComponent,
     RecallCreatureHandler,
     RecaptureCreatureHandler,
     ReinforceGateHandler,
+    ReinforcementComponent,
     RepairDamageHandler,
     RepairFenceHandler,
     ReptileProcreationComponent,
@@ -108,9 +129,12 @@ from bunnyland.mechanics.dinosim import (
     SignalArmyHandler,
     SpeciesComponent,
     SpeciesIdentificationComponent,
+    StampedeStartedEvent,
+    StockFeedHandler,
     TameCreatureHandler,
     TamingProgressedEvent,
     TargetWeakPointHandler,
+    ToxinComponent,
     TrackComponent,
     TrackCreatureHandler,
     TrainCommandHandler,
@@ -172,6 +196,11 @@ def _install(actor):
     actor.register_handler(CallForHelpHandler())
     actor.register_handler(SignalArmyHandler())
     actor.register_handler(RepairDamageHandler())
+    actor.register_handler(StockFeedHandler())
+    actor.register_handler(CollectEggHandler())
+    actor.register_handler(HarvestProductHandler())
+    actor.register_handler(AssignRanchWorkHandler())
+    actor.register_handler(AssignGuardHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -717,6 +746,1105 @@ async def test_dangerous_encounter_army_response_and_damage_repair_loop():
         scenario.actor.world.get_entity(scenario.character),
     )
     assert "Army response signaled for Mosslit Burrow: strength 3." in fragments
+
+
+async def test_creature_products_feed_store_ranch_work_and_guard_assignment_loop():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    replace_component(room, FeedStoreComponent(feed=1.0, capacity=10.0))
+    raptor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ranch raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CreatureMilkComponent(volume=3.0, maximum=3.0),
+            ToxinComponent(potency=2.0, quantity=2.0, maximum=2.0),
+            HideComponent(quality=1.5),
+            BoneComponent(quality=2.0),
+            CreatureProductComponent(product_type="fertilizer", quantity=4.0, renewable=True),
+        ],
+    )
+    egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ranch egg", kind="egg"),
+            EggComponent(
+                species_name="velociraptor",
+                laid_at_epoch=0,
+                parent_ids=(str(raptor.id),),
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raptor.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), egg.id)
+
+    initial_fragments = dinosim_fragments(
+        scenario.actor.world,
+        scenario.actor.world.get_entity(scenario.character),
+    )
+    assert "Creature product available from ranch raptor: fertilizer x4." in initial_fragments
+    assert "ranch raptor has harvestable hide." in initial_fragments
+    assert "ranch raptor has harvestable bone." in initial_fragments
+
+    stocked: list[FeedStockedEvent] = []
+    products: list[CreatureProductCollectedEvent] = []
+    ranch_work: list[RanchWorkAssignedEvent] = []
+    guard_assigned: list[GuardAssignedEvent] = []
+    scenario.actor.bus.subscribe(FeedStockedEvent, stocked.append)
+    scenario.actor.bus.subscribe(CreatureProductCollectedEvent, products.append)
+    scenario.actor.bus.subscribe(RanchWorkAssignedEvent, ranch_work.append)
+    scenario.actor.bus.subscribe(GuardAssignedEvent, guard_assigned.append)
+
+    commands = [
+        _cmd(scenario, "stock-feed", feed_store_id=str(scenario.room_a), amount=7.0),
+        _cmd(scenario, "collect-egg", egg_id=str(egg.id)),
+        _cmd(
+            scenario,
+            "harvest-product",
+            creature_id=str(raptor.id),
+            product_type="milk",
+            quantity=2.0,
+        ),
+        _cmd(
+            scenario,
+            "harvest-product",
+            creature_id=str(raptor.id),
+            product_type="toxin",
+            quantity=1.0,
+        ),
+        _cmd(
+            scenario,
+            "harvest-product",
+            creature_id=str(raptor.id),
+            product_type="hide",
+        ),
+        _cmd(
+            scenario,
+            "harvest-product",
+            creature_id=str(raptor.id),
+            product_type="bone",
+        ),
+        _cmd(
+            scenario,
+            "harvest-product",
+            creature_id=str(raptor.id),
+            product_type="fertilizer",
+            quantity=2.0,
+        ),
+        _cmd(
+            scenario,
+            "assign-ranch-work",
+            creature_id=str(raptor.id),
+            work_type="mount work",
+            target_id=str(scenario.room_a),
+        ),
+        _cmd(
+            scenario,
+            "assign-guard",
+            creature_id=str(raptor.id),
+            location_id=str(scenario.room_a),
+        ),
+    ]
+    for command in commands:
+        await scenario.actor.submit(command)
+        await scenario.actor.tick(HOUR)
+
+    assert stocked[0].feed == 8.0
+    assert [event.product_type for event in products] == [
+        "egg",
+        "milk",
+        "toxin",
+        "hide",
+        "bone",
+        "fertilizer",
+    ]
+    assert products[2].quantity == 1.0
+    assert ranch_work[0].work_type == "mount work"
+    assert guard_assigned[0].location_id == str(scenario.room_a)
+    assert container_of(egg) == scenario.character
+    assert egg.get_component(CreatureProductComponent).product_type == "egg"
+    assert room.get_component(FeedStoreComponent).feed == 8.0
+    assert raptor.get_component(CreatureMilkComponent).volume == 1.0
+    assert raptor.get_component(ToxinComponent).quantity == 1.0
+    assert raptor.get_component(HideComponent).harvested is True
+    assert raptor.get_component(BoneComponent).harvested is True
+    assert raptor.get_component(CreatureProductComponent).quantity == 2.0
+    assert raptor.get_component(RanchLaborComponent).work_type == "mount work"
+    assert raptor.get_component(GuardAnimalComponent).location_id == str(scenario.room_a)
+    assert raptor.get_component(GuardBehaviorComponent).location_id == str(scenario.room_a)
+
+    inventory_products = [
+        entity.get_component(CreatureProductComponent).product_type
+        for _edge, entity_id in scenario.actor.world.get_entity(
+            scenario.character
+        ).get_relationships(Contains)
+        if scenario.actor.world.get_entity(entity_id).has_component(CreatureProductComponent)
+        for entity in (scenario.actor.world.get_entity(entity_id),)
+    ]
+    assert sorted(inventory_products) == [
+        "bone",
+        "egg",
+        "fertilizer",
+        "hide",
+        "milk",
+        "toxin",
+    ]
+
+    fragments = dinosim_fragments(
+        scenario.actor.world,
+        scenario.actor.world.get_entity(scenario.character),
+    )
+    assert "Feed store at Mosslit Burrow: 8/10." in fragments
+    assert "ranch raptor is assigned to ranch work: mount work." in fragments
+
+
+def test_dangerous_encounter_handlers_reject_invalid_and_cover_edge_paths_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    rock = spawn_entity(scenario.actor.world, [IdentityComponent(name="plain rock", kind="rock")])
+    plain = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="plain raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    hidden = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="hidden flank raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            WeakPointComponent(exposed=False),
+        ],
+    )
+    inventory_predator = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="pocket predator", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    for entity in (rock, plain, hidden):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), inventory_predator.id
+    )
+
+    cases = [
+        (
+            DodgeCreatureHandler(),
+            _handler_cmd(scenario, "dodge-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            FightCreatureHandler(),
+            _handler_cmd(scenario, "fight-creature", creature_id=str(rock.id)),
+            "target is not a creature",
+        ),
+        (
+            TargetWeakPointHandler(),
+            _handler_cmd(scenario, "target-weak-point", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            TargetWeakPointHandler(),
+            _handler_cmd(scenario, "target-weak-point", creature_id=str(plain.id)),
+            "creature has no exposed weak point",
+        ),
+        (
+            TargetWeakPointHandler(),
+            _handler_cmd(scenario, "target-weak-point", creature_id=str(hidden.id)),
+            "weak point is not exposed",
+        ),
+        (
+            DriveOffPredatorHandler(),
+            _handler_cmd(scenario, "drive-off-predator", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            DriveOffPredatorHandler(),
+            _handler_cmd(scenario, "drive-off-predator", creature_id="entity_999"),
+            "creature does not exist",
+        ),
+        (
+            CallForHelpHandler(),
+            _handler_cmd(scenario, "call-for-help", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            CallForHelpHandler(),
+            _handler_cmd(scenario, "call-for-help", room_id=str(rock.id)),
+            "target is not a room",
+        ),
+        (
+            SignalArmyHandler(),
+            _handler_cmd(scenario, "signal-army", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            SignalArmyHandler(),
+            _handler_cmd(scenario, "signal-army", room_id="entity_999"),
+            "room does not exist",
+        ),
+        (
+            RepairDamageHandler(),
+            _handler_cmd(scenario, "repair-damage", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            RepairDamageHandler(),
+            _handler_cmd(scenario, "repair-damage", damage_id=str(plain.id)),
+            "target has no settlement damage",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    assert DodgeCreatureHandler().execute(
+        ctx, _handler_cmd(scenario, "dodge-creature", creature_id=str(plain.id))
+    ).ok
+    fight_result = FightCreatureHandler().execute(
+        ctx, _handler_cmd(scenario, "fight-creature", creature_id=str(plain.id))
+    )
+    assert fight_result.ok is True
+    assert len(fight_result.events) == 1
+    assert DriveOffPredatorHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "drive-off-predator",
+            creature_id=str(inventory_predator.id),
+        ),
+    ).ok
+    signal_result = SignalArmyHandler().execute(
+        ctx, _handler_cmd(scenario, "signal-army", room_id=str(scenario.room_a))
+    )
+    assert signal_result.ok is True
+    assert len(signal_result.events) == 1
+
+
+def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    rock = spawn_entity(scenario.actor.world, [IdentityComponent(name="plain rock", kind="rock")])
+    plain = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="plain raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    milkless = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="dry raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CreatureMilkComponent(volume=0.0),
+        ],
+    )
+    toxinless = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="spent toxin raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            ToxinComponent(quantity=0.0),
+        ],
+    )
+    harvested = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="harvested raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            HideComponent(harvested=True),
+            BoneComponent(harvested=True),
+        ],
+    )
+    depleted = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="depleted raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CreatureProductComponent(product_type="fertilizer", quantity=0.0),
+        ],
+    )
+    meat = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="meat raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CreatureProductComponent(product_type="meat", quantity=3.0, renewable=False),
+        ],
+    )
+    auto_milk = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="milk raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CreatureMilkComponent(volume=1.0),
+        ],
+    )
+    auto_toxin = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="toxin raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            ToxinComponent(quantity=1.0),
+        ],
+    )
+    auto_product = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="fertilizer raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CreatureProductComponent(product_type="fertilizer", quantity=1.0),
+        ],
+    )
+    auto_hide = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="hide raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            HideComponent(),
+        ],
+    )
+    auto_bone = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="bone raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            BoneComponent(),
+        ],
+    )
+    egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="plain egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0),
+        ],
+    )
+    distant_egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0),
+        ],
+    )
+    for entity in (
+        rock,
+        plain,
+        milkless,
+        toxinless,
+        harvested,
+        depleted,
+        meat,
+        auto_milk,
+        auto_toxin,
+        auto_product,
+        auto_hide,
+        auto_bone,
+        egg,
+    ):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    cases = [
+        (
+            StockFeedHandler(),
+            _handler_cmd(scenario, "stock-feed", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            StockFeedHandler(),
+            _handler_cmd(scenario, "stock-feed", feed_store_id="entity_999"),
+            "feed store does not exist",
+        ),
+        (
+            CollectEggHandler(),
+            _handler_cmd(scenario, "collect-egg", character_id="not-an-id", egg_id=str(egg.id)),
+            "invalid character or egg id",
+        ),
+        (
+            CollectEggHandler(),
+            _handler_cmd(scenario, "collect-egg", egg_id="entity_999"),
+            "egg does not exist",
+        ),
+        (
+            CollectEggHandler(),
+            _handler_cmd(scenario, "collect-egg", egg_id=str(distant_egg.id)),
+            "egg is not reachable",
+        ),
+        (
+            CollectEggHandler(),
+            _handler_cmd(scenario, "collect-egg", egg_id=str(rock.id)),
+            "target is not an egg",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(scenario, "harvest-product", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(scenario, "harvest-product", creature_id=str(rock.id)),
+            "target is not a creature",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(scenario, "harvest-product", creature_id=str(plain.id)),
+            "creature has no harvestable product",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(plain.id),
+                product_type="milk",
+            ),
+            "creature has no milk",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(milkless.id),
+                product_type="milk",
+            ),
+            "creature has no milk available",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(plain.id),
+                product_type="toxin",
+            ),
+            "creature has no toxin",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(toxinless.id),
+                product_type="toxin",
+            ),
+            "creature has no toxin available",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(plain.id),
+                product_type="hide",
+            ),
+            "creature has no hide",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(harvested.id),
+                product_type="hide",
+            ),
+            "hide has already been harvested",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(plain.id),
+                product_type="bone",
+            ),
+            "creature has no bone",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(harvested.id),
+                product_type="bone",
+            ),
+            "bone has already been harvested",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(depleted.id),
+                product_type="meat",
+            ),
+            "creature has no matching product",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(depleted.id),
+                product_type="fertilizer",
+            ),
+            "creature product is depleted",
+        ),
+        (
+            HarvestProductHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(plain.id),
+                product_type="scale",
+            ),
+            "creature has no matching product",
+        ),
+        (
+            AssignRanchWorkHandler(),
+            _handler_cmd(scenario, "assign-ranch-work", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            AssignRanchWorkHandler(),
+            _handler_cmd(scenario, "assign-ranch-work", creature_id="entity_999"),
+            "creature does not exist",
+        ),
+        (
+            AssignRanchWorkHandler(),
+            _handler_cmd(scenario, "assign-ranch-work", creature_id=str(plain.id)),
+            "work type is required",
+        ),
+        (
+            AssignGuardHandler(),
+            _handler_cmd(scenario, "assign-guard", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            AssignGuardHandler(),
+            _handler_cmd(scenario, "assign-guard", creature_id="entity_999"),
+            "creature does not exist",
+        ),
+        (
+            AssignGuardHandler(),
+            _handler_cmd(
+                scenario,
+                "assign-guard",
+                creature_id=str(plain.id),
+                location_id="entity_999",
+            ),
+            "guard location does not exist",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    stock_result = StockFeedHandler().execute(ctx, _handler_cmd(scenario, "stock-feed", amount=2))
+    assert stock_result.ok is True
+    assert room.get_component(FeedStoreComponent).feed == 2.0
+    assert HarvestProductHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "harvest-product",
+            creature_id=str(meat.id),
+            product_type="meat",
+            quantity=2,
+        ),
+    ).ok
+    assert meat.get_component(CreatureProductComponent).quantity == 0.0
+    for creature in (auto_milk, auto_toxin, auto_product, auto_hide, auto_bone):
+        assert HarvestProductHandler().execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "harvest-product",
+                creature_id=str(creature.id),
+            ),
+        ).ok
+    assert AssignGuardHandler().execute(
+        ctx, _handler_cmd(scenario, "assign-guard", creature_id=str(plain.id))
+    ).ok
+    assert plain.get_component(GuardAnimalComponent).location_id == str(scenario.room_a)
+
+
+def test_dinosim_fragments_cover_danger_settlement_and_enclosure_branches():
+    scenario = build_scenario()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    replace_component(room, EnclosureComponent(name="Risk Pen"))
+    replace_component(room, FenceComponent(integrity=3.0, maximum=5.0))
+    replace_component(room, GateComponent(open=True, locked=False))
+    replace_component(room, EscapeRiskComponent(risk=0.5))
+    replace_component(room, SettlementDamageComponent(severity=2))
+    replace_component(room, ArmyResponseComponent(called=True, strength=4.0))
+    threat = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="visible threat", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CreatureAttackComponent(damage=2.0, attack_type="claw"),
+            WeakPointComponent(label="neck"),
+            ApexPredatorComponent(threat_level=4),
+            KaijuComponent(threat_level=9),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), threat.id)
+
+    fragments = dinosim_fragments(
+        scenario.actor.world,
+        scenario.actor.world.get_entity(scenario.character),
+    )
+
+    assert "Dangerous creature: visible threat (claw)." in fragments
+    assert "visible threat has exposed weak point: neck." in fragments
+    assert "Apex predator nearby: visible threat threat 4." in fragments
+    assert "Kaiju threat nearby: visible threat threat 9." in fragments
+    assert "Settlement damage on Mosslit Burrow: severity 2." in fragments
+    assert "Army response signaled for Mosslit Burrow: strength 4." in fragments
+    assert "Risk Pen escape risk: 0.5." in fragments
+
+
+def test_dinosim_consequences_cover_policy_reuse_and_escape_risk_edges_directly():
+    scenario = build_scenario()
+    install_dinosim(scenario.actor)
+    install_dinosim(scenario.actor)
+    world = scenario.actor.world
+
+    ready_egg = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="ready egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True),
+            IncubationComponent(started_at_epoch=0, ready=True),
+        ],
+    )
+    unfertilized_egg = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="unfertilized egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=False),
+            IncubationComponent(started_at_epoch=0),
+        ],
+    )
+    IncubationConsequence().process(world, HOUR)
+    assert ready_egg.get_component(IncubationComponent).ready is True
+    assert unfertilized_egg.get_component(IncubationComponent).progress_seconds == 0
+
+    safe = spawn_entity(
+        world,
+        [
+            RoomComponent(title="Safe Pen"),
+            EnclosureComponent(name="Safe Pen"),
+            FenceComponent(integrity=5.0),
+            GateComponent(open=False, locked=True),
+            EscapeRiskComponent(risk=0.5, last_updated_epoch=0),
+        ],
+    )
+    unsafe_slow = spawn_entity(
+        world,
+        [
+            RoomComponent(title="Slow Pen"),
+            EnclosureComponent(name="Slow Pen"),
+            GateComponent(open=True, locked=False),
+            EscapeRiskComponent(risk=0.2, threshold=1.0, last_updated_epoch=0),
+            ReinforcementComponent(amount=5.0),
+        ],
+    )
+    no_exit = spawn_entity(
+        world,
+        [
+            RoomComponent(title="No Exit Pen"),
+            EnclosureComponent(name="No Exit Pen"),
+            FenceComponent(integrity=0.0),
+            EscapeRiskComponent(risk=1.0, threshold=1.0, last_updated_epoch=0),
+        ],
+    )
+    room = world.get_entity(scenario.room_a)
+    replace_component(room, EnclosureComponent(name="Stampede Pen"))
+    replace_component(room, FenceComponent(integrity=0.0))
+    replace_component(room, EscapeRiskComponent(risk=1.0, threshold=1.0, last_updated_epoch=0))
+    raptor_a = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="raptor a", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    raptor_b = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="raptor b", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raptor_a.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raptor_b.id)
+
+    events = EscapeRiskConsequence().process(world, HOUR)
+
+    assert safe.get_component(EscapeRiskComponent).risk == 0.0
+    assert unsafe_slow.get_component(EscapeRiskComponent).risk < 1.0
+    assert no_exit.get_component(EscapeRiskComponent).risk == 1.0
+    assert any(isinstance(event, StampedeStartedEvent) for event in events)
+    assert container_of(raptor_a) == scenario.room_b
+    assert container_of(raptor_b) == scenario.room_b
+
+
+def test_enclosure_handlers_reject_invalid_and_cover_edge_paths_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    rock = spawn_entity(scenario.actor.world, [IdentityComponent(name="plain rock", kind="rock")])
+    no_gate = spawn_entity(
+        scenario.actor.world,
+        [RoomComponent(title="No Gate Pen"), EnclosureComponent(name="No Gate Pen")],
+    )
+    no_fence = spawn_entity(
+        scenario.actor.world,
+        [RoomComponent(title="No Fence Pen"), EnclosureComponent(name="No Fence Pen")],
+    )
+    raptor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="escape-risk raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            EscapeRiskComponent(risk=0.5),
+        ],
+    )
+    for entity in (rock, no_gate, no_fence, raptor):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    cases = [
+        (
+            BuildEnclosureHandler(),
+            _handler_cmd(scenario, "build-enclosure", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            BuildEnclosureHandler(),
+            _handler_cmd(scenario, "build-enclosure", room_id=str(rock.id)),
+            "target is not a room",
+        ),
+        (
+            BuildEnclosureHandler(),
+            _handler_cmd(scenario, "build-enclosure", room_id=str(no_gate.id)),
+            "room is already an enclosure",
+        ),
+        (
+            RepairFenceHandler(),
+            _handler_cmd(scenario, "repair-fence", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            RepairFenceHandler(),
+            _handler_cmd(scenario, "repair-fence", enclosure_id=str(rock.id)),
+            "target is not a room",
+        ),
+        (
+            ReinforceGateHandler(),
+            _handler_cmd(scenario, "reinforce-gate", enclosure_id=str(no_gate.id)),
+            "enclosure has no gate",
+        ),
+        (
+            LockPenHandler(),
+            _handler_cmd(scenario, "lock-pen", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            OpenPenHandler(),
+            _handler_cmd(scenario, "open-pen", enclosure_id=str(rock.id)),
+            "target is not a room",
+        ),
+        (
+            TriggerContainmentHandler(),
+            _handler_cmd(scenario, "trigger-containment", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            RecaptureCreatureHandler(),
+            _handler_cmd(scenario, "recapture-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            HideFromCreatureHandler(),
+            _handler_cmd(scenario, "hide-from-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            EvacuateRoomHandler(),
+            _handler_cmd(scenario, "evacuate-room", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            EvacuateRoomHandler(),
+            _handler_cmd(
+                scenario,
+                "evacuate-room",
+                room_id=str(scenario.room_a),
+                destination_id="entity_999",
+            ),
+            "destination does not exist",
+        ),
+        (
+            EvacuateRoomHandler(),
+            _handler_cmd(
+                scenario,
+                "evacuate-room",
+                room_id=str(scenario.room_a),
+                destination_id=str(rock.id),
+            ),
+            "destination is not a room",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    assert RepairFenceHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "repair-fence",
+            enclosure_id=str(no_fence.id),
+            amount=3,
+        ),
+    ).ok
+    assert no_fence.get_component(FenceComponent).integrity == 3.0
+    assert LockPenHandler().execute(
+        ctx, _handler_cmd(scenario, "lock-pen", enclosure_id=str(no_gate.id))
+    ).ok
+    assert OpenPenHandler().execute(
+        ctx, _handler_cmd(scenario, "open-pen", enclosure_id=str(no_gate.id))
+    ).ok
+    assert TriggerContainmentHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "trigger-containment",
+            enclosure_id=str(no_gate.id),
+        ),
+    ).ok
+    assert RecaptureCreatureHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "recapture-creature",
+            creature_id=str(raptor.id),
+            enclosure_id=str(no_gate.id),
+        ),
+    ).ok
+    assert raptor.get_component(EscapeRiskComponent).risk == 0.0
+
+
+def test_companion_lifecycle_and_item_handlers_cover_additional_edge_paths_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    companion = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="trained raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CompanionComponent(owner_id=str(scenario.character)),
+            TrainingComponent(learned_commands=("hunt",), progress={"guard": 1.0}),
+        ],
+    )
+    plain = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="plain raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    bait = spawn_entity(scenario.actor.world, [IdentityComponent(name="bait", kind="food")])
+    distant_bait = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="distant bait", kind="food")]
+    )
+    clone_egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="clone egg", kind="egg"),
+            EggComponent(species_name="velociraptor", laid_at_epoch=0, fertilized=True),
+            CloneCandidateComponent(
+                species_name="velociraptor",
+                source_sample_id="entity_999",
+            ),
+            IncubationComponent(started_at_epoch=0, ready=True),
+        ],
+    )
+    for entity in (companion, plain, bait, clone_egg):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    cases = [
+        (
+            SetBaitHandler(),
+            _handler_cmd(scenario, "set-bait", bait_id="not-an-id"),
+            "invalid item id",
+        ),
+        (
+            SetBaitHandler(),
+            _handler_cmd(scenario, "set-bait", bait_id=str(distant_bait.id)),
+            "item is not reachable",
+        ),
+        (
+            TranquilizeCreatureHandler(),
+            _handler_cmd(scenario, "tranquilize-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            ApproachCreatureHandler(),
+            _handler_cmd(scenario, "approach-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            TameCreatureHandler(),
+            _handler_cmd(scenario, "tame-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            TameCreatureHandler(),
+            _handler_cmd(scenario, "tame-creature", creature_id=str(companion.id)),
+            "creature is already your companion",
+        ),
+        (
+            TrainCommandHandler(),
+            _handler_cmd(scenario, "train-command", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            TrainCommandHandler(),
+            _handler_cmd(scenario, "train-command", creature_id=str(companion.id)),
+            "command name is required",
+        ),
+        (
+            MountCreatureHandler(),
+            _handler_cmd(scenario, "mount-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            CommandCompanionHandler(),
+            _handler_cmd(scenario, "command-companion", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            CommandCompanionHandler(),
+            _handler_cmd(scenario, "command-companion", creature_id=str(companion.id)),
+            "command name is required",
+        ),
+        (
+            CommandCompanionHandler(),
+            _handler_cmd(
+                scenario,
+                "command-companion",
+                creature_id=str(companion.id),
+                command_name="guard",
+            ),
+            "command has not been trained",
+        ),
+        (
+            RecallCreatureHandler(),
+            _handler_cmd(scenario, "recall-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            RecallCreatureHandler(),
+            _handler_cmd(scenario, "recall-creature", creature_id="not-an-id"),
+            "invalid creature id",
+        ),
+        (
+            RecallCreatureHandler(),
+            _handler_cmd(scenario, "recall-creature", creature_id="entity_999"),
+            "creature does not exist",
+        ),
+        (
+            RecallCreatureHandler(),
+            _handler_cmd(scenario, "recall-creature", creature_id=str(plain.id)),
+            "creature is not your companion",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    partial = TrainCommandHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "train-command",
+            creature_id=str(companion.id),
+            command_name="guard",
+            progress=0.5,
+        ),
+    )
+    assert partial.ok is True
+    assert partial.events == ()
+    assert CommandCompanionHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "command-companion",
+            creature_id=str(companion.id),
+            command_name="hunt",
+            target_id="velociraptor",
+        ),
+    ).ok
+    assert companion.get_component(HuntBehaviorComponent).target_species == "velociraptor"
+
+    hatched = HatchEggHandler().execute(
+        ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(clone_egg.id))
+    )
+    assert hatched.ok is True
+    assert not clone_egg.has_component(CloneCandidateComponent)
+
+    room.remove_relationship(Contains, scenario.character)
+    assert RecallCreatureHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "recall-creature",
+            creature_id=str(companion.id),
+        ),
+    ).reason == "character is not in a room"
 
 
 async def test_dinosim_rejects_invalid_fossil_sample_and_parent_targets():

@@ -18,7 +18,9 @@ from bunnyland.mechanics.barbariansim import WeaponComponent
 from bunnyland.mechanics.colonysim import ResourceNodeComponent
 from bunnyland.mechanics.daggersim import BankComponent
 from bunnyland.mechanics.dinosim import (
+    CreatureProductComponent,
     DinosaurComponent,
+    FeedStoreComponent,
     FertilityComponent,
     FossilFragmentComponent,
     ReptileProcreationComponent,
@@ -128,6 +130,8 @@ async def test_dinosim_demo_includes_fossil_and_fertile_parent():
     await DINOSIM_DEMO.generate(actor, "dinosim-demo", GenOptions())
 
     assert _has(actor, FossilFragmentComponent)
+    assert _has(actor, FeedStoreComponent)
+    assert _has(actor, CreatureProductComponent)
     assert bool(
         list(
             actor.world.query()

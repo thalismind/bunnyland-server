@@ -607,17 +607,23 @@ async def dinosim_example(actor, seed: str, options: GenOptions) -> Instantiated
     del options
     from ..core.components import IdentityComponent, PortableComponent
     from ..mechanics.dinosim import (
+        BoneComponent,
+        CreatureMilkComponent,
+        CreatureProductComponent,
         DinosaurComponent,
         EggComponent,
         EnclosureComponent,
         FeedingPenComponent,
+        FeedStoreComponent,
         FenceComponent,
         FertilityComponent,
         FossilFragmentComponent,
         GateComponent,
+        HideComponent,
         IncubationComponent,
         ReptileProcreationComponent,
         SpeciesComponent,
+        ToxinComponent,
         TranquilizerComponent,
     )
 
@@ -698,6 +704,7 @@ async def dinosim_example(actor, seed: str, options: GenOptions) -> Instantiated
             FenceComponent(integrity=8.0, maximum=10.0),
             GateComponent(open=False, locked=True),
             FeedingPenComponent(feed=5.0),
+            FeedStoreComponent(feed=5.0, capacity=12.0),
         )
         _add(
             actor,
@@ -758,6 +765,15 @@ async def dinosim_example(actor, seed: str, options: GenOptions) -> Instantiated
             ),
             FertilityComponent(fertile=True),
             ReptileProcreationComponent(egg_species_name="velociraptor"),
+            CreatureMilkComponent(volume=1.0, maximum=1.0),
+            ToxinComponent(potency=1.0, quantity=1.0, maximum=1.0),
+            HideComponent(quality=1.0),
+            BoneComponent(quality=1.0),
+            CreatureProductComponent(
+                product_type="fertilizer",
+                quantity=2.0,
+                renewable=True,
+            ),
         )
     return world
 

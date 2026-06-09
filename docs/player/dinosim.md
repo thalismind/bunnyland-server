@@ -180,6 +180,30 @@ Repair settlement damage after a kaiju or predator incident:
 !repair-damage damage_id="damaged gatehouse" amount=2
 ```
 
+## Creature products and ranch work
+
+Feed stores can be stocked on an enclosure, pen, or nearby room:
+
+```text
+!stock-feed feed_store_id="Fern Paddock" amount=5
+```
+
+Collect eggs into inventory or harvest products from a reachable creature:
+
+```text
+!collect-egg egg_id="velociraptor egg"
+!harvest-product creature_id="clever raptor" product_type="milk"
+!harvest-product creature_id="clever raptor" product_type="toxin"
+!harvest-product creature_id="clever raptor" product_type="hide"
+```
+
+Assign ranch labor or guard duty to a creature:
+
+```text
+!assign-ranch-work creature_id="clever raptor" work_type="haul" target_id="Fern Paddock"
+!assign-guard creature_id="clever raptor" location_id="Fern Paddock"
+```
+
 ## Kaiju storyteller incidents
 
 Kaiju attacks are storyteller incidents when both `bunnyland.dinosim` and
@@ -216,6 +240,9 @@ encounters, but it does not assume settlement damage or colony job queues exist.
 !fight-creature creature_id="clever raptor" damage=2
 !target-weak-point creature_id="clever raptor" damage=2
 !repair-damage damage_id="damaged gatehouse" amount=2
+!stock-feed feed_store_id="Fern Paddock" amount=5
+!harvest-product creature_id="clever raptor" product_type="milk"
+!assign-guard creature_id="clever raptor" location_id="Fern Paddock"
 !lock-pen enclosure_id="Fern Paddock"
 !resolve-incident incident_id="kaiju attack"
 ```

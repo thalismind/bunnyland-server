@@ -137,6 +137,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "exit_id",
         "faction_id",
         "fertilizer_id",
+        "feed_store_id",
         "fossil_id",
         "grid_id",
         "incident_id",
@@ -547,6 +548,27 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "repair-damage",
         ("damage_id", "amount"),
         tool_name="repair_damage",
+    ),
+    _definition(
+        "stock-feed",
+        ("feed_store_id", "amount"),
+        tool_name="stock_feed",
+    ),
+    _definition("collect-egg", ("egg_id",), tool_name="collect_egg"),
+    _definition(
+        "harvest-product",
+        ("creature_id", "product_type", "quantity"),
+        tool_name="harvest_product",
+    ),
+    _definition(
+        "assign-ranch-work",
+        ("creature_id", "work_type", "target_id"),
+        tool_name="assign_ranch_work",
+    ),
+    _definition(
+        "assign-guard",
+        ("creature_id", "location_id"),
+        tool_name="assign_guard",
     ),
     # Life sim.
     _definition("eat", ("item_id",), tool_name="eat", patterns=("eat {item_id}",)),

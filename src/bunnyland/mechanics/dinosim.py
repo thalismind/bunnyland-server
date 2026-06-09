@@ -341,6 +341,61 @@ class ArmyResponseComponent(Component):
     called_at_epoch: int = 0
 
 
+@dataclass(frozen=True)
+class FeedStoreComponent(Component):
+    feed: float = 0.0
+    capacity: float = 20.0
+
+
+@dataclass(frozen=True)
+class CreatureProductComponent(Component):
+    product_type: str
+    quantity: float = 1.0
+    source_creature_id: str = ""
+    collected_at_epoch: int = 0
+    renewable: bool = False
+
+
+@dataclass(frozen=True)
+class HideComponent(Component):
+    quality: float = 1.0
+    harvested: bool = False
+
+
+@dataclass(frozen=True)
+class BoneComponent(Component):
+    quality: float = 1.0
+    harvested: bool = False
+
+
+@dataclass(frozen=True)
+class ToxinComponent(Component):
+    potency: float = 1.0
+    quantity: float = 1.0
+    maximum: float = 1.0
+
+
+@dataclass(frozen=True)
+class CreatureMilkComponent(Component):
+    volume: float = 1.0
+    maximum: float = 1.0
+
+
+@dataclass(frozen=True)
+class RanchLaborComponent(Component):
+    work_type: str = "haul"
+    target_id: str = ""
+    assigned_by_id: str = ""
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class GuardAnimalComponent(Component):
+    location_id: str = ""
+    assigned_by_id: str = ""
+    active: bool = True
+
+
 class FossilIdentifiedEvent(DomainEvent):
     fossil_id: str
     species_name: str
@@ -550,6 +605,30 @@ class SettlementDamageRepairedEvent(DomainEvent):
     settlement_id: str
     severity: int
     repaired: bool
+
+
+class FeedStockedEvent(DomainEvent):
+    feed_store_id: str
+    amount: float
+    feed: float
+
+
+class CreatureProductCollectedEvent(DomainEvent):
+    creature_id: str
+    product_id: str
+    product_type: str
+    quantity: float
+
+
+class RanchWorkAssignedEvent(DomainEvent):
+    creature_id: str
+    work_type: str
+    target_id: str = ""
+
+
+class GuardAssignedEvent(DomainEvent):
+    creature_id: str
+    location_id: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -780,6 +859,36 @@ def _spawn_egg(
             PortableComponent(can_pick_up=True),
         ],
     )
+
+
+def _spawn_creature_product(
+    world: World,
+    character: Entity,
+    *,
+    product_type: str,
+    quantity: float,
+    source_creature_id: str,
+    epoch: int,
+) -> Entity:
+    product = spawn_entity(
+        world,
+        [
+            IdentityComponent(
+                name=f"{product_type} product",
+                kind="creature_product",
+                tags=("dinosim", "product", product_type),
+            ),
+            CreatureProductComponent(
+                product_type=product_type,
+                quantity=quantity,
+                source_creature_id=source_creature_id,
+                collected_at_epoch=epoch,
+            ),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), product.id)
+    return product
 
 
 def ensure_dinosim_policy(actor) -> DinosimPolicyComponent:
@@ -2304,6 +2413,273 @@ class RepairDamageHandler:
         )
 
 
+class StockFeedHandler:
+    command_type = "stock-feed"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        store_id = parse_entity_id(command.payload.get("feed_store_id"))
+        if store_id is None:
+            store_id = container_of(ctx.entity(character_id))
+        if store_id is None or not ctx.world.has_entity(store_id):
+            return rejected("feed store does not exist")
+        store = ctx.entity(store_id)
+        if store.id not in reachable_ids(ctx.world, ctx.entity(character_id)):
+            return rejected("feed store is not reachable")
+        feed_store = (
+            store.get_component(FeedStoreComponent)
+            if store.has_component(FeedStoreComponent)
+            else FeedStoreComponent()
+        )
+        amount = max(0.0, float(command.payload.get("amount") or 1.0))
+        updated = replace(
+            feed_store,
+            feed=min(feed_store.capacity, feed_store.feed + amount),
+        )
+        replace_component(store, updated)
+        return ok(
+            FeedStockedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(store.id),),
+                    feed_store_id=str(store.id),
+                    amount=amount,
+                    feed=updated.feed,
+                )
+            )
+        )
+
+
+class CollectEggHandler:
+    command_type = "collect-egg"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        egg_id = parse_entity_id(command.payload.get("egg_id"))
+        if character_id is None or egg_id is None:
+            return rejected("invalid character or egg id")
+        if not ctx.world.has_entity(egg_id):
+            return rejected("egg does not exist")
+        egg_entity = _reachable_entity(ctx, character_id, egg_id)
+        if egg_entity is None:
+            return rejected("egg is not reachable")
+        if not egg_entity.has_component(EggComponent):
+            return rejected("target is not an egg")
+        egg = egg_entity.get_component(EggComponent)
+        character = ctx.entity(character_id)
+        _remove_from_container(ctx.world, egg_id)
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), egg_id)
+        replace_component(
+            egg_entity,
+            CreatureProductComponent(
+                product_type="egg",
+                quantity=1.0,
+                source_creature_id=egg.parent_ids[0] if egg.parent_ids else "",
+                collected_at_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            CreatureProductCollectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(egg_id),),
+                    creature_id=egg.parent_ids[0] if egg.parent_ids else "",
+                    product_id=str(egg_id),
+                    product_type="egg",
+                    quantity=1.0,
+                )
+            )
+        )
+
+
+class HarvestProductHandler:
+    command_type = "harvest-product"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        product_type = str(command.payload.get("product_type") or "").strip().lower()
+        quantity = max(1.0, float(command.payload.get("quantity") or 1.0))
+        product_quantity = quantity
+
+        if not product_type:
+            if creature.has_component(CreatureMilkComponent):
+                product_type = "milk"
+            elif creature.has_component(ToxinComponent):
+                product_type = "toxin"
+            elif creature.has_component(CreatureProductComponent):
+                product_type = creature.get_component(CreatureProductComponent).product_type
+            elif creature.has_component(HideComponent):
+                product_type = "hide"
+            elif creature.has_component(BoneComponent):
+                product_type = "bone"
+            else:
+                return rejected("creature has no harvestable product")
+
+        if product_type == "milk":
+            if not creature.has_component(CreatureMilkComponent):
+                return rejected("creature has no milk")
+            milk = creature.get_component(CreatureMilkComponent)
+            if milk.volume <= 0.0:
+                return rejected("creature has no milk available")
+            product_quantity = min(quantity, milk.volume)
+            replace_component(creature, replace(milk, volume=milk.volume - product_quantity))
+        elif product_type == "toxin":
+            if not creature.has_component(ToxinComponent):
+                return rejected("creature has no toxin")
+            toxin = creature.get_component(ToxinComponent)
+            if toxin.quantity <= 0.0:
+                return rejected("creature has no toxin available")
+            product_quantity = min(quantity, toxin.quantity)
+            replace_component(creature, replace(toxin, quantity=toxin.quantity - product_quantity))
+        elif product_type == "hide":
+            if not creature.has_component(HideComponent):
+                return rejected("creature has no hide")
+            hide = creature.get_component(HideComponent)
+            if hide.harvested:
+                return rejected("hide has already been harvested")
+            product_quantity = hide.quality
+            replace_component(creature, replace(hide, harvested=True))
+        elif product_type == "bone":
+            if not creature.has_component(BoneComponent):
+                return rejected("creature has no bone")
+            bone = creature.get_component(BoneComponent)
+            if bone.harvested:
+                return rejected("bone has already been harvested")
+            product_quantity = bone.quality
+            replace_component(creature, replace(bone, harvested=True))
+        elif creature.has_component(CreatureProductComponent):
+            product = creature.get_component(CreatureProductComponent)
+            if product.product_type != product_type:
+                return rejected("creature has no matching product")
+            if product.quantity <= 0.0:
+                return rejected("creature product is depleted")
+            product_quantity = min(quantity, product.quantity)
+            remaining = product.quantity - product_quantity if product.renewable else 0.0
+            replace_component(creature, replace(product, quantity=remaining))
+        else:
+            return rejected("creature has no matching product")
+
+        character = ctx.entity(character_id)
+        product = _spawn_creature_product(
+            ctx.world,
+            character,
+            product_type=product_type,
+            quantity=product_quantity,
+            source_creature_id=str(creature.id),
+            epoch=ctx.epoch,
+        )
+        return ok(
+            CreatureProductCollectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id), str(product.id)),
+                    creature_id=str(creature.id),
+                    product_id=str(product.id),
+                    product_type=product_type,
+                    quantity=product_quantity,
+                )
+            )
+        )
+
+
+class AssignRanchWorkHandler:
+    command_type = "assign-ranch-work"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        work_type = str(command.payload.get("work_type") or "").strip()
+        if not work_type:
+            return rejected("work type is required")
+        target_id = str(command.payload.get("target_id") or "")
+        replace_component(
+            creature,
+            RanchLaborComponent(
+                work_type=work_type,
+                target_id=target_id,
+                assigned_by_id=str(character_id),
+                active=True,
+            ),
+        )
+        return ok(
+            RanchWorkAssignedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    work_type=work_type,
+                    target_id=target_id,
+                )
+            )
+        )
+
+
+class AssignGuardHandler:
+    command_type = "assign-guard"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        location_id = parse_entity_id(command.payload.get("location_id"))
+        if location_id is None:
+            location_id = container_of(ctx.entity(character_id))
+        if location_id is None or not ctx.world.has_entity(location_id):
+            return rejected("guard location does not exist")
+        replace_component(
+            creature,
+            GuardAnimalComponent(
+                location_id=str(location_id),
+                assigned_by_id=str(character_id),
+                active=True,
+            ),
+        )
+        replace_component(
+            creature,
+            GuardBehaviorComponent(location_id=str(location_id), active=True),
+        )
+        return ok(
+            GuardAssignedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id), str(location_id)),
+                    creature_id=str(creature.id),
+                    location_id=str(location_id),
+                )
+            )
+        )
+
+
 class EvacuateRoomHandler:
     command_type = "evacuate-room"
 
@@ -2410,6 +2786,40 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
             response = entity.get_component(ArmyResponseComponent)
             if response.called:
                 lines.append(f"Army response signaled for {name}: strength {response.strength:g}.")
+        if entity.has_component(FeedStoreComponent):
+            feed_store = entity.get_component(FeedStoreComponent)
+            lines.append(f"Feed store at {name}: {feed_store.feed:g}/{feed_store.capacity:g}.")
+        if entity.has_component(CreatureProductComponent):
+            product = entity.get_component(CreatureProductComponent)
+            if product.quantity > 0.0:
+                lines.append(
+                    f"Creature product available from {name}: "
+                    f"{product.product_type} x{product.quantity:g}."
+                )
+        if entity.has_component(CreatureMilkComponent):
+            milk = entity.get_component(CreatureMilkComponent)
+            if milk.volume > 0.0:
+                lines.append(f"{name} has milk available: {milk.volume:g}.")
+        if entity.has_component(ToxinComponent):
+            toxin = entity.get_component(ToxinComponent)
+            if toxin.quantity > 0.0:
+                lines.append(f"{name} has toxin available: {toxin.quantity:g}.")
+        if entity.has_component(HideComponent):
+            hide = entity.get_component(HideComponent)
+            if not hide.harvested:
+                lines.append(f"{name} has harvestable hide.")
+        if entity.has_component(BoneComponent):
+            bone = entity.get_component(BoneComponent)
+            if not bone.harvested:
+                lines.append(f"{name} has harvestable bone.")
+        if entity.has_component(RanchLaborComponent):
+            labor = entity.get_component(RanchLaborComponent)
+            if labor.active:
+                lines.append(f"{name} is assigned to ranch work: {labor.work_type}.")
+        if entity.has_component(GuardAnimalComponent):
+            guard = entity.get_component(GuardAnimalComponent)
+            if guard.active:
+                lines.append(f"{name} is assigned as guard animal for {guard.location_id}.")
         if entity.has_component(EnclosureComponent):
             enclosure = entity.get_component(EnclosureComponent)
             lines.append(f"Enclosure nearby: {enclosure.name}.")
@@ -2443,14 +2853,18 @@ __all__ = [
     "ArmorPlateComponent",
     "ArmyCalledEvent",
     "ArmyResponseComponent",
+    "AssignGuardHandler",
+    "AssignRanchWorkHandler",
     "BaitComponent",
     "BaitSetEvent",
+    "BoneComponent",
     "BreachComponent",
     "BuildEnclosureHandler",
     "CallForHelpHandler",
     "ChargeComponent",
     "CloneCandidateComponent",
     "ClonePreparedEvent",
+    "CollectEggHandler",
     "CommandComponent",
     "CommandCompanionHandler",
     "CommandTrainedEvent",
@@ -2461,6 +2875,9 @@ __all__ = [
     "CreatureAttackComponent",
     "CreatureAttackedEvent",
     "CreatureChargedEvent",
+    "CreatureMilkComponent",
+    "CreatureProductCollectedEvent",
+    "CreatureProductComponent",
     "CreatureEscapedEvent",
     "CreatureMountedEvent",
     "CreatureRecapturedEvent",
@@ -2485,6 +2902,8 @@ __all__ = [
     "EscapeRiskConsequence",
     "EvacuateRoomHandler",
     "ExtractAncientSampleHandler",
+    "FeedStockedEvent",
+    "FeedStoreComponent",
     "FeedingPenComponent",
     "FertilityComponent",
     "FertilizeEggHandler",
@@ -2497,11 +2916,15 @@ __all__ = [
     "GateComponent",
     "GateReinforcedEvent",
     "GrappleComponent",
+    "GuardAnimalComponent",
+    "GuardAssignedEvent",
     "GuardBehaviorComponent",
     "HatchEggHandler",
     "HatchlingComponent",
     "HiddenFromCreatureEvent",
     "HideFromCreatureHandler",
+    "HarvestProductHandler",
+    "HideComponent",
     "HuntBehaviorComponent",
     "IdentifyFossilHandler",
     "IncubateEggHandler",
@@ -2523,6 +2946,8 @@ __all__ = [
     "RecallComponent",
     "RecallCreatureHandler",
     "RecaptureCreatureHandler",
+    "RanchLaborComponent",
+    "RanchWorkAssignedEvent",
     "ReinforceGateHandler",
     "ReinforcementComponent",
     "RepairDamageHandler",
@@ -2553,6 +2978,7 @@ __all__ = [
     "TranquilizerComponent",
     "TriggerContainmentHandler",
     "TrustComponent",
+    "ToxinComponent",
     "WeakPointComponent",
     "dinosim_fragments",
     "ensure_dinosim_policy",
