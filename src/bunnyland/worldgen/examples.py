@@ -614,6 +614,7 @@ async def dinosim_example(actor, seed: str, options: GenOptions) -> Instantiated
         IncubationComponent,
         ReptileProcreationComponent,
         SpeciesComponent,
+        TranquilizerComponent,
     )
 
     proposal = WorldProposal(
@@ -713,6 +714,23 @@ async def dinosim_example(actor, seed: str, options: GenOptions) -> Instantiated
                     last_updated_epoch=0,
                     ready=True,
                 ),
+            ],
+        )
+        _add(
+            actor,
+            lab,
+            [
+                IdentityComponent(name="scented bait", kind="food"),
+                PortableComponent(can_pick_up=True),
+            ],
+        )
+        _add(
+            actor,
+            lab,
+            [
+                IdentityComponent(name="sleep dart", kind="tool"),
+                PortableComponent(can_pick_up=True),
+                TranquilizerComponent(potency=1.0, uses=1),
             ],
         )
         _augment(

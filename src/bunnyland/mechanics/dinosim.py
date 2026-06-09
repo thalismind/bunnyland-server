@@ -109,6 +109,97 @@ class HatchlingComponent(Component):
 
 
 @dataclass(frozen=True)
+class TrackComponent(Component):
+    room_id: str
+    freshness: float = 1.0
+    last_tracked_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class ScentComponent(Component):
+    species_name: str = ""
+    strength: float = 1.0
+
+
+@dataclass(frozen=True)
+class BaitComponent(Component):
+    target_species: str = ""
+    potency: float = 1.0
+    set_by_id: str = ""
+    set_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class TranquilizerComponent(Component):
+    potency: float = 1.0
+    uses: int = 1
+    sedated_until_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class TamingComponent(Component):
+    progress: float = 0.0
+    required: float = 3.0
+    tamer_id: str = ""
+    tamed: bool = False
+
+
+@dataclass(frozen=True)
+class TrustComponent(Component):
+    amount: float = 0.0
+
+
+@dataclass(frozen=True)
+class FearComponent(Component):
+    amount: float = 0.0
+
+
+@dataclass(frozen=True)
+class TrainingComponent(Component):
+    learned_commands: tuple[str, ...] = ()
+    progress: dict[str, float] | None = None
+    required: float = 2.0
+
+
+@dataclass(frozen=True)
+class CommandComponent(Component):
+    command_name: str
+    commanded_by_id: str
+    target_id: str = ""
+    issued_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class MountComponent(Component):
+    rider_id: str = ""
+    mounted: bool = False
+
+
+@dataclass(frozen=True)
+class CompanionComponent(Component):
+    owner_id: str
+    role: str = "companion"
+
+
+@dataclass(frozen=True)
+class GuardBehaviorComponent(Component):
+    location_id: str = ""
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class HuntBehaviorComponent(Component):
+    target_species: str = ""
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class RecallComponent(Component):
+    home_room_id: str = ""
+    last_recalled_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class KaijuComponent(Component):
     threat_level: int = 10
     target_room_id: str | None = None
@@ -161,6 +252,59 @@ class EggHatchedEvent(DomainEvent):
     species_name: str
 
 
+class CreatureTrackedEvent(DomainEvent):
+    creature_id: str
+    tracked_room_id: str
+    species_name: str
+
+
+class BaitSetEvent(DomainEvent):
+    bait_id: str
+    target_species: str
+    potency: float
+
+
+class CreatureTranquilizedEvent(DomainEvent):
+    creature_id: str
+    tranquilizer_id: str
+    sedated_until_epoch: int
+
+
+class TamingProgressedEvent(DomainEvent):
+    creature_id: str
+    progress: float
+    required: float
+    trust: float
+    fear: float
+
+
+class CreatureTamedEvent(DomainEvent):
+    creature_id: str
+    owner_id: str
+    role: str
+
+
+class CommandTrainedEvent(DomainEvent):
+    creature_id: str
+    command_name: str
+
+
+class CreatureMountedEvent(DomainEvent):
+    creature_id: str
+    rider_id: str
+
+
+class CompanionCommandedEvent(DomainEvent):
+    creature_id: str
+    command_name: str
+    target_id: str = ""
+
+
+class CreatureRecalledEvent(DomainEvent):
+    creature_id: str
+    recalled_room_id: str
+
+
 def _room_id(world: World, character_id: EntityId) -> str | None:
     raw = container_of(world.get_entity(character_id))
     return str(raw) if raw is not None else None
@@ -204,6 +348,91 @@ def _species_name(entity: Entity) -> str:
     if entity.has_component(IdentityComponent):
         return entity.get_component(IdentityComponent).name
     return "unknown reptile"
+
+
+def _entity_name(entity: Entity) -> str:
+    if entity.has_component(IdentityComponent):
+        return entity.get_component(IdentityComponent).name
+    return str(entity.id)
+
+
+def _is_creature(entity: Entity) -> bool:
+    return (
+        entity.has_component(DinosaurComponent)
+        or entity.has_component(SpeciesComponent)
+        or entity.has_component(ReptileProcreationComponent)
+        or entity.has_component(KaijuComponent)
+    )
+
+
+def _reachable_creature(
+    ctx: HandlerContext, character_id: EntityId, requested_id: object
+) -> tuple[Entity | None, str | None]:
+    creature_id = parse_entity_id(requested_id)
+    if creature_id is None:
+        return None, "invalid creature id"
+    if not ctx.world.has_entity(creature_id):
+        return None, "creature does not exist"
+    creature = _reachable_entity(ctx, character_id, creature_id)
+    if creature is None:
+        return None, "creature is not reachable"
+    if not _is_creature(creature):
+        return None, "target is not a creature"
+    return creature, None
+
+
+def _reachable_item(
+    ctx: HandlerContext, character_id: EntityId, requested_id: object
+) -> tuple[Entity | None, str | None]:
+    item_id = parse_entity_id(requested_id)
+    if item_id is None:
+        return None, "invalid item id"
+    if not ctx.world.has_entity(item_id):
+        return None, "item does not exist"
+    item = _reachable_entity(ctx, character_id, item_id)
+    if item is None:
+        return None, "item is not reachable"
+    return item, None
+
+
+def _companion_for_actor(creature: Entity, character_id: EntityId) -> CompanionComponent | None:
+    if not creature.has_component(CompanionComponent):
+        return None
+    companion = creature.get_component(CompanionComponent)
+    if companion.owner_id != str(character_id):
+        return None
+    return companion
+
+
+def _matching_bait_bonus(world: World, creature: Entity, character: Entity) -> float:
+    species = _species_name(creature)
+    bonus = 0.0
+    for entity_id in reachable_ids(world, character):
+        entity = world.get_entity(entity_id)
+        if not entity.has_component(BaitComponent):
+            continue
+        bait = entity.get_component(BaitComponent)
+        if not bait.target_species or bait.target_species == species:
+            bonus = max(bonus, max(0.0, bait.potency))
+    return bonus
+
+
+def _sedation_bonus(creature: Entity, epoch: int) -> float:
+    if not creature.has_component(TranquilizerComponent):
+        return 0.0
+    tranquilizer = creature.get_component(TranquilizerComponent)
+    if tranquilizer.sedated_until_epoch < epoch:
+        return 0.0
+    return max(0.0, tranquilizer.potency)
+
+
+def _move_to_room(world: World, entity: Entity, room_id: EntityId) -> None:
+    parent_id = container_of(entity)
+    if parent_id is not None and world.has_entity(parent_id):
+        world.get_entity(parent_id).remove_relationship(Contains, entity.id)
+    world.get_entity(room_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
+    )
 
 
 def _spawn_egg(
@@ -604,6 +833,428 @@ class HatchEggHandler:
         )
 
 
+def _progress_taming(
+    ctx: HandlerContext,
+    character_id: EntityId,
+    creature: Entity,
+    *,
+    base_progress: float,
+) -> tuple[TamingComponent, TrustComponent, FearComponent]:
+    character = ctx.entity(character_id)
+    bait_bonus = _matching_bait_bonus(ctx.world, creature, character)
+    sedation_bonus = _sedation_bonus(creature, ctx.epoch)
+
+    taming = (
+        creature.get_component(TamingComponent)
+        if creature.has_component(TamingComponent)
+        else TamingComponent(tamer_id=str(character_id))
+    )
+    trust = (
+        creature.get_component(TrustComponent)
+        if creature.has_component(TrustComponent)
+        else TrustComponent()
+    )
+    fear = (
+        creature.get_component(FearComponent)
+        if creature.has_component(FearComponent)
+        else FearComponent(amount=1.0)
+    )
+
+    progress_delta = max(0.0, base_progress + bait_bonus + sedation_bonus)
+    trust_delta = 1.0 + bait_bonus
+    fear_delta = 0.5 + sedation_bonus
+    updated_taming = replace(
+        taming,
+        progress=min(taming.required, taming.progress + progress_delta),
+        tamer_id=str(character_id),
+    )
+    updated_trust = replace(trust, amount=trust.amount + trust_delta)
+    updated_fear = replace(fear, amount=max(0.0, fear.amount - fear_delta))
+    replace_component(creature, updated_taming)
+    replace_component(creature, updated_trust)
+    replace_component(creature, updated_fear)
+    return updated_taming, updated_trust, updated_fear
+
+
+class TrackCreatureHandler:
+    command_type = "track-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        room_id = _entity_room_id(creature) or _room_id(ctx.world, character_id) or ""
+        replace_component(
+            creature,
+            TrackComponent(room_id=room_id, freshness=1.0, last_tracked_epoch=ctx.epoch),
+        )
+        return ok(
+            CreatureTrackedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    tracked_room_id=room_id,
+                    species_name=_species_name(creature),
+                )
+            )
+        )
+
+
+class SetBaitHandler:
+    command_type = "set-bait"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        bait_item, error = _reachable_item(ctx, character_id, command.payload.get("bait_id"))
+        if bait_item is None:
+            return rejected(error if error else "bait is required")
+        target_species = str(command.payload.get("target_species") or "").strip()
+        potency = float(command.payload.get("potency") or 1.0)
+        bait = BaitComponent(
+            target_species=target_species,
+            potency=max(0.0, potency),
+            set_by_id=str(character_id),
+            set_at_epoch=ctx.epoch,
+        )
+        replace_component(bait_item, bait)
+        return ok(
+            BaitSetEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(bait_item.id),),
+                    bait_id=str(bait_item.id),
+                    target_species=target_species,
+                    potency=bait.potency,
+                )
+            )
+        )
+
+
+class TranquilizeCreatureHandler:
+    command_type = "tranquilize-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        item, error = _reachable_item(ctx, character_id, command.payload.get("tranquilizer_id"))
+        if item is None:
+            return rejected(error if error else "tranquilizer is required")
+        if not item.has_component(TranquilizerComponent):
+            return rejected("item is not a tranquilizer")
+        tranquilizer = item.get_component(TranquilizerComponent)
+        if tranquilizer.uses <= 0:
+            return rejected("tranquilizer is spent")
+
+        duration = int(command.payload.get("duration_seconds") or 60 * 60)
+        sedated_until = ctx.epoch + max(60, duration)
+        replace_component(
+            item,
+            replace(tranquilizer, uses=tranquilizer.uses - 1),
+        )
+        replace_component(
+            creature,
+            TranquilizerComponent(
+                potency=tranquilizer.potency,
+                uses=0,
+                sedated_until_epoch=sedated_until,
+            ),
+        )
+        return ok(
+            CreatureTranquilizedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id), str(item.id)),
+                    creature_id=str(creature.id),
+                    tranquilizer_id=str(item.id),
+                    sedated_until_epoch=sedated_until,
+                )
+            )
+        )
+
+
+class ApproachCreatureHandler:
+    command_type = "approach-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        taming, trust, fear = _progress_taming(
+            ctx, character_id, creature, base_progress=0.5
+        )
+        return ok(
+            TamingProgressedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    progress=taming.progress,
+                    required=taming.required,
+                    trust=trust.amount,
+                    fear=fear.amount,
+                )
+            )
+        )
+
+
+class TameCreatureHandler:
+    command_type = "tame-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        if _companion_for_actor(creature, character_id) is not None:
+            return rejected("creature is already your companion")
+        taming, trust, fear = _progress_taming(ctx, character_id, creature, base_progress=1.0)
+        events: list[DomainEvent] = [
+            TamingProgressedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    progress=taming.progress,
+                    required=taming.required,
+                    trust=trust.amount,
+                    fear=fear.amount,
+                )
+            )
+        ]
+        if taming.progress >= taming.required:
+            role = str(command.payload.get("role") or "companion")
+            replace_component(creature, replace(taming, tamed=True))
+            replace_component(creature, CompanionComponent(owner_id=str(character_id), role=role))
+            events.append(
+                CreatureTamedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(creature.id),),
+                        creature_id=str(creature.id),
+                        owner_id=str(character_id),
+                        role=role,
+                    )
+                )
+            )
+        return ok(*events)
+
+
+class TrainCommandHandler:
+    command_type = "train-command"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        if _companion_for_actor(creature, character_id) is None:
+            return rejected("creature is not your companion")
+        command_name = str(command.payload.get("command_name") or "").strip()
+        if not command_name:
+            return rejected("command name is required")
+
+        training = (
+            creature.get_component(TrainingComponent)
+            if creature.has_component(TrainingComponent)
+            else TrainingComponent()
+        )
+        progress = dict(training.progress or {})
+        progress[command_name] = progress.get(command_name, 0.0) + float(
+            command.payload.get("progress") or 1.0
+        )
+        learned = training.learned_commands
+        if progress[command_name] >= training.required and command_name not in learned:
+            learned = (*learned, command_name)
+        replace_component(
+            creature,
+            replace(training, learned_commands=learned, progress=progress),
+        )
+        if command_name not in learned:
+            return ok()
+        return ok(
+            CommandTrainedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    command_name=command_name,
+                )
+            )
+        )
+
+
+class MountCreatureHandler:
+    command_type = "mount-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        if _companion_for_actor(creature, character_id) is None:
+            return rejected("creature is not your companion")
+        replace_component(creature, MountComponent(rider_id=str(character_id), mounted=True))
+        return ok(
+            CreatureMountedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    rider_id=str(character_id),
+                )
+            )
+        )
+
+
+class CommandCompanionHandler:
+    command_type = "command-companion"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        if _companion_for_actor(creature, character_id) is None:
+            return rejected("creature is not your companion")
+        command_name = str(command.payload.get("command_name") or "").strip()
+        if not command_name:
+            return rejected("command name is required")
+        training = (
+            creature.get_component(TrainingComponent)
+            if creature.has_component(TrainingComponent)
+            else TrainingComponent()
+        )
+        if command_name not in training.learned_commands:
+            return rejected("command has not been trained")
+
+        target_id = str(command.payload.get("target_id") or "")
+        replace_component(
+            creature,
+            CommandComponent(
+                command_name=command_name,
+                commanded_by_id=str(character_id),
+                target_id=target_id,
+                issued_at_epoch=ctx.epoch,
+            ),
+        )
+        if command_name == "guard":
+            replace_component(
+                creature,
+                GuardBehaviorComponent(
+                    location_id=target_id or (_room_id(ctx.world, character_id) or ""),
+                    active=True,
+                ),
+            )
+        if command_name == "hunt":
+            replace_component(
+                creature,
+                HuntBehaviorComponent(target_species=target_id, active=True),
+            )
+        return ok(
+            CompanionCommandedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    command_name=command_name,
+                    target_id=target_id,
+                )
+            )
+        )
+
+
+class RecallCreatureHandler:
+    command_type = "recall-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature_id = parse_entity_id(command.payload.get("creature_id"))
+        if creature_id is None:
+            return rejected("invalid creature id")
+        if not ctx.world.has_entity(creature_id):
+            return rejected("creature does not exist")
+        creature = ctx.entity(creature_id)
+        if not _is_creature(creature):
+            return rejected("target is not a creature")
+        if _companion_for_actor(creature, character_id) is None:
+            return rejected("creature is not your companion")
+        room_id = container_of(ctx.entity(character_id))
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("character is not in a room")
+        _move_to_room(ctx.world, creature, room_id)
+        replace_component(
+            creature,
+            RecallComponent(home_room_id=str(room_id), last_recalled_epoch=ctx.epoch),
+        )
+        return ok(
+            CreatureRecalledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    recalled_room_id=str(room_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    room_id=str(room_id),
+                )
+            )
+        )
+
+
 def dinosim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for entity_id in reachable_ids(world, character):
@@ -629,6 +1280,29 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
                 incubation = entity.get_component(IncubationComponent)
                 state = "ready to hatch" if incubation.ready else "incubating"
             lines.append(f"Nearby egg: {name} ({egg.species_name}, {state}).")
+        if entity.has_component(TrackComponent):
+            track = entity.get_component(TrackComponent)
+            lines.append(f"Tracked creature: {name} near {track.room_id}.")
+        if entity.has_component(TamingComponent):
+            taming = entity.get_component(TamingComponent)
+            state = "tamed" if taming.tamed else f"{taming.progress:g}/{taming.required:g}"
+            lines.append(f"Taming progress for {name}: {state}.")
+        if entity.has_component(CompanionComponent):
+            companion = entity.get_component(CompanionComponent)
+            if companion.owner_id == str(character.id):
+                lines.append(f"Your {companion.role}: {name}.")
+        if entity.has_component(TrainingComponent):
+            training = entity.get_component(TrainingComponent)
+            if training.learned_commands:
+                commands = ", ".join(training.learned_commands)
+                lines.append(f"{name} knows commands: {commands}.")
+        if entity.has_component(CommandComponent):
+            current = entity.get_component(CommandComponent)
+            lines.append(f"{name} is commanded to {current.command_name}.")
+        if entity.has_component(BaitComponent):
+            bait = entity.get_component(BaitComponent)
+            target = bait.target_species or "any creature"
+            lines.append(f"Bait set for {target}: {name}.")
     return sorted(lines)
 
 
@@ -640,8 +1314,21 @@ def install_dinosim(actor) -> None:
 __all__ = [
     "AncientSampleComponent",
     "AncientSampleExtractedEvent",
+    "ApproachCreatureHandler",
+    "BaitComponent",
+    "BaitSetEvent",
     "CloneCandidateComponent",
     "ClonePreparedEvent",
+    "CommandComponent",
+    "CommandCompanionHandler",
+    "CommandTrainedEvent",
+    "CompanionCommandedEvent",
+    "CompanionComponent",
+    "CreatureMountedEvent",
+    "CreatureRecalledEvent",
+    "CreatureTamedEvent",
+    "CreatureTrackedEvent",
+    "CreatureTranquilizedEvent",
     "DinosaurComponent",
     "DinosimPolicyComponent",
     "EggComponent",
@@ -652,21 +1339,40 @@ __all__ = [
     "ExtractAncientSampleHandler",
     "FertilityComponent",
     "FertilizeEggHandler",
+    "FearComponent",
     "FossilFragmentComponent",
     "FossilIdentifiedEvent",
+    "GuardBehaviorComponent",
     "HatchEggHandler",
     "HatchlingComponent",
+    "HuntBehaviorComponent",
     "IdentifyFossilHandler",
     "IncubateEggHandler",
     "IncubationComponent",
     "IncubationConsequence",
     "KaijuComponent",
     "LayEggHandler",
+    "MountComponent",
+    "MountCreatureHandler",
     "PrepareCloneHandler",
+    "RecallComponent",
+    "RecallCreatureHandler",
     "ReptileProcreationComponent",
+    "ScentComponent",
     "SettlementDamageComponent",
+    "SetBaitHandler",
     "SpeciesComponent",
     "SpeciesIdentificationComponent",
+    "TameCreatureHandler",
+    "TamingComponent",
+    "TamingProgressedEvent",
+    "TrackComponent",
+    "TrackCreatureHandler",
+    "TrainCommandHandler",
+    "TrainingComponent",
+    "TranquilizeCreatureHandler",
+    "TranquilizerComponent",
+    "TrustComponent",
     "dinosim_fragments",
     "ensure_dinosim_policy",
     "install_dinosim",

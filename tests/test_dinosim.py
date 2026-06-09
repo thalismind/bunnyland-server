@@ -21,6 +21,19 @@ from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.colonysim import install_colonysim
 from bunnyland.mechanics.dinosim import (
     AncientSampleComponent,
+    ApproachCreatureHandler,
+    BaitComponent,
+    BaitSetEvent,
+    CommandCompanionHandler,
+    CommandComponent,
+    CommandTrainedEvent,
+    CompanionCommandedEvent,
+    CompanionComponent,
+    CreatureMountedEvent,
+    CreatureRecalledEvent,
+    CreatureTamedEvent,
+    CreatureTrackedEvent,
+    CreatureTranquilizedEvent,
     DinosaurComponent,
     EggComponent,
     EggHatchedEvent,
@@ -30,17 +43,31 @@ from bunnyland.mechanics.dinosim import (
     FertilizeEggHandler,
     FossilFragmentComponent,
     FossilIdentifiedEvent,
+    GuardBehaviorComponent,
     HatchEggHandler,
     IdentifyFossilHandler,
     IncubateEggHandler,
     IncubationComponent,
     KaijuComponent,
     LayEggHandler,
+    MountComponent,
+    MountCreatureHandler,
     PrepareCloneHandler,
+    RecallComponent,
+    RecallCreatureHandler,
     ReptileProcreationComponent,
+    SetBaitHandler,
     SettlementDamageComponent,
     SpeciesComponent,
     SpeciesIdentificationComponent,
+    TameCreatureHandler,
+    TamingProgressedEvent,
+    TrackComponent,
+    TrackCreatureHandler,
+    TrainCommandHandler,
+    TrainingComponent,
+    TranquilizeCreatureHandler,
+    TranquilizerComponent,
     _entity_room_id,
     _species_name,
     dinosim_fragments,
@@ -67,6 +94,15 @@ def _install(actor):
     actor.register_handler(FertilizeEggHandler())
     actor.register_handler(IncubateEggHandler())
     actor.register_handler(HatchEggHandler())
+    actor.register_handler(TrackCreatureHandler())
+    actor.register_handler(SetBaitHandler())
+    actor.register_handler(TranquilizeCreatureHandler())
+    actor.register_handler(ApproachCreatureHandler())
+    actor.register_handler(TameCreatureHandler())
+    actor.register_handler(TrainCommandHandler())
+    actor.register_handler(MountCreatureHandler())
+    actor.register_handler(CommandCompanionHandler())
+    actor.register_handler(RecallCreatureHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -270,6 +306,123 @@ async def test_reptile_egg_can_be_fertilized_incubated_and_hatched_into_lifesim_
     assert hatchling.get_component(LifeStageComponent).stage == "child"
     assert hatchling.has_component(DinosaurComponent)
     assert container_of(hatchling) == scenario.room_a
+
+
+async def test_creature_can_be_tracked_tamed_trained_commanded_mounted_and_recalled():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    tunnel = scenario.actor.world.get_entity(scenario.room_b)
+    raptor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="clever raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            ReptileProcreationComponent(egg_species_name="velociraptor"),
+        ],
+    )
+    bait = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="scented bait", kind="food")],
+    )
+    tranquilizer = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="sleep dart", kind="tool"),
+            TranquilizerComponent(potency=1.0, uses=1),
+        ],
+    )
+    for entity in (raptor, bait, tranquilizer):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    tracked: list[CreatureTrackedEvent] = []
+    bait_set: list[BaitSetEvent] = []
+    tranquilized: list[CreatureTranquilizedEvent] = []
+    progressed: list[TamingProgressedEvent] = []
+    tamed: list[CreatureTamedEvent] = []
+    trained: list[CommandTrainedEvent] = []
+    mounted: list[CreatureMountedEvent] = []
+    commanded: list[CompanionCommandedEvent] = []
+    recalled: list[CreatureRecalledEvent] = []
+    scenario.actor.bus.subscribe(CreatureTrackedEvent, tracked.append)
+    scenario.actor.bus.subscribe(BaitSetEvent, bait_set.append)
+    scenario.actor.bus.subscribe(CreatureTranquilizedEvent, tranquilized.append)
+    scenario.actor.bus.subscribe(TamingProgressedEvent, progressed.append)
+    scenario.actor.bus.subscribe(CreatureTamedEvent, tamed.append)
+    scenario.actor.bus.subscribe(CommandTrainedEvent, trained.append)
+    scenario.actor.bus.subscribe(CreatureMountedEvent, mounted.append)
+    scenario.actor.bus.subscribe(CompanionCommandedEvent, commanded.append)
+    scenario.actor.bus.subscribe(CreatureRecalledEvent, recalled.append)
+
+    commands = [
+        _cmd(scenario, "track-creature", creature_id=str(raptor.id)),
+        _cmd(
+            scenario,
+            "set-bait",
+            bait_id=str(bait.id),
+            target_species="velociraptor",
+            potency=1.0,
+        ),
+        _cmd(
+            scenario,
+            "tranquilize-creature",
+            creature_id=str(raptor.id),
+            tranquilizer_id=str(tranquilizer.id),
+            duration_seconds=HOUR,
+        ),
+        _cmd(scenario, "approach-creature", creature_id=str(raptor.id)),
+        _cmd(scenario, "tame-creature", creature_id=str(raptor.id), role="guard"),
+        _cmd(
+            scenario,
+            "train-command",
+            creature_id=str(raptor.id),
+            command_name="guard",
+            progress=2.0,
+        ),
+        _cmd(scenario, "mount-creature", creature_id=str(raptor.id)),
+        _cmd(
+            scenario,
+            "command-companion",
+            creature_id=str(raptor.id),
+            command_name="guard",
+            target_id=str(scenario.room_a),
+        ),
+    ]
+    for command in commands:
+        await scenario.actor.submit(command)
+        await scenario.actor.tick(HOUR)
+
+    room.remove_relationship(Contains, raptor.id)
+    tunnel.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raptor.id)
+    await scenario.actor.submit(_cmd(scenario, "recall-creature", creature_id=str(raptor.id)))
+    await scenario.actor.tick(HOUR)
+
+    assert tracked[0].tracked_room_id == str(scenario.room_a)
+    assert bait_set[0].target_species == "velociraptor"
+    assert tranquilized[0].creature_id == str(raptor.id)
+    assert progressed[-1].progress == 3.0
+    assert tamed[0].role == "guard"
+    assert trained[0].command_name == "guard"
+    assert mounted[0].rider_id == str(scenario.character)
+    assert commanded[0].command_name == "guard"
+    assert recalled[0].recalled_room_id == str(scenario.room_a)
+    assert container_of(raptor) == scenario.room_a
+    assert raptor.has_component(TrackComponent)
+    assert bait.has_component(BaitComponent)
+    assert raptor.get_component(CompanionComponent).owner_id == str(scenario.character)
+    assert raptor.get_component(TrainingComponent).learned_commands == ("guard",)
+    assert raptor.get_component(MountComponent).mounted is True
+    assert raptor.get_component(CommandComponent).command_name == "guard"
+    assert raptor.get_component(GuardBehaviorComponent).location_id == str(scenario.room_a)
+    assert raptor.get_component(RecallComponent).home_room_id == str(scenario.room_a)
+
+    fragments = dinosim_fragments(
+        scenario.actor.world,
+        scenario.actor.world.get_entity(scenario.character),
+    )
+    assert "Your guard: clever raptor." in fragments
+    assert "clever raptor knows commands: guard." in fragments
 
 
 async def test_dinosim_rejects_invalid_fossil_sample_and_parent_targets():
@@ -662,6 +815,114 @@ def test_dinosim_handlers_reject_invalid_and_unreachable_targets_directly():
             assert result.reason == reason
         else:
             assert result.ok is True
+
+
+def test_companion_handlers_reject_invalid_targets_and_missing_ownership_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    rock = spawn_entity(scenario.actor.world, [IdentityComponent(name="plain rock", kind="rock")])
+    raptor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="clever raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    other_companion = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="other raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CompanionComponent(owner_id="entity_999"),
+        ],
+    )
+    bait = spawn_entity(scenario.actor.world, [IdentityComponent(name="bait", kind="food")])
+    spent_tranquilizer = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="spent dart", kind="tool"),
+            TranquilizerComponent(uses=0),
+        ],
+    )
+    for entity in (rock, raptor, other_companion, bait, spent_tranquilizer):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    cases = [
+        (
+            TrackCreatureHandler(),
+            _handler_cmd(scenario, "track-creature", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            TrackCreatureHandler(),
+            _handler_cmd(scenario, "track-creature", creature_id="entity_999"),
+            "creature does not exist",
+        ),
+        (
+            TrackCreatureHandler(),
+            _handler_cmd(scenario, "track-creature", creature_id=str(rock.id)),
+            "target is not a creature",
+        ),
+        (
+            SetBaitHandler(),
+            _handler_cmd(scenario, "set-bait", bait_id="entity_999"),
+            "item does not exist",
+        ),
+        (
+            TranquilizeCreatureHandler(),
+            _handler_cmd(
+                scenario,
+                "tranquilize-creature",
+                creature_id=str(raptor.id),
+                tranquilizer_id=str(bait.id),
+            ),
+            "item is not a tranquilizer",
+        ),
+        (
+            TranquilizeCreatureHandler(),
+            _handler_cmd(
+                scenario,
+                "tranquilize-creature",
+                creature_id=str(raptor.id),
+                tranquilizer_id=str(spent_tranquilizer.id),
+            ),
+            "tranquilizer is spent",
+        ),
+        (
+            TrainCommandHandler(),
+            _handler_cmd(
+                scenario,
+                "train-command",
+                creature_id=str(raptor.id),
+                command_name="guard",
+            ),
+            "creature is not your companion",
+        ),
+        (
+            CommandCompanionHandler(),
+            _handler_cmd(
+                scenario,
+                "command-companion",
+                creature_id=str(other_companion.id),
+                command_name="guard",
+            ),
+            "creature is not your companion",
+        ),
+        (
+            RecallCreatureHandler(),
+            _handler_cmd(scenario, "recall-creature", creature_id=str(rock.id)),
+            "target is not a creature",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
 
 
 async def test_storyteller_selects_kaiju_attack_only_when_colonysim_and_dinosim_are_enabled():

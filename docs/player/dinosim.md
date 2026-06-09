@@ -1,9 +1,10 @@
-# Dino-sim fossils, eggs, and kaiju incidents
+# Dino-sim fossils, eggs, companions, and kaiju incidents
 
 Dino-sim adds prehistoric creature lifecycle mechanics. It is not a park-building package:
 there are no guest, ticket, exhibit-rating, or shop loops. The main loops are finding and
-identifying fossils, preparing clone eggs, handling reptile eggs and hatching, and dealing
-with kaiju attacks when storyteller and colony-sim are active.
+identifying fossils, preparing clone eggs, handling reptile eggs and hatching, taming
+creatures as companions, and dealing with kaiju attacks when storyteller and colony-sim are
+active.
 
 In Discord, prefix these commands with `!`.
 
@@ -63,6 +64,54 @@ Hatching creates a normal character/critter entity with dino and lifesim-compati
 state. Lifesim can then handle ageing, care, relationships, injury, and death without a
 separate dinosaur-only timeline.
 
+## Tracking, taming, training, and companions
+
+Track a reachable creature:
+
+```text
+!track-creature creature_id="clever raptor"
+```
+
+Set reachable bait for a species:
+
+```text
+!set-bait bait_id="scented bait" target_species="velociraptor" potency=1
+```
+
+Use a reachable tranquilizer item on a creature:
+
+```text
+!tranquilize-creature creature_id="clever raptor" tranquilizer_id="sleep dart"
+```
+
+Approach and tame the creature:
+
+```text
+!approach-creature creature_id="clever raptor"
+!tame-creature creature_id="clever raptor" role="guard"
+```
+
+Bait and sedation make taming progress faster. When progress reaches the creature's
+threshold, the creature becomes your companion.
+
+Train and issue a companion command:
+
+```text
+!train-command creature_id="clever raptor" command_name="guard" progress=2
+!command-companion creature_id="clever raptor" command_name="guard"
+```
+
+You can mount your own companion and recall it back to your current room:
+
+```text
+!mount-creature creature_id="clever raptor"
+!recall-creature creature_id="clever raptor"
+```
+
+Companions are still normal creature entities with normal controllers. These commands add
+durable ECS state for trust, training, current orders, mounting, and recall; they do not add
+park-management systems.
+
 ## Kaiju storyteller incidents
 
 Kaiju attacks are storyteller incidents when both `bunnyland.dinosim` and
@@ -89,5 +138,11 @@ encounters, but it does not assume settlement damage or colony job queues exist.
 !hatch-egg egg_id="velociraptor egg"
 !lay-egg parent_id="clever raptor"
 !fertilize-egg egg_id="velociraptor egg" parent_id="clever raptor"
+!track-creature creature_id="clever raptor"
+!set-bait bait_id="scented bait" target_species="velociraptor"
+!approach-creature creature_id="clever raptor"
+!tame-creature creature_id="clever raptor"
+!train-command creature_id="clever raptor" command_name="guard" progress=2
+!command-companion creature_id="clever raptor" command_name="guard"
 !resolve-incident incident_id="kaiju attack"
 ```
