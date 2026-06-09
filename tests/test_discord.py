@@ -14,6 +14,7 @@ from types import ModuleType
 import pytest
 
 import bunnyland.discord.bot as discord_bot
+import bunnyland.discord.view as discord_view
 from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
@@ -655,6 +656,22 @@ def test_help_lists_available_discord_verbs(scenario):
     assert "move:" not in text
 
 
+def test_help_without_actor_reports_no_world_verbs():
+    assert render_help("verbs") == "No world verbs are available."
+
+
+def test_help_wraps_long_inline_verb_lists():
+    items = tuple(f"verb-{index}-{'x' * 120}" for index in range(12))
+
+    lines = discord_view._wrapped_inline_lines("Header:", items)
+
+    assert lines[0] == ""
+    assert lines[1] == "Header:"
+    assert len(lines) > 3
+    assert all(len(line) <= 900 for line in lines[2:])
+    assert discord_view._wrapped_inline_lines("Header:", ()) == ["", "Header:"]
+
+
 def test_discord_action_parser_uses_live_world_verbs(scenario):
     install_memory(scenario.actor, InMemoryStore())
     verbs = scenario.actor.available_command_types()
@@ -789,6 +806,33 @@ def test_render_notes_search_result_includes_note_ids():
     assert "The basin water is unsafe." in text
 
 
+def test_render_notes_search_result_handles_empty_recent_and_missing_note_ids():
+    empty = NotesSearchedEvent(
+        event_id="event-1",
+        world_epoch=1,
+        created_at=datetime.now(UTC),
+        query="basin",
+        mode="keyword",
+        results=(),
+    )
+    recent = NotesSearchedEvent(
+        event_id="event-2",
+        world_epoch=1,
+        created_at=datetime.now(UTC),
+        query=None,
+        mode="recent",
+        results=("The basin water is unsafe.", "The well is safe."),
+        note_ids=("note-123",),
+    )
+
+    assert render_notes_search_result(empty) == "No matching notes."
+    assert render_notes_search_result(recent).splitlines() == [
+        "Recent notes:",
+        "- `note-123` The basin water is unsafe.",
+        "- The well is safe.",
+    ]
+
+
 def test_help_verbs_is_paginated(scenario):
     class DummyHandler:
         def __init__(self, command_type: str) -> None:
@@ -816,6 +860,20 @@ def test_split_discord_text_keeps_chunks_below_the_api_limit():
 
     assert all(len(chunk) <= 1000 for chunk in chunks)
     assert "".join(chunks) == text
+
+
+def test_split_discord_text_handles_invalid_limits_and_candidate_overflow():
+    with pytest.raises(ValueError, match="limit must be between 1"):
+        split_discord_text("hello", limit=0)
+    with pytest.raises(ValueError, match="limit must be between 1"):
+        split_discord_text("hello", limit=2001)
+
+    chunks = split_discord_text("abc\ndefgh", limit=5)
+    long_chunks = split_discord_text("ab\ncdefgh", limit=5)
+
+    assert chunks == ("abc", "defgh")
+    assert long_chunks == ("ab", "cdefg", "h")
+    assert split_discord_text("") == ("",)
 
 
 def test_help_command_stubs_action_help(scenario):
@@ -985,6 +1043,21 @@ def test_render_look_uses_room_summary_projection(scenario):
     assert "Exits: north." in text
 
 
+def test_render_look_reports_unclaimed_and_nowhere_characters(scenario):
+    assert render_look(scenario.actor, 123) == "You are not controlling a character yet."
+
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        character_name="Juniper",
+    )
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains, scenario.character
+    )
+
+    assert render_look(scenario.actor, 123) == "You are nowhere."
+
+
 def test_render_move_result_reports_rejection_reason(scenario):
     assign_discord_controller(
         scenario.actor,
@@ -1049,6 +1122,195 @@ def test_render_action_result_confirms_non_move_success(scenario):
     text = render_action_result(scenario.actor, 123, "say", event)
 
     assert text == "Say complete for Juniper in Mosslit Burrow."
+
+
+def test_render_action_result_routes_move_results(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        character_name="Juniper",
+    )
+    event = CommandExecutedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-1",
+        command_type="move",
+    )
+
+    text = render_action_result(scenario.actor, 123, "move", event)
+
+    assert text.startswith("You are now in Mosslit Burrow")
+
+
+def test_render_action_result_summarizes_payload_values_and_rooms(scenario):
+    room = scenario.actor.world.get_entity(scenario.room_b)
+    room.add_component(IdentityComponent(name="Named Tunnel", kind="room"))
+    nameless = spawn_entity(scenario.actor.world, [])
+    event = CommandExecutedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id="entity_999999",
+        command_id="cmd-1",
+        command_type="inspect",
+        payload={
+            "target_ids": (str(scenario.character), str(scenario.room_b)),
+            "note": "shiny",
+            "empty": "",
+            "missing": None,
+            "raw_id": "entity_999999",
+            "nameless_id": str(nameless.id),
+        },
+    )
+
+    text = render_action_result(scenario.actor, 123, "inspect", event)
+
+    assert "Inspect complete:" in text
+    assert "target Juniper, Named Tunnel" in text
+    assert "note shiny" in text
+    assert f"nameless {nameless.id}" in text
+    assert "raw entity_999999" in text
+    assert "empty" not in text
+
+
+def test_render_action_result_summarizes_single_entity_payload(scenario):
+    event = CommandExecutedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-1",
+        command_type="inspect",
+        payload={"target_id": str(scenario.character)},
+    )
+
+    assert render_action_result(scenario.actor, 123, "inspect", event) == (
+        "Inspect complete: Juniper."
+    )
+
+    named_by_value = CommandExecutedEvent(
+        event_id="event-2",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-2",
+        command_type="inspect",
+        payload={"target": str(scenario.character)},
+    )
+    assert render_action_result(scenario.actor, 123, "inspect", named_by_value) == (
+        "Inspect complete: Juniper."
+    )
+
+    plain_payload = CommandExecutedEvent(
+        event_id="event-3",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-3",
+        command_type="inspect",
+        payload={"note": "shiny"},
+    )
+    assert render_action_result(scenario.actor, 123, "inspect", plain_payload) == (
+        "Inspect complete: note shiny."
+    )
+
+
+def test_render_action_result_uses_actor_fallback_contexts(scenario):
+    unknown_actor = CommandExecutedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id="entity_999999",
+        command_id="cmd-1",
+        command_type="wait",
+    )
+    assert render_action_result(scenario.actor, 123, "wait", unknown_actor) == (
+        "Wait complete for character."
+    )
+
+    loose = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Loose Bunny", kind="character"), CharacterComponent()],
+    )
+    loose_actor = CommandExecutedEvent(
+        event_id="event-2",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(loose.id),
+        command_id="cmd-2",
+        command_type="wait",
+    )
+
+    assert render_action_result(scenario.actor, 123, "wait", loose_actor) == (
+        "Wait complete for Loose Bunny."
+    )
+
+
+def test_render_action_result_uses_room_titles_for_entities_without_identity(scenario):
+    event = CommandExecutedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-1",
+        command_type="inspect",
+        payload={"target_id": str(scenario.room_b)},
+    )
+
+    assert render_action_result(scenario.actor, 123, "inspect", event) == (
+        "Inspect complete: North Tunnel."
+    )
+
+
+def test_render_action_result_summarizes_result_events(scenario):
+    token = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="silver token", kind="item")],
+    )
+    event = CommandExecutedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-1",
+        command_type="take",
+        result_events=(
+            {
+                "event_type": "ItemTakenEvent",
+                "actor_id": str(scenario.character),
+                "item_id": str(token.id),
+                "target_ids": (str(token.id),),
+                "count": 2,
+                "missing_id": "entity_999999",
+                "missing_ids": ("entity_999998",),
+            },
+            {
+                "event_type": "CustomEvent",
+                "event_id": "event-2",
+                "world_epoch": 0,
+                "created_at": "now",
+            },
+        ),
+    )
+
+    text = render_action_result(scenario.actor, 123, "take", event)
+
+    assert text.splitlines() == [
+        "Item taken: item silver token; count 2.",
+        "Custom.",
+    ]
+    assert discord_view._humanize_event_type("") == ""
 
 
 def test_render_action_result_reports_non_move_rejection(scenario):
