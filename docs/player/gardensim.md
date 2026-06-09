@@ -53,6 +53,8 @@ Then plant a seed packet in that bed:
 ```
 
 Planting requires prepared soil and a plantable seed. The seed is consumed when planted. A bed can hold only one crop at a time.
+If the world has an environment calendar, seeds can only be planted in their valid seasons
+unless the soil is a greenhouse bed.
 
 Fertilizer is optional. If you have reachable fertilizer, apply it to the soil:
 
@@ -78,6 +80,12 @@ Watering lasts one in-game day. Crops only gain growth progress while watered, s
 ```
 
 Crop state appears in nearby context as stages, `ready`, or `dead`. If the environment calendar has a season and the crop does not support that season, the crop withers and cannot be harvested. Default seeds grow in spring, summer, and autumn; winter crops need seeds that explicitly support winter.
+
+Clear a dead crop before planting again:
+
+```text
+!clear-dead-crop garden bed
+```
 
 ## Harvest
 

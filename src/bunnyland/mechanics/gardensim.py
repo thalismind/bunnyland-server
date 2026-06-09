@@ -89,6 +89,11 @@ class HarvestableComponent(Component):
     ready: bool = False
 
 
+@pydantic_dataclass(frozen=True)
+class GreenhouseComponent(Component):
+    enabled: bool = True
+
+
 class SoilTilledEvent(DomainEvent):
     soil_id: str
 
@@ -133,6 +138,11 @@ class CropHarvestedEvent(DomainEvent):
     crop_type: str
     item_id: str
     quantity: int
+
+
+class DeadCropClearedEvent(DomainEvent):
+    soil_id: str
+    crop_type: str
 
 
 def _event_base(epoch: int, **kwargs) -> dict:
@@ -341,6 +351,14 @@ class PlantHandler:
             return rejected("target seed is not plantable")
 
         seed = seed_entity.get_component(SeedComponent)
+        season = _current_season(ctx.world)
+        if (
+            season is not None
+            and seed.seasons
+            and season not in seed.seasons
+            and not soil.has_component(GreenhouseComponent)
+        ):
+            return rejected("seed cannot grow in this season")
         soil.add_component(
             CropComponent(
                 crop_type=seed.crop_type,
@@ -507,6 +525,46 @@ class HarvestCropHandler:
         )
 
 
+class ClearDeadCropHandler:
+    command_type = "clear-dead-crop"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        soil_id = parse_entity_id(command.payload.get("soil_id"))
+        if character_id is None or soil_id is None:
+            return rejected("invalid character or soil id")
+        if not ctx.world.has_entity(soil_id):
+            return rejected("soil does not exist")
+        soil = _reachable_entity(ctx, character_id, soil_id)
+        if soil is None:
+            return rejected("soil is not reachable")
+        if not soil.has_component(CropComponent):
+            return rejected("soil has no crop")
+        crop = soil.get_component(CropComponent)
+        if not crop.dead:
+            return rejected("crop is not dead")
+
+        soil.remove_component(CropComponent)
+        if soil.has_component(CropGrowthComponent):
+            soil.remove_component(CropGrowthComponent)
+        if soil.has_component(HarvestableComponent):
+            soil.remove_component(HarvestableComponent)
+        if soil.has_component(WateredComponent):
+            soil.remove_component(WateredComponent)
+        return ok(
+            DeadCropClearedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(soil_id),),
+                    soil_id=str(soil_id),
+                    crop_type=crop.crop_type,
+                )
+            )
+        )
+
+
 def gardensim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for entity_id in reachable_ids(world, character):
@@ -542,9 +600,12 @@ __all__ = [
     "CropReadyEvent",
     "CropWateredEvent",
     "CropWitheredEvent",
+    "DeadCropClearedEvent",
     "FertilizerAppliedEvent",
     "FertilizerComponent",
     "FertilizeHandler",
+    "ClearDeadCropHandler",
+    "GreenhouseComponent",
     "HarvestCropHandler",
     "HarvestableComponent",
     "PlantHandler",

@@ -410,6 +410,12 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="harvest_crop",
         patterns=("harvest {soil_id}",),
     ),
+    _definition(
+        "clear-dead-crop",
+        ("soil_id",),
+        tool_name="clear_dead_crop",
+        patterns=("clear dead crop from {soil_id}",),
+    ),
     # Dino sim.
     _definition(
         "identify-fossil",

@@ -406,6 +406,7 @@ from ..mechanics.environment import (
     install_environment,
 )
 from ..mechanics.gardensim import (
+    ClearDeadCropHandler,
     CropComponent,
     CropGrewEvent,
     CropGrowthComponent,
@@ -413,9 +414,11 @@ from ..mechanics.gardensim import (
     CropReadyEvent,
     CropWateredEvent,
     CropWitheredEvent,
+    DeadCropClearedEvent,
     FertilizeHandler,
     FertilizerAppliedEvent,
     FertilizerComponent,
+    GreenhouseComponent,
     HarvestableComponent,
     HarvestCropHandler,
     PlantHandler,
@@ -1135,6 +1138,7 @@ def gardensim_plugin() -> Plugin:
                 CropComponent,
                 CropGrowthComponent,
                 HarvestableComponent,
+                GreenhouseComponent,
             )
         ),
         commands=CommandContribution(
@@ -1144,6 +1148,7 @@ def gardensim_plugin() -> Plugin:
                 WaterCropHandler,
                 FertilizeHandler,
                 HarvestCropHandler,
+                ClearDeadCropHandler,
             ),
             typed_events=(
                 SoilTilledEvent,
@@ -1154,6 +1159,7 @@ def gardensim_plugin() -> Plugin:
                 CropReadyEvent,
                 CropWitheredEvent,
                 CropHarvestedEvent,
+                DeadCropClearedEvent,
             ),
         ),
         runtime=RuntimeContribution(service_factories=(install_gardensim,)),

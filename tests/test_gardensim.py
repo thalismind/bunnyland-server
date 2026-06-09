@@ -21,14 +21,17 @@ from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.environment import CalendarComponent
 from bunnyland.mechanics.gardensim import (
+    ClearDeadCropHandler,
     CropComponent,
     CropGrewEvent,
     CropGrowthComponent,
     CropGrowthConsequence,
     CropHarvestedEvent,
     CropReadyEvent,
+    DeadCropClearedEvent,
     FertilizeHandler,
     FertilizerComponent,
+    GreenhouseComponent,
     HarvestableComponent,
     HarvestCropHandler,
     PlantHandler,
@@ -51,6 +54,7 @@ def _install(actor):
     actor.register_handler(WaterCropHandler())
     actor.register_handler(FertilizeHandler())
     actor.register_handler(HarvestCropHandler())
+    actor.register_handler(ClearDeadCropHandler())
     actor.register_consequence(CropGrowthConsequence())
 
 
@@ -89,7 +93,7 @@ def _soil(scenario, name="garden bed"):
     return soil.id
 
 
-def _seed(scenario, crop_type="turnip", growth_days=1.0):
+def _seed(scenario, crop_type="turnip", growth_days=1.0, seasons=("spring", "summer", "autumn")):
     seed = spawn_entity(
         scenario.actor.world,
         [
@@ -99,6 +103,7 @@ def _seed(scenario, crop_type="turnip", growth_days=1.0):
                 growth_days=growth_days,
                 yield_item=crop_type,
                 yield_quantity=2,
+                seasons=seasons,
             ),
             PortableComponent(can_pick_up=True),
         ],
@@ -238,16 +243,94 @@ async def test_crop_withers_out_of_season():
     clock = list(
         scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
     )[0]
-    clock.add_component(CalendarComponent(season="winter"))
+    clock.add_component(CalendarComponent(season="spring"))
 
     await scenario.actor.submit(_cmd(scenario, "till", soil_id=str(soil)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "plant", soil_id=str(soil), seed_id=str(seed)))
     await scenario.actor.tick(HOUR)
+    clock.remove_component(CalendarComponent)
+    clock.add_component(CalendarComponent(season="winter"))
     await scenario.actor.tick(0.0)
 
     soil_entity = scenario.actor.world.get_entity(soil)
     assert soil_entity.get_component(CropComponent).dead is True
+
+
+async def test_planting_respects_seed_season_unless_soil_is_greenhouse():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    soil = _soil(scenario)
+    winter_seed = _seed(scenario, "snow yam", seasons=("winter",))
+    spring_seed = _seed(scenario, "turnip", seasons=("spring",))
+    clock = list(
+        scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
+    )[0]
+    clock.add_component(CalendarComponent(season="winter"))
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(_cmd(scenario, "till", soil_id=str(soil)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "plant", soil_id=str(soil), seed_id=str(spring_seed))
+    )
+    await scenario.actor.tick(HOUR)
+
+    soil_entity = scenario.actor.world.get_entity(soil)
+    assert rejects[-1].reason == "seed cannot grow in this season"
+    assert not soil_entity.has_component(CropComponent)
+    assert container_of(scenario.actor.world.get_entity(spring_seed)) == scenario.character
+
+    await scenario.actor.submit(
+        _cmd(scenario, "plant", soil_id=str(soil), seed_id=str(winter_seed))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert soil_entity.get_component(CropComponent).crop_type == "snow yam"
+
+    greenhouse_soil = _soil(scenario, name="greenhouse bed")
+    greenhouse_entity = scenario.actor.world.get_entity(greenhouse_soil)
+    greenhouse_entity.add_component(GreenhouseComponent())
+    greenhouse_seed = _seed(scenario, "tomato", seasons=("summer",))
+
+    await scenario.actor.submit(_cmd(scenario, "till", soil_id=str(greenhouse_soil)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "plant", soil_id=str(greenhouse_soil), seed_id=str(greenhouse_seed))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert greenhouse_entity.get_component(CropComponent).crop_type == "tomato"
+
+
+async def test_clear_dead_crop_removes_crop_state_from_soil():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    soil = _soil(scenario)
+    seed = _seed(scenario)
+    clock = list(
+        scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
+    )[0]
+    clock.add_component(CalendarComponent(season="spring"))
+    cleared: list[DeadCropClearedEvent] = []
+    scenario.actor.bus.subscribe(DeadCropClearedEvent, cleared.append)
+
+    await scenario.actor.submit(_cmd(scenario, "till", soil_id=str(soil)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "plant", soil_id=str(soil), seed_id=str(seed)))
+    await scenario.actor.tick(HOUR)
+    clock.remove_component(CalendarComponent)
+    clock.add_component(CalendarComponent(season="winter"))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "clear-dead-crop", soil_id=str(soil)))
+    await scenario.actor.tick(HOUR)
+
+    soil_entity = scenario.actor.world.get_entity(soil)
+    assert cleared[0].crop_type == "turnip"
+    assert not soil_entity.has_component(CropComponent)
+    assert not soil_entity.has_component(CropGrowthComponent)
+    assert not soil_entity.has_component(HarvestableComponent)
 
 
 def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
@@ -475,6 +558,31 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
             HarvestCropHandler(),
             _handler_cmd(scenario, "harvest-crop", soil_id=str(dead_soil.id)),
             "crop is dead",
+        ),
+        (
+            ClearDeadCropHandler(),
+            _handler_cmd(scenario, "clear-dead-crop", soil_id="not-an-id"),
+            "invalid character or soil id",
+        ),
+        (
+            ClearDeadCropHandler(),
+            _handler_cmd(scenario, "clear-dead-crop", soil_id="entity_999"),
+            "soil does not exist",
+        ),
+        (
+            ClearDeadCropHandler(),
+            _handler_cmd(scenario, "clear-dead-crop", soil_id=str(distant_soil.id)),
+            "soil is not reachable",
+        ),
+        (
+            ClearDeadCropHandler(),
+            _handler_cmd(scenario, "clear-dead-crop", soil_id=str(soil.id)),
+            "soil has no crop",
+        ),
+        (
+            ClearDeadCropHandler(),
+            _handler_cmd(scenario, "clear-dead-crop", soil_id=str(cropped_soil.id)),
+            "crop is not dead",
         ),
     ]
 
