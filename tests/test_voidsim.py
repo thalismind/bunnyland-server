@@ -1712,6 +1712,97 @@ def test_voidsim_fragments_describe_navigation_status_and_signals():
     assert "Orbital body nearby: Verdant III (planet)." in fragments
 
 
+def test_voidsim_fragments_cover_alternate_and_suppressed_states(monkeypatch):
+    scenario = build_scenario()
+    _make_module(scenario, module_type="airlock bay", pressure=0.0)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(LifeSupportComponent(online=False))
+
+    body = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Verdant III", kind="planet"),
+            OrbitalBodyComponent(body_type="planet"),
+        ],
+    )
+    stale_station = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Lost Station", kind="station"), StationComponent(name="Lost")],
+    )
+    reachable = [
+        [
+            IdentityComponent(name="port airlock", kind="airlock"),
+            AirlockComponent(state="cycled"),
+        ],
+        [
+            IdentityComponent(name="emergency grid", kind="power-grid"),
+            PowerGridComponent(capacity=50.0, available=12.0),
+        ],
+        [
+            IdentityComponent(name="dark reactor", kind="ship-system"),
+            ShipSystemComponent(system_type="reactor", integrity=0.0, online=False),
+        ],
+        [
+            IdentityComponent(name="stranded shuttle", kind="ship"),
+            ShipComponent(name="stranded shuttle"),
+            OrbitComponent(body_id=str(body.id), altitude="surface"),
+        ],
+        [
+            IdentityComponent(name="bad orbit", kind="ship"),
+            OrbitComponent(body_id="entity_999999", altitude="orbit"),
+        ],
+        [
+            IdentityComponent(name="answered mayday", kind="signal"),
+            DistressSignalComponent(text="Already handled.", detected=True, answered=True),
+        ],
+        [
+            IdentityComponent(name="silent mayday", kind="signal"),
+            DistressSignalComponent(text="Not detected.", detected=False),
+        ],
+    ]
+    for components in reachable:
+        entity_id = _spawn_in_room_a(scenario, components)
+        entity = scenario.actor.world.get_entity(entity_id)
+        if entity.has_component(ShipComponent):
+            entity.add_relationship(DockedTo(), stale_station.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), body.id)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(ChaosMutationPressureComponent(amount=0.0))
+    character.add_component(RadiationMutationPressureComponent(amount=0.0))
+    character.add_component(CyberneticMutationPressureComponent(amount=0.0))
+    original_has_entity = scenario.actor.world.has_entity
+
+    def has_entity(entity_id):
+        if entity_id == stale_station.id:
+            return False
+        return original_has_entity(entity_id)
+
+    monkeypatch.setattr(scenario.actor.world, "has_entity", has_entity)
+
+    fragments = voidsim_fragments(scenario.actor.world, character)
+
+    assert "Module pressure: vacuum." in fragments
+    assert "Life support: OFFLINE." in fragments
+    assert "Airlock port airlock: cycled." in fragments
+    assert "Power grid: 12/50 available." in fragments
+    assert "Ship system reactor: 0% (offline)." in fragments
+    assert "stranded shuttle is landed on Verdant III." in fragments
+    assert not any("docked at" in line for line in fragments)
+    assert not any("Distress signal" in line for line in fragments)
+    assert not any("mutation pressure" in line for line in fragments)
+
+
+def test_voidsim_fragments_allow_character_without_container():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains, scenario.character
+    )
+
+    assert voidsim_fragments(scenario.actor.world, character) == []
+
+
 def test_install_voidsim_registers_plugin_consequences():
     scenario = build_scenario()
     before = len(scenario.actor._consequences)

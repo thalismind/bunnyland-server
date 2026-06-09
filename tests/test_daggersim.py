@@ -2566,6 +2566,92 @@ def test_daggersim_fragments_show_nearby_services_magic_law_and_character_state(
     assert "Feeding need: 4.0/10.0." in fragments
 
 
+def test_daggersim_fragments_cover_suppressed_and_default_states(monkeypatch):
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(TravelHubComponent(name="Self Hub", region_id="moss-road"))
+    stale_institution = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Vanished Guild", kind="institution")],
+    )
+    character.add_relationship(MemberOfInstitution(rank="guest"), stale_institution.id)
+    character.add_relationship(MemberOfInstitution(rank="guest"), scenario.room_b)
+
+    suppressed = [
+        [
+            IdentityComponent(name="Realized Hamlet", kind="settlement"),
+            UnrealizedLocationComponent(
+                summary="already built",
+                region_id="moss-road",
+                detail_level="instantiated",
+            ),
+        ],
+        [
+            IdentityComponent(name="unheard rumor", kind="rumor"),
+            RumorComponent(text="Nobody told you this."),
+        ],
+        [
+            IdentityComponent(name="closed panel", kind="secret-door"),
+            SecretDoorComponent(
+                target_room_id=str(scenario.room_b),
+                hint="cold air",
+                found=False,
+            ),
+        ],
+        [
+            IdentityComponent(name="hidden key", kind="objective"),
+            DungeonObjectiveComponent(objective_kind="key", description="hidden", found=False),
+        ],
+        [
+            IdentityComponent(name="Baroness Thistledown", kind="character"),
+            CharacterComponent(species="bunny"),
+            ConversationToneComponent(tone="cool", last_reaction=""),
+        ],
+        [
+            IdentityComponent(name="Ferry Gate", kind="travel-hub"),
+            TravelHubComponent(name="Ferry Gate", region_id="moss-road"),
+        ],
+    ]
+    visible = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="burrow spriggan", kind="creature"),
+            CreatureLanguageComponent(language="sylvan"),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    for components in suppressed:
+        entity = spawn_entity(scenario.actor.world, components)
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), visible.id)
+    original_has_entity = scenario.actor.world.has_entity
+
+    def has_entity(entity_id):
+        if entity_id == stale_institution.id:
+            return False
+        return original_has_entity(entity_id)
+
+    monkeypatch.setattr(scenario.actor.world, "has_entity", has_entity)
+
+    fragments = daggersim_fragments(scenario.actor.world, character)
+
+    assert "Creature language nearby: sylvan (hostile)." in fragments
+    assert "Travel destination: Ferry Gate." in fragments
+    assert not any("Nearby unrealized site: Realized Hamlet" in line for line in fragments)
+    assert not any("Nobody told you this" in line for line in fragments)
+    assert not any("Travel destination: Self Hub" in line for line in fragments)
+    assert not any("Secret door found here" in line for line in fragments)
+    assert not any("Dungeon objective found" in line for line in fragments)
+    assert not any("last approach" in line for line in fragments)
+    assert not any("Institution membership" in line for line in fragments)
+
+    room.remove_relationship(Contains, scenario.character)
+    assert not any(
+        line.startswith("Rest risk here:")
+        for line in daggersim_fragments(scenario.actor.world, character)
+    )
+
+
 def _dungeon(scenario, *, generated=True):
     world = scenario.actor.world
     entry_room = spawn_entity(
