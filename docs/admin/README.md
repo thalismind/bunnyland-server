@@ -88,7 +88,7 @@ behaviour is added by **plugins**; the builtins are:
 | `bunnyland.daggersim`   | rumors, travel, guilds, banks, law, spells, and dungeons      |
 | `bunnyland.voidsim`     | ships, pressure, airlocks, power, repair, docking, and jumps  |
 | `bunnyland.nukesim`     | radiation, mutation pressure, scavenging, and scrapping       |
-| `bunnyland.dinosim`     | fossils, clone eggs, hatching, taming, companions, kaiju      |
+| `bunnyland.dinosim`     | fossils, clone eggs, hatching, taming, enclosures, kaiju      |
 | `bunnyland.mcp`         | optional HTTP MCP endpoint for agentic clients                |
 
 The sim packages (`bunnyland.lifesim`, `colonysim`, `gardensim`, `barbariansim`,

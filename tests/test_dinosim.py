@@ -13,6 +13,7 @@ from bunnyland.core import (
     build_submitted_command,
     container_of,
     parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.components import CharacterComponent
@@ -24,13 +25,18 @@ from bunnyland.mechanics.dinosim import (
     ApproachCreatureHandler,
     BaitComponent,
     BaitSetEvent,
+    BuildEnclosureHandler,
     CommandCompanionHandler,
     CommandComponent,
     CommandTrainedEvent,
     CompanionCommandedEvent,
     CompanionComponent,
+    ContainmentProtocolComponent,
+    ContainmentTriggeredEvent,
+    CreatureEscapedEvent,
     CreatureMountedEvent,
     CreatureRecalledEvent,
+    CreatureRecapturedEvent,
     CreatureTamedEvent,
     CreatureTrackedEvent,
     CreatureTranquilizedEvent,
@@ -38,24 +44,43 @@ from bunnyland.mechanics.dinosim import (
     EggComponent,
     EggHatchedEvent,
     EggLaidEvent,
+    EnclosureBuiltEvent,
+    EnclosureComponent,
+    EvacuateRoomHandler,
     ExtractAncientSampleHandler,
+    FeedingPenComponent,
+    FenceComponent,
+    FenceRepairedEvent,
     FertilityComponent,
     FertilizeEggHandler,
     FossilFragmentComponent,
     FossilIdentifiedEvent,
+    GateComponent,
+    GateReinforcedEvent,
     GuardBehaviorComponent,
     HatchEggHandler,
+    HiddenFromCreatureEvent,
+    HideFromCreatureHandler,
     IdentifyFossilHandler,
     IncubateEggHandler,
     IncubationComponent,
     KaijuComponent,
     LayEggHandler,
+    LockPenHandler,
     MountComponent,
     MountCreatureHandler,
+    OpenPenHandler,
+    PenLockedEvent,
+    PenOpenedEvent,
     PrepareCloneHandler,
+    QuarantinePenComponent,
     RecallComponent,
     RecallCreatureHandler,
+    RecaptureCreatureHandler,
+    ReinforceGateHandler,
+    RepairFenceHandler,
     ReptileProcreationComponent,
+    RoomEvacuatedEvent,
     SetBaitHandler,
     SettlementDamageComponent,
     SpeciesComponent,
@@ -68,6 +93,7 @@ from bunnyland.mechanics.dinosim import (
     TrainingComponent,
     TranquilizeCreatureHandler,
     TranquilizerComponent,
+    TriggerContainmentHandler,
     _entity_room_id,
     _species_name,
     dinosim_fragments,
@@ -103,6 +129,15 @@ def _install(actor):
     actor.register_handler(MountCreatureHandler())
     actor.register_handler(CommandCompanionHandler())
     actor.register_handler(RecallCreatureHandler())
+    actor.register_handler(BuildEnclosureHandler())
+    actor.register_handler(RepairFenceHandler())
+    actor.register_handler(ReinforceGateHandler())
+    actor.register_handler(LockPenHandler())
+    actor.register_handler(OpenPenHandler())
+    actor.register_handler(TriggerContainmentHandler())
+    actor.register_handler(RecaptureCreatureHandler())
+    actor.register_handler(HideFromCreatureHandler())
+    actor.register_handler(EvacuateRoomHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -423,6 +458,134 @@ async def test_creature_can_be_tracked_tamed_trained_commanded_mounted_and_recal
     )
     assert "Your guard: clever raptor." in fragments
     assert "clever raptor knows commands: guard." in fragments
+
+
+async def test_enclosure_escape_recapture_hide_and_evacuation_loop():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    raptor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="clever raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+        ],
+    )
+    bystander = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="field tech", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raptor.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bystander.id)
+
+    built: list[EnclosureBuiltEvent] = []
+    repaired: list[FenceRepairedEvent] = []
+    reinforced: list[GateReinforcedEvent] = []
+    locked: list[PenLockedEvent] = []
+    opened: list[PenOpenedEvent] = []
+    escaped: list[CreatureEscapedEvent] = []
+    hidden: list = []
+    recaptured: list[CreatureRecapturedEvent] = []
+    contained: list[ContainmentTriggeredEvent] = []
+    evacuated: list[RoomEvacuatedEvent] = []
+    scenario.actor.bus.subscribe(EnclosureBuiltEvent, built.append)
+    scenario.actor.bus.subscribe(FenceRepairedEvent, repaired.append)
+    scenario.actor.bus.subscribe(GateReinforcedEvent, reinforced.append)
+    scenario.actor.bus.subscribe(PenLockedEvent, locked.append)
+    scenario.actor.bus.subscribe(PenOpenedEvent, opened.append)
+    scenario.actor.bus.subscribe(CreatureEscapedEvent, escaped.append)
+    scenario.actor.bus.subscribe(HiddenFromCreatureEvent, hidden.append)
+    scenario.actor.bus.subscribe(CreatureRecapturedEvent, recaptured.append)
+    scenario.actor.bus.subscribe(ContainmentTriggeredEvent, contained.append)
+    scenario.actor.bus.subscribe(RoomEvacuatedEvent, evacuated.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "build-enclosure",
+            room_id=str(scenario.room_a),
+            name="Fern Pen",
+            capacity=2,
+            feeding_pen=True,
+            quarantine=True,
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    replace_component(room, FenceComponent(integrity=2.0, maximum=10.0))
+    await scenario.actor.submit(
+        _cmd(scenario, "repair-fence", enclosure_id=str(scenario.room_a), amount=4.0)
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "reinforce-gate", enclosure_id=str(scenario.room_a), amount=2.0)
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "lock-pen", enclosure_id=str(scenario.room_a)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "open-pen", enclosure_id=str(scenario.room_a)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(HOUR)
+
+    assert built[0].name == "Fern Pen"
+    assert repaired[0].integrity == 6.0
+    assert reinforced[0].reinforcement == 2.0
+    assert locked and opened
+    assert escaped[0].creature_id == str(raptor.id)
+    assert container_of(raptor) == scenario.room_b
+    assert room.has_component(EnclosureComponent)
+    assert room.has_component(FeedingPenComponent)
+    assert room.has_component(QuarantinePenComponent)
+    assert room.get_component(GateComponent).open is True
+
+    await scenario.actor.submit(_cmd(scenario, "move", direction="north"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "hide-from-creature", creature_id=str(raptor.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "recapture-creature",
+            creature_id=str(raptor.id),
+            enclosure_id=str(scenario.room_a),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "trigger-containment", enclosure_id=str(scenario.room_a))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "evacuate-room",
+            room_id=str(scenario.room_a),
+            destination_id=str(scenario.room_b),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert hidden
+    assert recaptured[0].enclosure_id == str(scenario.room_a)
+    assert container_of(raptor) == scenario.room_a
+    assert contained[0].enclosure_id == str(scenario.room_a)
+    assert room.get_component(GateComponent).locked is True
+    assert room.get_component(ContainmentProtocolComponent).active is True
+    assert evacuated[0].character_ids == (str(bystander.id),)
+    assert container_of(bystander) == scenario.room_b
+
+    await scenario.actor.submit(_cmd(scenario, "move", direction="south"))
+    await scenario.actor.tick(HOUR)
+    fragments = dinosim_fragments(
+        scenario.actor.world,
+        scenario.actor.world.get_entity(scenario.character),
+    )
+    assert "Enclosure nearby: Fern Pen." in fragments
+    assert "Fern Pen gate: closed, locked." in fragments
 
 
 async def test_dinosim_rejects_invalid_fossil_sample_and_parent_targets():

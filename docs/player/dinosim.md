@@ -112,6 +112,49 @@ Companions are still normal creature entities with normal controllers. These com
 durable ECS state for trust, training, current orders, mounting, and recall; they do not add
 park-management systems.
 
+## Enclosures, containment, and escapes
+
+Build a pen around a room:
+
+```text
+!build-enclosure room_id="Fern Paddock" name="Fern Pen" capacity=3 feeding_pen=true
+```
+
+Repair and reinforce containment:
+
+```text
+!repair-fence enclosure_id="Fern Paddock" amount=4
+!reinforce-gate enclosure_id="Fern Paddock" amount=2
+```
+
+Lock or open the pen gate:
+
+```text
+!lock-pen enclosure_id="Fern Paddock"
+!open-pen enclosure_id="Fern Paddock"
+```
+
+Open gates, breaches, and ruined fences raise escape risk. When risk crosses the threshold,
+creatures can escape through a room exit. Trigger containment to close and lock the gate
+again:
+
+```text
+!trigger-containment enclosure_id="Fern Paddock"
+```
+
+If a creature escapes, reach it and recapture it into an enclosure:
+
+```text
+!hide-from-creature creature_id="clever raptor"
+!recapture-creature creature_id="clever raptor" enclosure_id="Fern Paddock"
+```
+
+Evacuate non-creature characters from a room during an incident:
+
+```text
+!evacuate-room room_id="Fern Paddock" destination_id="Amber Hatchery Lab"
+```
+
 ## Kaiju storyteller incidents
 
 Kaiju attacks are storyteller incidents when both `bunnyland.dinosim` and
@@ -144,5 +187,7 @@ encounters, but it does not assume settlement damage or colony job queues exist.
 !tame-creature creature_id="clever raptor"
 !train-command creature_id="clever raptor" command_name="guard" progress=2
 !command-companion creature_id="clever raptor" command_name="guard"
+!build-enclosure room_id="Fern Paddock" name="Fern Pen"
+!lock-pen enclosure_id="Fern Paddock"
 !resolve-incident incident_id="kaiju attack"
 ```

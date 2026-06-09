@@ -181,7 +181,7 @@ full catalogue is in [`bunnyland_mechanics.md`](bunnyland_mechanics.md).
 | **Dagger Sim**  | Implemented | Daggerfall       | Procedural frontier expansion, rumors, travel logistics, guilds/institutions and services, banking and debt, civic law and fines, custom classes and spells, language pacification, supernatural afflictions, procedural dungeons, etiquette and social approach |
 | **Void Sim**    | Implemented | FTL              | Ships, stations and habitat modules, life support, pressure and airlocks, power grids, ship-system repair, and docking |
 | **Neon Sim**    | Planned     | Deus Ex, Watch Dogs, Cyberpunk 2077 | Cyberpunk districts, usable surveillance, ECS hacking, fixer missions, corporate intrigue, street economy, wanted levels, reputation, and cybernetics |
-| **Dino Sim**    | Implemented | Jurassic Park, ARK, Dino Crisis | Fossil/species identification and cloning, egg handling, reptile procreation, incubation, hatching, tracking, taming, companion commands, and kaiju storyteller incidents |
+| **Dino Sim**    | Implemented | Jurassic Park, ARK, Dino Crisis | Fossil/species identification and cloning, egg handling, reptile procreation, incubation, hatching, tracking, taming, companion commands, enclosures and escapes, and kaiju storyteller incidents |
 | **Fortress Sim** | Planned    | Dwarf Fortress   | Deep materials, world history, civilizations, artifacts, nobles, justice, institutions, tantrum spirals, and multi-site worlds |
 
 Foundational plugins back these up: **Environment** (time, weather, fire), **Mechanisms**

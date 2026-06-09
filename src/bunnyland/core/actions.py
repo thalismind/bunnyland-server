@@ -132,6 +132,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "door_id",
         "dungeon_id",
         "egg_id",
+        "enclosure_id",
         "exit_id",
         "faction_id",
         "fertilizer_id",
@@ -182,6 +183,7 @@ def _argument_for_key(key: str, *, required: bool = False) -> ActionArgument:
     kind: ArgumentKind = "entity" if key in REFERENCE_ARG_KEYS else "string"
     if key in {
         "amount",
+        "capacity",
         "damage_per_hour",
         "default_price",
         "due_epoch",
@@ -209,7 +211,7 @@ def _argument_for_key(key: str, *, required: bool = False) -> ActionArgument:
         "xp",
     }:
         kind = "number"
-    if key in {"audible", "lethal"}:
+    if key in {"audible", "feeding_pen", "lethal", "quarantine"}:
         kind = "boolean"
     return ActionArgument(
         title=title,
@@ -475,6 +477,43 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("creature_id",),
         tool_name="recall_creature",
         patterns=("recall {creature_id}",),
+    ),
+    _definition(
+        "build-enclosure",
+        ("room_id", "name", "capacity", "feeding_pen", "quarantine"),
+        tool_name="build_enclosure",
+    ),
+    _definition(
+        "repair-fence",
+        ("enclosure_id", "amount"),
+        tool_name="repair_fence",
+    ),
+    _definition(
+        "reinforce-gate",
+        ("enclosure_id", "amount"),
+        tool_name="reinforce_gate",
+    ),
+    _definition("lock-pen", ("enclosure_id",), tool_name="lock_pen"),
+    _definition("open-pen", ("enclosure_id",), tool_name="open_pen"),
+    _definition(
+        "trigger-containment",
+        ("enclosure_id",),
+        tool_name="trigger_containment",
+    ),
+    _definition(
+        "recapture-creature",
+        ("creature_id", "enclosure_id"),
+        tool_name="recapture_creature",
+    ),
+    _definition(
+        "hide-from-creature",
+        ("creature_id",),
+        tool_name="hide_from_creature",
+    ),
+    _definition(
+        "evacuate-room",
+        ("room_id", "destination_id"),
+        tool_name="evacuate_room",
     ),
     # Life sim.
     _definition("eat", ("item_id",), tool_name="eat", patterns=("eat {item_id}",)),

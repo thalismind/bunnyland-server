@@ -8,6 +8,8 @@ storyteller support. It intentionally does not add park guests or attraction man
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
 from relics import Component, Entity, EntityId, World
@@ -20,12 +22,22 @@ from ..core.components import (
     RoomComponent,
 )
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component, spawn_entity
-from ..core.edges import ContainmentMode, Contains
+from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .lifesim import AgeComponent, LifeStageComponent
 
 DEFAULT_INCUBATION_SECONDS = 24 * 60 * 60
+
+
+def _event_base(epoch: int, **kwargs) -> dict:
+    base = {
+        "event_id": uuid4().hex,
+        "world_epoch": epoch,
+        "created_at": datetime.now(UTC),
+    }
+    base.update(kwargs)
+    return base
 
 
 @dataclass(frozen=True)
@@ -200,6 +212,65 @@ class RecallComponent(Component):
 
 
 @dataclass(frozen=True)
+class EnclosureComponent(Component):
+    name: str = "enclosure"
+    capacity: int = 4
+    built_by_id: str = ""
+    built_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class FenceComponent(Component):
+    integrity: float = 10.0
+    maximum: float = 10.0
+
+
+@dataclass(frozen=True)
+class GateComponent(Component):
+    open: bool = False
+    locked: bool = False
+
+
+@dataclass(frozen=True)
+class ReinforcementComponent(Component):
+    amount: float = 0.0
+
+
+@dataclass(frozen=True)
+class FeedingPenComponent(Component):
+    feed: float = 0.0
+
+
+@dataclass(frozen=True)
+class QuarantinePenComponent(Component):
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class EscapeRiskComponent(Component):
+    risk: float = 0.0
+    threshold: float = 1.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class BreachComponent(Component):
+    severity: float = 1.0
+
+
+@dataclass(frozen=True)
+class StampedeComponent(Component):
+    active: bool = True
+    started_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class ContainmentProtocolComponent(Component):
+    active: bool = False
+    triggered_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class KaijuComponent(Component):
     threat_level: int = 10
     target_room_id: str | None = None
@@ -303,6 +374,60 @@ class CompanionCommandedEvent(DomainEvent):
 class CreatureRecalledEvent(DomainEvent):
     creature_id: str
     recalled_room_id: str
+
+
+class EnclosureBuiltEvent(DomainEvent):
+    enclosure_id: str
+    name: str
+
+
+class FenceRepairedEvent(DomainEvent):
+    enclosure_id: str
+    integrity: float
+
+
+class GateReinforcedEvent(DomainEvent):
+    enclosure_id: str
+    reinforcement: float
+
+
+class PenLockedEvent(DomainEvent):
+    enclosure_id: str
+
+
+class PenOpenedEvent(DomainEvent):
+    enclosure_id: str
+
+
+class ContainmentTriggeredEvent(DomainEvent):
+    enclosure_id: str
+
+
+class CreatureEscapedEvent(DomainEvent):
+    creature_id: str
+    from_room_id: str
+    to_room_id: str
+
+
+class CreatureRecapturedEvent(DomainEvent):
+    creature_id: str
+    enclosure_id: str
+
+
+class StampedeStartedEvent(DomainEvent):
+    enclosure_id: str
+    creature_ids: tuple[str, ...] = ()
+
+
+class RoomEvacuatedEvent(DomainEvent):
+    room_id_evacuated: str
+    destination_id: str
+    character_ids: tuple[str, ...] = ()
+
+
+class HiddenFromCreatureEvent(DomainEvent):
+    creature_id: str
+    character_id: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -435,6 +560,51 @@ def _move_to_room(world: World, entity: Entity, room_id: EntityId) -> None:
     )
 
 
+def _current_or_requested_room(
+    ctx: HandlerContext, character_id: EntityId, requested_id: object
+) -> tuple[Entity | None, str | None]:
+    room_id = parse_entity_id(requested_id) if requested_id is not None else None
+    if room_id is None:
+        room_id = container_of(ctx.entity(character_id))
+    if room_id is None:
+        return None, "room is required"
+    if not ctx.world.has_entity(room_id):
+        return None, "room does not exist"
+    room = ctx.entity(room_id)
+    if not room.has_component(RoomComponent):
+        return None, "target is not a room"
+    return room, None
+
+
+def _enclosure_entity(
+    ctx: HandlerContext, character_id: EntityId, requested_id: object
+) -> tuple[Entity | None, str | None]:
+    enclosure, error = _current_or_requested_room(ctx, character_id, requested_id)
+    if enclosure is None:
+        return None, error
+    if not enclosure.has_component(EnclosureComponent):
+        return None, "target is not an enclosure"
+    return enclosure, None
+
+
+def _first_exit_target(room: Entity) -> EntityId | None:
+    exits = room.get_relationships(ExitTo)
+    if not exits:
+        return None
+    return exits[0][1]
+
+
+def _creatures_in_room(world: World, room: Entity) -> list[Entity]:
+    creatures: list[Entity] = []
+    for _edge, entity_id in room.get_relationships(Contains):
+        if not world.has_entity(entity_id):
+            continue
+        entity = world.get_entity(entity_id)
+        if _is_creature(entity):
+            creatures.append(entity)
+    return creatures
+
+
 def _spawn_egg(
     world: World,
     species_name: str,
@@ -491,6 +661,88 @@ class IncubationConsequence:
                 ),
             )
         return []
+
+
+class EscapeRiskConsequence:
+    """Move creatures out of breached or open enclosures once escape risk crosses threshold."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for room in world.query().with_all([RoomComponent, EnclosureComponent]).execute_entities():
+            fence = (
+                room.get_component(FenceComponent)
+                if room.has_component(FenceComponent)
+                else None
+            )
+            gate = room.get_component(GateComponent) if room.has_component(GateComponent) else None
+            breached = room.has_component(BreachComponent)
+            unsafe = breached or (fence is not None and fence.integrity <= 0.0)
+            unsafe = unsafe or (gate is not None and gate.open and not gate.locked)
+            risk = (
+                room.get_component(EscapeRiskComponent)
+                if room.has_component(EscapeRiskComponent)
+                else EscapeRiskComponent(last_updated_epoch=epoch)
+            )
+            if not unsafe:
+                replace_component(room, replace(risk, risk=0.0, last_updated_epoch=epoch))
+                continue
+
+            elapsed = max(0, epoch - risk.last_updated_epoch)
+            reinforcement = (
+                room.get_component(ReinforcementComponent).amount
+                if room.has_component(ReinforcementComponent)
+                else 0.0
+            )
+            if risk.risk <= 0.0:
+                risk_delta = 1.0
+            else:
+                risk_delta = elapsed / DEFAULT_INCUBATION_SECONDS
+                risk_delta = max(0.1, risk_delta - reinforcement * 0.05)
+            updated_risk = replace(
+                risk,
+                risk=min(risk.threshold, risk.risk + risk_delta),
+                last_updated_epoch=epoch,
+            )
+            replace_component(room, updated_risk)
+            if updated_risk.risk < updated_risk.threshold:
+                continue
+
+            destination_id = _first_exit_target(room)
+            if destination_id is None or not world.has_entity(destination_id):
+                continue
+            escaped: list[str] = []
+            for creature in _creatures_in_room(world, room):
+                _move_to_room(world, creature, destination_id)
+                escaped.append(str(creature.id))
+                events.append(
+                    CreatureEscapedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.ROOM,
+                            room_id=str(room.id),
+                            target_ids=(str(creature.id), str(destination_id)),
+                            creature_id=str(creature.id),
+                            from_room_id=str(room.id),
+                            to_room_id=str(destination_id),
+                        )
+                    )
+                )
+            if len(escaped) > 1:
+                replace_component(room, StampedeComponent(active=True, started_at_epoch=epoch))
+                events.append(
+                    StampedeStartedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.ROOM,
+                            room_id=str(room.id),
+                            target_ids=tuple(escaped),
+                            enclosure_id=str(room.id),
+                            creature_ids=tuple(escaped),
+                        )
+                    )
+                )
+            replace_component(room, replace(updated_risk, risk=0.0, last_updated_epoch=epoch))
+        return events
 
 
 class IdentifyFossilHandler:
@@ -1255,6 +1507,330 @@ class RecallCreatureHandler:
         )
 
 
+class BuildEnclosureHandler:
+    command_type = "build-enclosure"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        room, error = _current_or_requested_room(ctx, character_id, command.payload.get("room_id"))
+        if room is None:
+            return rejected(error if error else "room is required")
+        if room.has_component(EnclosureComponent):
+            return rejected("room is already an enclosure")
+        name = str(command.payload.get("name") or _entity_name(room))
+        capacity = int(command.payload.get("capacity") or 4)
+        replace_component(
+            room,
+            EnclosureComponent(
+                name=name,
+                capacity=max(1, capacity),
+                built_by_id=str(character_id),
+                built_at_epoch=ctx.epoch,
+            ),
+        )
+        replace_component(room, FenceComponent())
+        replace_component(room, GateComponent(open=False, locked=True))
+        if command.payload.get("feeding_pen"):
+            replace_component(room, FeedingPenComponent())
+        if command.payload.get("quarantine"):
+            replace_component(room, QuarantinePenComponent())
+        return ok(
+            EnclosureBuiltEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room.id),
+                    target_ids=(str(room.id),),
+                    enclosure_id=str(room.id),
+                    name=name,
+                )
+            )
+        )
+
+
+class RepairFenceHandler:
+    command_type = "repair-fence"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        enclosure, error = _enclosure_entity(
+            ctx, character_id, command.payload.get("enclosure_id")
+        )
+        if enclosure is None:
+            return rejected(error if error else "enclosure is required")
+        fence = (
+            enclosure.get_component(FenceComponent)
+            if enclosure.has_component(FenceComponent)
+            else FenceComponent(integrity=0.0)
+        )
+        amount = float(command.payload.get("amount") or 2.0)
+        updated = replace(fence, integrity=min(fence.maximum, fence.integrity + max(0.0, amount)))
+        replace_component(enclosure, updated)
+        return ok(
+            FenceRepairedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(enclosure.id),
+                    target_ids=(str(enclosure.id),),
+                    enclosure_id=str(enclosure.id),
+                    integrity=updated.integrity,
+                )
+            )
+        )
+
+
+class ReinforceGateHandler:
+    command_type = "reinforce-gate"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        enclosure, error = _enclosure_entity(
+            ctx, character_id, command.payload.get("enclosure_id")
+        )
+        if enclosure is None:
+            return rejected(error if error else "enclosure is required")
+        if not enclosure.has_component(GateComponent):
+            return rejected("enclosure has no gate")
+        current = (
+            enclosure.get_component(ReinforcementComponent)
+            if enclosure.has_component(ReinforcementComponent)
+            else ReinforcementComponent()
+        )
+        amount = float(command.payload.get("amount") or 1.0)
+        updated = replace(current, amount=current.amount + max(0.0, amount))
+        replace_component(enclosure, updated)
+        return ok(
+            GateReinforcedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(enclosure.id),
+                    target_ids=(str(enclosure.id),),
+                    enclosure_id=str(enclosure.id),
+                    reinforcement=updated.amount,
+                )
+            )
+        )
+
+
+class LockPenHandler:
+    command_type = "lock-pen"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        enclosure, error = _enclosure_entity(
+            ctx, character_id, command.payload.get("enclosure_id")
+        )
+        if enclosure is None:
+            return rejected(error if error else "enclosure is required")
+        gate = (
+            enclosure.get_component(GateComponent)
+            if enclosure.has_component(GateComponent)
+            else GateComponent()
+        )
+        replace_component(enclosure, replace(gate, open=False, locked=True))
+        return ok(
+            PenLockedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(enclosure.id),
+                    target_ids=(str(enclosure.id),),
+                    enclosure_id=str(enclosure.id),
+                )
+            )
+        )
+
+
+class OpenPenHandler:
+    command_type = "open-pen"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        enclosure, error = _enclosure_entity(
+            ctx, character_id, command.payload.get("enclosure_id")
+        )
+        if enclosure is None:
+            return rejected(error if error else "enclosure is required")
+        gate = (
+            enclosure.get_component(GateComponent)
+            if enclosure.has_component(GateComponent)
+            else GateComponent()
+        )
+        replace_component(enclosure, replace(gate, open=True, locked=False))
+        return ok(
+            PenOpenedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(enclosure.id),
+                    target_ids=(str(enclosure.id),),
+                    enclosure_id=str(enclosure.id),
+                )
+            )
+        )
+
+
+class TriggerContainmentHandler:
+    command_type = "trigger-containment"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        enclosure, error = _enclosure_entity(
+            ctx, character_id, command.payload.get("enclosure_id")
+        )
+        if enclosure is None:
+            return rejected(error if error else "enclosure is required")
+        replace_component(
+            enclosure,
+            ContainmentProtocolComponent(active=True, triggered_at_epoch=ctx.epoch),
+        )
+        gate = (
+            enclosure.get_component(GateComponent)
+            if enclosure.has_component(GateComponent)
+            else GateComponent()
+        )
+        replace_component(enclosure, replace(gate, open=False, locked=True))
+        replace_component(enclosure, EscapeRiskComponent(risk=0.0, last_updated_epoch=ctx.epoch))
+        return ok(
+            ContainmentTriggeredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(enclosure.id),
+                    target_ids=(str(enclosure.id),),
+                    enclosure_id=str(enclosure.id),
+                )
+            )
+        )
+
+
+class RecaptureCreatureHandler:
+    command_type = "recapture-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        enclosure, error = _enclosure_entity(
+            ctx, character_id, command.payload.get("enclosure_id")
+        )
+        if enclosure is None:
+            return rejected(error if error else "enclosure is required")
+        _move_to_room(ctx.world, creature, enclosure.id)
+        gate = (
+            enclosure.get_component(GateComponent)
+            if enclosure.has_component(GateComponent)
+            else GateComponent()
+        )
+        replace_component(enclosure, replace(gate, open=False, locked=True))
+        replace_component(enclosure, EscapeRiskComponent(risk=0.0, last_updated_epoch=ctx.epoch))
+        if creature.has_component(EscapeRiskComponent):
+            replace_component(creature, EscapeRiskComponent())
+        return ok(
+            CreatureRecapturedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(enclosure.id),
+                    target_ids=(str(creature.id), str(enclosure.id)),
+                    creature_id=str(creature.id),
+                    enclosure_id=str(enclosure.id),
+                )
+            )
+        )
+
+
+class HideFromCreatureHandler:
+    command_type = "hide-from-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        fear = (
+            creature.get_component(FearComponent)
+            if creature.has_component(FearComponent)
+            else FearComponent()
+        )
+        replace_component(creature, replace(fear, amount=max(0.0, fear.amount - 1.0)))
+        return ok(
+            HiddenFromCreatureEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id), str(character_id)),
+                    creature_id=str(creature.id),
+                    character_id=str(character_id),
+                )
+            )
+        )
+
+
+class EvacuateRoomHandler:
+    command_type = "evacuate-room"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        room, error = _current_or_requested_room(ctx, character_id, command.payload.get("room_id"))
+        if room is None:
+            return rejected(error if error else "room is required")
+        destination_id = parse_entity_id(command.payload.get("destination_id"))
+        if destination_id is None or not ctx.world.has_entity(destination_id):
+            return rejected("destination does not exist")
+        destination = ctx.entity(destination_id)
+        if not destination.has_component(RoomComponent):
+            return rejected("destination is not a room")
+        moved: list[str] = []
+        for _edge, entity_id in tuple(room.get_relationships(Contains)):
+            if not ctx.world.has_entity(entity_id):
+                continue
+            entity = ctx.entity(entity_id)
+            if not entity.has_component(CharacterComponent) or _is_creature(entity):
+                continue
+            _move_to_room(ctx.world, entity, destination_id)
+            moved.append(str(entity.id))
+        return ok(
+            RoomEvacuatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room.id),
+                    target_ids=(str(room.id), str(destination_id), *moved),
+                    room_id_evacuated=str(room.id),
+                    destination_id=str(destination_id),
+                    character_ids=tuple(moved),
+                )
+            )
+        )
+
+
 def dinosim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for entity_id in reachable_ids(world, character):
@@ -1303,12 +1879,28 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
             bait = entity.get_component(BaitComponent)
             target = bait.target_species or "any creature"
             lines.append(f"Bait set for {target}: {name}.")
+        if entity.has_component(EnclosureComponent):
+            enclosure = entity.get_component(EnclosureComponent)
+            lines.append(f"Enclosure nearby: {enclosure.name}.")
+            if entity.has_component(FenceComponent):
+                fence = entity.get_component(FenceComponent)
+                lines.append(f"{enclosure.name} fence: {fence.integrity:g}/{fence.maximum:g}.")
+            if entity.has_component(GateComponent):
+                gate = entity.get_component(GateComponent)
+                state = "open" if gate.open else "closed"
+                lock = "locked" if gate.locked else "unlocked"
+                lines.append(f"{enclosure.name} gate: {state}, {lock}.")
+            if entity.has_component(EscapeRiskComponent):
+                risk = entity.get_component(EscapeRiskComponent)
+                if risk.risk > 0.0:
+                    lines.append(f"{enclosure.name} escape risk: {risk.risk:g}.")
     return sorted(lines)
 
 
 def install_dinosim(actor) -> None:
     ensure_dinosim_policy(actor)
     actor.register_consequence(IncubationConsequence())
+    actor.register_consequence(EscapeRiskConsequence())
 
 
 __all__ = [
@@ -1317,6 +1909,8 @@ __all__ = [
     "ApproachCreatureHandler",
     "BaitComponent",
     "BaitSetEvent",
+    "BreachComponent",
+    "BuildEnclosureHandler",
     "CloneCandidateComponent",
     "ClonePreparedEvent",
     "CommandComponent",
@@ -1324,7 +1918,11 @@ __all__ = [
     "CommandTrainedEvent",
     "CompanionCommandedEvent",
     "CompanionComponent",
+    "ContainmentProtocolComponent",
+    "ContainmentTriggeredEvent",
+    "CreatureEscapedEvent",
     "CreatureMountedEvent",
+    "CreatureRecapturedEvent",
     "CreatureRecalledEvent",
     "CreatureTamedEvent",
     "CreatureTrackedEvent",
@@ -1336,15 +1934,27 @@ __all__ = [
     "EggHatchedEvent",
     "EggIncubatedEvent",
     "EggLaidEvent",
+    "EnclosureBuiltEvent",
+    "EnclosureComponent",
+    "EscapeRiskComponent",
+    "EscapeRiskConsequence",
+    "EvacuateRoomHandler",
     "ExtractAncientSampleHandler",
+    "FeedingPenComponent",
     "FertilityComponent",
     "FertilizeEggHandler",
     "FearComponent",
+    "FenceComponent",
+    "FenceRepairedEvent",
     "FossilFragmentComponent",
     "FossilIdentifiedEvent",
+    "GateComponent",
+    "GateReinforcedEvent",
     "GuardBehaviorComponent",
     "HatchEggHandler",
     "HatchlingComponent",
+    "HiddenFromCreatureEvent",
+    "HideFromCreatureHandler",
     "HuntBehaviorComponent",
     "IdentifyFossilHandler",
     "IncubateEggHandler",
@@ -1352,17 +1962,29 @@ __all__ = [
     "IncubationConsequence",
     "KaijuComponent",
     "LayEggHandler",
+    "LockPenHandler",
     "MountComponent",
     "MountCreatureHandler",
+    "OpenPenHandler",
+    "PenLockedEvent",
+    "PenOpenedEvent",
     "PrepareCloneHandler",
+    "QuarantinePenComponent",
     "RecallComponent",
     "RecallCreatureHandler",
+    "RecaptureCreatureHandler",
+    "ReinforceGateHandler",
+    "ReinforcementComponent",
+    "RepairFenceHandler",
     "ReptileProcreationComponent",
+    "RoomEvacuatedEvent",
     "ScentComponent",
     "SettlementDamageComponent",
     "SetBaitHandler",
     "SpeciesComponent",
     "SpeciesIdentificationComponent",
+    "StampedeComponent",
+    "StampedeStartedEvent",
     "TameCreatureHandler",
     "TamingComponent",
     "TamingProgressedEvent",
@@ -1372,6 +1994,7 @@ __all__ = [
     "TrainingComponent",
     "TranquilizeCreatureHandler",
     "TranquilizerComponent",
+    "TriggerContainmentHandler",
     "TrustComponent",
     "dinosim_fragments",
     "ensure_dinosim_policy",

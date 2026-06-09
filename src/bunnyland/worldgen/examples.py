@@ -609,8 +609,12 @@ async def dinosim_example(actor, seed: str, options: GenOptions) -> Instantiated
     from ..mechanics.dinosim import (
         DinosaurComponent,
         EggComponent,
+        EnclosureComponent,
+        FeedingPenComponent,
+        FenceComponent,
         FertilityComponent,
         FossilFragmentComponent,
+        GateComponent,
         IncubationComponent,
         ReptileProcreationComponent,
         SpeciesComponent,
@@ -685,7 +689,16 @@ async def dinosim_example(actor, seed: str, options: GenOptions) -> Instantiated
 
     async with actor._lock:
         lab = world.rooms["lab"]
+        paddock = world.rooms["paddock"]
         raptor = world.characters["raptor"]
+        _augment(
+            actor,
+            paddock,
+            EnclosureComponent(name="Fern Paddock", capacity=3),
+            FenceComponent(integrity=8.0, maximum=10.0),
+            GateComponent(open=False, locked=True),
+            FeedingPenComponent(feed=5.0),
+        )
         _add(
             actor,
             lab,
