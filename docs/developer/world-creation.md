@@ -74,6 +74,8 @@ uv run bunnyland serve --generator voidsim-demo --ticks 5
 | `dragonsim-demo`     | A village, an undiscovered barrow, a faction, and a quest |
 | `daggersim-demo`     | A town with a bank, guild, rumor, travel route, and a frontier site to expand |
 | `voidsim-demo`       | A ship of habitat modules with life support, power, a damaged reactor, and a distress beacon |
+| `nukesim-demo`       | A wasteland checkpoint with radiation, scavenging, decontamination, and scrap crafting |
+| `dinosim-demo`       | A hatchery with fossils, a ready egg, and a fertile dinosaur parent |
 | `apartment-demo`     | A five-storey NYC apartment building of quirky tenants with backstories, homes, and daily routines, a rat-man in the warren below, and hidden corners to find |
 
 Each demo builds on the shared life-sim basics (every character has needs), then layers on
@@ -100,8 +102,8 @@ An unknown `--generator` name lists what the enabled plugins actually provide:
 
 ```
 unknown generator 'maze'; available: apartment-demo, barbariansim-demo, colonysim-demo,
-daggersim-demo, dragonsim-demo, empty, gardensim-demo, lifesim-demo, oneshot, recursive,
-voidsim-demo
+daggersim-demo, dinosim-demo, dragonsim-demo, empty, gardensim-demo, lifesim-demo,
+nukesim-demo, oneshot, recursive, voidsim-demo
 ```
 
 ## Seeds

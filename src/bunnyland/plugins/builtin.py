@@ -550,6 +550,7 @@ from ..worldgen.examples import (
     CLUE_SNACK_DEMO,
     COLONYSIM_DEMO,
     DAGGERSIM_DEMO,
+    DINOSIM_DEMO,
     DIVE_SCHEME_DEMO,
     DRAGONSIM_DEMO,
     GARDENSIM_DEMO,
@@ -1081,7 +1082,10 @@ def dinosim_plugin() -> Plugin:
             ),
         ),
         runtime=RuntimeContribution(service_factories=(install_dinosim,)),
-        content=ContentContribution(prompt_fragments=(dinosim_fragments,)),
+        content=ContentContribution(
+            prompt_fragments=(dinosim_fragments,),
+            world_generators=(DINOSIM_DEMO,),
+        ),
     )
 
 

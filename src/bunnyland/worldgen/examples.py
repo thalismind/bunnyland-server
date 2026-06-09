@@ -599,6 +599,139 @@ async def nukesim_example(actor, seed: str, options: GenOptions) -> Instantiated
 
 
 # --------------------------------------------------------------------------------------
+# dino-sim — fossils, clone eggs, reptile procreation, incubation, and hatching
+# --------------------------------------------------------------------------------------
+
+
+async def dinosim_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    del options
+    from ..core.components import IdentityComponent, PortableComponent
+    from ..mechanics.dinosim import (
+        DinosaurComponent,
+        EggComponent,
+        FertilityComponent,
+        FossilFragmentComponent,
+        IncubationComponent,
+        ReptileProcreationComponent,
+        SpeciesComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(
+                key="lab",
+                title="Amber Hatchery Lab",
+                biome="field-lab",
+                indoor=True,
+                light=0.65,
+                celsius=24.0,
+            ),
+            RoomSpec(
+                key="paddock",
+                title="Fern Paddock",
+                biome="paddock",
+                light=0.9,
+                celsius=27.0,
+            ),
+        ],
+        exits=[
+            ExitSpec(from_key="lab", direction="out", to_key="paddock"),
+            ExitSpec(from_key="paddock", direction="in", to_key="lab"),
+        ],
+        objects=[
+            ObjectSpec(
+                key="ration",
+                room_key="lab",
+                name="a basket of fern cakes",
+                kind="food",
+                nutrition=4.0,
+                satiety=18.0,
+                portable=True,
+            ),
+            ObjectSpec(
+                key="water",
+                room_key="paddock",
+                name="a clear trough",
+                kind="water",
+                hydration=20.0,
+                portable=False,
+                renewable=True,
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="keeper",
+                name="Mira",
+                room_key="lab",
+                controller="suspended",
+                traits=("careful", "curious"),
+                goals=("hatch the prepared egg", "catalogue the amber shard"),
+            ),
+            CharacterSpec(
+                key="raptor",
+                name="Clever Raptor",
+                room_key="paddock",
+                species="velociraptor",
+                controller="llm",
+                llm_profile="alert hatchery creature",
+                traits=("watchful", "fast"),
+                goals=("guard the paddock", "inspect new hatchlings"),
+            ),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        lab = world.rooms["lab"]
+        raptor = world.characters["raptor"]
+        _add(
+            actor,
+            lab,
+            [
+                IdentityComponent(name="an amber bone shard", kind="fossil"),
+                PortableComponent(can_pick_up=True),
+                FossilFragmentComponent(sample_quality=0.85),
+            ],
+        )
+        _add(
+            actor,
+            lab,
+            [
+                IdentityComponent(name="a warm velociraptor egg", kind="egg"),
+                PortableComponent(can_pick_up=True),
+                EggComponent(
+                    species_name="velociraptor",
+                    laid_at_epoch=0,
+                    fertilized=True,
+                    source="clone",
+                ),
+                IncubationComponent(
+                    started_at_epoch=0,
+                    required_seconds=60,
+                    progress_seconds=60,
+                    last_updated_epoch=0,
+                    ready=True,
+                ),
+            ],
+        )
+        _augment(
+            actor,
+            raptor,
+            DinosaurComponent(species_name="velociraptor"),
+            SpeciesComponent(
+                common_name="velociraptor",
+                scientific_name="Velociraptor mongoliensis",
+                diet="carnivore",
+                size_class="small",
+            ),
+            FertilityComponent(fertile=True),
+            ReptileProcreationComponent(egg_species_name="velociraptor"),
+        )
+    return world
+
+
+# --------------------------------------------------------------------------------------
 # pop-culture demos — legally distinct affectionate genre spoofs
 # --------------------------------------------------------------------------------------
 
@@ -990,6 +1123,10 @@ NUKESIM_DEMO = WorldGenerator(
     name="nukesim-demo", generate=nukesim_example,
     description="A wasteland checkpoint with radiation, scavenging, decon, and scrap crafting.",
     uses_seed=False)
+DINOSIM_DEMO = WorldGenerator(
+    name="dinosim-demo", generate=dinosim_example,
+    description="A hatchery with fossils, a ready egg, and a fertile dinosaur parent.",
+    uses_seed=False)
 CLUE_SNACK_DEMO = WorldGenerator(
     name="clue-snack-demo", generate=clue_snack_example,
     description=(
@@ -1022,6 +1159,7 @@ __all__ = [
     "CLUE_SNACK_DEMO",
     "COLONYSIM_DEMO",
     "DAGGERSIM_DEMO",
+    "DINOSIM_DEMO",
     "DRAGONSIM_DEMO",
     "DIVE_SCHEME_DEMO",
     "GARDENSIM_DEMO",
@@ -1035,6 +1173,7 @@ __all__ = [
     "clue_snack_example",
     "colonysim_example",
     "daggersim_example",
+    "dinosim_example",
     "dragonsim_example",
     "dive_scheme_example",
     "gardensim_example",

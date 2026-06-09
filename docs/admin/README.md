@@ -81,12 +81,19 @@ behaviour is added by **plugins**; the builtins are:
 | `bunnyland.mechanisms`  | door auto-close and momentary-button reset timers             |
 | `bunnyland.social`      | social bonds that grow through speech (affinity/trust/fear)   |
 | `bunnyland.policy`      | boundary/consent gate (flirting etc.); denied always wins     |
+| `bunnyland.colonysim`   | resources, work reservations, crafting, jobs, and ownership   |
+| `bunnyland.gardensim`   | soil, tilling, planting, crop growth, watering, and harvests  |
+| `bunnyland.barbariansim` | combat, stamina, exposure, gear durability, poison, corruption |
+| `bunnyland.dragonsim`   | discovery, quests, objectives, factions, and reputation       |
+| `bunnyland.daggersim`   | rumors, travel, guilds, banks, law, spells, and dungeons      |
+| `bunnyland.voidsim`     | ships, pressure, airlocks, power, repair, docking, and jumps  |
+| `bunnyland.nukesim`     | radiation, mutation pressure, scavenging, and scrapping       |
 | `bunnyland.dinosim`     | fossils, species identification, clone eggs, hatching, kaiju  |
 | `bunnyland.mcp`         | optional HTTP MCP endpoint for agentic clients                |
 
 The sim packages (`bunnyland.lifesim`, `colonysim`, `gardensim`, `barbariansim`,
-`dragonsim`, `daggersim`, `voidsim`, `dinosim`) add their own components and verbs. Most
-implemented sims also include a ready-to-play `<sim>-demo` world generator — e.g.
+`dragonsim`, `daggersim`, `voidsim`, `nukesim`, `dinosim`) add their own components and
+verbs. Implemented sims also include a ready-to-play `<sim>-demo` world generator — e.g.
 `serve --generator voidsim-demo`. See [world creation](../developer/world-creation.md) for
 the full list.
 

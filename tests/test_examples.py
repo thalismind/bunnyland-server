@@ -17,19 +17,28 @@ from bunnyland.core.components import (
 from bunnyland.mechanics.barbariansim import WeaponComponent
 from bunnyland.mechanics.colonysim import ResourceNodeComponent
 from bunnyland.mechanics.daggersim import BankComponent
+from bunnyland.mechanics.dinosim import (
+    DinosaurComponent,
+    FertilityComponent,
+    FossilFragmentComponent,
+    ReptileProcreationComponent,
+)
 from bunnyland.mechanics.dragonsim import QuestComponent
 from bunnyland.mechanics.gardensim import CropComponent
 from bunnyland.mechanics.lifesim import CareerComponent
 from bunnyland.mechanics.needs import HungerComponent
+from bunnyland.mechanics.nukesim import RadiationSourceComponent
 from bunnyland.mechanics.voidsim import HabitatModuleComponent, ShipComponent
 from bunnyland.plugins.builtin import bunnyland_plugins
 from bunnyland.worldgen.examples import (
     BARBARIANSIM_DEMO,
     COLONYSIM_DEMO,
     DAGGERSIM_DEMO,
+    DINOSIM_DEMO,
     DRAGONSIM_DEMO,
     GARDENSIM_DEMO,
     LIFESIM_DEMO,
+    NUKESIM_DEMO,
     POP_CULTURE_DEMOS,
     VOIDSIM_DEMO,
 )
@@ -43,6 +52,8 @@ PACKAGE_DEMOS = [
     DRAGONSIM_DEMO,
     DAGGERSIM_DEMO,
     VOIDSIM_DEMO,
+    NUKESIM_DEMO,
+    DINOSIM_DEMO,
 ]
 ALL_DEMOS = [*PACKAGE_DEMOS, *POP_CULTURE_DEMOS]
 
@@ -55,6 +66,8 @@ HALLMARKS = {
     DRAGONSIM_DEMO.name: QuestComponent,
     DAGGERSIM_DEMO.name: BankComponent,
     VOIDSIM_DEMO.name: ShipComponent,
+    NUKESIM_DEMO.name: RadiationSourceComponent,
+    DINOSIM_DEMO.name: DinosaurComponent,
 }
 
 
@@ -107,6 +120,21 @@ async def test_voidsim_demo_rooms_are_habitat_modules():
     await VOIDSIM_DEMO.generate(actor, "voidsim-demo", GenOptions())
 
     assert _has(actor, HabitatModuleComponent)
+
+
+async def test_dinosim_demo_includes_fossil_and_fertile_parent():
+    actor = WorldActor()
+
+    await DINOSIM_DEMO.generate(actor, "dinosim-demo", GenOptions())
+
+    assert _has(actor, FossilFragmentComponent)
+    assert bool(
+        list(
+            actor.world.query()
+            .with_all([DinosaurComponent, FertilityComponent, ReptileProcreationComponent])
+            .execute_entities()
+        )
+    )
 
 
 @pytest.mark.parametrize("demo", POP_CULTURE_DEMOS, ids=lambda d: d.name)

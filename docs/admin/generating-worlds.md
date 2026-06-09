@@ -18,8 +18,8 @@ Enabled plugins contribute named generators. The built-in worldgen plugin provid
 | `star-opera-demo` | A legally distinct star-opera rebellion at a desert port and rusty freighter. |
 
 Implemented sim packages also provide deterministic demo worlds, such as `lifesim-demo`,
-`gardensim-demo`, `daggersim-demo`, and `voidsim-demo`. See
-[world creation](../developer/world-creation.md) for the full list.
+`gardensim-demo`, `daggersim-demo`, `voidsim-demo`, `nukesim-demo`, and `dinosim-demo`.
+See [world creation](../developer/world-creation.md) for the full list.
 
 ## Generate from the web bundle
 

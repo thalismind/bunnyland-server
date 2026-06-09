@@ -196,15 +196,15 @@ uv run bunnyland serve --generator voidsim-demo --ticks 5
 ```
 
 The demos are `lifesim-demo`, `gardensim-demo`, `colonysim-demo`, `barbariansim-demo`,
-`dragonsim-demo`, `daggersim-demo`, and `voidsim-demo`. There is also a larger life-sim
-showcase, `apartment-demo`: a quirky NYC apartment building of eccentric tenants with
-backstories, homes, and daily routines, a rat-man in the warren below, and hidden corners.
+`dragonsim-demo`, `daggersim-demo`, `voidsim-demo`, `nukesim-demo`, and `dinosim-demo`.
+There is also a larger life-sim showcase, `apartment-demo`: a quirky NYC apartment
+building of eccentric tenants with backstories, homes, and daily routines, a rat-man in
+the warren below, and hidden corners.
 For lighter genre-spoof setups, the worldgen plugin also ships `clue-snack-demo`,
 `dive-scheme-demo`, `star-opera-demo`, and `gothic-count-demo`, all using new names,
 locations, and props.
 The `neonsim` and `fortresssim` packages are planned catalogue packages and do not have
-plugins or demo generators yet. The implemented `dinosim` package currently focuses on
-fossil cloning, eggs, hatching, and kaiju incidents; it does not have a demo generator yet.
+plugins or demo generators yet.
 
 ## Development
 
