@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from argparse import Namespace
 
 import pytest
 from conftest import install_plugin_module
@@ -41,6 +42,50 @@ from bunnyland.plugins.builtin import (
     VOIDSIM,
     WORLDGEN,
 )
+
+
+def _serve_args(**overrides):
+    values = {
+        "api_host": "127.0.0.1",
+        "api_port": None,
+        "autosave_every": 0,
+        "character_model": None,
+        "claim_timeout_controller": None,
+        "claim_timeout_seconds": 0,
+        "discord": False,
+        "discord_allowed_channel_id": [],
+        "discord_allowed_dm_user_id": [],
+        "discord_allowed_guild_id": [],
+        "discord_allow_child_claims": False,
+        "discord_channel_id": None,
+        "discord_character": None,
+        "discord_playtest": None,
+        "discord_user_id": None,
+        "generator": "empty",
+        "lifesim_natural_aging": None,
+        "llm": False,
+        "llm_provider": "ollama",
+        "load": None,
+        "load_paused": False,
+        "max_rooms": 6,
+        "mcp": False,
+        "mcp_admin_token": None,
+        "memory_backend": "in-memory",
+        "memory_path": None,
+        "module": [],
+        "ollama_model": None,
+        "plugin": None,
+        "save": None,
+        "seed": "a quiet marsh",
+        "starter_pack": None,
+        "tick_seconds": 1.0,
+        "ticks": 1,
+        "time_scale": 3600.0,
+        "worldgen_model": None,
+        "worldgen_provider": None,
+    }
+    values.update(overrides)
+    return Namespace(**values)
 
 
 def test_select_plugins_records_imported_module_namespace(monkeypatch):
@@ -88,6 +133,18 @@ def test_select_plugins_adds_extra_plugin_without_disabling_defaults():
 
     assert MCP in ids
     assert WORLDGEN in ids
+
+
+def test_select_plugins_ignores_extra_plugin_already_enabled_by_default():
+    selected = select_plugins([], None, extra_enabled_ids=(WORLDGEN,))
+
+    assert [plugin.id for plugin in selected].count(WORLDGEN) == 1
+
+
+def test_select_plugins_adds_extra_plugin_to_explicit_selection():
+    selected = select_plugins([], [WORLDGEN], extra_enabled_ids=(MCP,))
+
+    assert [plugin.id for plugin in selected] == [WORLDGEN, MCP]
 
 
 def test_build_actor_applies_requested_plugins():
@@ -566,6 +623,34 @@ bad line
     assert cli.os.environ["BUNNYLAND_NEW_VALUE"] == "loaded"
 
 
+def test_cli_serve_helper_models_credentials_and_env_errors(monkeypatch):
+    args = _serve_args(
+        character_model="character-model",
+        lifesim_natural_aging=True,
+        ollama_model="shared-model",
+        worldgen_model="world-model",
+    )
+
+    assert cli._lifesim_natural_aging_setting(args) is True
+    assert cli._serve_models(args) == cli.ServeModels(
+        worldgen_model="world-model",
+        character_model="character-model",
+    )
+    assert cli._serve_credentials(args).worldgen_provider == "ollama"
+
+    monkeypatch.setenv("BUNNYLAND_LIFESIM_NATURAL_AGING", "maybe")
+    with pytest.raises(SystemExit, match="BUNNYLAND_LIFESIM_NATURAL_AGING must be one of"):
+        cli._lifesim_natural_aging_setting(_serve_args())
+
+
+def test_cli_serve_credentials_reads_discord_token(monkeypatch):
+    monkeypatch.setenv("DISCORD_TOKEN", "discord-token")
+
+    credentials = cli._serve_credentials(_serve_args(discord=True))
+
+    assert credentials.discord_token == "discord-token"
+
+
 def test_cli_tui_command_forwards_remote_options(monkeypatch):
     import bunnyland.tui as tui
 
@@ -712,6 +797,30 @@ async def test_run_with_optional_discord_stops_loop_when_bot_exits():
     assert loop.stopped is True
 
 
+async def test_run_with_optional_discord_wraps_bot_exception():
+    class FakeLoop:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    class FakeBot:
+        async def start(self):
+            raise ValueError("discord failed")
+
+        async def close(self):
+            raise AssertionError("close is only used when runtime finishes first")
+
+    loop = FakeLoop()
+
+    with pytest.raises(RuntimeError, match="Discord bot stopped unexpectedly") as exc:
+        await cli._run_with_optional_discord(asyncio.sleep(60), loop, FakeBot())
+
+    assert isinstance(exc.value.__cause__, ValueError)
+    assert loop.stopped is True
+
+
 def test_assign_discord_controller_claims_suspended_character():
     actor = WorldActor()
     character = spawn_entity(
@@ -850,6 +959,200 @@ def test_configure_memory_backend_can_install_chroma(monkeypatch, tmp_path):
     assert "take-note" in actor.available_command_types()
     assert "remember" in actor.available_command_types()
     assert "forget" in actor.available_command_types()
+
+
+def test_configure_actor_backends_applies_lifesim_and_reports_memory_backend(
+    monkeypatch,
+    capsys,
+):
+    calls = {}
+
+    def fake_configure_lifesim_aging(actor, *, natural_aging):
+        calls["lifesim"] = (actor, natural_aging)
+
+    def fake_configure_memory_backend(actor, backend, path):
+        calls["memory"] = (actor, backend, path)
+
+    actor = WorldActor()
+    monkeypatch.setattr(cli, "configure_lifesim_aging", fake_configure_lifesim_aging)
+    monkeypatch.setattr(cli, "configure_memory_backend", fake_configure_memory_backend)
+
+    cli._configure_actor_backends(actor, _serve_args(memory_backend="chroma"), True)
+
+    assert calls["lifesim"] == (actor, True)
+    assert calls["memory"] == (actor, "chroma", None)
+    assert "Using 'chroma' memory backend." in capsys.readouterr().out
+
+
+def test_configure_actor_backends_converts_memory_runtime_errors(monkeypatch):
+    def fake_configure_memory_backend(actor, backend, path):
+        del actor, backend, path
+        raise RuntimeError("memory unavailable")
+
+    monkeypatch.setattr(cli, "configure_memory_backend", fake_configure_memory_backend)
+
+    with pytest.raises(SystemExit, match="memory unavailable"):
+        cli._configure_actor_backends(WorldActor(), _serve_args(), None)
+
+
+def test_build_serve_agent_constructs_enabled_providers(monkeypatch):
+    import bunnyland.llm_agents as llm_agents
+
+    calls = {}
+
+    class FakeOllamaAgent:
+        def __init__(self, **kwargs):
+            calls["ollama"] = kwargs
+
+    class FakeOpenRouterAgent:
+        def __init__(self, **kwargs):
+            calls["openrouter"] = kwargs
+
+    class FakeProviderRouterAgent:
+        def __init__(self, providers, *, default_provider):
+            calls["router"] = (providers, default_provider)
+
+    monkeypatch.setattr(llm_agents, "OllamaAgent", FakeOllamaAgent)
+    monkeypatch.setattr(llm_agents, "OpenRouterAgent", FakeOpenRouterAgent)
+    monkeypatch.setattr(llm_agents, "ProviderRouterAgent", FakeProviderRouterAgent)
+
+    agent = cli._build_serve_agent(
+        _serve_args(llm=True, llm_provider="openrouter"),
+        cli.ServeCredentials(
+            worldgen_provider="openrouter",
+            host="https://ollama.example",
+            api_key="ollama-key",
+            openrouter_api_key="openrouter-key",
+            openrouter_server_url="https://openrouter.example",
+        ),
+        cli.ServeModels(worldgen_model="world-model", character_model="character-model"),
+    )
+
+    providers, default_provider = calls["router"]
+    assert agent.__class__ is FakeProviderRouterAgent
+    assert default_provider == "openrouter"
+    assert set(providers) == {"ollama", "openrouter"}
+    assert calls["ollama"] == {
+        "model": "character-model",
+        "host": "https://ollama.example",
+        "api_key": "ollama-key",
+    }
+    assert calls["openrouter"] == {
+        "model": "character-model",
+        "api_key": "openrouter-key",
+        "server_url": "https://openrouter.example",
+    }
+
+
+def test_build_serve_agent_rejects_missing_provider():
+    with pytest.raises(SystemExit, match="no LLM agent configured for provider 'openrouter'"):
+        cli._build_serve_agent(
+            _serve_args(llm=True, llm_provider="openrouter"),
+            cli.ServeCredentials(worldgen_provider="openrouter"),
+            cli.ServeModels(worldgen_model="world-model", character_model="character-model"),
+        )
+
+
+async def test_load_or_generate_world_reports_loaded_world(tmp_path, capsys):
+    path = tmp_path / "world.json"
+    save_world(WorldActor(), path, meta=WorldMeta(seed="saved seed", generator="saved-gen"))
+
+    actor, meta = await cli._load_or_generate_world(
+        _serve_args(load=str(path)),
+        select_plugins([], [WORLDGEN]),
+        [],
+        cli.ServeCredentials(worldgen_provider="ollama"),
+        cli.ServeModels(worldgen_model="world-model", character_model="character-model"),
+    )
+
+    output = capsys.readouterr().out
+    assert actor.epoch == 0
+    assert meta.seed == "saved seed"
+    assert f"Reloaded world from {str(path)!r}" in output
+
+
+def test_discord_filter_ids_can_come_from_environment(monkeypatch):
+    monkeypatch.setenv("BUNNYLAND_DISCORD_ALLOWED_GUILD_IDS", "11,22")
+    monkeypatch.setenv("BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS", "33")
+    monkeypatch.setenv("BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS", "44, 55")
+
+    assert cli._discord_filter_ids(_serve_args()) == ((11, 22), (33,), (44, 55))
+
+
+def test_maybe_assign_startup_discord_claim_handles_errors_and_save(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    actor = WorldActor()
+    meta = WorldMeta(seed="moss", generator="empty")
+
+    def failing_assign(actor, **kwargs):
+        del actor, kwargs
+        raise RuntimeError("no claimable characters")
+
+    monkeypatch.setenv("BUNNYLAND_DISCORD_USER_ID", "123")
+    monkeypatch.setenv("BUNNYLAND_DISCORD_CHANNEL_ID", "456")
+    monkeypatch.setattr(cli, "assign_discord_controller", failing_assign)
+
+    cli._maybe_assign_startup_discord_claim(actor, _serve_args(discord=True), meta)
+    assert "Skipped startup Discord claim for user 123" in capsys.readouterr().out
+
+    path = tmp_path / "claimed-world.json"
+
+    def successful_assign(actor, **kwargs):
+        del actor
+        assert kwargs["default_channel_id"] == 456
+        return "Juniper"
+
+    monkeypatch.setattr(cli, "assign_discord_controller", successful_assign)
+
+    cli._maybe_assign_startup_discord_claim(
+        actor,
+        _serve_args(discord=True, save=str(path)),
+        meta,
+    )
+
+    assert "Assigned Discord user 123 to 'Juniper'." in capsys.readouterr().out
+    assert path.exists()
+
+
+async def test_run_api_runtime_without_mcp_uses_env_admin_token(monkeypatch, tmp_path, capsys):
+    import bunnyland.server.runtime as runtime
+
+    calls = {}
+
+    async def fake_run_loop_with_api(loop, actor, meta, **kwargs):
+        calls["loop"] = loop
+        calls["actor"] = actor
+        calls["meta"] = meta
+        calls["kwargs"] = kwargs
+        return 3
+
+    actor = WorldActor()
+    meta = WorldMeta(seed="moss", generator="empty")
+    args = _serve_args(api_port=8765, max_rooms=9, save=str(tmp_path / "world.json"))
+    loop = type("Loop", (), {"run": lambda self, *, max_ticks: asyncio.sleep(0, result=1)})()
+
+    monkeypatch.setenv("BUNNYLAND_MCP_ADMIN_TOKEN", "env-admin")
+    monkeypatch.setattr(runtime, "run_loop_with_api", fake_run_loop_with_api)
+
+    ticks = await cli._run_api_runtime(
+        loop,
+        actor,
+        meta,
+        args,
+        select_plugins([], [WORLDGEN]),
+        None,
+        cli.ServeCredentials(worldgen_provider="ollama", worldgen_api_key="worldgen-key"),
+        cli.ServeModels(worldgen_model="world-model", character_model="character-model"),
+        3,
+    )
+
+    assert ticks == 3
+    assert calls["kwargs"]["mcp_admin_token"] == "env-admin"
+    assert calls["kwargs"]["worldgen_options"].max_rooms == 9
+    assert "Serving MCP" not in capsys.readouterr().out
 
 
 def test_cli_save_records_namespaced_imported_plugin(monkeypatch, tmp_path):

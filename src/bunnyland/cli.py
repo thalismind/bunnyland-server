@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from pathlib import Path
 
 from .core.claim_timeout import CLAIM_TIMEOUT_DEFAULT_SECONDS, normalize_claim_timeout
@@ -58,6 +59,23 @@ STARTER_PACKS: dict[str, tuple[str, ...]] = {
     "fantastic": (CORE_VERBS, WORLDGEN, LIFESIM, BARBARIANSIM, DRAGONSIM),
     "futuristic": (CORE_VERBS, WORLDGEN, LIFESIM, NUKESIM, VOIDSIM),
 }
+
+
+@dataclass(frozen=True)
+class ServeModels:
+    worldgen_model: str
+    character_model: str
+
+
+@dataclass(frozen=True)
+class ServeCredentials:
+    worldgen_provider: str
+    host: str | None = None
+    api_key: str | None = None
+    worldgen_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openrouter_server_url: str | None = None
+    discord_token: str | None = None
 
 
 def _dedupe_plugin_ids(plugin_ids: list[str]) -> list[str]:
@@ -179,7 +197,7 @@ async def _run_with_optional_discord(
     raise RuntimeError("Discord bot stopped unexpectedly")
 
 
-async def _serve(args) -> None:
+def _validate_serve_args(args) -> None:
     if args.discord and args.discord_playtest:
         raise SystemExit(
             "--discord-playtest uses a mocked Discord adapter; do not combine it with --discord"
@@ -189,6 +207,8 @@ async def _serve(args) -> None:
     if args.mcp and args.api_port is None:
         raise SystemExit("--mcp mounts on the HTTP API and needs --api-port")
 
+
+def _load_serve_plugins(args) -> tuple[list, list]:
     try:
         plugins = select_plugins(
             args.module,
@@ -201,20 +221,31 @@ async def _serve(args) -> None:
         logging.getLogger(__name__).error("plugin loading failed: %s", exc)
         raise SystemExit(2) from exc
     # TODO: add --auto-load-requires to include missing required plugins automatically.
+    return plugins, ordered_plugins
 
-    load_dotenv()
+
+def _lifesim_natural_aging_setting(args) -> bool | None:
     try:
-        lifesim_natural_aging = (
-            args.lifesim_natural_aging
-            if args.lifesim_natural_aging is not None
-            else _env_bool("BUNNYLAND_LIFESIM_NATURAL_AGING")
-        )
+        if args.lifesim_natural_aging is not None:
+            return args.lifesim_natural_aging
+        return _env_bool("BUNNYLAND_LIFESIM_NATURAL_AGING")
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
+
+def _serve_models(args) -> ServeModels:
+    return ServeModels(
+        worldgen_model=args.worldgen_model or args.ollama_model or DEFAULT_WORLDGEN_MODEL,
+        character_model=args.character_model or args.ollama_model or DEFAULT_MODEL,
+    )
+
+
+def _serve_credentials(args) -> ServeCredentials:
     worldgen_provider = args.worldgen_provider or args.llm_provider
-    host = api_key = worldgen_api_key = discord_token = None
+    discord_token = None
+    host = api_key = worldgen_api_key = None
     openrouter_api_key = openrouter_server_url = None
+
     if args.llm:
         openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
         openrouter_server_url = os.environ.get("OPENROUTER_SERVER_URL")
@@ -235,63 +266,99 @@ async def _serve(args) -> None:
                 "(set it in .env or the environment)"
             )
         worldgen_api_key = openrouter_api_key if worldgen_provider == "openrouter" else api_key
-    worldgen_model = args.worldgen_model or args.ollama_model or DEFAULT_WORLDGEN_MODEL
-    character_model = args.character_model or args.ollama_model or DEFAULT_MODEL
+
     if args.discord:
         discord_token = os.environ.get("DISCORD_TOKEN")
         if not discord_token:
             raise SystemExit("--discord needs DISCORD_TOKEN (set it in .env or the environment)")
-    discord_playtest = None
-    if args.discord_playtest:
-        from .discord.playtest import load_discord_playtest
 
-        discord_playtest = load_discord_playtest(args.discord_playtest)
+    return ServeCredentials(
+        worldgen_provider=worldgen_provider,
+        host=host,
+        api_key=api_key,
+        worldgen_api_key=worldgen_api_key,
+        openrouter_api_key=openrouter_api_key,
+        openrouter_server_url=openrouter_server_url,
+        discord_token=discord_token,
+    )
 
+
+def _load_discord_playtest(args):
+    if not args.discord_playtest:
+        return None
+    from .discord.playtest import load_discord_playtest
+
+    return load_discord_playtest(args.discord_playtest)
+
+
+async def _load_or_generate_world(
+    args,
+    plugins: list,
+    ordered_plugins: list,
+    credentials: ServeCredentials,
+    models: ServeModels,
+) -> tuple[WorldActor, WorldMeta]:
     if args.load:
         try:
             actor, meta = load_world(args.load, plugins=plugins)
         except PluginError as exc:
             logging.getLogger(__name__).error("plugin loading failed: %s", exc)
             raise SystemExit(2) from exc
-        print(f"Reloaded world from {args.load!r}: seed {meta.seed!r}, "
-              f"generator {meta.generator!r}, game epoch {actor.epoch}s.")
-    else:
-        actor = WorldActor()
-        apply_plugins(plugins, actor)
-        print("Loaded plugins:")
-        for plugin in ordered_plugins:
-            print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
-
-        registry = collect_generators(plugins)
-        generator = registry.get(args.generator)
-        if generator is None:
-            names = ", ".join(sorted(registry)) or "(none)"
-            raise SystemExit(f"unknown generator {args.generator!r}; available: {names}")
-
-        if args.llm:
-            print(
-                f"Generating world with {worldgen_provider} model "
-                f"{worldgen_model!r}."
-            )
-        options = GenOptions(
-            llm=args.llm,
-            provider=worldgen_provider,
-            model=worldgen_model,
-            host=host,
-            api_key=worldgen_api_key,
-            server_url=openrouter_server_url,
-            max_rooms=args.max_rooms,
+        print(
+            f"Reloaded world from {args.load!r}: seed {meta.seed!r}, "
+            f"generator {meta.generator!r}, game epoch {actor.epoch}s."
         )
-        result = await generator.generate(actor, args.seed, options)
-        meta = WorldMeta(
-            seed=args.seed,
-            generator=generator.name,
-            prompt=result.prompt,  # the literal DM system prompt (empty for stub builders)
-            plugins=tuple(plugin.id for plugin in ordered_plugins),
-        )
-        print(f"Generated world {args.seed!r} via {generator.name!r}: "
-              f"{len(result.rooms)} rooms, {len(result.characters)} characters.")
+        return actor, meta
 
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    print("Loaded plugins:")
+    for plugin in ordered_plugins:
+        print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
+
+    registry = collect_generators(plugins)
+    generator = registry.get(args.generator)
+    if generator is None:
+        names = ", ".join(sorted(registry)) or "(none)"
+        raise SystemExit(f"unknown generator {args.generator!r}; available: {names}")
+
+    if args.llm:
+        print(
+            f"Generating world with {credentials.worldgen_provider} model "
+            f"{models.worldgen_model!r}."
+        )
+    options = _worldgen_options(args, credentials, models)
+    result = await generator.generate(actor, args.seed, options)
+    meta = WorldMeta(
+        seed=args.seed,
+        generator=generator.name,
+        prompt=result.prompt,  # the literal DM system prompt (empty for stub builders)
+        plugins=tuple(plugin.id for plugin in ordered_plugins),
+    )
+    print(
+        f"Generated world {args.seed!r} via {generator.name!r}: "
+        f"{len(result.rooms)} rooms, {len(result.characters)} characters."
+    )
+    return actor, meta
+
+
+def _worldgen_options(args, credentials: ServeCredentials, models: ServeModels) -> GenOptions:
+    return GenOptions(
+        llm=args.llm,
+        provider=credentials.worldgen_provider,
+        model=models.worldgen_model,
+        host=credentials.host,
+        api_key=credentials.worldgen_api_key,
+        server_url=credentials.openrouter_server_url,
+        max_rooms=args.max_rooms,
+    )
+
+
+def _configure_actor_backends(
+    actor: WorldActor,
+    args,
+    lifesim_natural_aging: bool | None,
+) -> None:
     if lifesim_natural_aging is not None:
         configure_lifesim_aging(actor, natural_aging=lifesim_natural_aging)
 
@@ -305,37 +372,49 @@ async def _serve(args) -> None:
             f"{f' at {args.memory_path}' if args.memory_path else ''}."
         )
 
-    if args.llm:
-        from .llm_agents import OllamaAgent, OpenRouterAgent, ProviderRouterAgent
 
-        providers = {}
-        if api_key:
-            providers["ollama"] = OllamaAgent(model=character_model, host=host, api_key=api_key)
-        if openrouter_api_key:
-            providers["openrouter"] = OpenRouterAgent(
-                model=character_model,
-                api_key=openrouter_api_key,
-                server_url=openrouter_server_url,
-            )
-        if args.llm_provider not in providers:
-            raise SystemExit(f"no LLM agent configured for provider {args.llm_provider!r}")
-        agent = ProviderRouterAgent(providers, default_provider=args.llm_provider)
-        print(
-            f"Driving characters with default {args.llm_provider} model "
-            f"{character_model!r}."
-        )
-    else:
-        agent = ScriptedAgent([])  # offline: characters wait, the world still ticks
+def _build_serve_agent(args, credentials: ServeCredentials, models: ServeModels):
+    if not args.llm:
         print("Offline demo (no --llm): characters will wait.")
+        return ScriptedAgent([])  # offline: characters wait, the world still ticks
 
-    autosave = None
-    if args.save and args.autosave_every > 0:
-        def autosave(ticks: int) -> None:
-            save_world(actor, args.save, meta=meta)
-            print(f"  [autosave] tick {ticks} -> {args.save}")
+    from .llm_agents import OllamaAgent, OpenRouterAgent, ProviderRouterAgent
 
-    builder = PromptBuilder(actor.world, fragment_providers=collect_prompt_fragments(plugins))
-    dispatch = ControllerDispatch(actor, builder, agent)
+    providers = {}
+    if credentials.api_key:
+        providers["ollama"] = OllamaAgent(
+            model=models.character_model,
+            host=credentials.host,
+            api_key=credentials.api_key,
+        )
+    if credentials.openrouter_api_key:
+        providers["openrouter"] = OpenRouterAgent(
+            model=models.character_model,
+            api_key=credentials.openrouter_api_key,
+            server_url=credentials.openrouter_server_url,
+        )
+    if args.llm_provider not in providers:
+        raise SystemExit(f"no LLM agent configured for provider {args.llm_provider!r}")
+    agent = ProviderRouterAgent(providers, default_provider=args.llm_provider)
+    print(
+        f"Driving characters with default {args.llm_provider} model "
+        f"{models.character_model!r}."
+    )
+    return agent
+
+
+def _make_autosave(actor: WorldActor, args, meta: WorldMeta):
+    if not args.save or args.autosave_every <= 0:
+        return None
+
+    def autosave(ticks: int) -> None:
+        save_world(actor, args.save, meta=meta)
+        print(f"  [autosave] tick {ticks} -> {args.save}")
+
+    return autosave
+
+
+def _configure_claim_timeout(actor: WorldActor, args, models: ServeModels) -> None:
     claim_timeout_seconds = args.claim_timeout_seconds
     if claim_timeout_seconds is None:
         env_claim_timeout_seconds = _env_int("BUNNYLAND_CLAIM_TIMEOUT_SECONDS")
@@ -344,72 +423,105 @@ async def _serve(args) -> None:
             if env_claim_timeout_seconds is not None
             else CLAIM_TIMEOUT_DEFAULT_SECONDS
         )
-    if claim_timeout_seconds > 0:
-        normalize_claim_timeout(claim_timeout_seconds)
-        actor.register_after_tick(
-            ClaimTimeoutSystem(
-                default_timeout_seconds=claim_timeout_seconds,
-                controller_kinds=tuple(args.claim_timeout_controller or ("discord", "web")),
-                default_llm_model=character_model,
-                default_llm_provider=args.llm_provider,
-            )
+    if claim_timeout_seconds <= 0:
+        return
+
+    normalize_claim_timeout(claim_timeout_seconds)
+    actor.register_after_tick(
+        ClaimTimeoutSystem(
+            default_timeout_seconds=claim_timeout_seconds,
+            controller_kinds=tuple(args.claim_timeout_controller or ("discord", "web")),
+            default_llm_model=models.character_model,
+            default_llm_provider=args.llm_provider,
         )
-    loop = GameLoop(
-        actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
-        autosave=autosave, autosave_every=args.autosave_every,
-        paused=bool(args.load and args.load_paused),
     )
-    discord_bot = None
-    if args.discord:
-        from .discord import DiscordBot, DiscordMessageFilters, parse_discord_id_list
 
-        guild_filter_ids = tuple(
-            args.discord_allowed_guild_id
-            or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_GUILD_IDS"))
-        )
-        channel_filter_ids = tuple(
-            args.discord_allowed_channel_id
-            or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS"))
-        )
-        dm_user_filter_ids = tuple(
-            args.discord_allowed_dm_user_id
-            or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS"))
-        )
 
-        discord_bot = DiscordBot(
+def _discord_filter_ids(args) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    from .discord import parse_discord_id_list
+
+    guild_filter_ids = tuple(
+        args.discord_allowed_guild_id
+        or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_GUILD_IDS"))
+    )
+    channel_filter_ids = tuple(
+        args.discord_allowed_channel_id
+        or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS"))
+    )
+    dm_user_filter_ids = tuple(
+        args.discord_allowed_dm_user_id
+        or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS"))
+    )
+    return guild_filter_ids, channel_filter_ids, dm_user_filter_ids
+
+
+def _setup_discord_bot(
+    actor: WorldActor,
+    loop: GameLoop,
+    args,
+    credentials: ServeCredentials,
+    models: ServeModels,
+    meta: WorldMeta,
+):
+    if not args.discord:
+        return None
+
+    from .discord import DiscordBot, DiscordMessageFilters
+
+    guild_filter_ids, channel_filter_ids, dm_user_filter_ids = _discord_filter_ids(args)
+    discord_bot = DiscordBot(
+        actor,
+        token=credentials.discord_token,
+        allow_child_claims=args.discord_allow_child_claims,
+        llm_provider=args.llm_provider,
+        character_model=models.character_model,
+        pause_status=lambda: loop.paused,
+        message_filters=DiscordMessageFilters(
+            guild_ids=guild_filter_ids,
+            channel_ids=channel_filter_ids,
+            dm_user_ids=dm_user_filter_ids,
+        ),
+    )
+    _maybe_assign_startup_discord_claim(actor, args, meta)
+    return discord_bot
+
+
+def _maybe_assign_startup_discord_claim(actor: WorldActor, args, meta: WorldMeta) -> None:
+    claim_user_id = args.discord_user_id or _env_int("BUNNYLAND_DISCORD_USER_ID")
+    claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0
+    claim_character = args.discord_character or os.environ.get("BUNNYLAND_DISCORD_CHARACTER")
+    if claim_user_id is None:
+        print("Discord bot enabled without a startup character claim.")
+        return
+
+    try:
+        claimed = assign_discord_controller(
             actor,
-            token=discord_token,
+            discord_user_id=claim_user_id,
+            default_channel_id=claim_channel_id,
+            character_name=claim_character,
             allow_child_claims=args.discord_allow_child_claims,
-            llm_provider=args.llm_provider,
-            character_model=character_model,
-            pause_status=lambda: loop.paused,
-            message_filters=DiscordMessageFilters(
-                guild_ids=guild_filter_ids,
-                channel_ids=channel_filter_ids,
-                dm_user_ids=dm_user_filter_ids,
-            ),
         )
-        claim_user_id = args.discord_user_id or _env_int("BUNNYLAND_DISCORD_USER_ID")
-        claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0
-        claim_character = args.discord_character or os.environ.get("BUNNYLAND_DISCORD_CHARACTER")
-        if claim_user_id is not None:
-            try:
-                claimed = assign_discord_controller(
-                    actor,
-                    discord_user_id=claim_user_id,
-                    default_channel_id=claim_channel_id,
-                    character_name=claim_character,
-                    allow_child_claims=args.discord_allow_child_claims,
-                )
-            except RuntimeError as exc:
-                print(f"Skipped startup Discord claim for user {claim_user_id}: {exc}")
-            else:
-                print(f"Assigned Discord user {claim_user_id} to {claimed!r}.")
-                if args.save:
-                    save_world(actor, args.save, meta=meta)
-        else:
-            print("Discord bot enabled without a startup character claim.")
+    except RuntimeError as exc:
+        print(f"Skipped startup Discord claim for user {claim_user_id}: {exc}")
+        return
 
+    print(f"Assigned Discord user {claim_user_id} to {claimed!r}.")
+    if args.save:
+        save_world(actor, args.save, meta=meta)
+
+
+async def _run_serve_runtime(
+    loop: GameLoop,
+    actor: WorldActor,
+    meta: WorldMeta,
+    args,
+    plugins: list,
+    discord_playtest,
+    discord_bot,
+    credentials: ServeCredentials,
+    models: ServeModels,
+) -> int:
     max_ticks = args.ticks if args.ticks > 0 else None
     display_ticks = (
         discord_playtest.resolved_ticks(max_ticks)
@@ -421,50 +533,109 @@ async def _serve(args) -> None:
         f"({'forever' if display_ticks is None else f'{display_ticks} ticks'})..."
     )
     if discord_playtest is not None:
-        from .discord.playtest import run_discord_playtest
+        return await _run_discord_playtest_runtime(loop, discord_playtest, max_ticks)
+    if args.api_port is None:
+        return await _run_with_optional_discord(loop.run(max_ticks=max_ticks), loop, discord_bot)
+    return await _run_api_runtime(
+        loop,
+        actor,
+        meta,
+        args,
+        plugins,
+        discord_bot,
+        credentials,
+        models,
+        max_ticks,
+    )
 
-        result = await run_discord_playtest(loop, discord_playtest, max_ticks=max_ticks)
-        ticks = result.ticks
-        print(
-            f"Discord playtest passed: {len(result.inputs)} input(s), "
-            f"{len(result.messages)} message(s)."
-        )
-    elif args.api_port is None:
-        ticks = await _run_with_optional_discord(loop.run(max_ticks=max_ticks), loop, discord_bot)
-    else:
-        from .server.runtime import run_loop_with_api
 
-        print(f"Serving client API at http://{args.api_host}:{args.api_port}.")
-        if args.mcp:
-            print(f"Serving MCP at http://{args.api_host}:{args.api_port}/mcp.")
-        try:
-            ticks = await _run_with_optional_discord(
-                run_loop_with_api(
-                    loop,
-                    actor,
-                    meta,
-                    host=args.api_host,
-                    port=args.api_port,
-                    save_path=args.save,
-                    worldgen_options=GenOptions(
-                        llm=args.llm,
-                        provider=worldgen_provider,
-                        model=worldgen_model,
-                        host=host,
-                        api_key=worldgen_api_key,
-                        server_url=openrouter_server_url,
-                        max_rooms=args.max_rooms,
-                    ),
-                    plugins=plugins,
-                    mcp_admin_token=args.mcp_admin_token
-                    or os.environ.get("BUNNYLAND_MCP_ADMIN_TOKEN"),
-                    max_ticks=max_ticks,
-                ),
+async def _run_discord_playtest_runtime(loop: GameLoop, discord_playtest, max_ticks: int | None):
+    from .discord.playtest import run_discord_playtest
+
+    result = await run_discord_playtest(loop, discord_playtest, max_ticks=max_ticks)
+    print(
+        f"Discord playtest passed: {len(result.inputs)} input(s), "
+        f"{len(result.messages)} message(s)."
+    )
+    return result.ticks
+
+
+async def _run_api_runtime(
+    loop: GameLoop,
+    actor: WorldActor,
+    meta: WorldMeta,
+    args,
+    plugins: list,
+    discord_bot,
+    credentials: ServeCredentials,
+    models: ServeModels,
+    max_ticks: int | None,
+) -> int:
+    from .server.runtime import run_loop_with_api
+
+    print(f"Serving client API at http://{args.api_host}:{args.api_port}.")
+    if args.mcp:
+        print(f"Serving MCP at http://{args.api_host}:{args.api_port}/mcp.")
+    try:
+        return await _run_with_optional_discord(
+            run_loop_with_api(
                 loop,
-                discord_bot,
-            )
-        except RuntimeError as exc:
-            raise SystemExit(str(exc)) from exc
+                actor,
+                meta,
+                host=args.api_host,
+                port=args.api_port,
+                save_path=args.save,
+                worldgen_options=_worldgen_options(args, credentials, models),
+                plugins=plugins,
+                mcp_admin_token=args.mcp_admin_token
+                or os.environ.get("BUNNYLAND_MCP_ADMIN_TOKEN"),
+                max_ticks=max_ticks,
+            ),
+            loop,
+            discord_bot,
+        )
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+async def _serve(args) -> None:
+    _validate_serve_args(args)
+    plugins, ordered_plugins = _load_serve_plugins(args)
+    load_dotenv()
+    lifesim_natural_aging = _lifesim_natural_aging_setting(args)
+    models = _serve_models(args)
+    credentials = _serve_credentials(args)
+    discord_playtest = _load_discord_playtest(args)
+    actor, meta = await _load_or_generate_world(
+        args,
+        plugins,
+        ordered_plugins,
+        credentials,
+        models,
+    )
+    _configure_actor_backends(actor, args, lifesim_natural_aging)
+    agent = _build_serve_agent(args, credentials, models)
+    autosave = _make_autosave(actor, args, meta)
+    builder = PromptBuilder(actor.world, fragment_providers=collect_prompt_fragments(plugins))
+    dispatch = ControllerDispatch(actor, builder, agent)
+    _configure_claim_timeout(actor, args, models)
+    loop = GameLoop(
+        actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
+        autosave=autosave, autosave_every=args.autosave_every,
+        paused=bool(args.load and args.load_paused),
+    )
+    discord_bot = _setup_discord_bot(actor, loop, args, credentials, models, meta)
+    ticks = await _run_serve_runtime(
+        loop,
+        actor,
+        meta,
+        args,
+        plugins,
+        discord_playtest,
+        discord_bot,
+        credentials,
+        models,
+    )
     print(f"Stopped after {ticks} ticks at game epoch {actor.epoch}s.")
 
     if args.save:
