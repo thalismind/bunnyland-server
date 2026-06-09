@@ -174,6 +174,11 @@ class WorldActor:
     def submit_nowait(self, command: SubmittedCommand) -> None:
         self._inbox.put_nowait(command)
 
+    def pending_submissions(self) -> list[SubmittedCommand]:
+        """Return commands accepted for ingestion on the next tick."""
+
+        return list(self._inbox._queue)
+
     # -- tick pipeline ------------------------------------------------------------------
 
     async def tick(self, game_delta_seconds: float) -> None:

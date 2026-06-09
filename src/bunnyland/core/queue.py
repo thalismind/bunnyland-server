@@ -51,6 +51,17 @@ class CommandQueues:
             return bool(lanes[lane])
         return any(lanes[la] for la in Lane)
 
+    def pending(self, character_id: str, lane: Lane | None = None) -> list[SubmittedCommand]:
+        lanes = self._lanes.get(character_id)
+        if not lanes:
+            return []
+        if lane is not None:
+            return list(lanes[lane])
+        commands: list[SubmittedCommand] = []
+        for command_lane in Lane:
+            commands.extend(lanes[command_lane])
+        return commands
+
     def characters_with_pending(self) -> list[str]:
         return [cid for cid, lanes in self._lanes.items() if any(lanes[la] for la in Lane)]
 

@@ -14,6 +14,7 @@ from bunnyland.core import (
     CharacterComponent,
     ClaimTimeoutComponent,
     CommandCost,
+    CommandQueues,
     ContainmentMode,
     Contains,
     DeadComponent,
@@ -88,6 +89,30 @@ def _command(scenario, command_type="move", **kwargs):
         expires_at_epoch=kwargs.pop("expires_at_epoch", None),
         command_id=kwargs.pop("command_id", None),
     )
+
+
+def test_command_queues_report_pending_commands_by_character_and_lane():
+    scenario = build_scenario()
+    queues = CommandQueues()
+    world_command = _command(scenario, command_id="world-command")
+    focus_command = _command(
+        scenario,
+        command_id="focus-command",
+        command_type="remember",
+        lane=Lane.FOCUS,
+        payload={"query": "moss"},
+    )
+
+    assert queues.pop(str(scenario.character), Lane.WORLD) is None
+    assert queues.pending(str(scenario.character)) == []
+
+    queues.enqueue(world_command)
+    queues.enqueue(focus_command)
+
+    assert queues.has_pending(str(scenario.character))
+    assert queues.pending(str(scenario.character), Lane.WORLD) == [world_command]
+    assert queues.pending(str(scenario.character), Lane.FOCUS) == [focus_command]
+    assert queues.pending(str(scenario.character)) == [focus_command, world_command]
 
 
 async def test_world_actor_hooks_available_commands_and_submit_nowait():

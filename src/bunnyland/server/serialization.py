@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ..core.commands import Lane, SubmittedCommand
 from ..core.components import IdentityComponent
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
@@ -72,6 +73,35 @@ def serialize_entity(actor: WorldActor, entity) -> dict[str, Any]:
     }
 
 
+def serialize_queued_command(command: SubmittedCommand) -> dict[str, Any]:
+    """Return the client-facing fields for one volatile queued command."""
+
+    return {
+        "command_id": command.command_id,
+        "character_id": command.character_id,
+        "command_type": command.command_type,
+        "payload": jsonable(command.payload),
+        "cost": jsonable(command.cost),
+        "lane": command.lane.value,
+        "submitted_at_epoch": command.submitted_at_epoch,
+        "expires_at_epoch": command.expires_at_epoch,
+    }
+
+
+def serialize_queued_commands(actor: WorldActor) -> list[dict[str, Any]]:
+    """Return volatile queued commands grouped by character and lane."""
+
+    return [
+        serialize_queued_command(command)
+        for command in actor.pending_submissions()
+    ] + [
+        serialize_queued_command(command)
+        for character_id in sorted(actor.queues.characters_with_pending())
+        for lane in Lane
+        for command in actor.queues.pending(character_id, lane)
+    ]
+
+
 def serialize_world(actor: WorldActor, meta: WorldMeta | None = None) -> dict[str, Any]:
     """Return the initial snapshot payload expected by web/admin/TUI clients."""
 
@@ -80,6 +110,7 @@ def serialize_world(actor: WorldActor, meta: WorldMeta | None = None) -> dict[st
         "world_epoch": actor.epoch,
         "metadata": meta.model_dump(mode="json") if meta is not None else None,
         "entities": [serialize_entity(actor, entity) for entity in _sorted_entities(actor)],
+        "queued_commands": serialize_queued_commands(actor),
     }
 
 
@@ -103,5 +134,7 @@ __all__ = [
     "jsonable",
     "serialize_entity",
     "serialize_event",
+    "serialize_queued_command",
+    "serialize_queued_commands",
     "serialize_world",
 ]

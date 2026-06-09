@@ -114,6 +114,64 @@ def test_editor_display_component_serializes_emoji_for_clients(scenario):
     assert character["components"]["EditorDisplayComponent"]["emoji"] == "🦊"
 
 
+def test_world_snapshot_serializes_queued_commands(scenario):
+    command = CommandRequest(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="say",
+        payload={"text": "hold on"},
+        cost={"action": 1, "focus": 1},
+        lane=Lane.WORLD,
+        command_id="cmd-waiting",
+    ).to_submitted(submitted_at_epoch=42)
+    scenario.actor.queues.enqueue(command)
+
+    snapshot = serialize_world(scenario.actor)
+
+    assert snapshot["queued_commands"] == [
+        {
+            "command_id": "cmd-waiting",
+            "character_id": str(scenario.character),
+            "command_type": "say",
+            "payload": {"text": "hold on"},
+            "cost": {"action": 1, "focus": 1},
+            "lane": "world",
+            "submitted_at_epoch": 42,
+            "expires_at_epoch": None,
+        }
+    ]
+
+
+def test_world_snapshot_serializes_pending_submitted_commands_before_tick(scenario):
+    command = CommandRequest(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="say",
+        payload={"text": "next tick"},
+        cost={"action": 1, "focus": 1},
+        lane=Lane.WORLD,
+        command_id="cmd-next-tick",
+    ).to_submitted(submitted_at_epoch=42)
+    scenario.actor.submit_nowait(command)
+
+    snapshot = serialize_world(scenario.actor)
+
+    assert snapshot["queued_commands"] == [
+        {
+            "command_id": "cmd-next-tick",
+            "character_id": str(scenario.character),
+            "command_type": "say",
+            "payload": {"text": "next tick"},
+            "cost": {"action": 1, "focus": 1},
+            "lane": "world",
+            "submitted_at_epoch": 42,
+            "expires_at_epoch": None,
+        }
+    ]
+
+
 def test_command_request_builds_submitted_command():
     request = CommandRequest(
         character_id="entity_1",
