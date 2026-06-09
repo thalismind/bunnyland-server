@@ -155,6 +155,31 @@ Evacuate non-creature characters from a room during an incident:
 !evacuate-room room_id="Fern Paddock" destination_id="Amber Hatchery Lab"
 ```
 
+## Dangerous encounters and damage response
+
+Some creatures can carry attack, armor, weak point, pack hunt, apex predator, or kaiju
+state. Respond directly when one threatens the room:
+
+```text
+!dodge-creature creature_id="clever raptor"
+!fight-creature creature_id="clever raptor" damage=2
+!target-weak-point creature_id="clever raptor" damage=2
+!drive-off-predator creature_id="clever raptor"
+```
+
+Call for help or signal an army response during a large incident:
+
+```text
+!call-for-help room_id="Fern Paddock" strength=2
+!signal-army room_id="Fern Paddock" creature_id="kaiju threat" strength=8
+```
+
+Repair settlement damage after a kaiju or predator incident:
+
+```text
+!repair-damage damage_id="damaged gatehouse" amount=2
+```
+
 ## Kaiju storyteller incidents
 
 Kaiju attacks are storyteller incidents when both `bunnyland.dinosim` and
@@ -188,6 +213,9 @@ encounters, but it does not assume settlement damage or colony job queues exist.
 !train-command creature_id="clever raptor" command_name="guard" progress=2
 !command-companion creature_id="clever raptor" command_name="guard"
 !build-enclosure room_id="Fern Paddock" name="Fern Pen"
+!fight-creature creature_id="clever raptor" damage=2
+!target-weak-point creature_id="clever raptor" damage=2
+!repair-damage damage_id="damaged gatehouse" amount=2
 !lock-pen enclosure_id="Fern Paddock"
 !resolve-incident incident_id="kaiju attack"
 ```

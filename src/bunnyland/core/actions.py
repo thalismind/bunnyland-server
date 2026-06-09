@@ -128,6 +128,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "crime_id",
         "creature_id",
         "customer_id",
+        "damage_id",
         "destination_id",
         "door_id",
         "dungeon_id",
@@ -184,6 +185,7 @@ def _argument_for_key(key: str, *, required: bool = False) -> ActionArgument:
     if key in {
         "amount",
         "capacity",
+        "damage",
         "damage_per_hour",
         "default_price",
         "due_epoch",
@@ -514,6 +516,37 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "evacuate-room",
         ("room_id", "destination_id"),
         tool_name="evacuate_room",
+    ),
+    _definition("dodge-creature", ("creature_id",), tool_name="dodge_creature"),
+    _definition(
+        "fight-creature",
+        ("creature_id", "damage"),
+        tool_name="fight_creature",
+    ),
+    _definition(
+        "target-weak-point",
+        ("creature_id", "damage"),
+        tool_name="target_weak_point",
+    ),
+    _definition(
+        "drive-off-predator",
+        ("creature_id",),
+        tool_name="drive_off_predator",
+    ),
+    _definition(
+        "call-for-help",
+        ("room_id", "strength"),
+        tool_name="call_for_help",
+    ),
+    _definition(
+        "signal-army",
+        ("room_id", "creature_id", "strength"),
+        tool_name="signal_army",
+    ),
+    _definition(
+        "repair-damage",
+        ("damage_id", "amount"),
+        tool_name="repair_damage",
     ),
     # Life sim.
     _definition("eat", ("item_id",), tool_name="eat", patterns=("eat {item_id}",)),

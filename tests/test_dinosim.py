@@ -22,10 +22,17 @@ from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.colonysim import install_colonysim
 from bunnyland.mechanics.dinosim import (
     AncientSampleComponent,
+    ApexPredatorAppearedEvent,
+    ApexPredatorComponent,
     ApproachCreatureHandler,
+    ArmorPlateComponent,
+    ArmyCalledEvent,
+    ArmyResponseComponent,
     BaitComponent,
     BaitSetEvent,
     BuildEnclosureHandler,
+    CallForHelpHandler,
+    ChargeComponent,
     CommandCompanionHandler,
     CommandComponent,
     CommandTrainedEvent,
@@ -33,14 +40,21 @@ from bunnyland.mechanics.dinosim import (
     CompanionComponent,
     ContainmentProtocolComponent,
     ContainmentTriggeredEvent,
+    CreatureAttackComponent,
+    CreatureAttackedEvent,
+    CreatureChargedEvent,
     CreatureEscapedEvent,
     CreatureMountedEvent,
     CreatureRecalledEvent,
     CreatureRecapturedEvent,
+    CreatureRoaredEvent,
     CreatureTamedEvent,
     CreatureTrackedEvent,
+    CreatureTrampledEvent,
     CreatureTranquilizedEvent,
     DinosaurComponent,
+    DodgeCreatureHandler,
+    DriveOffPredatorHandler,
     EggComponent,
     EggHatchedEvent,
     EggLaidEvent,
@@ -53,10 +67,12 @@ from bunnyland.mechanics.dinosim import (
     FenceRepairedEvent,
     FertilityComponent,
     FertilizeEggHandler,
+    FightCreatureHandler,
     FossilFragmentComponent,
     FossilIdentifiedEvent,
     GateComponent,
     GateReinforcedEvent,
+    GrappleComponent,
     GuardBehaviorComponent,
     HatchEggHandler,
     HiddenFromCreatureEvent,
@@ -64,36 +80,47 @@ from bunnyland.mechanics.dinosim import (
     IdentifyFossilHandler,
     IncubateEggHandler,
     IncubationComponent,
+    KaijuArrivedEvent,
     KaijuComponent,
     LayEggHandler,
     LockPenHandler,
     MountComponent,
     MountCreatureHandler,
     OpenPenHandler,
+    PackHuntComponent,
     PenLockedEvent,
     PenOpenedEvent,
+    PredatorDrivenOffEvent,
     PrepareCloneHandler,
     QuarantinePenComponent,
     RecallComponent,
     RecallCreatureHandler,
     RecaptureCreatureHandler,
     ReinforceGateHandler,
+    RepairDamageHandler,
     RepairFenceHandler,
     ReptileProcreationComponent,
+    RoarComponent,
     RoomEvacuatedEvent,
     SetBaitHandler,
     SettlementDamageComponent,
+    SettlementDamageRepairedEvent,
+    SignalArmyHandler,
     SpeciesComponent,
     SpeciesIdentificationComponent,
     TameCreatureHandler,
     TamingProgressedEvent,
+    TargetWeakPointHandler,
     TrackComponent,
     TrackCreatureHandler,
     TrainCommandHandler,
     TrainingComponent,
+    TrampleComponent,
     TranquilizeCreatureHandler,
     TranquilizerComponent,
     TriggerContainmentHandler,
+    WeakPointComponent,
+    WeakPointHitEvent,
     _entity_room_id,
     _species_name,
     dinosim_fragments,
@@ -138,6 +165,13 @@ def _install(actor):
     actor.register_handler(RecaptureCreatureHandler())
     actor.register_handler(HideFromCreatureHandler())
     actor.register_handler(EvacuateRoomHandler())
+    actor.register_handler(DodgeCreatureHandler())
+    actor.register_handler(FightCreatureHandler())
+    actor.register_handler(TargetWeakPointHandler())
+    actor.register_handler(DriveOffPredatorHandler())
+    actor.register_handler(CallForHelpHandler())
+    actor.register_handler(SignalArmyHandler())
+    actor.register_handler(RepairDamageHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -586,6 +620,103 @@ async def test_enclosure_escape_recapture_hide_and_evacuation_loop():
     )
     assert "Enclosure nearby: Fern Pen." in fragments
     assert "Fern Pen gate: closed, locked." in fragments
+
+
+async def test_dangerous_encounter_army_response_and_damage_repair_loop():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    raptor = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="armored raptor", kind="character"),
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            CreatureAttackComponent(damage=3.0, attack_type="bite"),
+            RoarComponent(fear=2.0),
+            ChargeComponent(damage=4.0, prepared=True),
+            GrappleComponent(target_id=str(scenario.character)),
+            TrampleComponent(damage=5.0),
+            ArmorPlateComponent(rating=1.0),
+            WeakPointComponent(label="soft flank", damage_multiplier=2.0),
+            PackHuntComponent(pack_id="red pack", bonus=1.0),
+            ApexPredatorComponent(threat_level=6),
+            KaijuComponent(threat_level=7),
+        ],
+    )
+    replace_component(room, SettlementDamageComponent(severity=3))
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raptor.id)
+
+    charged: list[CreatureChargedEvent] = []
+    attacked: list[CreatureAttackedEvent] = []
+    roared: list[CreatureRoaredEvent] = []
+    trampled: list[CreatureTrampledEvent] = []
+    weak_hit: list[WeakPointHitEvent] = []
+    apex: list[ApexPredatorAppearedEvent] = []
+    kaiju: list[KaijuArrivedEvent] = []
+    army: list[ArmyCalledEvent] = []
+    driven_off: list[PredatorDrivenOffEvent] = []
+    repaired: list[SettlementDamageRepairedEvent] = []
+    scenario.actor.bus.subscribe(CreatureChargedEvent, charged.append)
+    scenario.actor.bus.subscribe(CreatureAttackedEvent, attacked.append)
+    scenario.actor.bus.subscribe(CreatureRoaredEvent, roared.append)
+    scenario.actor.bus.subscribe(CreatureTrampledEvent, trampled.append)
+    scenario.actor.bus.subscribe(WeakPointHitEvent, weak_hit.append)
+    scenario.actor.bus.subscribe(ApexPredatorAppearedEvent, apex.append)
+    scenario.actor.bus.subscribe(KaijuArrivedEvent, kaiju.append)
+    scenario.actor.bus.subscribe(ArmyCalledEvent, army.append)
+    scenario.actor.bus.subscribe(PredatorDrivenOffEvent, driven_off.append)
+    scenario.actor.bus.subscribe(SettlementDamageRepairedEvent, repaired.append)
+
+    commands = [
+        _cmd(scenario, "dodge-creature", creature_id=str(raptor.id)),
+        _cmd(scenario, "fight-creature", creature_id=str(raptor.id), damage=2.0),
+        _cmd(scenario, "target-weak-point", creature_id=str(raptor.id), damage=2.0),
+        _cmd(
+            scenario,
+            "call-for-help",
+            room_id=str(scenario.room_a),
+            strength=2.0,
+        ),
+        _cmd(
+            scenario,
+            "signal-army",
+            room_id=str(scenario.room_a),
+            creature_id=str(raptor.id),
+            strength=3.0,
+        ),
+        _cmd(scenario, "repair-damage", damage_id=str(scenario.room_a), amount=3),
+        _cmd(scenario, "drive-off-predator", creature_id=str(raptor.id)),
+    ]
+    for command in commands:
+        await scenario.actor.submit(command)
+        await scenario.actor.tick(HOUR)
+
+    assert charged[0].dodged is True
+    assert attacked[0].damage == 4.0
+    assert roared[0].fear == 2.0
+    assert trampled[0].damage == 5.0
+    assert weak_hit[0].label == "soft flank"
+    assert weak_hit[0].damage == 4.0
+    assert apex[0].threat_level == 6
+    assert kaiju[0].threat_level == 7
+    assert [event.strength for event in army] == [2.0, 3.0]
+    assert driven_off[-1].creature_id == str(raptor.id)
+    assert repaired[0].repaired is True
+    assert container_of(raptor) == scenario.room_b
+    assert room.get_component(ArmyResponseComponent).strength == 3.0
+    assert room.get_component(SettlementDamageComponent).repaired is True
+    assert raptor.get_component(ChargeComponent).prepared is False
+    assert raptor.get_component(GrappleComponent).active is False
+    assert raptor.get_component(WeakPointComponent).exposed is False
+    assert raptor.get_component(ApexPredatorComponent).threat_level == 0
+    assert raptor.get_component(KaijuComponent).threat_level == 0
+
+    fragments = dinosim_fragments(
+        scenario.actor.world,
+        scenario.actor.world.get_entity(scenario.character),
+    )
+    assert "Army response signaled for Mosslit Burrow: strength 3." in fragments
 
 
 async def test_dinosim_rejects_invalid_fossil_sample_and_parent_targets():

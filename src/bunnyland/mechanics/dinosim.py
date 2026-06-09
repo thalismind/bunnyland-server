@@ -282,6 +282,65 @@ class SettlementDamageComponent(Component):
     repaired: bool = False
 
 
+@dataclass(frozen=True)
+class CreatureAttackComponent(Component):
+    damage: float = 2.0
+    attack_type: str = "bite"
+
+
+@dataclass(frozen=True)
+class RoarComponent(Component):
+    fear: float = 1.0
+    radius: str = "room"
+
+
+@dataclass(frozen=True)
+class ChargeComponent(Component):
+    damage: float = 3.0
+    prepared: bool = False
+
+
+@dataclass(frozen=True)
+class GrappleComponent(Component):
+    target_id: str = ""
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class TrampleComponent(Component):
+    damage: float = 4.0
+
+
+@dataclass(frozen=True)
+class ArmorPlateComponent(Component):
+    rating: float = 1.0
+
+
+@dataclass(frozen=True)
+class WeakPointComponent(Component):
+    label: str = "weak point"
+    exposed: bool = True
+    damage_multiplier: float = 2.0
+
+
+@dataclass(frozen=True)
+class PackHuntComponent(Component):
+    pack_id: str = ""
+    bonus: float = 1.0
+
+
+@dataclass(frozen=True)
+class ApexPredatorComponent(Component):
+    threat_level: int = 5
+
+
+@dataclass(frozen=True)
+class ArmyResponseComponent(Component):
+    called: bool = False
+    strength: float = 5.0
+    called_at_epoch: int = 0
+
+
 class FossilIdentifiedEvent(DomainEvent):
     fossil_id: str
     species_name: str
@@ -430,6 +489,69 @@ class HiddenFromCreatureEvent(DomainEvent):
     character_id: str
 
 
+class CreatureAttackedEvent(DomainEvent):
+    creature_id: str
+    character_id: str
+    damage: float
+    attack_type: str
+
+
+class CreatureRoaredEvent(DomainEvent):
+    creature_id: str
+    fear: float
+
+
+class CreatureChargedEvent(DomainEvent):
+    creature_id: str
+    character_id: str
+    damage: float
+    dodged: bool = False
+
+
+class CreatureTrampledEvent(DomainEvent):
+    creature_id: str
+    character_id: str
+    damage: float
+
+
+class WeakPointHitEvent(DomainEvent):
+    creature_id: str
+    label: str
+    damage: float
+
+
+class ApexPredatorAppearedEvent(DomainEvent):
+    creature_id: str
+    threat_level: int
+
+
+class KaijuArrivedEvent(DomainEvent):
+    creature_id: str
+    threat_level: int
+
+
+class ArmyCalledEvent(DomainEvent):
+    room_id_called: str
+    strength: float
+
+
+class SettlementDamagedEvent(DomainEvent):
+    settlement_id: str
+    severity: int
+
+
+class PredatorDrivenOffEvent(DomainEvent):
+    creature_id: str
+    from_room_id: str
+    to_room_id: str = ""
+
+
+class SettlementDamageRepairedEvent(DomainEvent):
+    settlement_id: str
+    severity: int
+    repaired: bool
+
+
 def _room_id(world: World, character_id: EntityId) -> str | None:
     raw = container_of(world.get_entity(character_id))
     return str(raw) if raw is not None else None
@@ -478,6 +600,8 @@ def _species_name(entity: Entity) -> str:
 def _entity_name(entity: Entity) -> str:
     if entity.has_component(IdentityComponent):
         return entity.get_component(IdentityComponent).name
+    if entity.has_component(RoomComponent):
+        return entity.get_component(RoomComponent).title
     return str(entity.id)
 
 
@@ -603,6 +727,34 @@ def _creatures_in_room(world: World, room: Entity) -> list[Entity]:
         if _is_creature(entity):
             creatures.append(entity)
     return creatures
+
+
+def _creature_attack_damage(creature: Entity) -> tuple[float, str]:
+    if not creature.has_component(CreatureAttackComponent):
+        return 1.0, "attack"
+    attack = creature.get_component(CreatureAttackComponent)
+    return max(0.0, attack.damage), attack.attack_type
+
+
+def _armor_rating(creature: Entity) -> float:
+    if not creature.has_component(ArmorPlateComponent):
+        return 0.0
+    return max(0.0, creature.get_component(ArmorPlateComponent).rating)
+
+
+def _pack_bonus(creature: Entity) -> float:
+    if not creature.has_component(PackHuntComponent):
+        return 0.0
+    return max(0.0, creature.get_component(PackHuntComponent).bonus)
+
+
+def _signal_room(
+    ctx: HandlerContext, character_id: EntityId, requested_id: object
+) -> tuple[Entity | None, str | None]:
+    room, error = _current_or_requested_room(ctx, character_id, requested_id)
+    if room is None:
+        return None, error
+    return room, None
 
 
 def _spawn_egg(
@@ -1791,6 +1943,367 @@ class HideFromCreatureHandler:
         )
 
 
+class DodgeCreatureHandler:
+    command_type = "dodge-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        if creature.has_component(ChargeComponent):
+            charge = creature.get_component(ChargeComponent)
+            replace_component(creature, replace(charge, prepared=False))
+            damage = charge.damage
+        else:
+            damage = _creature_attack_damage(creature)[0]
+        fear = (
+            creature.get_component(FearComponent)
+            if creature.has_component(FearComponent)
+            else FearComponent()
+        )
+        replace_component(creature, replace(fear, amount=fear.amount + 0.5))
+        return ok(
+            CreatureChargedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id), str(character_id)),
+                    creature_id=str(creature.id),
+                    character_id=str(character_id),
+                    damage=damage,
+                    dodged=True,
+                )
+            )
+        )
+
+
+class FightCreatureHandler:
+    command_type = "fight-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        damage = max(0.0, float(command.payload.get("damage") or 1.0) - _armor_rating(creature))
+        fear = (
+            creature.get_component(FearComponent)
+            if creature.has_component(FearComponent)
+            else FearComponent()
+        )
+        replace_component(creature, replace(fear, amount=fear.amount + damage))
+        if creature.has_component(GrappleComponent):
+            grapple = creature.get_component(GrappleComponent)
+            if not grapple.target_id or grapple.target_id == str(character_id):
+                replace_component(
+                    creature,
+                    replace(grapple, target_id=str(character_id), active=False),
+                )
+
+        attack_damage, attack_type = _creature_attack_damage(creature)
+        events: list[DomainEvent] = [
+            CreatureAttackedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id), str(character_id)),
+                    creature_id=str(creature.id),
+                    character_id=str(character_id),
+                    damage=attack_damage + _pack_bonus(creature),
+                    attack_type=attack_type,
+                )
+            )
+        ]
+        if creature.has_component(RoarComponent):
+            roar = creature.get_component(RoarComponent)
+            events.append(
+                CreatureRoaredEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(creature.id),),
+                        creature_id=str(creature.id),
+                        fear=roar.fear,
+                    )
+                )
+            )
+        if creature.has_component(TrampleComponent):
+            trample = creature.get_component(TrampleComponent)
+            events.append(
+                CreatureTrampledEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(creature.id), str(character_id)),
+                        creature_id=str(creature.id),
+                        character_id=str(character_id),
+                        damage=trample.damage,
+                    )
+                )
+            )
+        if creature.has_component(ApexPredatorComponent):
+            apex = creature.get_component(ApexPredatorComponent)
+            events.append(
+                ApexPredatorAppearedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(creature.id),),
+                        creature_id=str(creature.id),
+                        threat_level=apex.threat_level,
+                    )
+                )
+            )
+        if creature.has_component(KaijuComponent):
+            kaiju = creature.get_component(KaijuComponent)
+            events.append(
+                KaijuArrivedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(creature.id),),
+                        creature_id=str(creature.id),
+                        threat_level=kaiju.threat_level,
+                    )
+                )
+            )
+        return ok(*events)
+
+
+class TargetWeakPointHandler:
+    command_type = "target-weak-point"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        if not creature.has_component(WeakPointComponent):
+            return rejected("creature has no exposed weak point")
+        weak_point = creature.get_component(WeakPointComponent)
+        if not weak_point.exposed:
+            return rejected("weak point is not exposed")
+        base_damage = max(0.0, float(command.payload.get("damage") or 1.0))
+        damage = base_damage * max(1.0, weak_point.damage_multiplier)
+        replace_component(creature, replace(weak_point, exposed=False))
+        if creature.has_component(ApexPredatorComponent):
+            apex = creature.get_component(ApexPredatorComponent)
+            threat = max(0, apex.threat_level - int(damage))
+            replace_component(creature, replace(apex, threat_level=threat))
+        if creature.has_component(KaijuComponent):
+            kaiju = creature.get_component(KaijuComponent)
+            threat = max(0, kaiju.threat_level - int(damage))
+            replace_component(creature, replace(kaiju, threat_level=threat))
+        return ok(
+            WeakPointHitEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    label=weak_point.label,
+                    damage=damage,
+                )
+            )
+        )
+
+
+class DriveOffPredatorHandler:
+    command_type = "drive-off-predator"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        creature, error = _reachable_creature(
+            ctx, character_id, command.payload.get("creature_id")
+        )
+        if creature is None:
+            return rejected(error if error else "creature is required")
+        from_room_id = container_of(creature)
+        if from_room_id is None or not ctx.world.has_entity(from_room_id):
+            return rejected("creature is not in a room")
+        from_room = ctx.entity(from_room_id)
+        to_room_id = _first_exit_target(from_room)
+        if to_room_id is not None and ctx.world.has_entity(to_room_id):
+            _move_to_room(ctx.world, creature, to_room_id)
+        fear = (
+            creature.get_component(FearComponent)
+            if creature.has_component(FearComponent)
+            else FearComponent()
+        )
+        replace_component(creature, replace(fear, amount=fear.amount + 2.0))
+        if creature.has_component(ApexPredatorComponent):
+            apex = creature.get_component(ApexPredatorComponent)
+            replace_component(creature, replace(apex, threat_level=0))
+        return ok(
+            PredatorDrivenOffEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(from_room_id),
+                    target_ids=(str(creature.id),),
+                    creature_id=str(creature.id),
+                    from_room_id=str(from_room_id),
+                    to_room_id=str(to_room_id) if to_room_id is not None else "",
+                )
+            )
+        )
+
+
+class CallForHelpHandler:
+    command_type = "call-for-help"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        room, error = _signal_room(ctx, character_id, command.payload.get("room_id"))
+        if room is None:
+            return rejected(error if error else "room is required")
+        strength = max(0.0, float(command.payload.get("strength") or 1.0))
+        replace_component(
+            room,
+            ArmyResponseComponent(
+                called=True,
+                strength=strength,
+                called_at_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            ArmyCalledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room.id),
+                    target_ids=(str(room.id),),
+                    room_id_called=str(room.id),
+                    strength=strength,
+                )
+            )
+        )
+
+
+class SignalArmyHandler:
+    command_type = "signal-army"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        room, error = _signal_room(ctx, character_id, command.payload.get("room_id"))
+        if room is None:
+            return rejected(error if error else "room is required")
+        strength = max(1.0, float(command.payload.get("strength") or 5.0))
+        replace_component(
+            room,
+            ArmyResponseComponent(
+                called=True,
+                strength=strength,
+                called_at_epoch=ctx.epoch,
+            ),
+        )
+        events: list[DomainEvent] = [
+            ArmyCalledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room.id),
+                    target_ids=(str(room.id),),
+                    room_id_called=str(room.id),
+                    strength=strength,
+                )
+            )
+        ]
+        creature_id = parse_entity_id(command.payload.get("creature_id"))
+        if creature_id is not None and ctx.world.has_entity(creature_id):
+            creature = _reachable_entity(ctx, character_id, creature_id)
+            if creature is not None and _is_creature(creature):
+                if creature.has_component(KaijuComponent):
+                    kaiju = creature.get_component(KaijuComponent)
+                    replace_component(
+                        creature,
+                        replace(kaiju, threat_level=max(0, kaiju.threat_level - int(strength))),
+                    )
+                if creature.has_component(ApexPredatorComponent):
+                    apex = creature.get_component(ApexPredatorComponent)
+                    replace_component(
+                        creature,
+                        replace(apex, threat_level=max(0, apex.threat_level - int(strength))),
+                    )
+                events.append(
+                    PredatorDrivenOffEvent(
+                        **ctx.event_base(
+                            visibility=EventVisibility.ROOM,
+                            actor_id=str(character_id),
+                            room_id=str(room.id),
+                            target_ids=(str(creature.id),),
+                            creature_id=str(creature.id),
+                            from_room_id=str(room.id),
+                            to_room_id="",
+                        )
+                    )
+                )
+        return ok(*events)
+
+
+class RepairDamageHandler:
+    command_type = "repair-damage"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        damage_id = parse_entity_id(command.payload.get("damage_id"))
+        if damage_id is None:
+            damage_id = container_of(ctx.entity(character_id))
+        if damage_id is None or not ctx.world.has_entity(damage_id):
+            return rejected("damage target does not exist")
+        target = ctx.entity(damage_id)
+        if target.id not in reachable_ids(ctx.world, ctx.entity(character_id)):
+            return rejected("damage target is not reachable")
+        if not target.has_component(SettlementDamageComponent):
+            return rejected("target has no settlement damage")
+        current = target.get_component(SettlementDamageComponent)
+        amount = max(1, int(command.payload.get("amount") or 1))
+        severity = max(0, current.severity - amount)
+        updated = replace(current, severity=severity, repaired=severity == 0)
+        replace_component(target, updated)
+        return ok(
+            SettlementDamageRepairedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target.id),),
+                    settlement_id=str(target.id),
+                    severity=updated.severity,
+                    repaired=updated.repaired,
+                )
+            )
+        )
+
+
 class EvacuateRoomHandler:
     command_type = "evacuate-room"
 
@@ -1835,11 +2348,7 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        name = (
-            entity.get_component(IdentityComponent).name
-            if entity.has_component(IdentityComponent)
-            else str(entity.id)
-        )
+        name = _entity_name(entity)
         if entity.has_component(FossilFragmentComponent):
             if entity.has_component(SpeciesIdentificationComponent):
                 identification = entity.get_component(SpeciesIdentificationComponent)
@@ -1879,6 +2388,28 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
             bait = entity.get_component(BaitComponent)
             target = bait.target_species or "any creature"
             lines.append(f"Bait set for {target}: {name}.")
+        if entity.has_component(CreatureAttackComponent):
+            attack = entity.get_component(CreatureAttackComponent)
+            lines.append(f"Dangerous creature: {name} ({attack.attack_type}).")
+        if entity.has_component(WeakPointComponent):
+            weak_point = entity.get_component(WeakPointComponent)
+            if weak_point.exposed:
+                lines.append(f"{name} has exposed weak point: {weak_point.label}.")
+        if entity.has_component(ApexPredatorComponent):
+            apex = entity.get_component(ApexPredatorComponent)
+            if apex.threat_level > 0:
+                lines.append(f"Apex predator nearby: {name} threat {apex.threat_level}.")
+        if entity.has_component(KaijuComponent):
+            kaiju = entity.get_component(KaijuComponent)
+            lines.append(f"Kaiju threat nearby: {name} threat {kaiju.threat_level}.")
+        if entity.has_component(SettlementDamageComponent):
+            damage = entity.get_component(SettlementDamageComponent)
+            if not damage.repaired:
+                lines.append(f"Settlement damage on {name}: severity {damage.severity}.")
+        if entity.has_component(ArmyResponseComponent):
+            response = entity.get_component(ArmyResponseComponent)
+            if response.called:
+                lines.append(f"Army response signaled for {name}: strength {response.strength:g}.")
         if entity.has_component(EnclosureComponent):
             enclosure = entity.get_component(EnclosureComponent)
             lines.append(f"Enclosure nearby: {enclosure.name}.")
@@ -1907,10 +2438,17 @@ __all__ = [
     "AncientSampleComponent",
     "AncientSampleExtractedEvent",
     "ApproachCreatureHandler",
+    "ApexPredatorAppearedEvent",
+    "ApexPredatorComponent",
+    "ArmorPlateComponent",
+    "ArmyCalledEvent",
+    "ArmyResponseComponent",
     "BaitComponent",
     "BaitSetEvent",
     "BreachComponent",
     "BuildEnclosureHandler",
+    "CallForHelpHandler",
+    "ChargeComponent",
     "CloneCandidateComponent",
     "ClonePreparedEvent",
     "CommandComponent",
@@ -1920,15 +2458,22 @@ __all__ = [
     "CompanionComponent",
     "ContainmentProtocolComponent",
     "ContainmentTriggeredEvent",
+    "CreatureAttackComponent",
+    "CreatureAttackedEvent",
+    "CreatureChargedEvent",
     "CreatureEscapedEvent",
     "CreatureMountedEvent",
     "CreatureRecapturedEvent",
     "CreatureRecalledEvent",
+    "CreatureRoaredEvent",
     "CreatureTamedEvent",
     "CreatureTrackedEvent",
     "CreatureTranquilizedEvent",
+    "CreatureTrampledEvent",
     "DinosaurComponent",
     "DinosimPolicyComponent",
+    "DodgeCreatureHandler",
+    "DriveOffPredatorHandler",
     "EggComponent",
     "EggFertilizedEvent",
     "EggHatchedEvent",
@@ -1946,10 +2491,12 @@ __all__ = [
     "FearComponent",
     "FenceComponent",
     "FenceRepairedEvent",
+    "FightCreatureHandler",
     "FossilFragmentComponent",
     "FossilIdentifiedEvent",
     "GateComponent",
     "GateReinforcedEvent",
+    "GrappleComponent",
     "GuardBehaviorComponent",
     "HatchEggHandler",
     "HatchlingComponent",
@@ -1961,13 +2508,16 @@ __all__ = [
     "IncubationComponent",
     "IncubationConsequence",
     "KaijuComponent",
+    "KaijuArrivedEvent",
     "LayEggHandler",
     "LockPenHandler",
     "MountComponent",
     "MountCreatureHandler",
     "OpenPenHandler",
+    "PackHuntComponent",
     "PenLockedEvent",
     "PenOpenedEvent",
+    "PredatorDrivenOffEvent",
     "PrepareCloneHandler",
     "QuarantinePenComponent",
     "RecallComponent",
@@ -1975,12 +2525,17 @@ __all__ = [
     "RecaptureCreatureHandler",
     "ReinforceGateHandler",
     "ReinforcementComponent",
+    "RepairDamageHandler",
     "RepairFenceHandler",
     "ReptileProcreationComponent",
+    "RoarComponent",
     "RoomEvacuatedEvent",
     "ScentComponent",
+    "SettlementDamageRepairedEvent",
     "SettlementDamageComponent",
+    "SettlementDamagedEvent",
     "SetBaitHandler",
+    "SignalArmyHandler",
     "SpeciesComponent",
     "SpeciesIdentificationComponent",
     "StampedeComponent",
@@ -1988,14 +2543,17 @@ __all__ = [
     "TameCreatureHandler",
     "TamingComponent",
     "TamingProgressedEvent",
+    "TargetWeakPointHandler",
     "TrackComponent",
     "TrackCreatureHandler",
     "TrainCommandHandler",
     "TrainingComponent",
+    "TrampleComponent",
     "TranquilizeCreatureHandler",
     "TranquilizerComponent",
     "TriggerContainmentHandler",
     "TrustComponent",
+    "WeakPointComponent",
     "dinosim_fragments",
     "ensure_dinosim_policy",
     "install_dinosim",
