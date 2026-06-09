@@ -212,6 +212,38 @@ class ResourceGatheredEvent(DomainEvent):
     stack_id: str
 
 
+class StockpileCreatedEvent(DomainEvent):
+    stockpile_id: str
+    capacity: int
+
+
+class StorageFilterChangedEvent(DomainEvent):
+    stockpile_id: str
+    allowed_types: tuple[str, ...] = ()
+
+
+class ItemForbiddenEvent(DomainEvent):
+    item_id: str
+    forbidden: bool
+
+
+class ItemHauledEvent(DomainEvent):
+    item_id: str
+    target_container_id: str
+
+
+class StackSplitEvent(DomainEvent):
+    source_stack_id: str
+    new_stack_id: str
+    quantity: int
+
+
+class StackMergedEvent(DomainEvent):
+    source_stack_id: str
+    target_stack_id: str
+    quantity: int
+
+
 class ItemCraftedEvent(DomainEvent):
     recipe_id: str
     output_ids: tuple[str, ...] = ()
@@ -473,6 +505,8 @@ __all__ = [
     "ItemUsedEvent",
     "JobAssignedEvent",
     "JobCompletedEvent",
+    "ItemForbiddenEvent",
+    "ItemHauledEvent",
     "NoiseHeardEvent",
     "NoteTakenEvent",
     "NotesSearchedEvent",
@@ -486,6 +520,10 @@ __all__ = [
     "ReservationReleasedEvent",
     "RaidStartedEvent",
     "ResourceGatheredEvent",
+    "StackMergedEvent",
+    "StackSplitEvent",
+    "StockpileCreatedEvent",
+    "StorageFilterChangedEvent",
     "PhysicalWriteEvent",
     "ReflectionCreatedEvent",
     "SpeechSaidEvent",

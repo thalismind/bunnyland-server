@@ -171,6 +171,8 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
         RecipeComponent,
         ResourceNodeComponent,
         ResourceStackComponent,
+        StockpileComponent,
+        StorageFilterComponent,
         WorkstationComponent,
     )
 
@@ -209,6 +211,11 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
             IdentityComponent(name="plank recipe", kind="recipe"),
             RecipeComponent(recipe_id="plank", inputs={"wood": 2}, outputs={"plank": 1},
                             required_station="workbench"),
+        ])
+        _add(actor, store, [
+            IdentityComponent(name="a wood stockpile", kind="stockpile"),
+            StockpileComponent(capacity=24),
+            StorageFilterComponent(allowed_types=("wood", "plank")),
         ])
         _add(actor, store, [
             IdentityComponent(name="a stack of logs", kind="resource"),

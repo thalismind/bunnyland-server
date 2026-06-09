@@ -36,6 +36,43 @@ Gather from a reachable resource node:
 The node must have enough available resources. A successful gather reduces the node's
 current amount and creates a resource stack in your inventory, such as `wood x2`.
 
+## Stockpiles and hauling
+
+Create a stockpile in your current room:
+
+```text
+!create-stockpile name="wood stockpile" capacity=20 allowed_types="wood,plank"
+```
+
+Change its filter later:
+
+```text
+!set-storage-filter stockpile_id="wood stockpile" allowed_types="wood,plank,stone"
+```
+
+Forbid a reachable item to keep it out of hauling, then allow it again:
+
+```text
+!forbid-item item_id="wood x6"
+!allow-item item_id="wood x6"
+```
+
+Haul a reachable item or resource stack into a reachable container or stockpile:
+
+```text
+!haul-item item_id="wood x6" target_container_id="wood stockpile"
+```
+
+Filtered stockpiles accept only matching resource stacks. Empty filters accept anything.
+Capacity counts resource stack quantity.
+
+Split and merge resource stacks:
+
+```text
+!split-stack item_id="wood x6" quantity=2
+!merge-stack source_id="wood x2" target_id="wood x4"
+```
+
 ## Craft items
 
 Craft from a known recipe:
@@ -88,6 +125,8 @@ A simple colony loop:
 ```text
 !reserve target_id="wood patch"
 !gather-resource node_id="wood patch" quantity=2
+!create-stockpile name="wood stockpile" capacity=20 allowed_types="wood"
+!haul-item item_id="wood x2" target_container_id="wood stockpile"
 !craft recipe_id=club
 !assign-job job_id="haul job"
 !complete-job job_id="haul job"

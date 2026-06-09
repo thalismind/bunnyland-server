@@ -21,21 +21,34 @@ from bunnyland.core import (
 from bunnyland.core.events import (
     CommandRejectedEvent,
     ItemCraftedEvent,
+    ItemForbiddenEvent,
+    ItemHauledEvent,
     JobAssignedEvent,
     JobCompletedEvent,
     OwnershipClaimedEvent,
     OwnershipReleasedEvent,
     ResourceGatheredEvent,
+    StackMergedEvent,
+    StackSplitEvent,
+    StockpileCreatedEvent,
+    StorageFilterChangedEvent,
 )
 from bunnyland.mechanics import colonysim
 from bunnyland.mechanics.colonysim import (
+    AllowItemHandler,
     AssignedTo,
     AssignJobHandler,
     ClaimOwnershipHandler,
+    ColonySimComponent,
     CompleteJobHandler,
     CraftHandler,
+    CreateStockpileHandler,
+    ForbiddenComponent,
+    ForbidItemHandler,
     GatherResourceHandler,
+    HaulItemHandler,
     JobComponent,
+    MergeStackHandler,
     Owns,
     RecipeComponent,
     ReleaseOwnershipHandler,
@@ -45,6 +58,10 @@ from bunnyland.mechanics.colonysim import (
     ResourceNodeComponent,
     ResourceRegenSystem,
     ResourceStackComponent,
+    SetStorageFilterHandler,
+    SplitStackHandler,
+    StockpileComponent,
+    StorageFilterComponent,
     WorkstationComponent,
     colonysim_fragments,
 )
@@ -56,6 +73,13 @@ def _install(actor):
     actor.register_handler(ReserveHandler())
     actor.register_handler(ReleaseReservationHandler())
     actor.register_handler(GatherResourceHandler())
+    actor.register_handler(CreateStockpileHandler())
+    actor.register_handler(SetStorageFilterHandler())
+    actor.register_handler(ForbidItemHandler())
+    actor.register_handler(AllowItemHandler())
+    actor.register_handler(HaulItemHandler())
+    actor.register_handler(SplitStackHandler())
+    actor.register_handler(MergeStackHandler())
     actor.register_handler(CraftHandler())
     actor.register_handler(AssignJobHandler())
     actor.register_handler(CompleteJobHandler())
@@ -115,6 +139,21 @@ def _stack(scenario, resource_type, quantity):
         Contains(mode=ContainmentMode.INVENTORY), item.id
     )
     return item.id
+
+
+def _stockpile(scenario, capacity=10, allowed_types=()):
+    stockpile = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="stockpile", kind="stockpile"),
+            StockpileComponent(capacity=capacity),
+            StorageFilterComponent(allowed_types=tuple(allowed_types)),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), stockpile.id
+    )
+    return stockpile.id
 
 
 def _job(scenario, job_type="haul", priority=5):
@@ -413,6 +452,432 @@ def test_colonysim_handlers_reject_bad_state_directly():
         result = handler.execute(ctx, command)
         assert result.ok is False
         assert result.reason == reason
+
+
+def test_colonysim_stockpile_and_stack_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    stack = _stack(scenario, "wood", 3)
+    stone = _stack(scenario, "stone", 1)
+    stockpile = _stockpile(scenario, capacity=2, allowed_types=("wood",))
+    non_stack = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="crate", kind="prop")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), non_stack.id
+    )
+    distant_stack = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant wood", kind="resource"),
+            ResourceStackComponent(resource_type="wood", quantity=1),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant_stack.id
+    )
+
+    forbidden_stack = _stack(scenario, "wood", 1)
+    scenario.actor.world.get_entity(forbidden_stack).add_component(ForbiddenComponent())
+
+    cases = [
+        (
+            CreateStockpileHandler(),
+            _handler_cmd(scenario, "create-stockpile", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            CreateStockpileHandler(),
+            _handler_cmd(scenario, "create-stockpile", capacity=0),
+            "capacity must be positive",
+        ),
+        (
+            SetStorageFilterHandler(),
+            _handler_cmd(scenario, "set-storage-filter", stockpile_id="not-an-id"),
+            "invalid character or stockpile id",
+        ),
+        (
+            SetStorageFilterHandler(),
+            _handler_cmd(scenario, "set-storage-filter", stockpile_id="entity_999"),
+            "stockpile does not exist",
+        ),
+        (
+            SetStorageFilterHandler(),
+            _handler_cmd(scenario, "set-storage-filter", stockpile_id=str(distant_stack.id)),
+            "stockpile is not reachable",
+        ),
+        (
+            SetStorageFilterHandler(),
+            _handler_cmd(scenario, "set-storage-filter", stockpile_id=str(stack)),
+            "target is not a stockpile",
+        ),
+        (
+            ForbidItemHandler(),
+            _handler_cmd(scenario, "forbid-item", item_id="not-an-id"),
+            "invalid character or item id",
+        ),
+        (
+            ForbidItemHandler(),
+            _handler_cmd(scenario, "forbid-item", item_id="entity_999"),
+            "item does not exist",
+        ),
+        (
+            ForbidItemHandler(),
+            _handler_cmd(scenario, "forbid-item", item_id=str(distant_stack.id)),
+            "item is not reachable",
+        ),
+        (
+            AllowItemHandler(),
+            _handler_cmd(scenario, "allow-item", item_id="not-an-id"),
+            "invalid character or item id",
+        ),
+        (
+            AllowItemHandler(),
+            _handler_cmd(scenario, "allow-item", item_id="entity_999"),
+            "item does not exist",
+        ),
+        (
+            AllowItemHandler(),
+            _handler_cmd(scenario, "allow-item", item_id=str(distant_stack.id)),
+            "item is not reachable",
+        ),
+        (
+            AllowItemHandler(),
+            _handler_cmd(scenario, "allow-item", item_id=str(stack)),
+            "item is not forbidden",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(
+                scenario,
+                "haul-item",
+                item_id="not-an-id",
+                target_container_id=str(stockpile),
+            ),
+            "invalid character, item, or target container id",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(
+                scenario,
+                "haul-item",
+                item_id="entity_999",
+                target_container_id=str(stockpile),
+            ),
+            "item does not exist",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(
+                scenario,
+                "haul-item",
+                item_id=str(stack),
+                target_container_id="entity_999",
+            ),
+            "target container does not exist",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(
+                scenario,
+                "haul-item",
+                item_id=str(distant_stack.id),
+                target_container_id=str(stockpile),
+            ),
+            "item is not reachable",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(
+                scenario,
+                "haul-item",
+                item_id=str(stack),
+                target_container_id=str(distant_stack.id),
+            ),
+            "target container is not reachable",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(scenario, "haul-item", item_id=str(stack), target_container_id=str(stack)),
+            "item cannot contain itself",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(
+                scenario,
+                "haul-item",
+                item_id=str(forbidden_stack),
+                target_container_id=str(stockpile),
+            ),
+            "item is forbidden",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(
+                scenario,
+                "haul-item",
+                item_id=str(stone),
+                target_container_id=str(stockpile),
+            ),
+            "item does not match storage filter",
+        ),
+        (
+            HaulItemHandler(),
+            _handler_cmd(
+                scenario,
+                "haul-item",
+                item_id=str(stack),
+                target_container_id=str(stockpile),
+            ),
+            "stockpile is full",
+        ),
+        (
+            SplitStackHandler(),
+            _handler_cmd(scenario, "split-stack", item_id="not-an-id"),
+            "invalid character or item id",
+        ),
+        (
+            SplitStackHandler(),
+            _handler_cmd(scenario, "split-stack", item_id=str(stack), quantity=0),
+            "quantity must be positive",
+        ),
+        (
+            SplitStackHandler(),
+            _handler_cmd(scenario, "split-stack", item_id="entity_999"),
+            "stack does not exist",
+        ),
+        (
+            SplitStackHandler(),
+            _handler_cmd(scenario, "split-stack", item_id=str(distant_stack.id)),
+            "stack is not reachable",
+        ),
+        (
+            SplitStackHandler(),
+            _handler_cmd(scenario, "split-stack", item_id=str(non_stack.id)),
+            "target is not a resource stack",
+        ),
+        (
+            SplitStackHandler(),
+            _handler_cmd(scenario, "split-stack", item_id=str(stone), quantity=1),
+            "quantity must be smaller than stack",
+        ),
+        (
+            MergeStackHandler(),
+            _handler_cmd(scenario, "merge-stack", source_id="not-an-id", target_id=str(stack)),
+            "invalid character, source, or target id",
+        ),
+        (
+            MergeStackHandler(),
+            _handler_cmd(scenario, "merge-stack", source_id=str(stack), target_id=str(stack)),
+            "source and target must differ",
+        ),
+        (
+            MergeStackHandler(),
+            _handler_cmd(scenario, "merge-stack", source_id="entity_999", target_id=str(stack)),
+            "source stack does not exist",
+        ),
+        (
+            MergeStackHandler(),
+            _handler_cmd(scenario, "merge-stack", source_id=str(stack), target_id="entity_999"),
+            "target stack does not exist",
+        ),
+        (
+            MergeStackHandler(),
+            _handler_cmd(
+                scenario,
+                "merge-stack",
+                source_id=str(distant_stack.id),
+                target_id=str(stack),
+            ),
+            "stacks are not reachable",
+        ),
+        (
+            MergeStackHandler(),
+            _handler_cmd(
+                scenario,
+                "merge-stack",
+                source_id=str(non_stack.id),
+                target_id=str(stack),
+            ),
+            "both targets must be resource stacks",
+        ),
+        (
+            MergeStackHandler(),
+            _handler_cmd(scenario, "merge-stack", source_id=str(stone), target_id=str(stack)),
+            "resource types do not match",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_colonysim_stockpile_helpers_cover_filter_and_container_branches():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    colonysim.install_colonysim(scenario.actor)
+    colonysim.install_colonysim(scenario.actor)
+    assert len(
+        list(scenario.actor.world.query().with_all([ColonySimComponent]).execute_entities())
+    ) == 1
+
+    stockpile = scenario.actor.world.get_entity(_stockpile(scenario, allowed_types=()))
+    stack = scenario.actor.world.get_entity(_stack(scenario, "wood", 2))
+    non_stack = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="chair", kind="prop")],
+    )
+    stockpile.add_relationship(Contains(mode=ContainmentMode.CONTAINER), non_stack.id)
+
+    assert colonysim._parse_types(None) == ()
+    assert colonysim._parse_types(7) == ("7",)
+    assert colonysim._stockpile_load(scenario.actor.world, stockpile) == 1
+    assert colonysim._stockpile_accepts(stockpile, non_stack) is True
+    assert colonysim._stockpile_accepts(stockpile, stack) is True
+
+    stockpile.remove_component(StorageFilterComponent)
+    assert colonysim._stockpile_accepts(stockpile, stack) is True
+
+    stockpile.add_component(StorageFilterComponent(allowed_types=("wood",)))
+    assert colonysim._stockpile_accepts(stockpile, non_stack) is False
+
+    orphan_container = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="crate", kind="container")],
+    )
+    colonysim._move_entity(scenario.actor.world, orphan_container.id, stockpile.id)
+    assert container_of(orphan_container) == stockpile.id
+
+
+async def test_stockpile_filter_forbid_haul_split_and_merge_loop():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    created: list[StockpileCreatedEvent] = []
+    filtered: list[StorageFilterChangedEvent] = []
+    forbidden: list[ItemForbiddenEvent] = []
+    hauled: list[ItemHauledEvent] = []
+    split: list[StackSplitEvent] = []
+    merged: list[StackMergedEvent] = []
+    scenario.actor.bus.subscribe(StockpileCreatedEvent, created.append)
+    scenario.actor.bus.subscribe(StorageFilterChangedEvent, filtered.append)
+    scenario.actor.bus.subscribe(ItemForbiddenEvent, forbidden.append)
+    scenario.actor.bus.subscribe(ItemHauledEvent, hauled.append)
+    scenario.actor.bus.subscribe(StackSplitEvent, split.append)
+    scenario.actor.bus.subscribe(StackMergedEvent, merged.append)
+    stack = _stack(scenario, "wood", 6)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "create-stockpile",
+            name="wood stockpile",
+            capacity=8,
+            allowed_types="stone",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    stockpile_id = parse_entity_id(created[0].stockpile_id)
+    stockpile = scenario.actor.world.get_entity(stockpile_id)
+    assert stockpile.get_component(StorageFilterComponent).allowed_types == ("stone",)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "set-storage-filter",
+            stockpile_id=str(stockpile_id),
+            allowed_types=("wood", "plank"),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    assert filtered[0].allowed_types == ("plank", "wood")
+
+    await scenario.actor.submit(_cmd(scenario, "forbid-item", item_id=str(stack)))
+    await scenario.actor.tick(HOUR)
+    assert scenario.actor.world.get_entity(stack).has_component(ForbiddenComponent)
+
+    await scenario.actor.submit(_cmd(scenario, "allow-item", item_id=str(stack)))
+    await scenario.actor.tick(HOUR)
+    assert not scenario.actor.world.get_entity(stack).has_component(ForbiddenComponent)
+    assert [event.forbidden for event in forbidden] == [True, False]
+
+    await scenario.actor.submit(_cmd(scenario, "split-stack", item_id=str(stack), quantity=2))
+    await scenario.actor.tick(HOUR)
+    new_stack_id = parse_entity_id(split[0].new_stack_id)
+    assert (
+        scenario.actor.world.get_entity(stack).get_component(ResourceStackComponent).quantity == 4
+    )
+    assert scenario.actor.world.get_entity(new_stack_id).get_component(
+        ResourceStackComponent
+    ).quantity == 2
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "merge-stack",
+            source_id=str(new_stack_id),
+            target_id=str(stack),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    assert merged[0].quantity == 2
+    assert (
+        scenario.actor.world.get_entity(stack).get_component(ResourceStackComponent).quantity == 6
+    )
+    assert container_of(scenario.actor.world.get_entity(new_stack_id)) is None
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "haul-item",
+            item_id=str(stack),
+            target_container_id=str(stockpile_id),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert hauled[0].target_container_id == str(stockpile_id)
+    assert container_of(scenario.actor.world.get_entity(stack)) == stockpile_id
+    fragments = colonysim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+    assert any("Nearby stockpile: 6/8 stored, accepts plank, wood." == line for line in fragments)
+
+
+async def test_stockpile_creation_requires_room_and_haul_can_use_plain_container():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    stack = _stack(scenario, "wood", 1)
+    crate = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="crate", kind="container")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), crate.id
+    )
+    rejected_events: list[CommandRejectedEvent] = []
+    hauled: list[ItemHauledEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejected_events.append)
+    scenario.actor.bus.subscribe(ItemHauledEvent, hauled.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "haul-item", item_id=str(stack), target_container_id=str(crate.id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert hauled[0].target_container_id == str(crate.id)
+    assert container_of(scenario.actor.world.get_entity(stack)) == crate.id
+
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains, scenario.character
+    )
+    await scenario.actor.submit(_cmd(scenario, "create-stockpile", name="orphan stockpile"))
+    await scenario.actor.tick(HOUR)
+
+    assert rejected_events[-1].reason == "character is not in a room"
 
 
 async def test_reservation_blocks_other_characters_until_released():

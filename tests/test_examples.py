@@ -15,7 +15,7 @@ from bunnyland.core.components import (
     RoomComponent,
 )
 from bunnyland.mechanics.barbariansim import WeaponComponent
-from bunnyland.mechanics.colonysim import ResourceNodeComponent
+from bunnyland.mechanics.colonysim import ResourceNodeComponent, StockpileComponent
 from bunnyland.mechanics.daggersim import BankComponent
 from bunnyland.mechanics.dinosim import (
     CreatureProductComponent,
@@ -139,6 +139,14 @@ async def test_dinosim_demo_includes_fossil_and_fertile_parent():
             .execute_entities()
         )
     )
+
+
+async def test_colonysim_demo_includes_stockpile_storage():
+    actor = WorldActor()
+
+    await COLONYSIM_DEMO.generate(actor, "colonysim-demo", GenOptions())
+
+    assert _has(actor, StockpileComponent)
 
 
 @pytest.mark.parametrize("demo", POP_CULTURE_DEMOS, ids=lambda d: d.name)
