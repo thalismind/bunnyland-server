@@ -51,6 +51,21 @@ class EditorDisplayComponent(Component):
     emoji: str = ""
 
 
+@dataclass(frozen=True)
+class ControllerOutboxMessageComponent(Component):
+    """A pending message for a controller integration to deliver.
+
+    Message history is repeatable, so each message is a separate entity. Transport
+    adapters mark delivery by replacing this component; they do not store queues outside
+    the ECS.
+    """
+
+    controller_id: str
+    text: str
+    created_at_epoch: int
+    delivered_at_epoch: int | None = None
+
+
 # --------------------------------------------------------------------------------------
 # Affect, thoughts (spec 11.12). Mood is multidimensional, not a single scalar.
 # --------------------------------------------------------------------------------------

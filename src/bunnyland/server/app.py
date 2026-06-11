@@ -19,7 +19,7 @@ from ..core import (
 )
 from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.controllers import ClaimTimeoutComponent
-from ..core.events import ControllerChangedEvent
+from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
 from ..core.world_actor import WorldActor
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
 from ..persistence import WorldMeta
@@ -241,6 +241,16 @@ def create_app(
                             actor_id=str(character_id),
                             generation=generation,
                             controller_kind="web",
+                        )
+                    )
+                )
+                await actor.bus.publish(
+                    CharacterClaimedEvent(
+                        **actor._event_base(
+                            actor_id=str(character_id),
+                            character_id=str(character_id),
+                            controller_id=str(controller.id),
+                            generation=generation,
                         )
                     )
                 )

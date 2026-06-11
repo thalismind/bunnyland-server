@@ -125,6 +125,7 @@ from bunnyland.mechanics.storyteller import (
 )
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.memory.store import MemoryEntry
+from bunnyland.plugins import apply_plugins, load_modules, select
 from bunnyland.prompts.builder import PromptBuilder
 
 PLAYTEST_DIR = Path(__file__).resolve().parents[1] / "examples" / "playtests"
@@ -1087,6 +1088,33 @@ async def test_discord_playtest_schedules_inputs_by_tick(scenario):
     assert scenario.character_room() == scenario.room_b
     assert result.inputs[1].reactions
     assert "You are now in North Tunnel" in result.inputs[1].messages[0]
+
+
+async def test_discord_playtest_motd_plugin_sends_claim_message(scenario):
+    plugins = select(load_modules(["examples.plugins.motd_claim"]), ["motd_claim"])
+    apply_plugins(plugins, scenario.actor)
+    spec = DiscordPlaytest(
+        ticks=1,
+        inputs=(
+            PlaytestInput(
+                tick=0,
+                user_id=123,
+                channel_id=456,
+                content="!claim Juniper",
+                expect=(
+                    "You are now controlling Juniper.",
+                    "Welcome to Bunnyland. Today's tip",
+                ),
+            ),
+        ),
+    )
+
+    result = await run_discord_playtest(_loop(scenario.actor), spec)
+
+    assert result.inputs[0].messages == (
+        "<@123> You are now controlling Juniper.",
+        "<@123> Welcome to Bunnyland. Today's tip: use !look before your first move.",
+    )
 
 
 async def test_discord_playtest_writes_trace_artifacts(scenario, tmp_path, monkeypatch):

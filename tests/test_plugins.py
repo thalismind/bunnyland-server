@@ -16,6 +16,8 @@ from bunnyland.core import (
     ActionPattern,
     CommandCost,
     Contains,
+    ControllerOutboxMessageComponent,
+    DiscordControllerComponent,
     HandlerContext,
     HandlerResult,
     Lane,
@@ -23,6 +25,7 @@ from bunnyland.core import (
     SubmittedCommand,
     WorldActor,
     build_submitted_command,
+    spawn_entity,
 )
 from bunnyland.core.events import NoteTakenEvent
 from bunnyland.core.handlers import ok
@@ -472,6 +475,68 @@ def test_ecs_systems_can_be_instances_or_classes():
     actor = WorldActor()
     plugin = Plugin(id="t", name="T", ecs=EcsContribution(systems=(HungerSystem(),)))
     apply_plugins([plugin], actor)  # must not raise
+
+
+async def test_example_motd_plugin_greets_discord_claims_with_ecs_rows():
+    from bunnyland.core.events import CharacterClaimedEvent
+    from examples.plugins.motd_claim import HasMotdMessage, MotdMessageComponent
+
+    scenario = build_scenario()
+    plugins = select(load_modules(["examples.plugins.motd_claim"]), ["motd_claim"])
+    apply_plugins(plugins, scenario.actor)
+    controller = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=123, default_channel_id=456)],
+    )
+    generation = scenario.actor.assign_controller(scenario.character, controller.id)
+
+    await scenario.actor.bus.publish(
+        CharacterClaimedEvent(
+            **scenario.actor._event_base(
+                actor_id=str(scenario.character),
+                character_id=str(scenario.character),
+                controller_id=str(controller.id),
+                generation=generation,
+            )
+        )
+    )
+    await scenario.actor.tick(0.0)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    motds = [
+        scenario.actor.world.get_entity(message_id)
+        for _edge, message_id in character.get_relationships(HasMotdMessage)
+    ]
+    assert len(motds) == 1
+    message = motds[0].get_component(MotdMessageComponent)
+    assert "Today's tip" in message.text
+    assert message.queued_for_delivery is True
+    outbox = motds[0].get_component(ControllerOutboxMessageComponent)
+    assert outbox.controller_id == str(controller.id)
+    assert outbox.delivered_at_epoch is None
+
+
+async def test_example_motd_plugin_ignores_non_discord_claims():
+    from bunnyland.core.events import CharacterClaimedEvent
+    from examples.plugins.motd_claim import HasMotdMessage
+
+    scenario = build_scenario()
+    plugins = select(load_modules(["examples.plugins.motd_claim"]), ["motd_claim"])
+    apply_plugins(plugins, scenario.actor)
+
+    await scenario.actor.bus.publish(
+        CharacterClaimedEvent(
+            **scenario.actor._event_base(
+                actor_id=str(scenario.character),
+                character_id=str(scenario.character),
+                controller_id=str(scenario.controller),
+                generation=scenario.generation,
+            )
+        )
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_relationships(HasMotdMessage) == []
 
 
 # -- helpers ----------------------------------------------------------------------------

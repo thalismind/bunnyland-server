@@ -25,7 +25,7 @@ from ..core import (
 )
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
 from ..core.ecs import parse_entity_id
-from ..core.events import DomainEvent
+from ..core.events import CharacterClaimedEvent, DomainEvent
 from ..mechanics.lifesim import LifeStageComponent
 from ..plugins.builtin import MCP
 from ..prompts import PromptBuilder, render_prompt
@@ -585,7 +585,7 @@ def create_bunnyland_mcp_app(
 
         try:
             async with actor._lock:
-                return assign_mcp_controller(
+                claimed = assign_mcp_controller(
                     actor,
                     agent_id=agent_id,
                     character_name=character_name,
@@ -593,6 +593,17 @@ def create_bunnyland_mcp_app(
                     label=label,
                     allow_child_claims=allow_child_claims,
                 )
+                await actor.bus.publish(
+                    CharacterClaimedEvent(
+                        **actor._event_base(
+                            actor_id=claimed["character_id"],
+                            character_id=claimed["character_id"],
+                            controller_id=claimed["controller_id"],
+                            generation=claimed["controller_generation"],
+                        )
+                    )
+                )
+                return claimed
         except RuntimeError as exc:
             raise ToolError(str(exc)) from exc
 

@@ -56,6 +56,7 @@ from .ecs import ensure_blank_prefab, parse_entity_id, replace_component, spawn_
 from .edges import ControlledBy
 from .events import (
     ActionPointsChangedEvent,
+    CharacterClaimedEvent,
     CommandExecutedEvent,
     CommandExpiredEvent,
     CommandQueuedEvent,
@@ -541,6 +542,17 @@ class WorldActor:
                 )
             )
         )
+        if command.command_type in {"take-control", "resume"}:
+            await self._publish(
+                CharacterClaimedEvent(
+                    **self._event_base(
+                        actor_id=str(character_id),
+                        character_id=str(character_id),
+                        controller_id=str(controller_id),
+                        generation=generation,
+                    )
+                )
+            )
         return True, ""
 
     # -- events -------------------------------------------------------------------------

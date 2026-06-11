@@ -102,6 +102,12 @@ class ControllerChangedEvent(DomainEvent):
     controller_kind: str
 
 
+class CharacterClaimedEvent(DomainEvent):
+    character_id: str
+    controller_id: str
+    generation: int
+
+
 class WorldPauseStatusChangedEvent(DomainEvent):
     paused: bool
     state: str
@@ -481,6 +487,7 @@ __all__ = [
     "CharacterAttackedEvent",
     "CharacterDefendedEvent",
     "CharacterPickpocketedEvent",
+    "CharacterClaimedEvent",
     "CharacterRevivedEvent",
     "CombatChallengeEvent",
     "CommandAcceptedEvent",

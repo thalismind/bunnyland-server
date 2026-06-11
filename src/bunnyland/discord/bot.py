@@ -26,8 +26,11 @@ from ..core.claim_timeout import (
     normalize_claim_timeout,
 )
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
+from ..core.components import ControllerOutboxMessageComponent
 from ..core.controllers import DiscordControllerComponent
+from ..core.ecs import replace_component
 from ..core.events import (
+    CharacterClaimedEvent,
     CommandExecutedEvent,
     CommandRejectedEvent,
     NotesSearchedEvent,
@@ -633,7 +636,9 @@ class DiscordBot:
             except (RuntimeError, ValueError) as exc:
                 await self._reply(ctx, str(exc))
                 return True
+            await self._publish_claimed(ctx.author.id)
             await self._reply(ctx, f"You are now controlling {claimed}.")
+            await self._drain_controller_outbox(ctx, ctx.author.id)
             return True
 
         if head == "fallback":
@@ -709,6 +714,44 @@ class DiscordBot:
 
         return False
 
+    async def _publish_claimed(self, discord_user_id: int) -> None:
+        found = self._character_for_user(discord_user_id)
+        if found is None:
+            return
+        character_id, controller_id, generation = found
+        await self.actor.bus.publish(
+            CharacterClaimedEvent(
+                **self.actor._event_base(
+                    actor_id=str(character_id),
+                    character_id=str(character_id),
+                    controller_id=str(controller_id),
+                    generation=generation,
+                )
+            )
+        )
+
+    async def _drain_controller_outbox(self, ctx, discord_user_id: int) -> None:
+        found = self._character_for_user(discord_user_id)
+        if found is None:
+            return
+        _character_id, controller_id, _generation = found
+        messages = sorted(
+            self.actor.world.query()
+            .with_all([ControllerOutboxMessageComponent])
+            .execute_entities(),
+            key=lambda entity: str(entity.id),
+        )
+        for entity in messages:
+            message = entity.get_component(ControllerOutboxMessageComponent)
+            already_delivered = message.delivered_at_epoch is not None
+            if message.controller_id != str(controller_id) or already_delivered:
+                continue
+            await self._reply(ctx, message.text)
+            replace_component(
+                entity,
+                replace(message, delivered_at_epoch=self.actor.epoch),
+            )
+
     async def handle_text_command(self, ctx, text: str) -> None:
         """Handle one Discord command body after the leading ``!`` has been removed."""
         stripped = text.strip()
@@ -754,7 +797,9 @@ class DiscordBot:
             except (RuntimeError, ValueError) as exc:
                 await self._reply(ctx, str(exc))
                 return
+            await self._publish_claimed(ctx.author.id)
             await self._reply(ctx, f"You are now controlling {claimed}.")
+            await self._drain_controller_outbox(ctx, ctx.author.id)
 
         @self.client.command(name="fallback")
         async def fallback(ctx, fallback_controller: str | None = None, minutes: int | None = None):
