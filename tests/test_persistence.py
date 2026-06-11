@@ -533,7 +533,7 @@ def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):
                 RegionComponent(
                     name="Lapin Prime",
                     kind="planet",
-                    population="8.4B",
+                    population=8_400_000_000,
                     climate="temperate",
                     terrain="mixed biomes",
                 )
@@ -559,7 +559,7 @@ def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):
     loaded, _meta = load_world(path)
 
     loaded_root = loaded.world.get_entity(chain[0].id).get_component(RegionComponent)
-    assert loaded_root.population == "8.4B"
+    assert loaded_root.population == 8_400_000_000
     assert loaded_root.climate == "temperate"
     assert loaded_root.terrain == "mixed biomes"
 

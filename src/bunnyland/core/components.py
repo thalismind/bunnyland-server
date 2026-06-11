@@ -138,7 +138,7 @@ class RegionComponent(Component):
 
     name: str
     kind: str = "region"
-    population: int | str | None = None
+    population: int | None = None
     climate: str = ""
     terrain: str = ""
 
