@@ -26,6 +26,7 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from .colonysim import ResourceStackComponent
 from .environment import CalendarComponent
 
 SECONDS_PER_DAY = 24 * 60 * 60
@@ -94,6 +95,22 @@ class GreenhouseComponent(Component):
     enabled: bool = True
 
 
+@pydantic_dataclass(frozen=True)
+class TreeComponent(Component):
+    tree_type: str
+    planted_at_epoch: int
+    maturity_days: float
+    mature: bool = False
+    dead: bool = False
+
+
+@pydantic_dataclass(frozen=True)
+class TreeTapComponent(Component):
+    tapped_at_epoch: int
+    last_collected_epoch: int
+    collection_days: float = 1.0
+
+
 class SoilTilledEvent(DomainEvent):
     soil_id: str
 
@@ -145,6 +162,28 @@ class DeadCropClearedEvent(DomainEvent):
     crop_type: str
 
 
+class TreeMaturedEvent(DomainEvent):
+    tree_id: str
+    tree_type: str
+
+
+class TreeTappedEvent(DomainEvent):
+    tree_id: str
+    tree_type: str
+
+
+class SapReadyEvent(DomainEvent):
+    tree_id: str
+    tree_type: str
+
+
+class SapHarvestedEvent(DomainEvent):
+    tree_id: str
+    tree_type: str
+    item_id: str
+    quantity: int
+
+
 def _event_base(epoch: int, **kwargs) -> dict:
     base = {
         "event_id": uuid4().hex,
@@ -189,6 +228,22 @@ def _spawn_harvest_item(
         [
             IdentityComponent(name=label, kind="crop", tags=(crop_type,)),
             PortableComponent(can_pick_up=True),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    return str(item.id)
+
+
+def _spawn_sap_item(
+    world: World, character: Entity, tree_type: str, item_name: str, quantity: int
+) -> str:
+    label = f"{item_name} x{quantity}" if quantity != 1 else item_name
+    item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name=label, kind="resource", tags=(tree_type,)),
+            PortableComponent(can_pick_up=True),
+            ResourceStackComponent(resource_type=item_name, quantity=quantity),
         ],
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
@@ -292,6 +347,59 @@ class CropGrowthConsequence:
                 )
             if watered.expires_at_epoch <= epoch:
                 soil.remove_component(WateredComponent)
+        return events
+
+
+class TreeGrowthConsequence:
+    """Mature trees over time and mark tapped trees ready to harvest sap."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = world.query().with_all([TreeComponent])
+        for tree in list(query.execute_entities()):
+            component = tree.get_component(TreeComponent)
+            if component.dead:
+                continue
+            mature = component.mature
+            if not mature:
+                elapsed_days = (epoch - component.planted_at_epoch) / SECONDS_PER_DAY
+                mature = elapsed_days >= component.maturity_days
+                if mature:
+                    replace_component(tree, replace(component, mature=True))
+                    events.append(
+                        TreeMaturedEvent(
+                            **_event_base(
+                                epoch,
+                                room_id=_entity_room_id(tree),
+                                target_ids=(str(tree.id),),
+                                tree_id=str(tree.id),
+                                tree_type=component.tree_type,
+                            )
+                        )
+                    )
+            if not mature or not tree.has_component(TreeTapComponent):
+                continue
+            if not tree.has_component(HarvestableComponent):
+                continue
+            tap = tree.get_component(TreeTapComponent)
+            harvestable = tree.get_component(HarvestableComponent)
+            if harvestable.ready:
+                continue
+            elapsed_days = (epoch - tap.last_collected_epoch) / SECONDS_PER_DAY
+            if elapsed_days < tap.collection_days:
+                continue
+            replace_component(tree, replace(harvestable, ready=True))
+            events.append(
+                SapReadyEvent(
+                    **_event_base(
+                        epoch,
+                        room_id=_entity_room_id(tree),
+                        target_ids=(str(tree.id),),
+                        tree_id=str(tree.id),
+                        tree_type=component.tree_type,
+                    )
+                )
+            )
         return events
 
 
@@ -565,30 +673,139 @@ class ClearDeadCropHandler:
         )
 
 
+class TapTreeHandler:
+    command_type = "tap-tree"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        tree_id = parse_entity_id(command.payload.get("tree_id"))
+        if character_id is None or tree_id is None:
+            return rejected("invalid character or tree id")
+        if not ctx.world.has_entity(tree_id):
+            return rejected("tree does not exist")
+        tree = _reachable_entity(ctx, character_id, tree_id)
+        if tree is None:
+            return rejected("tree is not reachable")
+        if not tree.has_component(TreeComponent):
+            return rejected("target is not a tree")
+        component = tree.get_component(TreeComponent)
+        if component.dead:
+            return rejected("tree is dead")
+        if not component.mature:
+            return rejected("tree is not ready to tap")
+        if tree.has_component(TreeTapComponent):
+            return rejected("tree is already tapped")
+
+        tree.add_component(
+            TreeTapComponent(tapped_at_epoch=ctx.epoch, last_collected_epoch=ctx.epoch)
+        )
+        tree.add_component(HarvestableComponent(yield_item="maple sap", quantity=4))
+        return ok(
+            TreeTappedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(tree_id),),
+                    tree_id=str(tree_id),
+                    tree_type=component.tree_type,
+                )
+            )
+        )
+
+
+class HarvestSapHandler:
+    command_type = "harvest-sap"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        tree_id = parse_entity_id(command.payload.get("tree_id"))
+        if character_id is None or tree_id is None:
+            return rejected("invalid character or tree id")
+        if not ctx.world.has_entity(tree_id):
+            return rejected("tree does not exist")
+        character = ctx.entity(character_id)
+        tree = _reachable_entity(ctx, character_id, tree_id)
+        if tree is None:
+            return rejected("tree is not reachable")
+        if not tree.has_component(TreeComponent):
+            return rejected("target is not a tree")
+        component = tree.get_component(TreeComponent)
+        if component.dead:
+            return rejected("tree is dead")
+        if not tree.has_component(TreeTapComponent):
+            return rejected("tree is not tapped")
+        if not tree.has_component(HarvestableComponent):
+            return rejected("tree has no sap bucket")
+        harvestable = tree.get_component(HarvestableComponent)
+        if not harvestable.ready:
+            return rejected("sap is not ready")
+
+        item_id = _spawn_sap_item(
+            ctx.world,
+            character,
+            component.tree_type,
+            harvestable.yield_item,
+            harvestable.quantity,
+        )
+        tap = tree.get_component(TreeTapComponent)
+        replace_component(tree, replace(tap, last_collected_epoch=ctx.epoch))
+        replace_component(tree, replace(harvestable, ready=False))
+        return ok(
+            SapHarvestedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(tree_id), item_id),
+                    tree_id=str(tree_id),
+                    tree_type=component.tree_type,
+                    item_id=item_id,
+                    quantity=harvestable.quantity,
+                )
+            )
+        )
+
+
 def gardensim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        if not entity.has_component(SoilComponent):
-            continue
-        name = (
-            entity.get_component(IdentityComponent).name
-            if entity.has_component(IdentityComponent)
-            else "soil"
-        )
-        if entity.has_component(CropComponent):
-            crop = entity.get_component(CropComponent)
-            state = "dead" if crop.dead else "ready" if crop.ready else f"stage {crop.stage}"
-            lines.append(f"Nearby crop: {crop.crop_type} in {name} ({state}).")
-        elif entity.has_component(TilledComponent):
-            lines.append(f"Nearby tilled soil: {name}.")
-        else:
-            lines.append(f"Nearby soil: {name}.")
+        name = None
+        if entity.has_component(IdentityComponent):
+            name = entity.get_component(IdentityComponent).name
+        if entity.has_component(SoilComponent):
+            soil_name = name or "soil"
+            if entity.has_component(CropComponent):
+                crop = entity.get_component(CropComponent)
+                state = "dead" if crop.dead else "ready" if crop.ready else f"stage {crop.stage}"
+                lines.append(f"Nearby crop: {crop.crop_type} in {soil_name} ({state}).")
+            elif entity.has_component(TilledComponent):
+                lines.append(f"Nearby tilled soil: {soil_name}.")
+            else:
+                lines.append(f"Nearby soil: {soil_name}.")
+        if entity.has_component(TreeComponent):
+            tree = entity.get_component(TreeComponent)
+            tree_name = name or "tree"
+            if tree.dead:
+                state = "dead"
+            elif not tree.mature:
+                state = "growing"
+            elif not entity.has_component(TreeTapComponent):
+                state = "ready to tap"
+            elif entity.has_component(HarvestableComponent) and entity.get_component(
+                HarvestableComponent
+            ).ready:
+                state = "sap ready"
+            else:
+                state = "tapped"
+            lines.append(f"Nearby tree: {tree.tree_type} in {tree_name} ({state}).")
     return sorted(lines)
 
 
 def install_gardensim(actor) -> None:
     actor.register_consequence(CropGrowthConsequence())
+    actor.register_consequence(TreeGrowthConsequence())
 
 
 __all__ = [
@@ -608,13 +825,22 @@ __all__ = [
     "GreenhouseComponent",
     "HarvestCropHandler",
     "HarvestableComponent",
+    "HarvestSapHandler",
     "PlantHandler",
+    "SapHarvestedEvent",
+    "SapReadyEvent",
     "SeedComponent",
     "SeedPlantedEvent",
     "SoilComponent",
     "SoilTilledEvent",
+    "TapTreeHandler",
     "TilledComponent",
     "TillHandler",
+    "TreeComponent",
+    "TreeGrowthConsequence",
+    "TreeMaturedEvent",
+    "TreeTapComponent",
+    "TreeTappedEvent",
     "WaterCropHandler",
     "WateredComponent",
     "gardensim_fragments",

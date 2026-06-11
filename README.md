@@ -175,7 +175,7 @@ full catalogue is in [`bunnyland_mechanics.md`](bunnyland_mechanics.md).
 |-----------------|-------------|------------------|-----------------------------|
 | **Life Sim**    | Implemented | The Sims         | Needs, moods/thoughts, social bonds and jealousy, romance, family and pregnancy, skill progression, careers and household economy |
 | **Colony Sim**  | Implemented | RimWorld         | Work priorities and jobs, resource gathering, crafting recipes and workstations, ownership and reservations |
-| **Garden Sim**  | Implemented | Stardew Valley   | Soil and tilling, planting/watering/fertilizing, seasonal crop growth, and harvesting |
+| **Garden Sim**  | Implemented | Stardew Valley   | Soil and tilling, planting/watering/fertilizing, seasonal crop growth, harvesting, tree tapping, and sap collection |
 | **Barbarian Sim** | Implemented | Conan Exiles   | Survival combat, stamina, temperature exposure, gear durability, poison and corruption |
 | **Dragon Sim**  | Implemented | Skyrim           | Open-world discovery, radiant quests and objectives, factions and reputation |
 | **Dagger Sim**  | Implemented | Daggerfall       | Procedural frontier expansion, rumors, travel logistics, guilds/institutions and services, banking and debt, civic law and fines, custom classes and spells, language pacification, supernatural afflictions, procedural dungeons, etiquette and social approach |
@@ -196,8 +196,9 @@ mechanics (and the life-sim needs every character shares). Spin one up with its
 uv run bunnyland serve --generator voidsim-demo --ticks 5
 ```
 
-The demos are `lifesim-demo`, `gardensim-demo`, `colonysim-demo`, `barbariansim-demo`,
-`dragonsim-demo`, `daggersim-demo`, `voidsim-demo`, `nukesim-demo`, and `dinosim-demo`.
+The demos are `lifesim-demo`, `gardensim-demo`, `maple-farm-demo`, `colonysim-demo`,
+`barbariansim-demo`, `dragonsim-demo`, `daggersim-demo`, `voidsim-demo`, `nukesim-demo`,
+and `dinosim-demo`.
 There is also a larger life-sim showcase, `apartment-demo`: a quirky NYC apartment
 building of eccentric tenants with backstories, homes, and daily routines, a rat-man in
 the warren below, and hidden corners.

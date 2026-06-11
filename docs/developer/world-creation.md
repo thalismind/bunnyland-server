@@ -69,6 +69,7 @@ uv run bunnyland serve --generator voidsim-demo --ticks 5
 |----------------------|-----------------|
 | `lifesim-demo`       | A married couple with careers, skills, money, and aspirations |
 | `gardensim-demo`     | A farm with tilled soil, a half-grown crop, and seeds |
+| `maple-farm-demo`    | A Canadian sugarbush with maple trees to wait for, tap, and harvest sap from |
 | `colonysim-demo`     | A camp with a resource node, workstation, recipe, and a job |
 | `barbariansim-demo`  | A frozen ridge and sheltered cave, with gear, stamina, and corruption |
 | `dragonsim-demo`     | A village, an undiscovered barrow, a faction, and a quest |

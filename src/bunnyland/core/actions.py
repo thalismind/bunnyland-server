@@ -174,6 +174,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "tenant_id",
         "tool_id",
         "tranquilizer_id",
+        "tree_id",
         "weapon_id",
         "worker_id",
         "source_id",
@@ -415,6 +416,18 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("soil_id",),
         tool_name="clear_dead_crop",
         patterns=("clear dead crop from {soil_id}",),
+    ),
+    _definition(
+        "tap-tree",
+        ("tree_id",),
+        tool_name="tap_tree",
+        patterns=("tap {tree_id}", "tap tree {tree_id}"),
+    ),
+    _definition(
+        "harvest-sap",
+        ("tree_id",),
+        tool_name="harvest_sap",
+        patterns=("harvest sap from {tree_id}", "collect sap from {tree_id}"),
     ),
     # Dino sim.
     _definition(

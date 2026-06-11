@@ -15,7 +15,12 @@ from bunnyland.core.components import (
     RoomComponent,
 )
 from bunnyland.mechanics.barbariansim import WeaponComponent
-from bunnyland.mechanics.colonysim import ResourceNodeComponent, StockpileComponent
+from bunnyland.mechanics.colonysim import (
+    RecipeComponent,
+    ResourceNodeComponent,
+    StockpileComponent,
+    WorkstationComponent,
+)
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
 from bunnyland.mechanics.daggersim import (
     AutomapComponent,
@@ -35,7 +40,13 @@ from bunnyland.mechanics.dinosim import (
     ReptileProcreationComponent,
 )
 from bunnyland.mechanics.dragonsim import QuestComponent
-from bunnyland.mechanics.gardensim import CropComponent
+from bunnyland.mechanics.environment import CalendarComponent
+from bunnyland.mechanics.gardensim import (
+    CropComponent,
+    HarvestableComponent,
+    TreeComponent,
+    TreeTapComponent,
+)
 from bunnyland.mechanics.lifesim import CareerComponent
 from bunnyland.mechanics.needs import HungerComponent
 from bunnyland.mechanics.nukesim import RadiationSourceComponent
@@ -50,6 +61,7 @@ from bunnyland.worldgen.examples import (
     DUNGEON_DEMOS,
     GARDENSIM_DEMO,
     LIFESIM_DEMO,
+    MAPLE_FARM_DEMO,
     NUKESIM_DEMO,
     POP_CULTURE_DEMOS,
     VOIDSIM_DEMO,
@@ -67,7 +79,7 @@ PACKAGE_DEMOS = [
     NUKESIM_DEMO,
     DINOSIM_DEMO,
 ]
-ALL_DEMOS = [*PACKAGE_DEMOS, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS]
+ALL_DEMOS = [*PACKAGE_DEMOS, MAPLE_FARM_DEMO, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS]
 
 # Each demo's hallmark component — proof its package's mechanics are present.
 HALLMARKS = {
@@ -157,6 +169,33 @@ async def test_colonysim_demo_includes_stockpile_storage():
     await COLONYSIM_DEMO.generate(actor, "colonysim-demo", GenOptions())
 
     assert _has(actor, StockpileComponent)
+
+
+async def test_maple_farm_demo_is_a_functional_canadian_sugarbush():
+    actor = WorldActor()
+
+    await MAPLE_FARM_DEMO.generate(actor, "maple-farm-demo", GenOptions())
+
+    assert _has(actor, TreeComponent)
+    assert _has(actor, TreeTapComponent)
+    assert _has(actor, HarvestableComponent)
+    assert _has(actor, WorkstationComponent)
+    assert _has(actor, RecipeComponent)
+    assert _has(actor, StockpileComponent)
+    assert _has(actor, CalendarComponent)
+
+    corpus = _visible_text(actor)
+    assert "Quebec Maple Grove" in corpus
+    assert "Sugar Shack" in corpus
+    assert "maple sap" in corpus
+
+    trees = list(actor.world.query().with_all([TreeComponent]).execute_entities())
+    assert any(not tree.get_component(TreeComponent).mature for tree in trees)
+    assert any(
+        tree.has_component(TreeTapComponent)
+        and not tree.get_component(HarvestableComponent).ready
+        for tree in trees
+    )
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)

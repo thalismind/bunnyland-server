@@ -1,6 +1,6 @@
 # Garden-sim farming
 
-Garden-sim is the crop loop provided by the `bunnyland.gardensim` plugin. The full farm-to-sale path also uses `bunnyland.lifesim` for money, customers, and businesses, and can use `bunnyland.colonysim` ownership if you want to mark a bed as yours.
+Garden-sim is the crop and tree loop provided by the `bunnyland.gardensim` plugin. The full farm-to-sale path also uses `bunnyland.lifesim` for money, customers, and businesses, and can use `bunnyland.colonysim` ownership if you want to mark a bed as yours.
 
 ## Find a plot
 
@@ -10,6 +10,7 @@ A usable plot is a nearby entity with soil. In prompts and context it appears as
 Nearby soil: garden bed.
 Nearby tilled soil: garden bed.
 Nearby crop: turnip in garden bed (stage 2).
+Nearby tree: sugar maple in old maple (ready to tap).
 ```
 
 You can garden any reachable soil bed. For gardening commands, reachable means the bed is in your current room or inventory. Ownership is optional bookkeeping, not a gardening requirement. If the world supports colony-sim ownership and you want to mark the bed as yours, claim it first:
@@ -99,6 +100,45 @@ Harvesting fails if the crop is missing, dead, or not ready. A successful harves
 
 The bed stays tilled after harvest, so you can plant another seed in it.
 
+## Trees and sap
+
+Trees are reachable garden entities. A tree can be growing, ready to tap, tapped, sap
+ready, or dead. Growing trees become ready as world time passes, so waiting is part of the
+tree loop:
+
+```text
+!wait
+```
+
+When a tree is ready, tap it:
+
+```text
+!tap-tree sugar maple
+```
+
+Tapping fails if the target is not a tree, is dead, is still growing, or is already tapped.
+Once tapped, the bucket needs collection time. Wait until nearby context says the tree has
+sap ready:
+
+```text
+!wait
+```
+
+Then collect the sap:
+
+```text
+!harvest-sap sugar maple
+```
+
+Harvesting sap fails if the tree is not tapped or the sap is not ready yet. A successful
+harvest puts a portable sap resource stack in your inventory and resets the bucket so it
+can fill again after more waiting. If colony-sim crafting is available, that sap can feed
+recipes such as a sugar-shack evaporator recipe.
+
+The `maple-farm-demo` world is a Canadian sugarbush built around this loop. It includes
+maples that need time, trees ready to tap, a tapped tree, a sugar shack, a sap stockpile,
+an evaporator workstation, and a maple syrup recipe.
+
 ## Sell the harvest
 
 Selling produce uses the life-sim business system. First open a business or farm stand:
@@ -135,6 +175,10 @@ One verified end-to-end cycle looks like this:
 !water-crop garden bed
 !wait
 !harvest-crop garden bed
+!wait
+!tap-tree sugar maple
+!wait
+!harvest-sap sugar maple
 !open-business name="Hazel's Farm Stand" default_price=8
 !sell-item item_id="radish x2" customer_id=Marigold price=8
 ```

@@ -19,6 +19,7 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
+from bunnyland.mechanics.colonysim import ResourceStackComponent
 from bunnyland.mechanics.environment import CalendarComponent
 from bunnyland.mechanics.gardensim import (
     ClearDeadCropHandler,
@@ -34,12 +35,21 @@ from bunnyland.mechanics.gardensim import (
     GreenhouseComponent,
     HarvestableComponent,
     HarvestCropHandler,
+    HarvestSapHandler,
     PlantHandler,
+    SapHarvestedEvent,
+    SapReadyEvent,
     SeedComponent,
     SoilComponent,
     SoilTilledEvent,
+    TapTreeHandler,
     TilledComponent,
     TillHandler,
+    TreeComponent,
+    TreeGrowthConsequence,
+    TreeMaturedEvent,
+    TreeTapComponent,
+    TreeTappedEvent,
     WaterCropHandler,
     gardensim_fragments,
 )
@@ -55,7 +65,10 @@ def _install(actor):
     actor.register_handler(FertilizeHandler())
     actor.register_handler(HarvestCropHandler())
     actor.register_handler(ClearDeadCropHandler())
+    actor.register_handler(TapTreeHandler())
+    actor.register_handler(HarvestSapHandler())
     actor.register_consequence(CropGrowthConsequence())
+    actor.register_consequence(TreeGrowthConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -127,6 +140,25 @@ def _fertilizer(scenario):
         Contains(mode=ContainmentMode.INVENTORY), fertilizer.id
     )
     return fertilizer.id
+
+
+def _tree(scenario, *, mature=False, maturity_days=1.0, name="sugar maple"):
+    tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=name, kind="tree"),
+            TreeComponent(
+                tree_type="sugar maple",
+                planted_at_epoch=0,
+                maturity_days=maturity_days,
+                mature=mature,
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), tree.id
+    )
+    return tree.id
 
 
 async def test_till_plant_water_grow_and_harvest_crop():
@@ -233,6 +265,62 @@ async def test_harvest_rejects_before_crop_is_ready():
     await scenario.actor.tick(HOUR)
 
     assert any(event.reason == "crop is not ready" for event in rejects)
+
+
+async def test_wait_tap_tree_wait_and_harvest_sap():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    tree = _tree(scenario)
+    rejects: list[CommandRejectedEvent] = []
+    matured: list[TreeMaturedEvent] = []
+    tapped: list[TreeTappedEvent] = []
+    ready: list[SapReadyEvent] = []
+    harvested: list[SapHarvestedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+    scenario.actor.bus.subscribe(TreeMaturedEvent, matured.append)
+    scenario.actor.bus.subscribe(TreeTappedEvent, tapped.append)
+    scenario.actor.bus.subscribe(SapReadyEvent, ready.append)
+    scenario.actor.bus.subscribe(SapHarvestedEvent, harvested.append)
+
+    await scenario.actor.submit(_cmd(scenario, "tap-tree", tree_id=str(tree)))
+    await scenario.actor.tick(HOUR)
+
+    tree_entity = scenario.actor.world.get_entity(tree)
+    assert rejects[-1].reason == "tree is not ready to tap"
+    assert tree_entity.get_component(TreeComponent).mature is False
+
+    await scenario.actor.tick(DAY)
+
+    assert matured[0].tree_id == str(tree)
+    assert tree_entity.get_component(TreeComponent).mature is True
+
+    await scenario.actor.submit(_cmd(scenario, "tap-tree", tree_id=str(tree)))
+    await scenario.actor.tick(HOUR)
+
+    assert tapped[0].tree_id == str(tree)
+    assert tree_entity.has_component(TreeTapComponent)
+    assert tree_entity.get_component(HarvestableComponent).ready is False
+
+    await scenario.actor.submit(_cmd(scenario, "harvest-sap", tree_id=str(tree)))
+    await scenario.actor.tick(HOUR)
+
+    assert rejects[-1].reason == "sap is not ready"
+
+    await scenario.actor.tick(DAY)
+
+    assert ready[0].tree_id == str(tree)
+    assert tree_entity.get_component(HarvestableComponent).ready is True
+
+    await scenario.actor.submit(_cmd(scenario, "harvest-sap", tree_id=str(tree)))
+    await scenario.actor.tick(HOUR)
+
+    sap = scenario.actor.world.get_entity(parse_entity_id(harvested[0].item_id))
+    assert sap.get_component(IdentityComponent).name == "maple sap x4"
+    assert sap.get_component(ResourceStackComponent).resource_type == "maple sap"
+    assert sap.get_component(ResourceStackComponent).quantity == 4
+    assert container_of(sap) == scenario.character
+    assert tree_entity.get_component(HarvestableComponent).ready is False
+    assert tree_entity.get_component(TreeTapComponent).last_collected_epoch == scenario.actor.epoch
 
 
 async def test_crop_withers_out_of_season():
@@ -376,11 +464,73 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), dead_soil.id)
+    young_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="young maple", kind="tree"),
+            TreeComponent(tree_type="sugar maple", planted_at_epoch=0, maturity_days=1.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), young_tree.id)
+    mature_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ready maple", kind="tree"),
+            TreeComponent(
+                tree_type="sugar maple",
+                planted_at_epoch=0,
+                maturity_days=0.0,
+                mature=True,
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), mature_tree.id)
+    tapped_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="tapped maple", kind="tree"),
+            TreeComponent(
+                tree_type="sugar maple",
+                planted_at_epoch=0,
+                maturity_days=0.0,
+                mature=True,
+            ),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0),
+            HarvestableComponent(yield_item="maple sap", quantity=4, ready=False),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), tapped_tree.id)
+    dead_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="dead maple", kind="tree"),
+            TreeComponent(
+                tree_type="sugar maple",
+                planted_at_epoch=0,
+                maturity_days=0.0,
+                mature=True,
+                dead=True,
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), dead_tree.id)
     seed = _seed(scenario)
     fertilizer = _fertilizer(scenario)
     distant_soil = spawn_entity(
         scenario.actor.world,
         [IdentityComponent(name="far bed", kind="soil"), SoilComponent()],
+    )
+    distant_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far maple", kind="tree"),
+            TreeComponent(
+                tree_type="sugar maple",
+                planted_at_epoch=0,
+                maturity_days=0.0,
+                mature=True,
+            ),
+        ],
     )
     distant_seed = spawn_entity(
         scenario.actor.world,
@@ -584,6 +734,82 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
             _handler_cmd(scenario, "clear-dead-crop", soil_id=str(cropped_soil.id)),
             "crop is not dead",
         ),
+        (
+            TapTreeHandler(),
+            _handler_cmd(
+                scenario,
+                "tap-tree",
+                character_id="not-an-id",
+                tree_id=str(mature_tree.id),
+            ),
+            "invalid character or tree id",
+        ),
+        (
+            TapTreeHandler(),
+            _handler_cmd(scenario, "tap-tree", tree_id="entity_999"),
+            "tree does not exist",
+        ),
+        (
+            TapTreeHandler(),
+            _handler_cmd(scenario, "tap-tree", tree_id=str(distant_tree.id)),
+            "tree is not reachable",
+        ),
+        (
+            TapTreeHandler(),
+            _handler_cmd(scenario, "tap-tree", tree_id=str(wrong_kind.id)),
+            "target is not a tree",
+        ),
+        (
+            TapTreeHandler(),
+            _handler_cmd(scenario, "tap-tree", tree_id=str(dead_tree.id)),
+            "tree is dead",
+        ),
+        (
+            TapTreeHandler(),
+            _handler_cmd(scenario, "tap-tree", tree_id=str(young_tree.id)),
+            "tree is not ready to tap",
+        ),
+        (
+            TapTreeHandler(),
+            _handler_cmd(scenario, "tap-tree", tree_id=str(tapped_tree.id)),
+            "tree is already tapped",
+        ),
+        (
+            HarvestSapHandler(),
+            _handler_cmd(scenario, "harvest-sap", character_id="not-an-id",
+                         tree_id=str(tapped_tree.id)),
+            "invalid character or tree id",
+        ),
+        (
+            HarvestSapHandler(),
+            _handler_cmd(scenario, "harvest-sap", tree_id="entity_999"),
+            "tree does not exist",
+        ),
+        (
+            HarvestSapHandler(),
+            _handler_cmd(scenario, "harvest-sap", tree_id=str(distant_tree.id)),
+            "tree is not reachable",
+        ),
+        (
+            HarvestSapHandler(),
+            _handler_cmd(scenario, "harvest-sap", tree_id=str(wrong_kind.id)),
+            "target is not a tree",
+        ),
+        (
+            HarvestSapHandler(),
+            _handler_cmd(scenario, "harvest-sap", tree_id=str(dead_tree.id)),
+            "tree is dead",
+        ),
+        (
+            HarvestSapHandler(),
+            _handler_cmd(scenario, "harvest-sap", tree_id=str(mature_tree.id)),
+            "tree is not tapped",
+        ),
+        (
+            HarvestSapHandler(),
+            _handler_cmd(scenario, "harvest-sap", tree_id=str(tapped_tree.id)),
+            "sap is not ready",
+        ),
     ]
 
     for handler, command, reason in cases:
@@ -596,9 +822,13 @@ def test_gardensim_fragments_show_nearby_crop_state():
     scenario = build_scenario()
     soil = scenario.actor.world.get_entity(_soil(scenario))
     soil.add_component(CropComponent(crop_type="turnip", planted_at_epoch=0, stage=2))
+    tree = scenario.actor.world.get_entity(_tree(scenario, mature=True, name="sugar maple"))
+    tree.add_component(TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0))
+    tree.add_component(HarvestableComponent(yield_item="maple sap", quantity=4, ready=True))
 
     fragments = gardensim_fragments(
         scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
     )
 
     assert any("Nearby crop: turnip" in line for line in fragments)
+    assert any("Nearby tree: sugar maple in sugar maple (sap ready)." in line for line in fragments)

@@ -158,6 +158,122 @@ async def gardensim_example(actor, seed: str, options: GenOptions) -> Instantiat
     return world
 
 
+async def maple_farm_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    del options
+    from ..core.components import (
+        DescriptionComponent,
+        IdentityComponent,
+        PortableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.colonysim import (
+        RecipeComponent,
+        ResourceStackComponent,
+        StockpileComponent,
+        StorageFilterComponent,
+        WorkstationComponent,
+    )
+    from ..mechanics.environment import CalendarComponent, WeatherComponent
+    from ..mechanics.gardensim import (
+        HarvestableComponent,
+        TreeComponent,
+        TreeTapComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="grove", title="Quebec Maple Grove", biome="sugarbush",
+                     light=0.8, celsius=2.0),
+            RoomSpec(key="shack", title="Sugar Shack", biome="sugar-shack",
+                     indoor=True, light=0.65, celsius=18.0),
+            RoomSpec(key="stand", title="Snowbank Farm Stand", biome="roadside",
+                     light=0.75, celsius=1.0),
+        ],
+        exits=[
+            ExitSpec(from_key="grove", direction="in", to_key="shack"),
+            ExitSpec(from_key="shack", direction="out", to_key="grove"),
+            ExitSpec(from_key="shack", direction="south", to_key="stand"),
+            ExitSpec(from_key="stand", direction="north", to_key="shack"),
+        ],
+        objects=[
+            ObjectSpec(key="pea_soup", room_key="shack", name="a crock of yellow pea soup",
+                       kind="food", nutrition=5.0, satiety=18.0, portable=False),
+            ObjectSpec(key="snow_water", room_key="grove", name="a clean snowmelt barrel",
+                       kind="water", hydration=16.0, portable=False),
+            ObjectSpec(key="tap_kit", room_key="grove", name="a maple tapping kit",
+                       kind="item", portable=True),
+            ObjectSpec(key="ledger", room_key="shack", name="a syrup season ledger",
+                       kind="paper", portable=True),
+            ObjectSpec(key="cash_box", room_key="stand", name="a locked wooden cash box",
+                       kind="container", portable=False, open=False),
+        ],
+        characters=[
+            CharacterSpec(key="syrupmaker", name="Camille Lavoie", room_key="grove",
+                          controller="suspended", traits=("patient", "weather-wise"),
+                          goals=("tap the ready maples", "bring sap to the sugar shack")),
+            CharacterSpec(key="neighbor", name="Noah Tremblay", room_key="stand",
+                          controller="llm", llm_profile="maple-neighbor",
+                          traits=("practical", "talkative"),
+                          goals=("trade for the first syrup of the season",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            clock[0].add_component(CalendarComponent(season="spring", day=38))
+            clock[0].add_component(WeatherComponent(condition="freeze-thaw", intensity=0.2))
+
+        grove = world.rooms["grove"]
+        _augment(actor, grove,
+                 DescriptionComponent(short="A Canadian sugarbush waits in thawing snow."))
+        _add(actor, grove, [
+            IdentityComponent(name="a young sugar maple", kind="tree"),
+            TreeComponent(tree_type="sugar maple", planted_at_epoch=0,
+                          maturity_days=1.0),
+        ])
+        _add(actor, grove, [
+            IdentityComponent(name="a ready sugar maple", kind="tree"),
+            TreeComponent(tree_type="sugar maple", planted_at_epoch=0,
+                          maturity_days=0.0, mature=True),
+        ])
+        _add(actor, grove, [
+            IdentityComponent(name="a tapped roadside maple", kind="tree"),
+            TreeComponent(tree_type="sugar maple", planted_at_epoch=0,
+                          maturity_days=0.0, mature=True),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0,
+                             collection_days=1.0),
+            HarvestableComponent(yield_item="maple sap", quantity=4, ready=False),
+        ])
+        _add(actor, world.rooms["shack"], [
+            IdentityComponent(name="a wood-fired evaporator", kind="workstation"),
+            WorkstationComponent(station_type="evaporator"),
+        ])
+        _add(actor, world.rooms["shack"], [
+            IdentityComponent(name="maple syrup recipe", kind="recipe"),
+            RecipeComponent(recipe_id="maple-syrup", inputs={"maple sap": 4},
+                            outputs={"maple syrup": 1}, required_station="evaporator"),
+        ])
+        _add(actor, world.rooms["shack"], [
+            IdentityComponent(name="a sap stockpile", kind="stockpile"),
+            StockpileComponent(capacity=32),
+            StorageFilterComponent(allowed_types=("maple sap", "maple syrup")),
+        ])
+        _add(actor, world.rooms["shack"], [
+            IdentityComponent(name="a starter pail of maple sap", kind="resource"),
+            PortableComponent(can_pick_up=True),
+            ResourceStackComponent(resource_type="maple sap", quantity=4),
+        ])
+        _add(actor, world.rooms["stand"], [
+            IdentityComponent(name="a display of amber maple syrup", kind="resource"),
+            PortableComponent(can_pick_up=True),
+            ResourceStackComponent(resource_type="maple syrup", quantity=2),
+        ])
+    return world
+
+
 # --------------------------------------------------------------------------------------
 # colony-sim — resource nodes, stockpiles, workstations, recipes, jobs
 # --------------------------------------------------------------------------------------
@@ -1486,6 +1602,10 @@ GARDENSIM_DEMO = WorldGenerator(
     name="gardensim-demo", generate=gardensim_example,
     description="A farm with tilled soil, a growing crop, and seeds.",
     uses_seed=False)
+MAPLE_FARM_DEMO = WorldGenerator(
+    name="maple-farm-demo", generate=maple_farm_example,
+    description="A Canadian maple syrup farm with trees to wait for, tap, and harvest sap from.",
+    uses_seed=False)
 COLONYSIM_DEMO = WorldGenerator(
     name="colonysim-demo", generate=colonysim_example,
     description="A work camp with resources, a workstation, a recipe, and a job.",
@@ -1574,6 +1694,7 @@ __all__ = [
     "GARDENSIM_DEMO",
     "GOTHIC_COUNT_DEMO",
     "LIFESIM_DEMO",
+    "MAPLE_FARM_DEMO",
     "NUKESIM_DEMO",
     "POP_CULTURE_DEMOS",
     "STAR_OPERA_DEMO",
@@ -1591,6 +1712,7 @@ __all__ = [
     "gardensim_example",
     "gothic_count_example",
     "lifesim_example",
+    "maple_farm_example",
     "nukesim_example",
     "star_opera_example",
     "voidsim_example",
