@@ -25,6 +25,7 @@ from bunnyland.core.ecs import contents
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.mechanics.needs import HungerComponent
+from bunnyland.mechanics.toonsim import ToonRoomComponent
 from bunnyland.persistence import (
     WorldMeta,
     YAMLPersistenceDriver,
@@ -518,10 +519,29 @@ async def test_game_loop_autosaves_every_n_ticks(tmp_path):
 
 def test_type_registries_cover_core_and_plugin_types():
     components, edges = type_registries(bunnyland_plugins())
-    assert {"IdentityComponent", "HungerComponent", "RoomComponent", "RegionComponent"} <= set(
-        components
-    )
+    assert {
+        "IdentityComponent",
+        "HungerComponent",
+        "RegionComponent",
+        "RoomComponent",
+        "ToonRoomComponent",
+    } <= set(components)
     assert {"Contains", "ExitTo", "ControlledBy"} <= set(edges)
+
+
+def test_toon_room_default_start_reloads_with_plugin_registry(tmp_path):
+    actor = WorldActor()
+    room = spawn_entity(
+        actor.world,
+        [RoomComponent(title="Landing Room"), ToonRoomComponent(default_start=True)],
+    )
+
+    path = tmp_path / "toon-room.json"
+    save_world(actor, path, meta=WorldMeta(seed="toon"))
+    loaded, _meta = load_world(path, plugins=bunnyland_plugins())
+
+    loaded_room = loaded.world.get_entity(room.id)
+    assert loaded_room.get_component(ToonRoomComponent).default_start is True
 
 
 def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):

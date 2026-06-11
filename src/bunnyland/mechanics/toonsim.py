@@ -6,6 +6,7 @@ sprites, without the engine itself caring about any of it:
 - :class:`SpritePosition` -- float X/Y placement within the entity's room.
 - :class:`SpriteImage` -- the sprite asset (a URL and/or inline data).
 - :class:`SpriteLayer` -- integer draw order (z-index), low draws first.
+- :class:`ToonRoomComponent` -- room-level hints for toon-client presentation.
 
 A single consequence backfills these components on renderable entities (rooms,
 furniture, items, doors, characters) that lack them, choosing a default layer by
@@ -97,6 +98,13 @@ class SpriteScale(Component):
     """
 
     scale: float = 1.0
+
+
+@pydantic_dataclass(frozen=True)
+class ToonRoomComponent(Component):
+    """Room-level presentation hints consumed by the toon client."""
+
+    default_start: bool = False
 
 
 def default_layer_for(entity: Entity) -> int | None:
@@ -212,6 +220,7 @@ __all__ = [
     "SpriteMovedEvent",
     "SpritePosition",
     "SpriteScale",
+    "ToonRoomComponent",
     "default_layer_for",
     "install_toonsim",
 ]
