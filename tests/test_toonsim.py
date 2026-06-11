@@ -15,6 +15,7 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
+from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.toonsim import (
     LAYER_BACKGROUND,
     LAYER_CHARACTER,
@@ -120,6 +121,30 @@ def test_does_not_overwrite_explicit_values():
     assert item.get_component(SpriteScale).scale == 2.5
 
 
+def test_backfill_preserves_existing_sprite_parts_when_adding_layer():
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="a painted egg", kind="food"),
+            PortableComponent(),
+            SpritePosition(x=3.5, y=-2.0),
+            SpriteImage(url="https://cdn/egg.png"),
+            SpriteScale(scale=2.5),
+        ],
+    )
+
+    _backfill(world)
+
+    assert item.get_component(SpriteLayer).layer == LAYER_ITEM
+    assert item.get_component(SpritePosition).x == 3.5
+    assert item.get_component(SpritePosition).y == -2.0
+    assert item.get_component(SpriteImage).url == "https://cdn/egg.png"
+    assert item.get_component(SpriteScale).scale == 2.5
+
+
 def test_backfill_is_idempotent():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -181,3 +206,21 @@ async def test_move_sprite_rejects_bad_payload():
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert not character.has_component(SpritePosition)
+
+
+def test_move_sprite_rejects_invalid_character_id():
+    scenario = build_scenario()
+    command = build_submitted_command(
+        character_id="not-an-entity-id",
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="move-sprite",
+        cost=CommandCost(),
+        lane=Lane.WORLD,
+        payload={"x": 1, "y": 2},
+    )
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    result = MoveSpriteHandler().execute(ctx, command)
+
+    assert result.reason == "invalid character id"
