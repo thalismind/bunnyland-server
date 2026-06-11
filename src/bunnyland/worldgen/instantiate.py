@@ -21,6 +21,7 @@ from ..core.components import (
     ContainerComponent,
     DescriptionComponent,
     FocusPointsComponent,
+    GenerationIntentComponent,
     IdentityComponent,
     InitiativeComponent,
     LightComponent,
@@ -32,7 +33,7 @@ from ..core.components import (
     WritableComponent,
 )
 from ..core.controllers import LLMControllerComponent
-from ..core.ecs import spawn_entity
+from ..core.ecs import replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import (
     CharacterGeneratedEvent,
@@ -145,6 +146,28 @@ def _generation_tags(*values: str, extra: tuple[str, ...] = ()) -> tuple[str, ..
     return tuple(tags)
 
 
+def _generation_intent(
+    base: GenerationIntentComponent,
+    *,
+    description: str,
+    tags: tuple[str, ...] = (),
+    wants: tuple[str, ...] = (),
+    needs: tuple[str, ...] = (),
+    source_seed: str,
+    source_key: str,
+    entity_kind: str,
+) -> GenerationIntentComponent:
+    return GenerationIntentComponent(
+        description=base.description or description,
+        tags=_generation_tags(*tags, extra=base.tags),
+        wants=_generation_tags(*wants, extra=base.wants),
+        needs=_generation_tags(*needs, extra=base.needs),
+        source_seed=source_seed,
+        source_key=source_key,
+        entity_kind=entity_kind,
+    )
+
+
 async def instantiate(actor: WorldActor, proposal: WorldProposal) -> InstantiatedWorld:
     """Validate then build the proposed world. Raises ValueError on validation failure."""
     errors = validate_proposal(proposal)
@@ -162,6 +185,15 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
             if room.celsius is not None:
                 components.append(TemperatureComponent(celsius=room.celsius))
             entity = spawn_entity(world, components)
+            generation = _generation_intent(
+                room.generation,
+                description=room.title,
+                tags=(room.biome, "indoor" if room.indoor else "outdoor"),
+                source_seed=proposal.seed,
+                source_key=room.key,
+                entity_kind="room",
+            )
+            replace_component(entity, generation)
             result.rooms[room.key] = entity.id
             await actor.bus.publish(
                 RoomGeneratedEvent(
@@ -172,13 +204,7 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
                         entity_kind="room",
                         room_id=str(entity.id),
                         room_key=room.key,
-                        intent=room.description or room.title,
-                        tags=_generation_tags(
-                            room.biome,
-                            "indoor" if room.indoor else "outdoor",
-                            extra=room.tags,
-                        ),
-                        wants=room.wants,
+                        generation=generation,
                         biome=room.biome,
                         indoor=room.indoor,
                     )
@@ -193,6 +219,15 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
 
         for obj in proposal.objects:
             entity = spawn_entity(world, _object_components(obj))
+            generation = _generation_intent(
+                obj.generation,
+                description=obj.name,
+                tags=(obj.kind,),
+                source_seed=proposal.seed,
+                source_key=obj.key,
+                entity_kind=obj.kind,
+            )
+            replace_component(entity, generation)
             world.get_entity(result.rooms[obj.room_key]).add_relationship(
                 Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
             )
@@ -208,15 +243,22 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
                         room_id=str(result.rooms[obj.room_key]),
                         container_id=str(result.rooms[obj.room_key]),
                         containment_mode=ContainmentMode.ROOM_CONTENT.value,
-                        intent=obj.description or obj.name,
-                        tags=_generation_tags(obj.kind, extra=obj.tags),
-                        wants=obj.wants,
+                        generation=generation,
                     )
                 )
             )
 
         for character in proposal.characters:
             entity = spawn_entity(world, _character_components(character))
+            generation = _generation_intent(
+                character.generation,
+                description=f"{character.name}, a {character.species}",
+                tags=(character.species, *character.traits),
+                source_seed=proposal.seed,
+                source_key=character.key,
+                entity_kind="character",
+            )
+            replace_component(entity, generation)
             world.get_entity(result.rooms[character.room_key]).add_relationship(
                 Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
             )
@@ -231,13 +273,7 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
                         entity_kind="character",
                         character_key=character.key,
                         room_id=str(result.rooms[character.room_key]),
-                        intent=character.description or f"{character.name}, a {character.species}",
-                        tags=_generation_tags(
-                            character.species,
-                            *character.traits,
-                            extra=character.tags,
-                        ),
-                        wants=character.wants,
+                        generation=generation,
                         species=character.species,
                     )
                 )

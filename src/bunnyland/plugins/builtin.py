@@ -675,6 +675,17 @@ from ..mechanics.voidsim import (
 )
 from ..memory import install_memory
 from ..worldgen.apartment import APARTMENT_DEMO
+from ..worldgen.enrichment import (
+    BarbarianWorldgenHook,
+    ColonyWorldgenHook,
+    DaggerWorldgenHook,
+    DinoWorldgenHook,
+    DragonWorldgenHook,
+    EnvironmentWorldgenHook,
+    GardenWorldgenHook,
+    NukeWorldgenHook,
+    VoidWorldgenHook,
+)
 from ..worldgen.examples import (
     BARBARIANSIM_DEMO,
     CLUE_SNACK_DEMO,
@@ -916,7 +927,10 @@ def environment_plugin() -> Plugin:
             ),
         ),
         runtime=RuntimeContribution(service_factories=(_environment_factory,)),
-        content=ContentContribution(prompt_fragments=(environment_fragments,)),
+        content=ContentContribution(
+            prompt_fragments=(environment_fragments,),
+            worldgen_hooks=(EnvironmentWorldgenHook,),
+        ),
     )
 
 
@@ -1067,6 +1081,7 @@ def colonysim_plugin() -> Plugin:
         ),
         content=ContentContribution(
             prompt_fragments=(colonysim_fragments,),
+            worldgen_hooks=(ColonyWorldgenHook,),
             world_generators=(COLONYSIM_DEMO,),
         ),
         runtime=RuntimeContribution(service_factories=(install_colonysim,)),
@@ -1127,6 +1142,7 @@ def barbariansim_plugin() -> Plugin:
         runtime=RuntimeContribution(service_factories=(install_barbariansim,)),
         content=ContentContribution(
             prompt_fragments=(barbariansim_fragments,),
+            worldgen_hooks=(BarbarianWorldgenHook,),
             world_generators=(BARBARIANSIM_DEMO,),
         ),
     )
@@ -1186,6 +1202,7 @@ def gardensim_plugin() -> Plugin:
         runtime=RuntimeContribution(service_factories=(install_gardensim,)),
         content=ContentContribution(
             prompt_fragments=(gardensim_fragments,),
+            worldgen_hooks=(GardenWorldgenHook,),
             world_generators=(GARDENSIM_DEMO, MAPLE_FARM_DEMO),
         ),
     )
@@ -1347,6 +1364,7 @@ def dinosim_plugin() -> Plugin:
         runtime=RuntimeContribution(service_factories=(install_dinosim,)),
         content=ContentContribution(
             prompt_fragments=(dinosim_fragments,),
+            worldgen_hooks=(DinoWorldgenHook,),
             world_generators=(DINOSIM_DEMO,),
         ),
     )
@@ -1410,6 +1428,7 @@ def dragonsim_plugin() -> Plugin:
         ),
         content=ContentContribution(
             prompt_fragments=(dragonsim_fragments,),
+            worldgen_hooks=(DragonWorldgenHook,),
             world_generators=(DRAGONSIM_DEMO,),
         ),
     )
@@ -1558,6 +1577,7 @@ def daggersim_plugin() -> Plugin:
         runtime=RuntimeContribution(service_factories=(install_daggersim,)),
         content=ContentContribution(
             prompt_fragments=(daggersim_fragments,),
+            worldgen_hooks=(DaggerWorldgenHook,),
             world_generators=(DAGGERSIM_DEMO,),
         ),
     )
@@ -1645,6 +1665,7 @@ def voidsim_plugin() -> Plugin:
         runtime=RuntimeContribution(service_factories=(install_voidsim,)),
         content=ContentContribution(
             prompt_fragments=(voidsim_fragments,),
+            worldgen_hooks=(VoidWorldgenHook,),
             world_generators=(VOIDSIM_DEMO,),
         ),
     )
@@ -1705,6 +1726,7 @@ def nukesim_plugin() -> Plugin:
         runtime=RuntimeContribution(service_factories=(install_nukesim,)),
         content=ContentContribution(
             prompt_fragments=(nukesim_fragments,),
+            worldgen_hooks=(NukeWorldgenHook,),
             world_generators=(NUKESIM_DEMO,),
         ),
     )

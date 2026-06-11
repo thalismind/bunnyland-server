@@ -9,8 +9,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..core.components import GenerationIntentComponent
 from ..llm_agents.agent import DEFAULT_MODEL
 
 _SEVERITY_LABELS = {
@@ -49,16 +50,67 @@ def _default_if_none(value: object, default: object) -> object:
     return default if value is None else value
 
 
-class RoomSpec(BaseModel):
+def _generation_dict(value: object) -> dict[str, object]:
+    if isinstance(value, GenerationIntentComponent):
+        return {
+            "description": value.description,
+            "tags": value.tags,
+            "wants": value.wants,
+            "needs": value.needs,
+            "source_seed": value.source_seed,
+            "source_key": value.source_key,
+            "entity_kind": value.entity_kind,
+        }
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
+class _GenerationIntentModel(BaseModel):
+    generation: GenerationIntentComponent = Field(default_factory=GenerationIntentComponent)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_generation_intent(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        generation = _generation_dict(
+            data.pop("generation", data.pop("generation_intent", {}))
+        )
+        if "intent" in data and "description" not in generation:
+            generation["description"] = data.pop("intent")
+        for key in ("description", "tags", "wants", "needs"):
+            if key in data:
+                generation[key] = data.pop(key)
+        if generation:
+            data["generation"] = generation
+        return data
+
+    @property
+    def description(self) -> str:
+        return self.generation.description
+
+    @property
+    def tags(self) -> tuple[str, ...]:
+        return self.generation.tags
+
+    @property
+    def wants(self) -> tuple[str, ...]:
+        return self.generation.wants
+
+    @property
+    def needs(self) -> tuple[str, ...]:
+        return self.generation.needs
+
+
+class RoomSpec(_GenerationIntentModel):
     key: str
     title: str
     biome: str = "unknown"
     indoor: bool = False
     light: float | None = None
     celsius: float | None = None
-    description: str = ""
-    tags: tuple[str, ...] = ()
-    wants: tuple[str, ...] = ()
 
 
 class ExitSpec(BaseModel):
@@ -68,7 +120,7 @@ class ExitSpec(BaseModel):
     locked: bool = False
 
 
-class ObjectSpec(BaseModel):
+class ObjectSpec(_GenerationIntentModel):
     key: str
     room_key: str
     name: str
@@ -82,9 +134,6 @@ class ObjectSpec(BaseModel):
     writable: bool = False
     key_name: str | None = None
     locked: bool = False
-    description: str = ""
-    tags: tuple[str, ...] = ()
-    wants: tuple[str, ...] = ()
 
     @field_validator(
         "portable",
@@ -102,7 +151,7 @@ class ObjectSpec(BaseModel):
         return _default_if_none(value, cls.model_fields[info.field_name].default)
 
 
-class CharacterSpec(BaseModel):
+class CharacterSpec(_GenerationIntentModel):
     key: str
     name: str
     room_key: str
@@ -115,9 +164,6 @@ class CharacterSpec(BaseModel):
     with_memory: bool = True
     traits: tuple[str, ...] = ()
     goals: tuple[str, ...] = ()
-    description: str = ""
-    tags: tuple[str, ...] = ()
-    wants: tuple[str, ...] = ()
 
     @field_validator("llm_profile", "llm_model", "llm_provider", mode="before")
     @classmethod
@@ -139,7 +185,7 @@ class WorldProposal(BaseModel):
 # --------------------------------------------------------------------------------------
 
 
-class RoomNodeProposal(BaseModel):
+class RoomNodeProposal(_GenerationIntentModel):
     """A single room, without exits — those are proposed separately so BFS can drive them."""
 
     title: str
@@ -147,9 +193,6 @@ class RoomNodeProposal(BaseModel):
     indoor: bool = False
     light: float | None = None
     celsius: float | None = None
-    description: str = ""  # short prose, re-shown to the DM when populating the room
-    tags: tuple[str, ...] = ()
-    wants: tuple[str, ...] = ()
 
 
 class DoorProposal(BaseModel):
@@ -170,7 +213,7 @@ class DanglingResolution(BaseModel):
     target_room_key: str | None = None  # required for "link"
 
 
-class ItemProposal(BaseModel):
+class ItemProposal(_GenerationIntentModel):
     """An object inside a room, inventory, or container (room_key/key are generator-assigned)."""
 
     name: str
@@ -184,9 +227,6 @@ class ItemProposal(BaseModel):
     writable: bool = False
     key_name: str | None = None
     locked: bool = False
-    description: str = ""
-    tags: tuple[str, ...] = ()
-    wants: tuple[str, ...] = ()
 
     @field_validator(
         "portable",
@@ -204,7 +244,7 @@ class ItemProposal(BaseModel):
         return _default_if_none(value, cls.model_fields[info.field_name].default)
 
 
-class CharacterProposal(BaseModel):
+class CharacterProposal(_GenerationIntentModel):
     """A character inside a room (key/room are generator-assigned)."""
 
     name: str
@@ -218,9 +258,6 @@ class CharacterProposal(BaseModel):
     traits: tuple[str, ...] = ()
     goals: tuple[str, ...] = ()
     key: str = ""  # assigned by the generator before instantiation
-    description: str = ""
-    tags: tuple[str, ...] = ()
-    wants: tuple[str, ...] = ()
 
     @field_validator("llm_profile", "llm_model", "llm_provider", mode="before")
     @classmethod
@@ -233,7 +270,7 @@ class RoomContentsProposal(BaseModel):
     characters: list[CharacterProposal] = Field(default_factory=list)
 
 
-class StoryEventProposal(BaseModel):
+class StoryEventProposal(_GenerationIntentModel):
     """A room-scoped event/incident/encounter proposed by the DM."""
 
     title: str
@@ -241,7 +278,6 @@ class StoryEventProposal(BaseModel):
     summary: str = ""
     severity: float = 1.0
     budget_spent: float = 0.0
-    tags: tuple[str, ...] = ()
     stimulus_type: str = "story_event"
     stimulus_intensity: float = 1.0
     objects: list[ItemProposal] = Field(default_factory=list)
@@ -259,6 +295,7 @@ __all__ = [
     "DanglingResolution",
     "DoorProposal",
     "ExitSpec",
+    "GenerationIntentComponent",
     "ItemProposal",
     "ObjectSpec",
     "RoomContentsProposal",

@@ -4,6 +4,7 @@ Two paths coexist: the one-shot ``WorldProposal``/``instantiate`` flow, and the
 breadth-first ``RecursiveWorldGenerator`` that grows the room graph node-by-node.
 """
 
+from ..core.components import GenerationIntentComponent
 from .builder import StubWorldBuilder, WorldBuilder
 from .defaults import DEFAULT_WORLDGEN_MODEL
 from .generators import (
@@ -52,6 +53,7 @@ __all__ = [
     "DoorProposal",
     "ExitSpec",
     "GenOptions",
+    "GenerationIntentComponent",
     "InstantiatedWorld",
     "ItemProposal",
     "ObjectSpec",

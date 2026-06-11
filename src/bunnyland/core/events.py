@@ -18,6 +18,8 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .components import GenerationIntentComponent
+
 
 class EventVisibility(StrEnum):
     PUBLIC = "public"
@@ -418,9 +420,23 @@ class GeneratedEntityEvent(DomainEvent):
     entity_id: str
     entity_key: str
     entity_kind: str
-    intent: str = ""
-    tags: tuple[str, ...] = ()
-    wants: tuple[str, ...] = ()
+    generation: GenerationIntentComponent = Field(default_factory=GenerationIntentComponent)
+
+    @property
+    def intent(self) -> str:
+        return self.generation.description
+
+    @property
+    def tags(self) -> tuple[str, ...]:
+        return self.generation.tags
+
+    @property
+    def wants(self) -> tuple[str, ...]:
+        return self.generation.wants
+
+    @property
+    def needs(self) -> tuple[str, ...]:
+        return self.generation.needs
 
 
 class RoomGeneratedEvent(GeneratedEntityEvent):

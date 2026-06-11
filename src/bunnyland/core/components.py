@@ -34,6 +34,24 @@ class DescriptionComponent(Component):
 
 
 @dataclass(frozen=True)
+class GenerationIntentComponent(Component):
+    """Semantic generation metadata shared by proposals, events, and ECS entities.
+
+    ``wants`` are optional plugin capabilities to try; ``needs`` are stronger hints that
+    a generated entity expects a plugin to satisfy. Both are data, not component names
+    the core generator has to understand.
+    """
+
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
+    needs: tuple[str, ...] = ()
+    source_seed: str = ""
+    source_key: str = ""
+    entity_kind: str = ""
+
+
+@dataclass(frozen=True)
 class LifecycleComponent(Component):
     active: bool = True
     destroyed: bool = False
@@ -467,6 +485,7 @@ __all__ = [
     "DownedComponent",
     "EncumbranceComponent",
     "FocusPointsComponent",
+    "GenerationIntentComponent",
     "HearingComponent",
     "HealthComponent",
     "IdentityComponent",

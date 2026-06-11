@@ -14,6 +14,7 @@ from bunnyland.core import (
     ControlledBy,
     EditorDisplayComponent,
     ExitTo,
+    GenerationIntentComponent,
     IdentityComponent,
     Lane,
     LightComponent,
@@ -434,24 +435,28 @@ async def test_instantiate_emits_typed_generation_events_with_intent_tags_and_wa
 
     assert [event.room_key for event in rooms] == ["cellar"]
     assert rooms[0].entity_id == str(result.rooms["cellar"])
-    assert rooms[0].intent == "a flooded cellar, signs of recent struggle"
-    assert rooms[0].tags == ("cellar", "indoor", "wet")
-    assert rooms[0].wants == ("humidity",)
+    assert rooms[0].generation.description == "a flooded cellar, signs of recent struggle"
+    assert rooms[0].generation.tags == ("cellar", "indoor", "wet")
+    assert rooms[0].generation.wants == ("humidity",)
+    assert (
+        actor.world.get_entity(result.rooms["cellar"]).get_component(GenerationIntentComponent)
+        == rooms[0].generation
+    )
 
     assert [event.object_key for event in objects] == ["crate"]
     assert objects[0].entity_id == str(result.objects["crate"])
     assert objects[0].room_id == str(result.rooms["cellar"])
     assert objects[0].container_id == str(result.rooms["cellar"])
-    assert objects[0].intent == "waterlogged supplies"
-    assert objects[0].tags == ("container", "salvage")
-    assert objects[0].wants == ("loot-table",)
+    assert objects[0].generation.description == "waterlogged supplies"
+    assert objects[0].generation.tags == ("container", "salvage")
+    assert objects[0].generation.wants == ("loot-table",)
 
     assert [event.character_key for event in characters] == ["scout"]
     assert characters[0].entity_id == str(result.characters["scout"])
     assert characters[0].room_id == str(result.rooms["cellar"])
-    assert characters[0].intent == "a worried scout checking the flood"
-    assert characters[0].tags == ("hare", "watchful", "local")
-    assert characters[0].wants == ("faction-allegiance",)
+    assert characters[0].generation.description == "a worried scout checking the flood"
+    assert characters[0].generation.tags == ("hare", "watchful", "local")
+    assert characters[0].generation.wants == ("faction-allegiance",)
 
 
 async def test_plugin_worldgen_hook_can_enrich_generated_entities():
@@ -496,6 +501,120 @@ async def test_plugin_worldgen_hook_can_enrich_generated_entities():
 
     room = actor.world.get_entity(result.rooms["room"])
     assert room.get_component(EditorDisplayComponent).emoji == "~"
+
+
+async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
+    from bunnyland.mechanics.barbariansim import StaminaComponent, WeaponComponent
+    from bunnyland.mechanics.colonysim import ResourceNodeComponent, StockpileComponent
+    from bunnyland.mechanics.daggersim import DungeonComponent
+    from bunnyland.mechanics.dinosim import DinosaurComponent, EnclosureComponent
+    from bunnyland.mechanics.dragonsim import FactionReputationComponent, PointOfInterestComponent
+    from bunnyland.mechanics.environment import FlammableComponent
+    from bunnyland.mechanics.gardensim import GreenhouseComponent, SeedComponent, SoilComponent
+    from bunnyland.mechanics.nukesim import MutationThresholdComponent, RadiationSourceComponent
+    from bunnyland.mechanics.voidsim import (
+        HabitatModuleComponent,
+        ShipComponent,
+        ShipSystemComponent,
+    )
+
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    proposal = WorldProposal(
+        seed="enriched",
+        rooms=[
+            RoomSpec(
+                key="garden_ship",
+                title="Greenhouse Ship",
+                biome="greenhouse",
+                indoor=True,
+                generation=GenerationIntentComponent(
+                    description="a greenhouse ship with a small dinosaur pen",
+                    tags=("ship",),
+                    wants=(
+                        "soil",
+                        "greenhouse",
+                        "stockpile",
+                        "ship",
+                        "point-of-interest",
+                        "dungeon",
+                        "enclosure",
+                        "radiation-source",
+                    ),
+                    needs=("flammable",),
+                ),
+            )
+        ],
+        objects=[
+            ObjectSpec(
+                key="ore",
+                room_key="garden_ship",
+                name="a metal ore vein",
+                kind="resource",
+                wants=("resource-node",),
+            ),
+            ObjectSpec(
+                key="seeds",
+                room_key="garden_ship",
+                name="turnip seeds",
+                kind="seed",
+                wants=("seed",),
+            ),
+            ObjectSpec(
+                key="blade",
+                room_key="garden_ship",
+                name="a survival sword",
+                kind="weapon",
+                wants=("weapon",),
+            ),
+            ObjectSpec(
+                key="drive",
+                room_key="garden_ship",
+                name="a damaged drive core",
+                kind="drive",
+                wants=("ship-system",),
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="raptor",
+                name="Clever",
+                room_key="garden_ship",
+                species="raptor",
+                wants=(
+                    "dinosaur",
+                    "stamina",
+                    "mutation-threshold",
+                    "faction-reputation",
+                ),
+            )
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    room = actor.world.get_entity(result.rooms["garden_ship"])
+    assert room.has_component(SoilComponent)
+    assert room.has_component(GreenhouseComponent)
+    assert room.has_component(StockpileComponent)
+    assert room.has_component(ShipComponent)
+    assert room.has_component(HabitatModuleComponent)
+    assert room.has_component(PointOfInterestComponent)
+    assert room.has_component(DungeonComponent)
+    assert room.has_component(EnclosureComponent)
+    assert room.has_component(RadiationSourceComponent)
+    assert room.has_component(FlammableComponent)
+
+    assert actor.world.get_entity(result.objects["ore"]).has_component(ResourceNodeComponent)
+    assert actor.world.get_entity(result.objects["seeds"]).has_component(SeedComponent)
+    assert actor.world.get_entity(result.objects["blade"]).has_component(WeaponComponent)
+    assert actor.world.get_entity(result.objects["drive"]).has_component(ShipSystemComponent)
+
+    raptor = actor.world.get_entity(result.characters["raptor"])
+    assert raptor.has_component(DinosaurComponent)
+    assert raptor.has_component(StaminaComponent)
+    assert raptor.has_component(MutationThresholdComponent)
+    assert raptor.has_component(FactionReputationComponent)
 
 
 async def test_generated_world_is_playable_via_plugins():
