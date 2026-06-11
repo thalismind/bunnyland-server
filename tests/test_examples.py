@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from bunnyland.core import WorldActor
+from bunnyland.core import SuspendedComponent, WorldActor, container_of
 from bunnyland.core.components import (
     DescriptionComponent,
     IdentityComponent,
@@ -16,7 +16,16 @@ from bunnyland.core.components import (
 )
 from bunnyland.mechanics.barbariansim import WeaponComponent
 from bunnyland.mechanics.colonysim import ResourceNodeComponent, StockpileComponent
-from bunnyland.mechanics.daggersim import BankComponent
+from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
+from bunnyland.mechanics.daggersim import (
+    AutomapComponent,
+    BankComponent,
+    DungeonComponent,
+    DungeonObjectiveComponent,
+    DungeonRoomComponent,
+    RestRiskComponent,
+    SecretDoorComponent,
+)
 from bunnyland.mechanics.dinosim import (
     CreatureProductComponent,
     DinosaurComponent,
@@ -38,6 +47,7 @@ from bunnyland.worldgen.examples import (
     DAGGERSIM_DEMO,
     DINOSIM_DEMO,
     DRAGONSIM_DEMO,
+    DUNGEON_DEMOS,
     GARDENSIM_DEMO,
     LIFESIM_DEMO,
     NUKESIM_DEMO,
@@ -57,7 +67,7 @@ PACKAGE_DEMOS = [
     NUKESIM_DEMO,
     DINOSIM_DEMO,
 ]
-ALL_DEMOS = [*PACKAGE_DEMOS, *POP_CULTURE_DEMOS]
+ALL_DEMOS = [*PACKAGE_DEMOS, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS]
 
 # Each demo's hallmark component — proof its package's mechanics are present.
 HALLMARKS = {
@@ -147,6 +157,31 @@ async def test_colonysim_demo_includes_stockpile_storage():
     await COLONYSIM_DEMO.generate(actor, "colonysim-demo", GenOptions())
 
     assert _has(actor, StockpileComponent)
+
+
+@pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)
+async def test_dungeon_demo_worlds_feel_like_hand_built_crawls(demo):
+    actor = WorldActor()
+
+    world = await demo.generate(actor, demo.name, GenOptions())
+
+    assert len(world.rooms) >= 5
+    assert len(world.characters) >= 2
+    assert _has(actor, DungeonComponent)
+    assert _has(actor, DungeonRoomComponent)
+    assert _has(actor, SecretDoorComponent)
+    assert _has(actor, DungeonObjectiveComponent)
+    assert _has(actor, RestRiskComponent)
+    assert _has(actor, FoodComponent)
+    assert _has(actor, DrinkableComponent)
+
+    claimable = actor.world.get_entity(next(iter(world.characters.values())))
+    assert claimable.has_component(SuspendedComponent)
+    assert claimable.has_component(AutomapComponent)
+    assert container_of(claimable) in set(world.rooms.values())
+
+    dungeon_rooms = list(actor.world.query().with_all([DungeonRoomComponent]).execute_entities())
+    assert any(room.get_component(DungeonRoomComponent).is_objective for room in dungeon_rooms)
 
 
 @pytest.mark.parametrize("demo", POP_CULTURE_DEMOS, ids=lambda d: d.name)

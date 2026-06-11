@@ -675,6 +675,7 @@ from ..worldgen.examples import (
     DINOSIM_DEMO,
     DIVE_SCHEME_DEMO,
     DRAGONSIM_DEMO,
+    DUNGEON_DEMOS,
     GARDENSIM_DEMO,
     GOTHIC_COUNT_DEMO,
     LIFESIM_DEMO,
@@ -1003,6 +1004,7 @@ def worldgen_plugin() -> Plugin:
                 DIVE_SCHEME_DEMO,
                 STAR_OPERA_DEMO,
                 GOTHIC_COUNT_DEMO,
+                *DUNGEON_DEMOS,
                 WorldGenerator(
                     "oneshot", oneshot_generator, "single LLM proposal, instantiated at once"
                 ),

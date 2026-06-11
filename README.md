@@ -204,6 +204,9 @@ the warren below, and hidden corners.
 For lighter genre-spoof setups, the worldgen plugin also ships `clue-snack-demo`,
 `dive-scheme-demo`, `star-opera-demo`, and `gothic-count-demo`, all using new names,
 locations, and props.
+For hand-crafted dungeon-crawler setups, use `dungeon-vault-demo`, `dungeon-maze-demo`,
+or `dungeon-crypt-demo`. These are small deterministic crawls with room maps, secrets,
+readable clues, food, water, and dungeon objectives.
 The `neonsim` and `fortresssim` packages are planned catalogue packages and do not have
 plugins or demo generators yet.
 

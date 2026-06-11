@@ -1145,6 +1145,339 @@ async def gothic_count_example(actor, seed: str, options: GenOptions) -> Instant
     return world
 
 
+# --------------------------------------------------------------------------------------
+# dungeon showcases — hand-built text-adventure crawls with maps, secrets, and objectives
+# --------------------------------------------------------------------------------------
+
+
+async def dungeon_vault_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A compact torchlit vault with a hidden final room and a relic objective."""
+
+    del options
+    from ..core.components import (
+        DescriptionComponent,
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+    )
+    from ..mechanics.daggersim import (
+        AutomapComponent,
+        DungeonComponent,
+        DungeonObjectiveComponent,
+        DungeonRoomComponent,
+        RecallAnchorComponent,
+        RestRiskComponent,
+        SecretDoorComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="threshold", title="Dungeon Threshold", biome="dungeon",
+                     indoor=True, light=0.25, celsius=11.0),
+            RoomSpec(key="guardroom", title="Old Guardroom", biome="dungeon",
+                     indoor=True, light=0.18, celsius=10.0),
+            RoomSpec(key="cistern", title="Black Cistern", biome="dungeon",
+                     indoor=True, light=0.08, celsius=8.0),
+            RoomSpec(key="shrine", title="Ashen Shrine", biome="dungeon",
+                     indoor=True, light=0.12, celsius=9.0),
+            RoomSpec(key="vault", title="Sealed Ember Vault", biome="dungeon",
+                     indoor=True, light=0.04, celsius=7.0),
+        ],
+        exits=[
+            ExitSpec(from_key="threshold", direction="north", to_key="guardroom"),
+            ExitSpec(from_key="guardroom", direction="south", to_key="threshold"),
+            ExitSpec(from_key="guardroom", direction="east", to_key="cistern"),
+            ExitSpec(from_key="cistern", direction="west", to_key="guardroom"),
+            ExitSpec(from_key="guardroom", direction="west", to_key="shrine"),
+            ExitSpec(from_key="shrine", direction="east", to_key="guardroom"),
+        ],
+        objects=[
+            ObjectSpec(key="ration", room_key="threshold", name="a waxed trail ration",
+                       kind="food", nutrition=4.0, satiety=16.0, portable=True),
+            ObjectSpec(key="canteen", room_key="cistern", name="a dented water canteen",
+                       kind="water", hydration=14.0, portable=True),
+            ObjectSpec(key="torch", room_key="threshold", name="a pitch-soaked torch",
+                       kind="item", portable=True),
+            ObjectSpec(key="chalk_map", room_key="guardroom", name="a chalked wall map",
+                       kind="paper", portable=False, writable=False),
+            ObjectSpec(key="iron_box", room_key="vault", name="an iron-banded coffer",
+                       kind="container", portable=False, open=False),
+        ],
+        characters=[
+            CharacterSpec(key="delver", name="Mira Flint", room_key="threshold",
+                          controller="suspended", traits=("methodical", "scarred"),
+                          goals=("map the vault", "bring back the ember idol")),
+            CharacterSpec(key="warden", name="The Ember Warden", room_key="shrine",
+                          species="echo", controller="llm", llm_profile="dungeon-warden",
+                          traits=("ancient", "literal"),
+                          goals=("test anyone who reaches the shrine",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        _add(actor, world.rooms["threshold"], [
+            IdentityComponent(name="the Ember Vault", kind="dungeon"),
+            DungeonComponent(dungeon_id="ember-vault", theme="torchlit ruin", seed=seed,
+                             level_count=1,
+                             objective_summary="recover the ember idol",
+                             entry_room_id=str(world.rooms["threshold"]),
+                             generated=True, entered=True),
+        ])
+        room_meta = {
+            "threshold": (0, "low", "The stair behind you climbs to black air."),
+            "guardroom": (1, "medium", "Rusty spear racks point toward four exits."),
+            "cistern": (2, "uneasy", "Water drips in a rhythm that almost spells words."),
+            "shrine": (2, "high", "Ash lies thick around a blank stone altar."),
+            "vault": (3, "ambush", "The final chamber waits behind the shrine wall."),
+        }
+        for key, (depth, risk, text) in room_meta.items():
+            _augment(actor, world.rooms[key],
+                     DungeonRoomComponent(dungeon_id="ember-vault", depth=depth,
+                                          discovered=(key == "threshold"),
+                                          is_objective=(key == "vault"), danger=risk),
+                     RestRiskComponent(band=risk),
+                     DescriptionComponent(short=text))
+        _augment(actor, world.characters["delver"],
+                 AutomapComponent(discovered_rooms=(str(world.rooms["threshold"]),)),
+                 RecallAnchorComponent(room_id=str(world.rooms["threshold"])))
+        _add(actor, world.rooms["shrine"], [
+            IdentityComponent(name="hairline cracks behind the altar", kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(world.rooms["vault"]),
+                                direction="behind altar", difficulty=2,
+                                hint="Ash has been swept away from the rear flagstones."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["chalk_map"]),
+            ReadableComponent(title="Chalked Wall Map",
+                              text="NORTH to iron, EAST to water, WEST to ash, then search.")
+        )
+        _add(actor, world.rooms["vault"], [
+            IdentityComponent(name="the ember idol", kind="objective"),
+            PortableComponent(can_pick_up=True),
+            DungeonObjectiveComponent(objective_kind="relic",
+                                      description="a palm-sized idol warm under the dust"),
+        ])
+    return world
+
+
+async def dungeon_maze_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A looping slate maze built for mapping, backtracking, and suspicious directions."""
+
+    del options
+    from ..core.components import DescriptionComponent, IdentityComponent, ReadableComponent
+    from ..mechanics.daggersim import (
+        AutomapComponent,
+        DungeonComponent,
+        DungeonObjectiveComponent,
+        DungeonRoomComponent,
+        RestRiskComponent,
+        SecretDoorComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="stair", title="Slate Stair", biome="dungeon",
+                     indoor=True, light=0.22, celsius=12.0),
+            RoomSpec(key="crossroads", title="Four-Way Crossroads", biome="dungeon",
+                     indoor=True, light=0.16, celsius=11.0),
+            RoomSpec(key="alcove", title="North Alcove", biome="dungeon",
+                     indoor=True, light=0.1, celsius=10.0),
+            RoomSpec(key="gallery", title="Echo Gallery", biome="dungeon",
+                     indoor=True, light=0.1, celsius=10.0),
+            RoomSpec(key="maproom", title="Map Room", biome="dungeon",
+                     indoor=True, light=0.2, celsius=12.0),
+            RoomSpec(key="cache", title="Hidden Provision Cache", biome="dungeon",
+                     indoor=True, light=0.05, celsius=9.0),
+        ],
+        exits=[
+            ExitSpec(from_key="stair", direction="down", to_key="crossroads"),
+            ExitSpec(from_key="crossroads", direction="up", to_key="stair"),
+            ExitSpec(from_key="crossroads", direction="north", to_key="alcove"),
+            ExitSpec(from_key="alcove", direction="south", to_key="crossroads"),
+            ExitSpec(from_key="crossroads", direction="east", to_key="gallery"),
+            ExitSpec(from_key="gallery", direction="west", to_key="crossroads"),
+            ExitSpec(from_key="gallery", direction="south", to_key="maproom"),
+            ExitSpec(from_key="maproom", direction="north", to_key="gallery"),
+            ExitSpec(from_key="maproom", direction="west", to_key="crossroads"),
+            ExitSpec(from_key="crossroads", direction="south", to_key="maproom"),
+        ],
+        objects=[
+            ObjectSpec(key="apple", room_key="stair", name="a bruised red apple",
+                       kind="food", nutrition=2.0, satiety=8.0, portable=True),
+            ObjectSpec(key="flask", room_key="alcove", name="a stoppered flask",
+                       kind="water", hydration=10.0, portable=True),
+            ObjectSpec(key="compass", room_key="gallery", name="a brass finger compass",
+                       kind="item", portable=True),
+            ObjectSpec(key="map_scrap", room_key="maproom", name="a slate map fragment",
+                       kind="paper", portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="mapper", name="Tamsin Grey", room_key="stair",
+                          controller="suspended", traits=("careful", "skeptical"),
+                          goals=("prove the map room lies", "mark a path out")),
+            CharacterSpec(key="voice", name="The Slate Voice", room_key="crossroads",
+                          species="echo", controller="llm", llm_profile="maze-voice",
+                          traits=("misleading", "patient"),
+                          goals=("offer directions that sound useful",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        _add(actor, world.rooms["stair"], [
+            IdentityComponent(name="the Slate Maze", kind="dungeon"),
+            DungeonComponent(dungeon_id="slate-maze", theme="mapped labyrinth", seed=seed,
+                             level_count=1,
+                             objective_summary="find the true map fragment",
+                             entry_room_id=str(world.rooms["stair"]),
+                             generated=True, entered=True),
+        ])
+        for key, depth in {
+            "stair": 0,
+            "crossroads": 1,
+            "alcove": 2,
+            "gallery": 2,
+            "maproom": 3,
+            "cache": 4,
+        }.items():
+            _augment(actor, world.rooms[key],
+                     DungeonRoomComponent(dungeon_id="slate-maze", depth=depth,
+                                          discovered=(key == "stair"),
+                                          is_objective=(key == "maproom"),
+                                          danger="medium" if key != "cache" else "low"),
+                     RestRiskComponent(band="uneasy" if key != "cache" else "low"),
+                     DescriptionComponent(short=f"Scratched slate marks the {key}."))
+        _augment(actor, world.characters["mapper"],
+                 AutomapComponent(discovered_rooms=(str(world.rooms["stair"]),)))
+        replace_component(
+            actor.world.get_entity(world.objects["map_scrap"]),
+            ReadableComponent(title="Slate Map Fragment",
+                              text="A blocky map says: N, E, S, W are true only once.")
+        )
+        _add(actor, world.rooms["maproom"], [
+            IdentityComponent(name="a square shadow under the false map", kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(world.rooms["cache"]),
+                                direction="under map", difficulty=1,
+                                hint="The map stone rings hollow when tapped."),
+        ])
+        _add(actor, world.rooms["cache"], [
+            IdentityComponent(name="the true map tablet", kind="objective"),
+            DungeonObjectiveComponent(objective_kind="map",
+                                      description="a complete route scratched into slate"),
+        ])
+    return world
+
+
+async def dungeon_crypt_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A chapel crypt with locked passages, readable clues, and a lower reliquary."""
+
+    del options
+    from ..core.components import (
+        DescriptionComponent,
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+    )
+    from ..mechanics.daggersim import (
+        AutomapComponent,
+        DungeonComponent,
+        DungeonObjectiveComponent,
+        DungeonRoomComponent,
+        RestRiskComponent,
+        SecretDoorComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="chapel", title="Ruined Chapel", biome="crypt",
+                     indoor=True, light=0.35, celsius=10.0),
+            RoomSpec(key="ossuary", title="Lettered Ossuary", biome="crypt",
+                     indoor=True, light=0.12, celsius=7.0),
+            RoomSpec(key="well", title="Dry Well Shaft", biome="crypt",
+                     indoor=True, light=0.06, celsius=6.0),
+            RoomSpec(key="gate", title="Iron Saint Gate", biome="crypt",
+                     indoor=True, light=0.08, celsius=6.0),
+            RoomSpec(key="reliquary", title="Lower Reliquary", biome="crypt",
+                     indoor=True, light=0.03, celsius=5.0),
+        ],
+        exits=[
+            ExitSpec(from_key="chapel", direction="down", to_key="ossuary"),
+            ExitSpec(from_key="ossuary", direction="up", to_key="chapel"),
+            ExitSpec(from_key="ossuary", direction="west", to_key="well"),
+            ExitSpec(from_key="well", direction="east", to_key="ossuary"),
+            ExitSpec(from_key="ossuary", direction="east", to_key="gate", locked=True),
+            ExitSpec(from_key="gate", direction="west", to_key="ossuary", locked=True),
+        ],
+        objects=[
+            ObjectSpec(key="bread", room_key="chapel", name="a wrapped heel of bread",
+                       kind="food", nutrition=3.0, satiety=10.0, portable=True),
+            ObjectSpec(key="holy_water", room_key="chapel", name="a blue glass water vial",
+                       kind="water", hydration=8.0, portable=True),
+            ObjectSpec(key="epitaph", room_key="ossuary", name="an alphabetical epitaph",
+                       kind="paper", portable=False),
+            ObjectSpec(key="rust_key", room_key="well", name="a rusted crypt key",
+                       kind="key", portable=True, key_name="saint-gate"),
+        ],
+        characters=[
+            CharacterSpec(key="seeker", name="Iris Vale", room_key="chapel",
+                          controller="suspended", traits=("brave", "tired"),
+                          goals=("read the epitaph", "find the reliquary candle")),
+            CharacterSpec(key="scribe", name="The Bone Scribe", room_key="ossuary",
+                          species="spirit", controller="llm", llm_profile="crypt-scribe",
+                          traits=("formal", "forgetful"),
+                          goals=("answer only in clues",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        _add(actor, world.rooms["chapel"], [
+            IdentityComponent(name="the Lettered Crypt", kind="dungeon"),
+            DungeonComponent(dungeon_id="lettered-crypt", theme="sepulchral puzzle",
+                             seed=seed, level_count=1,
+                             objective_summary="recover the reliquary candle",
+                             entry_room_id=str(world.rooms["chapel"]),
+                             generated=True, entered=True),
+        ])
+        for key, (depth, danger, text) in {
+            "chapel": (0, "low", "Rain ticks through the roof in single-letter beats."),
+            "ossuary": (1, "medium", "Names are carved alphabetically into every wall."),
+            "well": (2, "medium", "The dry stones smell of old iron."),
+            "gate": (2, "high", "A saint of iron bars blocks the eastern way."),
+            "reliquary": (3, "ambush", "Wax seals the shelves like pale armor."),
+        }.items():
+            _augment(actor, world.rooms[key],
+                     DungeonRoomComponent(dungeon_id="lettered-crypt", depth=depth,
+                                          discovered=(key == "chapel"),
+                                          is_objective=(key == "reliquary"), danger=danger),
+                     RestRiskComponent(band=danger),
+                     DescriptionComponent(short=text))
+        _augment(actor, world.characters["seeker"],
+                 AutomapComponent(discovered_rooms=(str(world.rooms["chapel"]),)))
+        _add(actor, world.rooms["gate"], [
+            IdentityComponent(name="a saint's loose iron halo", kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(world.rooms["reliquary"]),
+                                direction="through halo", difficulty=2,
+                                hint="The halo turns a finger-width when the key is near."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["epitaph"]),
+            ReadableComponent(title="Alphabetical Epitaph",
+                              text="A begins below. I opens east. R turns the saint's halo.")
+        )
+        _add(actor, world.rooms["reliquary"], [
+            IdentityComponent(name="the reliquary candle", kind="objective"),
+            PortableComponent(can_pick_up=True),
+            DungeonObjectiveComponent(objective_kind="light",
+                                      description="a black candle marked with silver letters"),
+        ])
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -1199,12 +1532,30 @@ GOTHIC_COUNT_DEMO = WorldGenerator(
     name="gothic-count-demo", generate=gothic_count_example,
     description="A legally distinct gothic night-host castle with papers, secrets, and hunger.",
     uses_seed=False)
+DUNGEON_VAULT_DEMO = WorldGenerator(
+    name="dungeon-vault-demo", generate=dungeon_vault_example,
+    description="A torchlit hand-built vault with a hidden relic room and dungeon map.",
+    uses_seed=False)
+DUNGEON_MAZE_DEMO = WorldGenerator(
+    name="dungeon-maze-demo", generate=dungeon_maze_example,
+    description="A looping slate maze for classic mapping, backtracking, and secret hunting.",
+    uses_seed=False)
+DUNGEON_CRYPT_DEMO = WorldGenerator(
+    name="dungeon-crypt-demo", generate=dungeon_crypt_example,
+    description="A chapel crypt with locked passages, readable clues, and a reliquary.",
+    uses_seed=False)
 
 POP_CULTURE_DEMOS = (
     CLUE_SNACK_DEMO,
     DIVE_SCHEME_DEMO,
     STAR_OPERA_DEMO,
     GOTHIC_COUNT_DEMO,
+)
+
+DUNGEON_DEMOS = (
+    DUNGEON_VAULT_DEMO,
+    DUNGEON_MAZE_DEMO,
+    DUNGEON_CRYPT_DEMO,
 )
 
 
@@ -1215,6 +1566,10 @@ __all__ = [
     "DAGGERSIM_DEMO",
     "DINOSIM_DEMO",
     "DRAGONSIM_DEMO",
+    "DUNGEON_CRYPT_DEMO",
+    "DUNGEON_DEMOS",
+    "DUNGEON_MAZE_DEMO",
+    "DUNGEON_VAULT_DEMO",
     "DIVE_SCHEME_DEMO",
     "GARDENSIM_DEMO",
     "GOTHIC_COUNT_DEMO",
@@ -1229,6 +1584,9 @@ __all__ = [
     "daggersim_example",
     "dinosim_example",
     "dragonsim_example",
+    "dungeon_crypt_example",
+    "dungeon_maze_example",
+    "dungeon_vault_example",
     "dive_scheme_example",
     "gardensim_example",
     "gothic_count_example",
