@@ -105,9 +105,13 @@ from .edges import (
 )
 from .events import (
     CharacterClaimedEvent,
+    CharacterGeneratedEvent,
     DomainEvent,
     EventBus,
     EventVisibility,
+    GeneratedEntityEvent,
+    ObjectGeneratedEvent,
+    RoomGeneratedEvent,
     WorldPauseStatusChangedEvent,
 )
 from .handlers import (
@@ -147,6 +151,7 @@ __all__ = [
     "ButtonComponent",
     "CharacterComponent",
     "CharacterClaimedEvent",
+    "CharacterGeneratedEvent",
     "ClaimTimeoutComponent",
     "ClaimTimeoutSystem",
     "Command",
@@ -169,6 +174,7 @@ __all__ = [
     "EventVisibility",
     "ExitTo",
     "FocusPointsComponent",
+    "GeneratedEntityEvent",
     "HearingComponent",
     "HasThought",
     "HasInjury",
@@ -192,6 +198,7 @@ __all__ = [
     "MoveCommand",
     "MoveHandler",
     "OnInsufficientPoints",
+    "ObjectGeneratedEvent",
     "PainComponent",
     "PerceptionComponent",
     "PortableComponent",
@@ -199,6 +206,7 @@ __all__ = [
     "ReadableComponent",
     "RegionComponent",
     "RoomComponent",
+    "RoomGeneratedEvent",
     "RoomSummaryComponent",
     "SayCommand",
     "SayHandler",

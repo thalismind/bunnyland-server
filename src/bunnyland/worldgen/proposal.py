@@ -56,6 +56,9 @@ class RoomSpec(BaseModel):
     indoor: bool = False
     light: float | None = None
     celsius: float | None = None
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
 
 
 class ExitSpec(BaseModel):
@@ -79,6 +82,9 @@ class ObjectSpec(BaseModel):
     writable: bool = False
     key_name: str | None = None
     locked: bool = False
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
 
     @field_validator(
         "portable",
@@ -109,6 +115,9 @@ class CharacterSpec(BaseModel):
     with_memory: bool = True
     traits: tuple[str, ...] = ()
     goals: tuple[str, ...] = ()
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
 
     @field_validator("llm_profile", "llm_model", "llm_provider", mode="before")
     @classmethod
@@ -139,6 +148,8 @@ class RoomNodeProposal(BaseModel):
     light: float | None = None
     celsius: float | None = None
     description: str = ""  # short prose, re-shown to the DM when populating the room
+    tags: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
 
 
 class DoorProposal(BaseModel):
@@ -173,6 +184,9 @@ class ItemProposal(BaseModel):
     writable: bool = False
     key_name: str | None = None
     locked: bool = False
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
 
     @field_validator(
         "portable",
@@ -204,6 +218,9 @@ class CharacterProposal(BaseModel):
     traits: tuple[str, ...] = ()
     goals: tuple[str, ...] = ()
     key: str = ""  # assigned by the generator before instantiation
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
 
     @field_validator("llm_profile", "llm_model", "llm_provider", mode="before")
     @classmethod

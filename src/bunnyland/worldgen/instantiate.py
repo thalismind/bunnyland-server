@@ -34,7 +34,12 @@ from ..core.components import (
 from ..core.controllers import LLMControllerComponent
 from ..core.ecs import spawn_entity
 from ..core.edges import ContainmentMode, Contains, ExitTo
-from ..core.events import WorldGeneratedEvent
+from ..core.events import (
+    CharacterGeneratedEvent,
+    ObjectGeneratedEvent,
+    RoomGeneratedEvent,
+    WorldGeneratedEvent,
+)
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.meter import Meter
 from ..mechanics.needs import HungerComponent, ThirstComponent
@@ -131,6 +136,15 @@ def _character_components(spec: CharacterSpec) -> list:
     return components
 
 
+def _generation_tags(*values: str, extra: tuple[str, ...] = ()) -> tuple[str, ...]:
+    tags: list[str] = []
+    for value in (*values, *extra):
+        clean = value.strip()
+        if clean and clean not in tags:
+            tags.append(clean)
+    return tuple(tags)
+
+
 async def instantiate(actor: WorldActor, proposal: WorldProposal) -> InstantiatedWorld:
     """Validate then build the proposed world. Raises ValueError on validation failure."""
     errors = validate_proposal(proposal)
@@ -147,7 +161,29 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
                 components.append(LightComponent(level=room.light))
             if room.celsius is not None:
                 components.append(TemperatureComponent(celsius=room.celsius))
-            result.rooms[room.key] = spawn_entity(world, components).id
+            entity = spawn_entity(world, components)
+            result.rooms[room.key] = entity.id
+            await actor.bus.publish(
+                RoomGeneratedEvent(
+                    **actor._event_base(
+                        seed=proposal.seed,
+                        entity_id=str(entity.id),
+                        entity_key=room.key,
+                        entity_kind="room",
+                        room_id=str(entity.id),
+                        room_key=room.key,
+                        intent=room.description or room.title,
+                        tags=_generation_tags(
+                            room.biome,
+                            "indoor" if room.indoor else "outdoor",
+                            extra=room.tags,
+                        ),
+                        wants=room.wants,
+                        biome=room.biome,
+                        indoor=room.indoor,
+                    )
+                )
+            )
 
         for exit_ in proposal.exits:
             world.get_entity(result.rooms[exit_.from_key]).add_relationship(
@@ -161,6 +197,23 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
                 Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
             )
             result.objects[obj.key] = entity.id
+            await actor.bus.publish(
+                ObjectGeneratedEvent(
+                    **actor._event_base(
+                        seed=proposal.seed,
+                        entity_id=str(entity.id),
+                        entity_key=obj.key,
+                        entity_kind=obj.kind,
+                        object_key=obj.key,
+                        room_id=str(result.rooms[obj.room_key]),
+                        container_id=str(result.rooms[obj.room_key]),
+                        containment_mode=ContainmentMode.ROOM_CONTENT.value,
+                        intent=obj.description or obj.name,
+                        tags=_generation_tags(obj.kind, extra=obj.tags),
+                        wants=obj.wants,
+                    )
+                )
+            )
 
         for character in proposal.characters:
             entity = spawn_entity(world, _character_components(character))
@@ -169,6 +222,26 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
             )
             result.characters[character.key] = entity.id
             _wire_controller(actor, entity.id, character)
+            await actor.bus.publish(
+                CharacterGeneratedEvent(
+                    **actor._event_base(
+                        seed=proposal.seed,
+                        entity_id=str(entity.id),
+                        entity_key=character.key,
+                        entity_kind="character",
+                        character_key=character.key,
+                        room_id=str(result.rooms[character.room_key]),
+                        intent=character.description or f"{character.name}, a {character.species}",
+                        tags=_generation_tags(
+                            character.species,
+                            *character.traits,
+                            extra=character.tags,
+                        ),
+                        wants=character.wants,
+                        species=character.species,
+                    )
+                )
+            )
 
         await actor.bus.publish(
             WorldGeneratedEvent(

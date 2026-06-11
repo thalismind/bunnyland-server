@@ -413,6 +413,35 @@ class WorldGeneratedEvent(DomainEvent):
     character_count: int
 
 
+class GeneratedEntityEvent(DomainEvent):
+    seed: str
+    entity_id: str
+    entity_key: str
+    entity_kind: str
+    intent: str = ""
+    tags: tuple[str, ...] = ()
+    wants: tuple[str, ...] = ()
+
+
+class RoomGeneratedEvent(GeneratedEntityEvent):
+    room_key: str
+    biome: str = "unknown"
+    indoor: bool = False
+
+
+class ObjectGeneratedEvent(GeneratedEntityEvent):
+    object_key: str
+    room_id: str | None = None
+    container_id: str | None = None
+    containment_mode: str = "room_content"
+
+
+class CharacterGeneratedEvent(GeneratedEntityEvent):
+    character_key: str
+    room_id: str
+    species: str = "bunny"
+
+
 class WorldGenerationStartedEvent(DomainEvent):
     job_id: str
     seed: str
@@ -504,6 +533,7 @@ __all__ = [
     "EventVisibility",
     "FortificationBuiltEvent",
     "FocusPointsChangedEvent",
+    "GeneratedEntityEvent",
     "InjuryAddedEvent",
     "ItemDroppedEvent",
     "ItemCraftedEvent",
@@ -533,6 +563,7 @@ __all__ = [
     "StorageFilterChangedEvent",
     "PhysicalWriteEvent",
     "ReflectionCreatedEvent",
+    "RoomGeneratedEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",
     "WorldPauseStatusChangedEvent",
@@ -540,4 +571,6 @@ __all__ = [
     "WorldGenerationFailedEvent",
     "WorldGenerationStartedEvent",
     "WorldGeneratedEvent",
+    "ObjectGeneratedEvent",
+    "CharacterGeneratedEvent",
 ]

@@ -34,10 +34,16 @@ from ..core.components import (
 )
 from ..core.ecs import spawn_entity
 from ..core.edges import ContainmentMode, Contains, ExitTo
-from ..core.events import WorldGeneratedEvent
+from ..core.events import (
+    CharacterGeneratedEvent,
+    ObjectGeneratedEvent,
+    RoomGeneratedEvent,
+    WorldGeneratedEvent,
+)
 from .instantiate import (
     InstantiatedWorld,
     _character_components,
+    _generation_tags,
     _object_components,
     _wire_controller,
 )
@@ -83,12 +89,14 @@ class RecursiveWorldGenerator:
         self._room_specs: dict[str, RoomNodeProposal] = {}
         self._descriptions: dict[str, str] = {}
         self._room_titles: dict[str, str] = {}
+        self._seed = ""
 
     @property
     def world(self):
         return self.actor.world
 
     async def generate(self, seed: str) -> InstantiatedWorld:
+        self._seed = seed
         await self._build_rooms(seed)
         await self._populate_rooms()
         await self._fill_containment()
@@ -111,6 +119,7 @@ class RecursiveWorldGenerator:
         root = self.builder.propose_room(seed, behind=None, known_rooms={})
         async with self.actor._lock:
             root_key = self._spawn_room("room_0", root)
+            await self._publish_room_generated(root_key, root)
         frontier: deque[tuple[str, DoorProposal]] = deque(
             (root_key, door) for door in self.builder.propose_doors(root)
         )
@@ -125,6 +134,7 @@ class RecursiveWorldGenerator:
             )
             async with self.actor._lock:
                 new_key = self._spawn_room(f"room_{counter}", spec)
+                await self._publish_room_generated(new_key, spec)
                 counter += 1
                 self._connect(source_key, new_key, door)
             doors = self.builder.propose_doors(spec)
@@ -144,7 +154,7 @@ class RecursiveWorldGenerator:
                 candidates=candidates,
             )
             async with self.actor._lock:
-                self._resolve_dangling(source_key, door, candidates, resolution)
+                await self._resolve_dangling(source_key, door, candidates, resolution)
 
     def _spawn_room(self, key: str, spec: RoomNodeProposal) -> str:
         spec = self._with_unique_room_title(key, spec)
@@ -197,7 +207,7 @@ class RecursiveWorldGenerator:
                 self.result.rooms[source_key],
             )
 
-    def _resolve_dangling(
+    async def _resolve_dangling(
         self,
         source_key: str,
         door: DoorProposal,
@@ -208,12 +218,22 @@ class RecursiveWorldGenerator:
             self._connect(source_key, resolution.target_room_key, door)
             self.stats["linked"] += 1
         elif resolution.action == "seal":
-            self._spawn_sealed_door(source_key, door)
+            object_key, entity_id = self._spawn_sealed_door(source_key, door)
+            await self._publish_object_generated(
+                object_key,
+                entity_id,
+                kind="door",
+                intent=door.beyond_hint or f"a sealed {door.direction} door",
+                tags=("door", "sealed"),
+                room_id=self.result.rooms[source_key],
+                container_id=self.result.rooms[source_key],
+                mode=ContainmentMode.ROOM_CONTENT,
+            )
             self.stats["sealed"] += 1
         else:
             self.stats["dropped"] += 1
 
-    def _spawn_sealed_door(self, room_key: str, door: DoorProposal) -> None:
+    def _spawn_sealed_door(self, room_key: str, door: DoorProposal) -> tuple[str, EntityId]:
         entity = spawn_entity(
             self.world,
             [
@@ -224,7 +244,9 @@ class RecursiveWorldGenerator:
         self.world.get_entity(self.result.rooms[room_key]).add_relationship(
             Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
         )
-        self.result.objects[f"door_{room_key}_{door.direction}"] = entity.id
+        object_key = f"door_{room_key}_{door.direction}"
+        self.result.objects[object_key] = entity.id
+        return object_key, entity.id
 
     # -- phase 4: contents ------------------------------------------------------------
 
@@ -237,13 +259,26 @@ class RecursiveWorldGenerator:
             )
             async with self.actor._lock:
                 for index, item in enumerate(contents.objects):
-                    self._spawn_object(
-                        room_id, f"{room_key}_obj{index}", item, ContainmentMode.ROOM_CONTENT
+                    key = f"{room_key}_obj{index}"
+                    entity_id = self._spawn_object(
+                        room_id, key, item, ContainmentMode.ROOM_CONTENT
+                    )
+                    await self._publish_object_generated(
+                        key,
+                        entity_id,
+                        kind=item.kind,
+                        intent=item.description or item.name,
+                        tags=_generation_tags(item.kind, extra=item.tags),
+                        wants=item.wants,
+                        room_id=room_id,
+                        container_id=room_id,
+                        mode=ContainmentMode.ROOM_CONTENT,
                     )
                 for character in contents.characters:
                     character.key = f"char_{char_counter}"
                     char_counter += 1
-                    self._spawn_character(room_id, character)
+                    entity_id = self._spawn_character(room_id, character)
+                    await self._publish_character_generated(entity_id, character, room_id)
 
     def _spawn_object(
         self, container_id, key: str, item: ItemProposal, mode: ContainmentMode
@@ -253,13 +288,14 @@ class RecursiveWorldGenerator:
         self.result.objects[key] = entity.id
         return entity.id
 
-    def _spawn_character(self, room_id, character: CharacterProposal) -> None:
+    def _spawn_character(self, room_id, character: CharacterProposal) -> EntityId:
         entity = spawn_entity(self.world, _character_components(character))
         self.world.get_entity(room_id).add_relationship(
             Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
         )
         self.result.characters[character.key] = entity.id
         _wire_controller(self.actor, entity.id, character)
+        return entity.id
 
     # -- phase 5: recurse into inventory and containers -------------------------------
 
@@ -274,8 +310,19 @@ class RecursiveWorldGenerator:
             items = self.builder.propose_inventory(name=name, species=species)
             async with self.actor._lock:
                 for index, item in enumerate(items):
-                    self._spawn_object(
-                        character_id, f"{key}_inv{index}", item, ContainmentMode.INVENTORY
+                    object_key = f"{key}_inv{index}"
+                    entity_id = self._spawn_object(
+                        character_id, object_key, item, ContainmentMode.INVENTORY
+                    )
+                    await self._publish_object_generated(
+                        object_key,
+                        entity_id,
+                        kind=item.kind,
+                        intent=item.description or item.name,
+                        tags=_generation_tags(item.kind, extra=item.tags),
+                        wants=item.wants,
+                        container_id=character_id,
+                        mode=ContainmentMode.INVENTORY,
                     )
 
         for key, object_id in list(self.result.objects.items()):
@@ -287,9 +334,99 @@ class RecursiveWorldGenerator:
             items = self.builder.propose_container_contents(name=name)
             async with self.actor._lock:
                 for index, item in enumerate(items):
-                    self._spawn_object(
-                        object_id, f"{key}_contains{index}", item, ContainmentMode.CONTAINER
+                    object_key = f"{key}_contains{index}"
+                    entity_id = self._spawn_object(
+                        object_id, object_key, item, ContainmentMode.CONTAINER
                     )
+                    await self._publish_object_generated(
+                        object_key,
+                        entity_id,
+                        kind=item.kind,
+                        intent=item.description or item.name,
+                        tags=_generation_tags(item.kind, extra=item.tags),
+                        wants=item.wants,
+                        container_id=object_id,
+                        mode=ContainmentMode.CONTAINER,
+                    )
+
+    async def _publish_room_generated(self, room_key: str, spec: RoomNodeProposal) -> None:
+        entity_id = self.result.rooms[room_key]
+        await self.actor.bus.publish(
+            RoomGeneratedEvent(
+                **self.actor._event_base(
+                    seed=self._seed,
+                    entity_id=str(entity_id),
+                    entity_key=room_key,
+                    entity_kind="room",
+                    room_id=str(entity_id),
+                    room_key=room_key,
+                    intent=spec.description or spec.title,
+                    tags=_generation_tags(
+                        spec.biome,
+                        "indoor" if spec.indoor else "outdoor",
+                        extra=spec.tags,
+                    ),
+                    wants=spec.wants,
+                    biome=spec.biome,
+                    indoor=spec.indoor,
+                )
+            )
+        )
+
+    async def _publish_object_generated(
+        self,
+        object_key: str,
+        entity_id: EntityId,
+        *,
+        kind: str,
+        intent: str,
+        tags: tuple[str, ...],
+        wants: tuple[str, ...] = (),
+        room_id: EntityId | None = None,
+        container_id: EntityId | None = None,
+        mode: ContainmentMode,
+    ) -> None:
+        await self.actor.bus.publish(
+            ObjectGeneratedEvent(
+                **self.actor._event_base(
+                    seed=self._seed,
+                    entity_id=str(entity_id),
+                    entity_key=object_key,
+                    entity_kind=kind,
+                    object_key=object_key,
+                    room_id=str(room_id) if room_id is not None else None,
+                    container_id=str(container_id) if container_id is not None else None,
+                    containment_mode=mode.value,
+                    intent=intent,
+                    tags=tags,
+                    wants=wants,
+                )
+            )
+        )
+
+    async def _publish_character_generated(
+        self, entity_id: EntityId, character: CharacterProposal, room_id: EntityId
+    ) -> None:
+        await self.actor.bus.publish(
+            CharacterGeneratedEvent(
+                **self.actor._event_base(
+                    seed=self._seed,
+                    entity_id=str(entity_id),
+                    entity_key=character.key,
+                    entity_kind="character",
+                    character_key=character.key,
+                    room_id=str(room_id),
+                    intent=character.description or f"{character.name}, a {character.species}",
+                    tags=_generation_tags(
+                        character.species,
+                        *character.traits,
+                        extra=character.tags,
+                    ),
+                    wants=character.wants,
+                    species=character.species,
+                )
+            )
+        )
 
 
 __all__ = ["RecursiveWorldGenerator"]

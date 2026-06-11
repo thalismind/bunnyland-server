@@ -214,13 +214,15 @@ plugins or demo generators yet.
 ## Development
 
 ```bash
-uv run -m pytest
+scripts/test-all
 uv run ruff check src tests
 ```
 
-Use `uv run -m pytest` instead of `uv run pytest`; with some `uv` environments the console
-entrypoint can run without the same import path as the module form, which shows up as
-missing installed dependencies such as `relics`.
+Use `scripts/test-all` for the default test run. It delegates to `scripts/test-coverage`,
+which runs `uv run -m pytest` with coverage. Use module-form pytest instead of
+`uv run pytest`; with some `uv` environments the console entrypoint can run without the
+same import path as the module form, which shows up as missing installed dependencies such
+as `relics`.
 
 Optional live LLM checks are marked and skipped by default. They load `.env` before
 checking credentials. To exercise real Ollama and OpenRouter SDK calls, install the `llm`

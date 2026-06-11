@@ -8,11 +8,13 @@ orders them by dependency, and applies each to a world actor.
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING
 
 from ..core.actions import action_definition_for_command_type, inferred_action_definition
+from ..core.events import GeneratedEntityEvent
 from .contributions import collect_content_items
 from .model import Plugin
 
@@ -118,6 +120,24 @@ def _instantiate(item):
     return item() if isinstance(item, type) else item
 
 
+def _subscribe_worldgen_hook(actor: WorldActor, hook) -> None:
+    """Register a generation hook contributed by plugin content."""
+
+    instance = _instantiate(hook)
+    subscribe = getattr(instance, "subscribe", None)
+    if subscribe is not None:
+        params = list(inspect.signature(subscribe).parameters)
+        if params and params[0] == "actor":
+            subscribe(actor)
+        else:
+            subscribe(actor.bus)
+        return
+    if callable(instance):
+        actor.bus.subscribe(GeneratedEntityEvent, instance)
+        return
+    raise PluginError(f"worldgen hook {hook!r} is not callable and has no subscribe()")
+
+
 def apply_plugin(plugin: Plugin, actor: WorldActor) -> None:
     """Wire a single plugin's contributions into the actor."""
     for system in plugin.ecs.systems:
@@ -137,6 +157,8 @@ def apply_plugin(plugin: Plugin, actor: WorldActor) -> None:
                 action_definition_for_command_type(instance.command_type)
                 or inferred_action_definition(instance.command_type)
             )
+    for hook in plugin.content.worldgen_hooks:
+        _subscribe_worldgen_hook(actor, hook)
     for factory in plugin.runtime.all_factories():
         factory(actor)
 

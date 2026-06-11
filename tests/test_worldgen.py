@@ -12,6 +12,7 @@ from bunnyland.core import (
     CommandCost,
     ContainerComponent,
     ControlledBy,
+    EditorDisplayComponent,
     ExitTo,
     IdentityComponent,
     Lane,
@@ -24,11 +25,17 @@ from bunnyland.core import (
     WorldActor,
     build_submitted_command,
     container_of,
+    parse_entity_id,
 )
 from bunnyland.core.components import ReadableComponent, WritableComponent
-from bunnyland.core.events import WorldGeneratedEvent
+from bunnyland.core.events import (
+    CharacterGeneratedEvent,
+    ObjectGeneratedEvent,
+    RoomGeneratedEvent,
+    WorldGeneratedEvent,
+)
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
-from bunnyland.plugins import apply_plugins, bunnyland_plugins
+from bunnyland.plugins import ContentContribution, Plugin, apply_plugins, bunnyland_plugins
 from bunnyland.worldgen import (
     CharacterProposal,
     CharacterSpec,
@@ -374,6 +381,121 @@ async def test_instantiate_builds_the_mvp_checklist():
     assert container_of(hazel) == result.rooms["burrow"]
 
     assert events and events[0].room_count == 2 and events[0].character_count == 2
+
+
+async def test_instantiate_emits_typed_generation_events_with_intent_tags_and_wants():
+    actor = WorldActor()
+    rooms: list[RoomGeneratedEvent] = []
+    objects: list[ObjectGeneratedEvent] = []
+    characters: list[CharacterGeneratedEvent] = []
+    actor.bus.subscribe(RoomGeneratedEvent, rooms.append)
+    actor.bus.subscribe(ObjectGeneratedEvent, objects.append)
+    actor.bus.subscribe(CharacterGeneratedEvent, characters.append)
+
+    proposal = WorldProposal(
+        seed="storm cellar",
+        rooms=[
+            RoomSpec(
+                key="cellar",
+                title="Flooded Cellar",
+                biome="cellar",
+                indoor=True,
+                description="a flooded cellar, signs of recent struggle",
+                tags=("wet",),
+                wants=("humidity",),
+            )
+        ],
+        objects=[
+            ObjectSpec(
+                key="crate",
+                room_key="cellar",
+                name="a swollen crate",
+                kind="container",
+                description="waterlogged supplies",
+                tags=("salvage",),
+                wants=("loot-table",),
+            )
+        ],
+        characters=[
+            CharacterSpec(
+                key="scout",
+                name="Scout",
+                room_key="cellar",
+                species="hare",
+                description="a worried scout checking the flood",
+                traits=("watchful",),
+                tags=("local",),
+                wants=("faction-allegiance",),
+            )
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    assert [event.room_key for event in rooms] == ["cellar"]
+    assert rooms[0].entity_id == str(result.rooms["cellar"])
+    assert rooms[0].intent == "a flooded cellar, signs of recent struggle"
+    assert rooms[0].tags == ("cellar", "indoor", "wet")
+    assert rooms[0].wants == ("humidity",)
+
+    assert [event.object_key for event in objects] == ["crate"]
+    assert objects[0].entity_id == str(result.objects["crate"])
+    assert objects[0].room_id == str(result.rooms["cellar"])
+    assert objects[0].container_id == str(result.rooms["cellar"])
+    assert objects[0].intent == "waterlogged supplies"
+    assert objects[0].tags == ("container", "salvage")
+    assert objects[0].wants == ("loot-table",)
+
+    assert [event.character_key for event in characters] == ["scout"]
+    assert characters[0].entity_id == str(result.characters["scout"])
+    assert characters[0].room_id == str(result.rooms["cellar"])
+    assert characters[0].intent == "a worried scout checking the flood"
+    assert characters[0].tags == ("hare", "watchful", "local")
+    assert characters[0].wants == ("faction-allegiance",)
+
+
+async def test_plugin_worldgen_hook_can_enrich_generated_entities():
+    class RoomEmojiHook:
+        def subscribe(self, actor: WorldActor) -> None:
+            self.actor = actor
+            actor.bus.subscribe(RoomGeneratedEvent, self.on_room)
+
+        def on_room(self, event: RoomGeneratedEvent) -> None:
+            if "humidity" not in event.wants:
+                return
+            entity_id = parse_entity_id(event.entity_id)
+            assert entity_id is not None
+            self.actor.world.get_entity(entity_id).add_component(
+                EditorDisplayComponent(emoji="~")
+            )
+
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="humidity",
+                name="Humidity",
+                content=ContentContribution(worldgen_hooks=(RoomEmojiHook,)),
+            )
+        ],
+        actor,
+    )
+    proposal = WorldProposal(
+        seed="rain",
+        rooms=[
+            RoomSpec(
+                key="room",
+                title="Rain Room",
+                description="rain pools on the floor",
+                wants=("humidity",),
+            )
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    room = actor.world.get_entity(result.rooms["room"])
+    assert room.get_component(EditorDisplayComponent).emoji == "~"
 
 
 async def test_generated_world_is_playable_via_plugins():
