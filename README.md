@@ -109,6 +109,8 @@ branch tags and `latest` for the default branch. The web repo publishes
   objects, write, rest, and talk.
 - **[Needs and memory](docs/player/needs-and-memory.md)** — how to eat, drink, take notes,
   remember, reflect, and forget.
+- **[Daily needs](docs/player/daily-needs.md)** — fatigue, hygiene, comfort, fun, social
+  contact, privacy, safety, and self-care actions.
 - **[Environment and mechanisms](docs/player/environment-and-mechanisms.md)** — how to use
   doors/buttons and handle fire.
 - **[Social play and boundaries](docs/player/social-and-boundaries.md)** — how speech,
@@ -117,8 +119,12 @@ branch tags and `latest` for the default branch. The web repo publishes
   resolve active incidents.
 - **[Garden-sim farming](docs/player/gardensim.md)** — finding soil, planting seeds,
   watering crops, harvesting produce, and selling it.
+- **[Farm production](docs/player/farm-production.md)** — edible produce, machines,
+  animals, fishing, mining, foraging, gifts, festivals, and bundles.
 - **[Colony-sim work and ownership](docs/player/colonysim.md)** — reservations, resources,
   crafting, jobs, and durable ownership.
+- **[Colony health and work](docs/player/colony-health-and-work.md)** — priorities,
+  allowed areas, room quality, medicine, recovery, wealth, and mental states.
 - **[Barbarian-sim combat and survival](docs/player/barbariansim.md)** — challenges,
   attacks, repairs, fortifications, poison, corruption, and pickpocketing.
 - **[Dragon-sim exploration and quests](docs/player/dragonsim.md)** — discovering

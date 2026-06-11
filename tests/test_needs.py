@@ -11,6 +11,7 @@ from bunnyland.core import (
     Contains,
     IdentityComponent,
     Lane,
+    SleepingComponent,
     build_submitted_command,
     container_of,
     spawn_entity,
@@ -24,7 +25,19 @@ from bunnyland.mechanics.consumables import (
 )
 from bunnyland.mechanics.eat_drink import DrinkHandler, EatHandler, _consume_one_use
 from bunnyland.mechanics.meter import Meter
-from bunnyland.mechanics.needs import HungerComponent, ThirstComponent
+from bunnyland.mechanics.needs import (
+    ComfortNeedComponent,
+    FatigueComponent,
+    FunNeedComponent,
+    HungerComponent,
+    HygieneComponent,
+    NeedAffordanceComponent,
+    PrivacyNeedComponent,
+    SafetyNeedComponent,
+    SocialNeedComponent,
+    ThirstComponent,
+    need_fragments,
+)
 
 HOUR = 3600.0
 
@@ -35,6 +48,19 @@ def needs_scenario(*, hunger=0.0, thirst=0.0):
     char = scenario.actor.world.get_entity(scenario.character)
     char.add_component(HungerComponent(meter=Meter(value=hunger), metabolism=2.0))
     char.add_component(ThirstComponent(meter=Meter(value=thirst), hydration_loss_rate=3.0))
+    return scenario
+
+
+def daily_needs_scenario():
+    scenario = needs_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+    char.add_component(FatigueComponent(meter=Meter(value=20.0), fatigue_rate=2.0))
+    char.add_component(HygieneComponent(meter=Meter(value=60.0), decay_rate=2.0))
+    char.add_component(ComfortNeedComponent(meter=Meter(value=60.0), decay_rate=2.0))
+    char.add_component(FunNeedComponent(meter=Meter(value=60.0), decay_rate=2.0))
+    char.add_component(SocialNeedComponent(meter=Meter(value=60.0), decay_rate=2.0))
+    char.add_component(PrivacyNeedComponent(meter=Meter(value=60.0), decay_rate=2.0))
+    char.add_component(SafetyNeedComponent(meter=Meter(value=60.0), decay_rate=2.0))
     return scenario
 
 
@@ -103,6 +129,65 @@ async def test_hunger_and_thirst_rise_independently():
     # hunger += metabolism(2.0)*1h; thirst += loss(3.0)*1h
     assert char.get_component(HungerComponent).meter.value == pytest.approx(2.0)
     assert char.get_component(ThirstComponent).meter.value == pytest.approx(3.0)
+
+
+async def test_daily_needs_decay_and_fatigue_recovers_while_sleeping():
+    scenario = daily_needs_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+
+    await scenario.actor.tick(HOUR)
+
+    assert char.get_component(FatigueComponent).meter.value == pytest.approx(22.0)
+    assert char.get_component(HygieneComponent).meter.value == pytest.approx(62.0)
+    assert char.get_component(ComfortNeedComponent).meter.value == pytest.approx(62.0)
+    assert char.get_component(FunNeedComponent).meter.value == pytest.approx(62.0)
+    assert char.get_component(SocialNeedComponent).meter.value == pytest.approx(62.0)
+    assert char.get_component(PrivacyNeedComponent).meter.value == pytest.approx(62.0)
+    assert char.get_component(SafetyNeedComponent).meter.value == pytest.approx(62.0)
+
+    char.add_component(SleepingComponent(started_at_epoch=scenario.actor.epoch))
+    await scenario.actor.tick(HOUR)
+
+    assert char.get_component(FatigueComponent).meter.value < 22.0
+
+
+async def test_daily_need_recovery_verbs_use_reachable_affordances_and_prompt_fragments():
+    scenario = daily_needs_scenario()
+    basin = give_item(
+        scenario,
+        [
+            IdentityComponent(name="bath basin", kind="fixture"),
+            NeedAffordanceComponent(recoveries={"hygiene": 10.0}),
+        ],
+        in_inventory=False,
+    )
+    chair = give_item(
+        scenario,
+        [
+            IdentityComponent(name="soft chair", kind="furniture"),
+            NeedAffordanceComponent(recoveries={"comfort": 5.0}),
+        ],
+        in_inventory=False,
+    )
+
+    await scenario.actor.submit(verb(scenario, "bathe", target_id=str(basin)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(verb(scenario, "relax", target_id=str(chair)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(verb(scenario, "play"))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(verb(scenario, "seek-privacy"))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(verb(scenario, "seek-safety"))
+    await scenario.actor.tick(0.0)
+
+    char = scenario.actor.world.get_entity(scenario.character)
+    assert char.get_component(HygieneComponent).meter.value == pytest.approx(15.0)
+    assert char.get_component(ComfortNeedComponent).meter.value == pytest.approx(30.0)
+    assert char.get_component(FunNeedComponent).meter.value == pytest.approx(35.0)
+    assert char.get_component(PrivacyNeedComponent).meter.value == pytest.approx(30.0)
+    assert char.get_component(SafetyNeedComponent).meter.value == pytest.approx(30.0)
+    assert any("company" in line for line in need_fragments(scenario.actor.world, char))
 
 
 async def test_suspended_character_does_not_get_hungry():

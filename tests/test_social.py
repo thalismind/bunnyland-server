@@ -15,6 +15,8 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
+from bunnyland.mechanics.meter import Meter
+from bunnyland.mechanics.needs import SocialNeedComponent
 from bunnyland.mechanics.social import (
     SocialBond,
     adjust_bond,
@@ -62,6 +64,21 @@ async def test_saying_builds_familiarity_both_ways():
 
     assert bond_between(world, juniper, hazel).familiarity > 0
     assert bond_between(world, hazel, juniper).familiarity > 0
+
+
+async def test_speech_satisfies_social_need_for_speaker_and_listener():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    speaker = world.get_entity(scenario.character)
+    listener = world.get_entity(hazel)
+    speaker.add_component(SocialNeedComponent(meter=Meter(value=50.0)))
+    listener.add_component(SocialNeedComponent(meter=Meter(value=50.0)))
+
+    await scenario.actor.submit(_say(scenario, "Hello there.", "neutral"))
+    await scenario.actor.tick(HOUR)
+
+    assert speaker.get_component(SocialNeedComponent).meter.value < 50.0
+    assert listener.get_component(SocialNeedComponent).meter.value < 50.0
 
 
 async def test_praise_warms_the_bond_and_threat_frightens_the_listener():

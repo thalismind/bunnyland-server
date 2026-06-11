@@ -1,9 +1,12 @@
 # Colony-sim work and ownership
 
-Colony-sim adds shared labor systems: reserving targets, gathering resources, crafting at
-workstations, assigning jobs, completing jobs, and marking ownership. These mechanics are
-useful when several characters are working in the same room and need the world to remember
-who is using what.
+Colony-sim adds shared labor systems: reserving targets, gathering resources, crafting and
+baking at workstations, assigning jobs, completing jobs, marking ownership, work
+priorities, allowed areas, room quality, colony wealth, and medical recovery. These
+mechanics are useful when several characters are working in the same settlement and need
+the world to remember who is using what. See
+[Colony health and work](colony-health-and-work.md) for the medical, room-quality, wealth,
+priority, and mental-state loops.
 
 In Discord, prefix these commands with `!`.
 
@@ -84,6 +87,15 @@ Craft from a known recipe:
 Crafting consumes the required resource stacks and creates the recipe output in your
 inventory. Some recipes require a workstation in the room, such as a workbench.
 
+Baking uses the same recipe engine:
+
+```text
+!bake recipe_id=cookies
+```
+
+Recipes may create plain resource stacks or item entities with food/drink data and
+consumable uses. Existing resource-stack recipes continue to work.
+
 ## Jobs
 
 Assign yourself to a reachable job:
@@ -128,6 +140,7 @@ A simple colony loop:
 !create-stockpile name="wood stockpile" capacity=20 allowed_types="wood"
 !haul-item item_id="wood x2" target_container_id="wood stockpile"
 !craft recipe_id=club
+!set-work-priority work_type=haul priority=2
 !assign-job job_id="haul job"
 !complete-job job_id="haul job"
 !release-reservation target_id="wood patch"

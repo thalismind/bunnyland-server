@@ -2,6 +2,9 @@
 
 Life-sim tracks durable everyday state: aspirations, skills, careers, household funds,
 businesses, homes, room claims, partnerships, pregnancy, birth, adoption, rent, and bills.
+It also participates in the daily needs model for fatigue, hygiene, comfort, fun, social
+contact, privacy, and safety. See [Daily needs](daily-needs.md) for those self-care
+commands and prompt cues.
 Homes are explicit room markers. They do not move you, protect the room, or create a
 lease by themselves; they give your character durable world state and prompt context about
 where they live, which household they belong to, and which rooms they claim.
@@ -191,6 +194,7 @@ Implemented benefits:
 - prompt context that reminds the character where they live and which rooms they claim;
 - a rent/bill loop for charging rent, showing unpaid bills, paying them, and transferring funds;
 - **restful sleep:** sleeping in your own home or a room you claim leaves you well-rested.
+- daily need prompt context when the world gives the character those components.
 
 ### Restful sleep
 

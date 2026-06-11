@@ -7,7 +7,7 @@ and economy until the basic crop loop is solid.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import field, replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -18,6 +18,7 @@ from ..core.commands import SubmittedCommand
 from ..core.components import IdentityComponent, PortableComponent
 from ..core.ecs import (
     container_of,
+    contents,
     parse_entity_id,
     reachable_ids,
     replace_component,
@@ -26,7 +27,8 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
-from .colonysim import ResourceStackComponent
+from .colonysim import ResourceStackComponent, _consume_resource_stack
+from .consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from .environment import CalendarComponent
 
 SECONDS_PER_DAY = 24 * 60 * 60
@@ -63,6 +65,8 @@ class SeedComponent(Component):
     yield_quantity: int = 1
     seasons: tuple[str, ...] = ("spring", "summer", "autumn")
     stage_count: int = 3
+    edible_nutrition: float = 0.0
+    edible_satiety: float = 0.0
 
 
 @pydantic_dataclass(frozen=True)
@@ -88,6 +92,116 @@ class HarvestableComponent(Component):
     yield_item: str
     quantity: int = 1
     ready: bool = False
+    edible_nutrition: float = 0.0
+    edible_satiety: float = 0.0
+
+
+@pydantic_dataclass(frozen=True)
+class MachineComponent(Component):
+    machine_type: str
+    busy: bool = False
+    quality: float = 1.0
+
+
+@pydantic_dataclass(frozen=True)
+class ProcessingRecipeComponent(Component):
+    recipe_id: str
+    machine_type: str
+    inputs: dict[str, int]
+    outputs: dict[str, int]
+    duration_seconds: int
+    output_entities: dict[str, dict[str, object]] = field(default_factory=dict)
+
+
+@pydantic_dataclass(frozen=True)
+class ProcessingTaskComponent(Component):
+    recipe_id: str
+    started_at_epoch: int
+    ready_at_epoch: int
+    ready: bool = False
+
+
+@pydantic_dataclass(frozen=True)
+class AnimalHomeComponent(Component):
+    capacity: int = 4
+    feed_type: str = "hay"
+
+
+@pydantic_dataclass(frozen=True)
+class FarmAnimalComponent(Component):
+    species: str
+    age_days: float = 0.0
+    adult_age_days: float = 3.0
+    friendship: float = 0.0
+    mood: float = 50.0
+    fed_until_epoch: int = 0
+    last_petted_epoch: int | None = None
+    sick: bool = False
+
+
+@pydantic_dataclass(frozen=True)
+class AnimalProductComponent(Component):
+    product_type: str
+    quantity: int = 1
+    interval_seconds: int = SECONDS_PER_DAY
+    last_produced_epoch: int = 0
+    ready: bool = False
+    quality: float = 1.0
+
+
+@pydantic_dataclass(frozen=True)
+class FishingSpotComponent(Component):
+    fish_type: str
+    quantity: int = 1
+    season: str | None = None
+    required_bait: str | None = None
+
+
+@pydantic_dataclass(frozen=True)
+class MiningNodeComponent(Component):
+    resource_type: str
+    quantity: int = 1
+    hardness: int = 1
+
+
+@pydantic_dataclass(frozen=True)
+class ForageComponent(Component):
+    resource_type: str
+    quantity: int = 1
+    seasons: tuple[str, ...] = ()
+
+
+@pydantic_dataclass(frozen=True)
+class GiftPreferenceComponent(Component):
+    likes: tuple[str, ...] = ()
+    loves: tuple[str, ...] = ()
+    dislikes: tuple[str, ...] = ()
+
+
+@pydantic_dataclass(frozen=True)
+class FriendshipComponent(Component):
+    points: float = 0.0
+
+
+@pydantic_dataclass(frozen=True)
+class FestivalComponent(Component):
+    name: str
+    season: str
+    day: int = 1
+    joined_character_ids: tuple[str, ...] = ()
+
+
+@pydantic_dataclass(frozen=True)
+class BundleComponent(Component):
+    bundle_id: str
+    requirements: dict[str, int]
+    contributed: dict[str, int] = field(default_factory=dict)
+    completed: bool = False
+
+
+@pydantic_dataclass(frozen=True)
+class DailyFarmResetComponent(Component):
+    last_reset_epoch: int = 0
 
 
 @pydantic_dataclass(frozen=True)
@@ -184,6 +298,88 @@ class SapHarvestedEvent(DomainEvent):
     quantity: int
 
 
+class MachineProcessingStartedEvent(DomainEvent):
+    machine_id: str
+    recipe_id: str
+    ready_at_epoch: int
+
+
+class MachineProcessingReadyEvent(DomainEvent):
+    machine_id: str
+    recipe_id: str
+
+
+class MachineOutputCollectedEvent(DomainEvent):
+    machine_id: str
+    recipe_id: str
+    output_ids: tuple[str, ...]
+
+
+class AnimalFedEvent(DomainEvent):
+    animal_id: str
+    feed_type: str
+
+
+class AnimalPettedEvent(DomainEvent):
+    animal_id: str
+    friendship: float
+
+
+class AnimalProductReadyEvent(DomainEvent):
+    animal_id: str
+    product_type: str
+
+
+class AnimalProductCollectedEvent(DomainEvent):
+    animal_id: str
+    product_type: str
+    item_id: str
+    quantity: int
+
+
+class FishCaughtEvent(DomainEvent):
+    spot_id: str
+    item_id: str
+    fish_type: str
+    quantity: int
+
+
+class MiningNodeMinedEvent(DomainEvent):
+    node_id: str
+    item_id: str
+    resource_type: str
+    quantity: int
+
+
+class ForageCollectedEvent(DomainEvent):
+    forage_id: str
+    item_id: str
+    resource_type: str
+    quantity: int
+
+
+class GiftGivenEvent(DomainEvent):
+    target_id: str
+    item_id: str
+    friendship: float
+
+
+class FestivalJoinedEvent(DomainEvent):
+    festival_id: str
+    name: str
+
+
+class BundleContributedEvent(DomainEvent):
+    bundle_id: str
+    resource_type: str
+    quantity: int
+    completed: bool
+
+
+class DailyFarmResetEvent(DomainEvent):
+    reset_epoch: int
+
+
 def _event_base(epoch: int, **kwargs) -> dict:
     base = {
         "event_id": uuid4().hex,
@@ -220,18 +416,88 @@ def _remove_from_container(world: World, entity_id: EntityId) -> None:
 
 
 def _spawn_harvest_item(
-    world: World, character: Entity, crop_type: str, item_name: str, quantity: int
+    world: World,
+    character: Entity,
+    crop_type: str,
+    item_name: str,
+    quantity: int,
+    *,
+    edible_nutrition: float = 0.0,
+    edible_satiety: float = 0.0,
 ) -> str:
     label = f"{item_name} x{quantity}" if quantity != 1 else item_name
+    components: list[Component] = [
+        IdentityComponent(name=label, kind="crop", tags=(crop_type,)),
+        PortableComponent(can_pick_up=True),
+        ResourceStackComponent(resource_type=item_name, quantity=quantity),
+    ]
+    if edible_satiety > 0 or edible_nutrition > 0:
+        components.extend(
+            [
+                FoodComponent(nutrition=edible_nutrition, satiety=edible_satiety),
+                ConsumableComponent(current_uses=quantity, max_uses=quantity),
+            ]
+        )
     item = spawn_entity(
         world,
-        [
-            IdentityComponent(name=label, kind="crop", tags=(crop_type,)),
-            PortableComponent(can_pick_up=True),
-        ],
+        components,
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
     return str(item.id)
+
+
+def _spawn_product_item(
+    world: World,
+    character: Entity,
+    resource_type: str,
+    quantity: int,
+    *,
+    kind: str = "resource",
+    metadata: dict[str, object] | None = None,
+) -> str:
+    metadata = metadata or {}
+    name = str(metadata.get("display_name") or _resource_name(resource_type, quantity))
+    components: list[Component] = [
+        IdentityComponent(name=name, kind=kind, tags=(resource_type,)),
+        ResourceStackComponent(resource_type=resource_type, quantity=quantity),
+        PortableComponent(can_pick_up=True),
+    ]
+    if "satiety" in metadata or "nutrition" in metadata:
+        components.append(
+            FoodComponent(
+                nutrition=float(metadata.get("nutrition", 0.0)),
+                satiety=float(metadata.get("satiety", 0.0)),
+                raw=bool(metadata.get("raw", False)),
+                spoiled=bool(metadata.get("spoiled", False)),
+            )
+        )
+    if "hydration" in metadata:
+        components.append(
+            DrinkableComponent(
+                hydration=float(metadata.get("hydration", 0.0)),
+                purity=float(metadata.get("purity", 1.0)),
+            )
+        )
+    uses = int(metadata.get("uses", quantity if len(components) > 3 else 0))
+    if uses > 0:
+        components.append(ConsumableComponent(current_uses=uses, max_uses=uses))
+    item = spawn_entity(world, components)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    return str(item.id)
+
+
+def _resource_name(resource_type: str, quantity: int) -> str:
+    return f"{resource_type} x{quantity}" if quantity != 1 else resource_type
+
+
+def _find_processing_recipe(
+    world: World, recipe_id: str, machine_type: str
+) -> ProcessingRecipeComponent | None:
+    for entity in world.query().with_all([ProcessingRecipeComponent]).execute_entities():
+        recipe = entity.get_component(ProcessingRecipeComponent)
+        if recipe.recipe_id == recipe_id and recipe.machine_type == machine_type:
+            return recipe
+    return None
 
 
 def _spawn_sap_item(
@@ -403,6 +669,101 @@ class TreeGrowthConsequence:
         return events
 
 
+class MachineProcessingConsequence:
+    """Mark processing machines ready after their recipe duration has elapsed."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for machine in (
+            world.query()
+            .with_all([MachineComponent, ProcessingTaskComponent])
+            .execute_entities()
+        ):
+            task = machine.get_component(ProcessingTaskComponent)
+            if task.ready or epoch < task.ready_at_epoch:
+                continue
+            replace_component(machine, replace(task, ready=True))
+            events.append(
+                MachineProcessingReadyEvent(
+                    **_event_base(
+                        epoch,
+                        room_id=_entity_room_id(machine),
+                        target_ids=(str(machine.id),),
+                        machine_id=str(machine.id),
+                        recipe_id=task.recipe_id,
+                    )
+                )
+            )
+        return events
+
+
+class AnimalProductConsequence:
+    """Advance animal age/mood and mark animal products ready on their interval."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for animal in world.query().with_all([FarmAnimalComponent]).execute_entities():
+            component = animal.get_component(FarmAnimalComponent)
+            fed = epoch <= component.fed_until_epoch
+            mood_delta = 2.0 if fed else -4.0
+            updated_animal = replace(
+                component,
+                age_days=max(component.age_days, epoch / SECONDS_PER_DAY),
+                mood=max(0.0, min(100.0, component.mood + mood_delta)),
+            )
+            if updated_animal != component:
+                replace_component(animal, updated_animal)
+            if not animal.has_component(AnimalProductComponent):
+                continue
+            product = animal.get_component(AnimalProductComponent)
+            if product.ready or updated_animal.sick:
+                continue
+            if updated_animal.age_days < updated_animal.adult_age_days:
+                continue
+            if epoch - product.last_produced_epoch < product.interval_seconds:
+                continue
+            quality = 1.0 + (updated_animal.friendship / 100.0) + (updated_animal.mood / 200.0)
+            updated_product = replace(product, ready=True, quality=round(quality, 3))
+            replace_component(animal, updated_product)
+            events.append(
+                AnimalProductReadyEvent(
+                    **_event_base(
+                        epoch,
+                        room_id=_entity_room_id(animal),
+                        target_ids=(str(animal.id),),
+                        animal_id=str(animal.id),
+                        product_type=product.product_type,
+                    )
+                )
+            )
+        return events
+
+
+class DailyFarmResetConsequence:
+    """Reset daily farm affordances such as forage after a full in-game day."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for state in world.query().with_all([DailyFarmResetComponent]).execute_entities():
+            reset = state.get_component(DailyFarmResetComponent)
+            if epoch - reset.last_reset_epoch < SECONDS_PER_DAY:
+                continue
+            replace_component(state, replace(reset, last_reset_epoch=epoch))
+            for animal in world.query().with_all([FarmAnimalComponent]).execute_entities():
+                component = animal.get_component(FarmAnimalComponent)
+                replace_component(animal, replace(component, last_petted_epoch=None))
+            events.append(
+                DailyFarmResetEvent(
+                    **_event_base(
+                        epoch,
+                        visibility=EventVisibility.SYSTEM,
+                        reset_epoch=epoch,
+                    )
+                )
+            )
+        return events
+
+
 class TillHandler:
     command_type = "till"
 
@@ -487,6 +848,8 @@ class PlantHandler:
                 yield_item=seed.yield_item,
                 quantity=seed.yield_quantity,
                 ready=False,
+                edible_nutrition=seed.edible_nutrition,
+                edible_satiety=seed.edible_satiety,
             )
         )
         _remove_from_container(ctx.world, seed_id)
@@ -611,6 +974,8 @@ class HarvestCropHandler:
             crop.crop_type,
             harvestable.yield_item,
             harvestable.quantity,
+            edible_nutrition=harvestable.edible_nutrition,
+            edible_satiety=harvestable.edible_satiety,
         )
         soil.remove_component(CropComponent)
         soil.remove_component(CropGrowthComponent)
@@ -767,6 +1132,520 @@ class HarvestSapHandler:
         )
 
 
+class StartMachineHandler:
+    command_type = "start-machine"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        machine_id = parse_entity_id(command.payload.get("machine_id"))
+        recipe_id = str(command.payload.get("recipe_id", "")).strip()
+        if character_id is None or machine_id is None:
+            return rejected("invalid character or machine id")
+        if not recipe_id:
+            return rejected("missing recipe id")
+        if not ctx.world.has_entity(machine_id):
+            return rejected("machine does not exist")
+        character = ctx.entity(character_id)
+        machine = _reachable_entity(ctx, character_id, machine_id)
+        if machine is None:
+            return rejected("machine is not reachable")
+        if not machine.has_component(MachineComponent):
+            return rejected("target is not a machine")
+        machine_component = machine.get_component(MachineComponent)
+        if machine_component.busy or machine.has_component(ProcessingTaskComponent):
+            return rejected("machine is busy")
+        recipe = _find_processing_recipe(ctx.world, recipe_id, machine_component.machine_type)
+        if recipe is None:
+            return rejected("processing recipe does not exist")
+        for resource_type, quantity in recipe.inputs.items():
+            found = False
+            for item_id in contents(character):
+                item = ctx.entity(item_id)
+                if (
+                    item.has_component(ResourceStackComponent)
+                    and item.get_component(ResourceStackComponent).resource_type == resource_type
+                    and item.get_component(ResourceStackComponent).quantity >= quantity
+                ):
+                    found = True
+                    break
+            if not found:
+                return rejected("missing processing inputs")
+        for resource_type, quantity in recipe.inputs.items():
+            _consume_resource_stack(character, ctx.world, resource_type, quantity)
+        ready_at = ctx.epoch + recipe.duration_seconds
+        replace_component(machine, replace(machine_component, busy=True))
+        machine.add_component(
+            ProcessingTaskComponent(
+                recipe_id=recipe.recipe_id,
+                started_at_epoch=ctx.epoch,
+                ready_at_epoch=ready_at,
+            )
+        )
+        return ok(
+            MachineProcessingStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(machine_id),),
+                    machine_id=str(machine_id),
+                    recipe_id=recipe.recipe_id,
+                    ready_at_epoch=ready_at,
+                )
+            )
+        )
+
+
+class CollectMachineOutputHandler:
+    command_type = "collect-machine-output"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        machine_id = parse_entity_id(command.payload.get("machine_id"))
+        if character_id is None or machine_id is None:
+            return rejected("invalid character or machine id")
+        if not ctx.world.has_entity(machine_id):
+            return rejected("machine does not exist")
+        character = ctx.entity(character_id)
+        machine = _reachable_entity(ctx, character_id, machine_id)
+        if machine is None:
+            return rejected("machine is not reachable")
+        if not machine.has_component(MachineComponent) or not machine.has_component(
+            ProcessingTaskComponent
+        ):
+            return rejected("machine has no output")
+        task = machine.get_component(ProcessingTaskComponent)
+        if not task.ready:
+            return rejected("machine output is not ready")
+        machine_component = machine.get_component(MachineComponent)
+        recipe = _find_processing_recipe(ctx.world, task.recipe_id, machine_component.machine_type)
+        if recipe is None:
+            return rejected("processing recipe does not exist")
+        output_ids = tuple(
+            _spawn_product_item(
+                ctx.world,
+                character,
+                resource_type,
+                quantity,
+                metadata=recipe.output_entities.get(resource_type),
+            )
+            for resource_type, quantity in recipe.outputs.items()
+        )
+        machine.remove_component(ProcessingTaskComponent)
+        replace_component(machine, replace(machine_component, busy=False))
+        return ok(
+            MachineOutputCollectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(machine_id), *output_ids),
+                    machine_id=str(machine_id),
+                    recipe_id=recipe.recipe_id,
+                    output_ids=output_ids,
+                )
+            )
+        )
+
+
+class FeedAnimalHandler:
+    command_type = "feed-animal"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        animal_id = parse_entity_id(command.payload.get("animal_id"))
+        feed_type = str(command.payload.get("feed_type", "hay")).strip() or "hay"
+        if character_id is None or animal_id is None:
+            return rejected("invalid character or animal id")
+        if not ctx.world.has_entity(animal_id):
+            return rejected("animal does not exist")
+        character = ctx.entity(character_id)
+        animal = _reachable_entity(ctx, character_id, animal_id)
+        if animal is None:
+            return rejected("animal is not reachable")
+        if not animal.has_component(FarmAnimalComponent):
+            return rejected("target is not a farm animal")
+        if not _consume_resource_stack(character, ctx.world, feed_type, 1):
+            return rejected("missing animal feed")
+        component = animal.get_component(FarmAnimalComponent)
+        replace_component(
+            animal,
+            replace(
+                component,
+                fed_until_epoch=ctx.epoch + SECONDS_PER_DAY,
+                mood=min(100.0, component.mood + 15.0),
+            ),
+        )
+        return ok(
+            AnimalFedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(animal_id),),
+                    animal_id=str(animal_id),
+                    feed_type=feed_type,
+                )
+            )
+        )
+
+
+class PetAnimalHandler:
+    command_type = "pet-animal"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        animal_id = parse_entity_id(command.payload.get("animal_id"))
+        if character_id is None or animal_id is None:
+            return rejected("invalid character or animal id")
+        if not ctx.world.has_entity(animal_id):
+            return rejected("animal does not exist")
+        animal = _reachable_entity(ctx, character_id, animal_id)
+        if animal is None:
+            return rejected("animal is not reachable")
+        if not animal.has_component(FarmAnimalComponent):
+            return rejected("target is not a farm animal")
+        component = animal.get_component(FarmAnimalComponent)
+        if (
+            component.last_petted_epoch is not None
+            and ctx.epoch - component.last_petted_epoch < SECONDS_PER_DAY
+        ):
+            return rejected("animal already petted today")
+        friendship = min(100.0, component.friendship + 5.0)
+        replace_component(
+            animal,
+            replace(
+                component,
+                friendship=friendship,
+                mood=min(100.0, component.mood + 5.0),
+                last_petted_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            AnimalPettedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(animal_id),),
+                    animal_id=str(animal_id),
+                    friendship=friendship,
+                )
+            )
+        )
+
+
+class CollectAnimalProductHandler:
+    command_type = "collect-animal-product"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        animal_id = parse_entity_id(command.payload.get("animal_id"))
+        if character_id is None or animal_id is None:
+            return rejected("invalid character or animal id")
+        if not ctx.world.has_entity(animal_id):
+            return rejected("animal does not exist")
+        character = ctx.entity(character_id)
+        animal = _reachable_entity(ctx, character_id, animal_id)
+        if animal is None:
+            return rejected("animal is not reachable")
+        if not animal.has_component(AnimalProductComponent):
+            return rejected("animal has no product")
+        product = animal.get_component(AnimalProductComponent)
+        if not product.ready:
+            return rejected("animal product is not ready")
+        item_id = _spawn_product_item(
+            ctx.world,
+            character,
+            product.product_type,
+            product.quantity,
+            kind="animal_product",
+        )
+        replace_component(
+            animal,
+            replace(product, ready=False, last_produced_epoch=ctx.epoch),
+        )
+        return ok(
+            AnimalProductCollectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(animal_id), item_id),
+                    animal_id=str(animal_id),
+                    product_type=product.product_type,
+                    item_id=item_id,
+                    quantity=product.quantity,
+                )
+            )
+        )
+
+
+class FishHandler:
+    command_type = "fish"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        spot_id = parse_entity_id(command.payload.get("spot_id"))
+        if character_id is None or spot_id is None:
+            return rejected("invalid character or fishing spot id")
+        if not ctx.world.has_entity(spot_id):
+            return rejected("fishing spot does not exist")
+        character = ctx.entity(character_id)
+        spot = _reachable_entity(ctx, character_id, spot_id)
+        if spot is None:
+            return rejected("fishing spot is not reachable")
+        if not spot.has_component(FishingSpotComponent):
+            return rejected("target is not a fishing spot")
+        fishing = spot.get_component(FishingSpotComponent)
+        season = _current_season(ctx.world)
+        if fishing.season is not None and season != fishing.season:
+            return rejected("fish is not available this season")
+        if fishing.required_bait and not _consume_resource_stack(
+            character, ctx.world, fishing.required_bait, 1
+        ):
+            return rejected("missing bait")
+        item_id = _spawn_product_item(
+            ctx.world, character, fishing.fish_type, fishing.quantity, kind="fish"
+        )
+        return ok(
+            FishCaughtEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(spot_id), item_id),
+                    spot_id=str(spot_id),
+                    item_id=item_id,
+                    fish_type=fishing.fish_type,
+                    quantity=fishing.quantity,
+                )
+            )
+        )
+
+
+class MineHandler:
+    command_type = "mine"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        node_id = parse_entity_id(command.payload.get("node_id"))
+        if character_id is None or node_id is None:
+            return rejected("invalid character or mining node id")
+        if not ctx.world.has_entity(node_id):
+            return rejected("mining node does not exist")
+        character = ctx.entity(character_id)
+        node = _reachable_entity(ctx, character_id, node_id)
+        if node is None:
+            return rejected("mining node is not reachable")
+        if not node.has_component(MiningNodeComponent):
+            return rejected("target is not a mining node")
+        mining = node.get_component(MiningNodeComponent)
+        item_id = _spawn_product_item(ctx.world, character, mining.resource_type, mining.quantity)
+        _remove_from_container(ctx.world, node_id)
+        ctx.world.remove(node_id)
+        return ok(
+            MiningNodeMinedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(item_id,),
+                    node_id=str(node_id),
+                    item_id=item_id,
+                    resource_type=mining.resource_type,
+                    quantity=mining.quantity,
+                )
+            )
+        )
+
+
+class ForageHandler:
+    command_type = "forage"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        forage_id = parse_entity_id(command.payload.get("forage_id"))
+        if character_id is None or forage_id is None:
+            return rejected("invalid character or forage id")
+        if not ctx.world.has_entity(forage_id):
+            return rejected("forage does not exist")
+        character = ctx.entity(character_id)
+        forage = _reachable_entity(ctx, character_id, forage_id)
+        if forage is None:
+            return rejected("forage is not reachable")
+        if not forage.has_component(ForageComponent):
+            return rejected("target is not forage")
+        component = forage.get_component(ForageComponent)
+        season = _current_season(ctx.world)
+        if season is not None and component.seasons and season not in component.seasons:
+            return rejected("forage is not available this season")
+        item_id = _spawn_product_item(
+            ctx.world, character, component.resource_type, component.quantity
+        )
+        _remove_from_container(ctx.world, forage_id)
+        ctx.world.remove(forage_id)
+        return ok(
+            ForageCollectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(item_id,),
+                    forage_id=str(forage_id),
+                    item_id=item_id,
+                    resource_type=component.resource_type,
+                    quantity=component.quantity,
+                )
+            )
+        )
+
+
+class GiveGiftHandler:
+    command_type = "give-gift"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if character_id is None or target_id is None or item_id is None:
+            return rejected("invalid character, target, or item id")
+        if not ctx.world.has_entity(target_id) or not ctx.world.has_entity(item_id):
+            return rejected("target or item does not exist")
+        character = ctx.entity(character_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+        if item_id not in contents(character):
+            return rejected("gift is not in inventory")
+        item = ctx.entity(item_id)
+        target = ctx.entity(target_id)
+        resource_type = (
+            item.get_component(ResourceStackComponent).resource_type
+            if item.has_component(ResourceStackComponent)
+            else item.get_component(IdentityComponent).name
+        )
+        delta = 5.0
+        if target.has_component(GiftPreferenceComponent):
+            prefs = target.get_component(GiftPreferenceComponent)
+            if resource_type in prefs.loves:
+                delta = 20.0
+            elif resource_type in prefs.likes:
+                delta = 10.0
+            elif resource_type in prefs.dislikes:
+                delta = -10.0
+        friendship = (
+            target.get_component(FriendshipComponent)
+            if target.has_component(FriendshipComponent)
+            else FriendshipComponent()
+        )
+        updated = FriendshipComponent(points=max(-100.0, min(100.0, friendship.points + delta)))
+        replace_component(target, updated)
+        character.remove_relationship(Contains, item_id)
+        target.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+        return ok(
+            GiftGivenEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id), str(item_id)),
+                    target_id=str(target_id),
+                    item_id=str(item_id),
+                    friendship=updated.points,
+                )
+            )
+        )
+
+
+class JoinFestivalHandler:
+    command_type = "join-festival"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        festival_id = parse_entity_id(command.payload.get("festival_id"))
+        if character_id is None or festival_id is None:
+            return rejected("invalid character or festival id")
+        if not ctx.world.has_entity(festival_id):
+            return rejected("festival does not exist")
+        festival = _reachable_entity(ctx, character_id, festival_id)
+        if festival is None:
+            return rejected("festival is not reachable")
+        if not festival.has_component(FestivalComponent):
+            return rejected("target is not a festival")
+        component = festival.get_component(FestivalComponent)
+        season = _current_season(ctx.world)
+        if season is not None and component.season != season:
+            return rejected("festival is not active this season")
+        joined = tuple(sorted({*component.joined_character_ids, str(character_id)}))
+        replace_component(festival, replace(component, joined_character_ids=joined))
+        return ok(
+            FestivalJoinedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(festival_id),),
+                    festival_id=str(festival_id),
+                    name=component.name,
+                )
+            )
+        )
+
+
+class ContributeBundleHandler:
+    command_type = "contribute-bundle"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        bundle_id = parse_entity_id(command.payload.get("bundle_id"))
+        resource_type = str(command.payload.get("resource_type", "")).strip()
+        quantity = int(command.payload.get("quantity", 1))
+        if character_id is None or bundle_id is None:
+            return rejected("invalid character or bundle id")
+        if not resource_type:
+            return rejected("missing resource type")
+        if quantity <= 0:
+            return rejected("quantity must be positive")
+        if not ctx.world.has_entity(bundle_id):
+            return rejected("bundle does not exist")
+        character = ctx.entity(character_id)
+        bundle = _reachable_entity(ctx, character_id, bundle_id)
+        if bundle is None:
+            return rejected("bundle is not reachable")
+        if not bundle.has_component(BundleComponent):
+            return rejected("target is not a bundle")
+        component = bundle.get_component(BundleComponent)
+        if component.completed:
+            return rejected("bundle is already complete")
+        required = component.requirements.get(resource_type, 0)
+        already = component.contributed.get(resource_type, 0)
+        if required <= 0 or already + quantity > required:
+            return rejected("bundle does not need that contribution")
+        if not _consume_resource_stack(character, ctx.world, resource_type, quantity):
+            return rejected("missing bundle resource")
+        contributed = dict(component.contributed)
+        contributed[resource_type] = already + quantity
+        completed = all(
+            contributed.get(kind, 0) >= amount
+            for kind, amount in component.requirements.items()
+        )
+        replace_component(bundle, replace(component, contributed=contributed, completed=completed))
+        return ok(
+            BundleContributedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(bundle_id),),
+                    bundle_id=component.bundle_id,
+                    resource_type=resource_type,
+                    quantity=quantity,
+                    completed=completed,
+                )
+            )
+        )
+
+
 def gardensim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for entity_id in reachable_ids(world, character):
@@ -800,15 +1679,67 @@ def gardensim_fragments(world: World, character: Entity) -> list[str]:
             else:
                 state = "tapped"
             lines.append(f"Nearby tree: {tree.tree_type} in {tree_name} ({state}).")
+        if entity.has_component(MachineComponent):
+            machine = entity.get_component(MachineComponent)
+            if entity.has_component(ProcessingTaskComponent):
+                task = entity.get_component(ProcessingTaskComponent)
+                state = "ready" if task.ready else f"processing {task.recipe_id}"
+            else:
+                state = "idle"
+            lines.append(f"Nearby machine: {machine.machine_type} ({state}).")
+        if entity.has_component(FarmAnimalComponent):
+            animal = entity.get_component(FarmAnimalComponent)
+            product = (
+                entity.get_component(AnimalProductComponent)
+                if entity.has_component(AnimalProductComponent)
+                else None
+            )
+            product_text = f", {product.product_type} ready" if product and product.ready else ""
+            lines.append(
+                f"Nearby animal: {animal.species}, mood {animal.mood:.0f}, "
+                f"friendship {animal.friendship:.0f}{product_text}."
+            )
+        if entity.has_component(FishingSpotComponent):
+            spot = entity.get_component(FishingSpotComponent)
+            lines.append(f"Nearby fishing spot: {spot.fish_type}.")
+        if entity.has_component(MiningNodeComponent):
+            node = entity.get_component(MiningNodeComponent)
+            lines.append(f"Nearby mining node: {node.resource_type} x{node.quantity}.")
+        if entity.has_component(ForageComponent):
+            forage = entity.get_component(ForageComponent)
+            lines.append(f"Nearby forage: {forage.resource_type} x{forage.quantity}.")
+        if entity.has_component(FestivalComponent):
+            festival = entity.get_component(FestivalComponent)
+            lines.append(f"Nearby festival: {festival.name} ({festival.season}).")
+        if entity.has_component(BundleComponent):
+            bundle = entity.get_component(BundleComponent)
+            state = "complete" if bundle.completed else "open"
+            lines.append(f"Nearby bundle: {bundle.bundle_id} ({state}).")
     return sorted(lines)
 
 
 def install_gardensim(actor) -> None:
     actor.register_consequence(CropGrowthConsequence())
     actor.register_consequence(TreeGrowthConsequence())
+    actor.register_consequence(MachineProcessingConsequence())
+    actor.register_consequence(AnimalProductConsequence())
+    actor.register_consequence(DailyFarmResetConsequence())
 
 
 __all__ = [
+    "AnimalFedEvent",
+    "AnimalHomeComponent",
+    "AnimalPettedEvent",
+    "AnimalProductCollectedEvent",
+    "AnimalProductComponent",
+    "AnimalProductConsequence",
+    "AnimalProductReadyEvent",
+    "BundleComponent",
+    "BundleContributedEvent",
+    "ClearDeadCropHandler",
+    "CollectAnimalProductHandler",
+    "CollectMachineOutputHandler",
+    "ContributeBundleHandler",
     "CropComponent",
     "CropGrewEvent",
     "CropGrowthComponent",
@@ -817,16 +1748,44 @@ __all__ = [
     "CropReadyEvent",
     "CropWateredEvent",
     "CropWitheredEvent",
+    "DailyFarmResetComponent",
+    "DailyFarmResetConsequence",
+    "DailyFarmResetEvent",
     "DeadCropClearedEvent",
+    "FarmAnimalComponent",
+    "FeedAnimalHandler",
     "FertilizerAppliedEvent",
     "FertilizerComponent",
     "FertilizeHandler",
-    "ClearDeadCropHandler",
+    "FestivalComponent",
+    "FestivalJoinedEvent",
+    "FishCaughtEvent",
+    "FishHandler",
+    "FishingSpotComponent",
+    "ForageCollectedEvent",
+    "ForageComponent",
+    "ForageHandler",
+    "FriendshipComponent",
+    "GiftGivenEvent",
+    "GiftPreferenceComponent",
+    "GiveGiftHandler",
     "GreenhouseComponent",
     "HarvestCropHandler",
     "HarvestableComponent",
     "HarvestSapHandler",
+    "JoinFestivalHandler",
+    "MachineComponent",
+    "MachineOutputCollectedEvent",
+    "MachineProcessingConsequence",
+    "MachineProcessingReadyEvent",
+    "MachineProcessingStartedEvent",
+    "MineHandler",
+    "MiningNodeComponent",
+    "MiningNodeMinedEvent",
+    "PetAnimalHandler",
     "PlantHandler",
+    "ProcessingRecipeComponent",
+    "ProcessingTaskComponent",
     "SapHarvestedEvent",
     "SapReadyEvent",
     "SeedComponent",

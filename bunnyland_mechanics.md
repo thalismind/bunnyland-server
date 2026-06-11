@@ -1,5 +1,28 @@
 Below is the first-pass **master mechanics catalogue** for bunnyland. This is intentionally broad. It is not the MVP list. It is the long-term backlog of systems, components, actions, events, services, projections, and plugin classes we may eventually want.
 
+## Current v1 peaceful-pack status
+
+The peaceful starter pack now has playable v1 coverage for the core catalogue loops:
+
+- `lifesim`: hunger, thirst, fatigue, hygiene, comfort, fun, social contact, privacy,
+  safety, eat/drink, self-care verbs, sleep fatigue recovery, social recovery through
+  speech, affect, homes, claims, careers, business, bills, skills, routines,
+  relationships, family, pregnancy, birth, adoption, aging stages, and natural-death
+  policy.
+- `colonysim`: resources, resource stacks, stockpiles, filters, hauling, reservations,
+  ownership, jobs, work priorities, allowed areas, workstation recipes, baking through the
+  shared recipe engine, entity outputs for edible/drinkable products, room quality,
+  colony wealth/expectations, wound tending, medicine uses, rescue to medical bed, bed
+  rest, infection progress, and mental breaks/inspirations.
+- `gardensim`: soil, tilling, planting, watering, fertilizer, growth, seasonal withering,
+  greenhouse exceptions, edible/resource harvests, tree tapping and sap, processing
+  machines, farm animals, feeding, petting, animal products, fishing, mining, foraging,
+  gifts/friendship, festivals, bundles, and daily farm reset.
+
+The remaining catalogue text is still broader than v1. Treat unimplemented headings below
+as backlog unless a component, handler, consequence/system, event, prompt fragment, and
+test exists in `src/bunnyland/mechanics/` and `tests/`.
+
 The design target is not to clone any one game. The target is to extract the loops that make those games sticky: needs, relationships, work, scarcity, seasons, growth, danger, exploration, memory, and the joy of small systems colliding.
 
 The inspirations break down cleanly:

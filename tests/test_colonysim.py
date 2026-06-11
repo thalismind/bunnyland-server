@@ -5,13 +5,21 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    AffectComponent,
+    AffectVector,
+    CharacterComponent,
     CommandCost,
     ContainmentMode,
     Contains,
+    DownedComponent,
     HandlerContext,
+    HasInjury,
+    HealthComponent,
     IdentityComponent,
+    InjuryComponent,
     Lane,
     PortableComponent,
+    SleepingComponent,
     build_submitted_command,
     container_of,
     parse_entity_id,
@@ -35,11 +43,16 @@ from bunnyland.core.events import (
 )
 from bunnyland.mechanics import colonysim
 from bunnyland.mechanics.colonysim import (
+    AllowedAreaComponent,
     AllowItemHandler,
     AssignedTo,
     AssignJobHandler,
+    BakeHandler,
+    BedRestComponent,
     ClaimOwnershipHandler,
     ColonySimComponent,
+    ColonyWealthComponent,
+    ColonyWealthConsequence,
     CompleteJobHandler,
     CraftHandler,
     CreateStockpileHandler,
@@ -48,28 +61,47 @@ from bunnyland.mechanics.colonysim import (
     GatherResourceHandler,
     HaulItemHandler,
     JobComponent,
+    MedicalBedComponent,
+    MedicalRecoveryConsequence,
+    MedicineComponent,
+    MentalStateComponent,
+    MentalStateConsequence,
     MergeStackHandler,
     Owns,
     RecipeComponent,
     ReleaseOwnershipHandler,
     ReleaseReservationHandler,
+    RescueToBedHandler,
     ReservedBy,
     ReserveHandler,
     ResourceNodeComponent,
     ResourceRegenSystem,
     ResourceStackComponent,
+    RoomQualityComponent,
+    RoomQualityConsequence,
+    RoomRoleComponent,
+    RoomStatComponent,
+    SetAllowedAreaHandler,
     SetStorageFilterHandler,
+    SetWorkPriorityHandler,
     SplitStackHandler,
     StockpileComponent,
     StorageFilterComponent,
+    TendWoundHandler,
+    WorkPriorityComponent,
     WorkstationComponent,
     colonysim_fragments,
 )
+from bunnyland.mechanics.consumables import FoodComponent
+from bunnyland.mechanics.meter import Meter
+from bunnyland.mechanics.needs import FunNeedComponent
 
 HOUR = 3600.0
 
 
 def _install(actor):
+    if not list(actor.world.query().with_all([ColonySimComponent]).execute_entities()):
+        spawn_entity(actor.world, [ColonySimComponent()])
     actor.register_handler(ReserveHandler())
     actor.register_handler(ReleaseReservationHandler())
     actor.register_handler(GatherResourceHandler())
@@ -81,11 +113,20 @@ def _install(actor):
     actor.register_handler(SplitStackHandler())
     actor.register_handler(MergeStackHandler())
     actor.register_handler(CraftHandler())
+    actor.register_handler(BakeHandler())
+    actor.register_handler(SetWorkPriorityHandler())
+    actor.register_handler(SetAllowedAreaHandler())
+    actor.register_handler(TendWoundHandler())
+    actor.register_handler(RescueToBedHandler())
     actor.register_handler(AssignJobHandler())
     actor.register_handler(CompleteJobHandler())
     actor.register_handler(ClaimOwnershipHandler())
     actor.register_handler(ReleaseOwnershipHandler())
     actor.world.register_system(ResourceRegenSystem())
+    actor.register_consequence(RoomQualityConsequence())
+    actor.register_consequence(ColonyWealthConsequence())
+    actor.register_consequence(MedicalRecoveryConsequence())
+    actor.register_consequence(MentalStateConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -1004,6 +1045,160 @@ async def test_craft_consumes_inputs_at_reachable_workstation_and_creates_output
     assert output.get_component(ResourceStackComponent).resource_type == "club"
     assert output.get_component(ResourceStackComponent).quantity == 1
     assert container_of(scenario.actor.world.get_entity(input_stack)) is None
+
+
+async def test_bake_recipe_creates_edible_output_entity():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _stack(scenario, "flour", 1)
+    _stack(scenario, "sugar", 1)
+    spawn_entity(
+        scenario.actor.world,
+        [
+            RecipeComponent(
+                recipe_id="cookies",
+                inputs={"flour": 1, "sugar": 1},
+                outputs={"cookies": 4},
+                required_station="oven",
+                output_entities={
+                    "cookies": {
+                        "display_name": "cookies",
+                        "entity_kind": "food",
+                        "nutrition": 4.0,
+                        "satiety": 18.0,
+                        "uses": 4,
+                    }
+                },
+            )
+        ],
+    )
+    oven = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Oven", kind="workstation"),
+            WorkstationComponent(station_type="oven"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), oven.id
+    )
+    crafted: list[ItemCraftedEvent] = []
+    scenario.actor.bus.subscribe(ItemCraftedEvent, crafted.append)
+
+    await scenario.actor.submit(_cmd(scenario, "bake", recipe_id="cookies"))
+    await scenario.actor.tick(HOUR)
+
+    output = scenario.actor.world.get_entity(parse_entity_id(crafted[0].output_ids[0]))
+    assert output.get_component(ResourceStackComponent).resource_type == "cookies"
+    assert output.get_component(ResourceStackComponent).quantity == 4
+    assert output.get_component(FoodComponent).satiety == 18.0
+    assert container_of(output) == scenario.character
+
+
+async def test_work_priorities_allowed_areas_room_quality_and_wealth_fragments():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(RoomRoleComponent(role="dining room"))
+    room.add_component(RoomStatComponent(beauty=2.0, cleanliness=1.0, comfort=3.0, wealth=100.0))
+    _stack(scenario, "wood", 10)
+
+    await scenario.actor.submit(_cmd(scenario, "set-work-priority", work_type="doctor", priority=1))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(
+        _cmd(scenario, "set-allowed-area", room_ids=(str(scenario.room_a), str(scenario.room_b)))
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(WorkPriorityComponent).priorities == {"doctor": 1}
+    assert character.get_component(AllowedAreaComponent).room_ids == (
+        str(scenario.room_a),
+        str(scenario.room_b),
+    )
+    assert room.get_component(RoomQualityComponent).impressiveness == 7.0
+    marker = next(scenario.actor.world.query().with_all([ColonySimComponent]).execute_entities())
+    assert marker.get_component(ColonyWealthComponent).wealth >= 110.0
+    fragments = colonysim_fragments(scenario.actor.world, character)
+    assert any("Work priorities" in line for line in fragments)
+    assert any("Colony wealth" in line for line in fragments)
+
+
+async def test_tend_wound_rescue_to_bed_and_medical_recovery():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    patient = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            HealthComponent(current=50.0, maximum=100.0),
+            DownedComponent(downed_at_epoch=0, cause="injured"),
+        ],
+    )
+    injury = spawn_entity(
+        scenario.actor.world,
+        [InjuryComponent(body_part="leg", severity=5.0, pain=8.0, bleeding_rate=4.0)],
+    )
+    patient.add_relationship(HasInjury(), injury.id)
+    bed = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="clinic bed", kind="bed"), MedicalBedComponent(quality=2.0)],
+    )
+    medicine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="herbal medicine", kind="medicine"),
+            MedicineComponent(quality=0.75, uses=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), patient.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bed.id)
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), medicine.id
+    )
+
+    await scenario.actor.submit(
+        _cmd(scenario, "rescue-to-bed", patient_id=str(patient.id), bed_id=str(bed.id))
+    )
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "tend-wound",
+            patient_id=str(patient.id),
+            injury_id=str(injury.id),
+            medicine_id=str(medicine.id),
+        )
+    )
+    await scenario.actor.tick(2 * HOUR)
+
+    assert injury.get_component(InjuryComponent).treated is True
+    assert not scenario.actor.world.has_entity(medicine.id)
+    assert patient.get_component(BedRestComponent).bed_id == str(bed.id)
+    assert patient.has_component(SleepingComponent)
+    assert patient.get_component(HealthComponent).current > 50.0
+
+
+async def test_mental_break_and_inspiration_trigger_from_needs_and_affect():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(FunNeedComponent(meter=Meter(value=95.0)))
+
+    await scenario.actor.tick(0.0)
+
+    assert character.get_component(MentalStateComponent).state == "mental_break"
+
+    character.remove_component(FunNeedComponent)
+    character.remove_component(MentalStateComponent)
+    character.add_component(AffectComponent(current=AffectVector(valence=20.0)))
+
+    await scenario.actor.tick(0.0)
+
+    assert character.get_component(MentalStateComponent).state == "inspired"
 
 
 async def test_craft_consumes_partial_stack_and_merges_output_stack():

@@ -74,15 +74,15 @@ behaviour is added by **plugins**; the builtins are:
 | Plugin id               | Provides                                                       |
 |-------------------------|---------------------------------------------------------------|
 | `bunnyland.core_verbs`  | move, take, put, use, write, sleep/wake/wait, say, tell       |
-| `bunnyland.lifesim`     | hunger/thirst components + systems, eat/drink, affect (mood)  |
+| `bunnyland.lifesim`     | daily needs, eat/drink, self-care, homes, work, family, aging |
 | `bunnyland.memory`      | take-note / remember (private, focus-lane)                    |
 | `bunnyland.worldgen`    | the `oneshot` and `recursive` world generators                |
 | `bunnyland.environment` | day/night light cycle, calendar, weather                      |
 | `bunnyland.mechanisms`  | door auto-close and momentary-button reset timers             |
 | `bunnyland.social`      | social bonds that grow through speech (affinity/trust/fear)   |
 | `bunnyland.policy`      | boundary/consent gate (flirting etc.); denied always wins     |
-| `bunnyland.colonysim`   | resources, work reservations, crafting, jobs, and ownership   |
-| `bunnyland.gardensim`   | soil, tilling, planting, crop growth, watering, and harvests  |
+| `bunnyland.colonysim`   | resources, stockpiles, work, recipes, health, rooms, wealth  |
+| `bunnyland.gardensim`   | crops, trees, machines, animals, fishing, mining, bundles    |
 | `bunnyland.barbariansim` | combat, stamina, exposure, gear durability, poison, corruption |
 | `bunnyland.dragonsim`   | discovery, quests, objectives, factions, and reputation       |
 | `bunnyland.daggersim`   | rumors, travel, guilds, banks, law, spells, and dungeons      |

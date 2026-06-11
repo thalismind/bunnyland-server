@@ -1,6 +1,12 @@
 # Garden-sim farming
 
-Garden-sim is the crop and tree loop provided by the `bunnyland.gardensim` plugin. The full farm-to-sale path also uses `bunnyland.lifesim` for money, customers, and businesses, and can use `bunnyland.colonysim` ownership if you want to mark a bed as yours.
+Garden-sim is the farm loop provided by the `bunnyland.gardensim` plugin. It includes
+soil, crops, trees, edible produce, processing machines, animals, fishing, mining,
+foraging, gifts, festivals, bundles, seasonal availability, greenhouse exceptions, and
+daily farm reset. The full farm-to-sale path also uses `bunnyland.lifesim` for money,
+customers, and businesses, and can use `bunnyland.colonysim` ownership if you want to mark
+a bed as yours. See [Farm production](farm-production.md) for the machine, animal,
+gathering, gift, festival, and bundle loops.
 
 ## Find a plot
 
@@ -96,7 +102,11 @@ When the crop is ready, harvest the bed:
 !harvest-crop garden bed
 ```
 
-Harvesting fails if the crop is missing, dead, or not ready. A successful harvest removes the crop from the soil and puts the produce in your inventory. If the yield is more than one, the item name includes the quantity, such as `radish x2`.
+Harvesting fails if the crop is missing, dead, or not ready. A successful harvest removes
+the crop from the soil and puts the produce in your inventory as a resource stack. If the
+yield is more than one, the item name includes the quantity, such as `radish x2`. Seeds can
+also mark produce as edible, allowing the same harvest to feed recipes, bundles, gifts, or
+the `eat` command.
 
 The bed stays tilled after harvest, so you can plant another seed in it.
 

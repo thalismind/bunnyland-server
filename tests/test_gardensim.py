@@ -14,15 +14,23 @@ from bunnyland.core import (
     WorldClockComponent,
     build_submitted_command,
     container_of,
+    contents,
     parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.colonysim import ResourceStackComponent
+from bunnyland.mechanics.consumables import FoodComponent
 from bunnyland.mechanics.environment import CalendarComponent
 from bunnyland.mechanics.gardensim import (
+    AnimalProductCollectedEvent,
+    AnimalProductComponent,
+    BundleComponent,
     ClearDeadCropHandler,
+    CollectAnimalProductHandler,
+    CollectMachineOutputHandler,
+    ContributeBundleHandler,
     CropComponent,
     CropGrewEvent,
     CropGrowthComponent,
@@ -30,18 +38,38 @@ from bunnyland.mechanics.gardensim import (
     CropHarvestedEvent,
     CropReadyEvent,
     DeadCropClearedEvent,
+    FarmAnimalComponent,
+    FeedAnimalHandler,
     FertilizeHandler,
     FertilizerComponent,
+    FestivalComponent,
+    FishCaughtEvent,
+    FishHandler,
+    FishingSpotComponent,
+    ForageComponent,
+    ForageHandler,
+    FriendshipComponent,
+    GiftPreferenceComponent,
+    GiveGiftHandler,
     GreenhouseComponent,
     HarvestableComponent,
     HarvestCropHandler,
     HarvestSapHandler,
+    JoinFestivalHandler,
+    MachineComponent,
+    MachineOutputCollectedEvent,
+    MineHandler,
+    MiningNodeComponent,
+    PetAnimalHandler,
     PlantHandler,
+    ProcessingRecipeComponent,
+    ProcessingTaskComponent,
     SapHarvestedEvent,
     SapReadyEvent,
     SeedComponent,
     SoilComponent,
     SoilTilledEvent,
+    StartMachineHandler,
     TapTreeHandler,
     TilledComponent,
     TillHandler,
@@ -67,8 +95,28 @@ def _install(actor):
     actor.register_handler(ClearDeadCropHandler())
     actor.register_handler(TapTreeHandler())
     actor.register_handler(HarvestSapHandler())
+    actor.register_handler(StartMachineHandler())
+    actor.register_handler(CollectMachineOutputHandler())
+    actor.register_handler(FeedAnimalHandler())
+    actor.register_handler(PetAnimalHandler())
+    actor.register_handler(CollectAnimalProductHandler())
+    actor.register_handler(FishHandler())
+    actor.register_handler(MineHandler())
+    actor.register_handler(ForageHandler())
+    actor.register_handler(GiveGiftHandler())
+    actor.register_handler(JoinFestivalHandler())
+    actor.register_handler(ContributeBundleHandler())
     actor.register_consequence(CropGrowthConsequence())
     actor.register_consequence(TreeGrowthConsequence())
+    from bunnyland.mechanics.gardensim import (
+        AnimalProductConsequence,
+        DailyFarmResetConsequence,
+        MachineProcessingConsequence,
+    )
+
+    actor.register_consequence(MachineProcessingConsequence())
+    actor.register_consequence(AnimalProductConsequence())
+    actor.register_consequence(DailyFarmResetConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -106,7 +154,13 @@ def _soil(scenario, name="garden bed"):
     return soil.id
 
 
-def _seed(scenario, crop_type="turnip", growth_days=1.0, seasons=("spring", "summer", "autumn")):
+def _seed(
+    scenario,
+    crop_type="turnip",
+    growth_days=1.0,
+    seasons=("spring", "summer", "autumn"),
+    edible_satiety=0.0,
+):
     seed = spawn_entity(
         scenario.actor.world,
         [
@@ -117,6 +171,8 @@ def _seed(scenario, crop_type="turnip", growth_days=1.0, seasons=("spring", "sum
                 yield_item=crop_type,
                 yield_quantity=2,
                 seasons=seasons,
+                edible_nutrition=2.0 if edible_satiety else 0.0,
+                edible_satiety=edible_satiety,
             ),
             PortableComponent(can_pick_up=True),
         ],
@@ -197,7 +253,32 @@ async def test_till_plant_water_grow_and_harvest_crop():
     assert not soil_entity.has_component(CropComponent)
     item = scenario.actor.world.get_entity(parse_entity_id(harvested[0].item_id))
     assert item.get_component(IdentityComponent).name == "turnip x2"
+    assert item.get_component(ResourceStackComponent).resource_type == "turnip"
     assert container_of(item) == scenario.character
+
+
+async def test_edible_crop_harvest_creates_food_resource_stack():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    soil = _soil(scenario)
+    seed = _seed(scenario, crop_type="strawberry", edible_satiety=12.0)
+
+    await scenario.actor.submit(_cmd(scenario, "till", soil_id=str(soil)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "plant", soil_id=str(soil), seed_id=str(seed)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "water-crop", soil_id=str(soil)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(DAY)
+    await scenario.actor.submit(_cmd(scenario, "harvest-crop", soil_id=str(soil)))
+    await scenario.actor.tick(0.0)
+
+    item_id = next(
+        iter(scenario.actor.world.get_entity(scenario.character).get_relationships(Contains))
+    )[1]
+    item = scenario.actor.world.get_entity(item_id)
+    assert item.get_component(ResourceStackComponent).resource_type == "strawberry"
+    assert item.get_component(FoodComponent).satiety == 12.0
 
 
 async def test_fertilizer_speeds_crop_growth():
@@ -323,6 +404,107 @@ async def test_wait_tap_tree_wait_and_harvest_sap():
     assert tree_entity.get_component(TreeTapComponent).last_collected_epoch == scenario.actor.epoch
 
 
+async def test_machine_processing_consumes_inputs_waits_and_collects_output():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    flour = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="wheat x2", kind="resource"),
+            ResourceStackComponent(resource_type="wheat", quantity=2),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), flour.id
+    )
+    machine = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="mill", kind="machine"), MachineComponent(machine_type="mill")],
+    )
+    recipe = spawn_entity(
+        scenario.actor.world,
+        [
+            ProcessingRecipeComponent(
+                recipe_id="flour",
+                machine_type="mill",
+                inputs={"wheat": 2},
+                outputs={"flour": 1},
+                duration_seconds=HOUR,
+            )
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), machine.id
+    )
+    outputs: list[MachineOutputCollectedEvent] = []
+    scenario.actor.bus.subscribe(MachineOutputCollectedEvent, outputs.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "start-machine", machine_id=str(machine.id), recipe_id="flour")
+    )
+    await scenario.actor.tick(0.0)
+    assert recipe.has_component(ProcessingRecipeComponent)
+    assert machine.get_component(MachineComponent).busy is True
+    assert container_of(flour) is None
+
+    await scenario.actor.tick(HOUR)
+    assert machine.get_component(ProcessingTaskComponent).ready is True
+
+    await scenario.actor.submit(
+        _cmd(scenario, "collect-machine-output", machine_id=str(machine.id))
+    )
+    await scenario.actor.tick(0.0)
+
+    output = scenario.actor.world.get_entity(parse_entity_id(outputs[0].output_ids[0]))
+    assert output.get_component(ResourceStackComponent).resource_type == "flour"
+    assert machine.get_component(MachineComponent).busy is False
+
+
+async def test_feed_pet_and_collect_animal_product():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    hay = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="hay x1", kind="resource"),
+            ResourceStackComponent(resource_type="hay", quantity=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    animal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Henrietta", kind="animal"),
+            FarmAnimalComponent(species="chicken", age_days=3.0, adult_age_days=3.0),
+            AnimalProductComponent(product_type="egg", quantity=1, last_produced_epoch=0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), hay.id
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), animal.id
+    )
+    collected: list[AnimalProductCollectedEvent] = []
+    scenario.actor.bus.subscribe(AnimalProductCollectedEvent, collected.append)
+
+    await scenario.actor.submit(_cmd(scenario, "feed-animal", animal_id=str(animal.id)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "pet-animal", animal_id=str(animal.id)))
+    await scenario.actor.tick(DAY)
+
+    assert animal.get_component(FarmAnimalComponent).friendship == 5.0
+    assert animal.get_component(AnimalProductComponent).ready is True
+
+    await scenario.actor.submit(_cmd(scenario, "collect-animal-product", animal_id=str(animal.id)))
+    await scenario.actor.tick(0.0)
+
+    egg = scenario.actor.world.get_entity(parse_entity_id(collected[0].item_id))
+    assert egg.get_component(ResourceStackComponent).resource_type == "egg"
+    assert animal.get_component(AnimalProductComponent).ready is False
+
+
 async def test_crop_withers_out_of_season():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -343,6 +525,95 @@ async def test_crop_withers_out_of_season():
 
     soil_entity = scenario.actor.world.get_entity(soil)
     assert soil_entity.get_component(CropComponent).dead is True
+
+
+async def test_fishing_mining_foraging_gifts_festivals_and_bundles():
+    scenario = build_scenario(action_current=10.0)
+    _install(scenario.actor)
+    spot = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="pond", kind="water"), FishingSpotComponent(fish_type="trout")],
+    )
+    node = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="copper node", kind="ore"),
+            MiningNodeComponent(resource_type="copper ore"),
+        ],
+    )
+    forage = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="wild leek", kind="forage"), ForageComponent(resource_type="leek")],
+    )
+    friend = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Marnie", kind="character"),
+            GiftPreferenceComponent(likes=("leek",)),
+        ],
+    )
+    festival = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Egg Festival", kind="festival"),
+            FestivalComponent(name="Egg Festival", season="spring"),
+        ],
+    )
+    bundle = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Spring Bundle", kind="bundle"),
+            BundleComponent(bundle_id="spring", requirements={"trout": 1}),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    for entity in (spot, node, forage, friend, festival, bundle):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    clock = list(scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities())[0]
+    clock.add_component(CalendarComponent(season="spring"))
+    fish_events: list[FishCaughtEvent] = []
+    scenario.actor.bus.subscribe(FishCaughtEvent, fish_events.append)
+
+    await scenario.actor.submit(_cmd(scenario, "fish", spot_id=str(spot.id)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "mine", node_id=str(node.id)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "forage", forage_id=str(forage.id)))
+    await scenario.actor.tick(0.0)
+
+    leek_id = next(
+        item_id
+        for item_id in contents(scenario.actor.world.get_entity(scenario.character))
+        if scenario.actor.world.get_entity(item_id).has_component(ResourceStackComponent)
+        and scenario.actor.world.get_entity(item_id)
+        .get_component(ResourceStackComponent)
+        .resource_type
+        == "leek"
+    )
+    await scenario.actor.submit(
+        _cmd(scenario, "give-gift", target_id=str(friend.id), item_id=str(leek_id))
+    )
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "join-festival", festival_id=str(festival.id)))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "contribute-bundle",
+            bundle_id=str(bundle.id),
+            resource_type="trout",
+            quantity=1,
+        )
+    )
+    await scenario.actor.tick(0.0)
+
+    assert fish_events[0].fish_type == "trout"
+    assert not scenario.actor.world.has_entity(node.id)
+    assert not scenario.actor.world.has_entity(forage.id)
+    assert friend.get_component(FriendshipComponent).points == 10.0
+    assert str(scenario.character) in festival.get_component(FestivalComponent).joined_character_ids
+    assert bundle.get_component(BundleComponent).completed is True
 
 
 async def test_planting_respects_seed_season_unless_soil_is_greenhouse():

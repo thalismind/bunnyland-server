@@ -20,6 +20,7 @@ from relics import Edge, Entity, EntityId, World
 from ..core.components import IdentityComponent
 from ..core.ecs import parse_entity_id
 from ..core.events import SpeechSaidEvent, SpeechToldEvent
+from .needs import SocialNeedComponent, recover_daily_need
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -39,6 +40,8 @@ class SocialBond(Edge):
 _FIELDS = ("affinity", "trust", "fear", "resentment", "familiarity")
 _FAMILIARITY_PER_SAY = 0.03
 _FAMILIARITY_PER_TELL = 0.06
+_SOCIAL_RECOVERY_PER_SAY = 8.0
+_SOCIAL_RECOVERY_PER_TELL = 12.0
 
 # How the speaker's bond toward a listener shifts, by speech intent (spec 14.2).
 _SPEAKER_DELTAS: dict[str, dict[str, float]] = {
@@ -108,14 +111,37 @@ class RelationshipReactor:
         familiarity = (
             _FAMILIARITY_PER_TELL if isinstance(event, SpeechToldEvent) else _FAMILIARITY_PER_SAY
         )
+        recovery = (
+            _SOCIAL_RECOVERY_PER_TELL
+            if isinstance(event, SpeechToldEvent)
+            else _SOCIAL_RECOVERY_PER_SAY
+        )
         intent = event.final_interpretation or "neutral"
         speaker_extra = _SPEAKER_DELTAS.get(intent, {})
         listener_extra = _LISTENER_DELTAS.get(intent, {})
+        speaker_entity = self.world.get_entity(speaker)
+        if event.target_ids and speaker_entity.has_component(SocialNeedComponent):
+            recover_daily_need(
+                speaker_entity,
+                SocialNeedComponent,
+                recovery,
+                event.world_epoch,
+                timestamp_field="last_social_epoch",
+            )
 
         for raw in event.target_ids:
             listener = parse_entity_id(raw)
             if listener is None or listener == speaker or not self.world.has_entity(listener):
                 continue
+            listener_entity = self.world.get_entity(listener)
+            if listener_entity.has_component(SocialNeedComponent):
+                recover_daily_need(
+                    listener_entity,
+                    SocialNeedComponent,
+                    recovery,
+                    event.world_epoch,
+                    timestamp_field="last_social_epoch",
+                )
             adjust_bond(
                 self.world, speaker, listener, {**speaker_extra, "familiarity": familiarity}
             )

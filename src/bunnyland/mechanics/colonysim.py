@@ -6,15 +6,25 @@ intentionally does not include base building or hidden job automation.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import field, replace
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, Frequency, System, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import (
+    AffectComponent,
+    BleedingComponent,
+    CharacterComponent,
+    DownedComponent,
+    HealthComponent,
     IdentityComponent,
+    InjuryComponent,
     PortableComponent,
+    RoomComponent,
+    SleepingComponent,
 )
 from ..core.ecs import (
     container_of,
@@ -24,8 +34,9 @@ from ..core.ecs import (
     replace_component,
     spawn_entity,
 )
-from ..core.edges import ContainmentMode, Contains
+from ..core.edges import ContainmentMode, Contains, HasInjury
 from ..core.events import (
+    DomainEvent,
     EventVisibility,
     ItemCraftedEvent,
     ItemForbiddenEvent,
@@ -43,8 +54,10 @@ from ..core.events import (
     StorageFilterChangedEvent,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from .consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 
 SECONDS_PER_DAY = 24 * 60 * 60
+SECONDS_PER_HOUR = 60 * 60
 
 
 @dataclass(frozen=True)
@@ -99,6 +112,7 @@ class RecipeComponent(Component):
     outputs: dict[str, int]
     required_station: str | None = None
     action_cost: int = 1
+    output_entities: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -107,6 +121,83 @@ class JobComponent(Component):
     priority: int
     assigned: bool = False
     completed: bool = False
+
+
+@dataclass(frozen=True)
+class WorkPriorityComponent(Component):
+    priorities: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WorkCapabilityComponent(Component):
+    disabled_work: tuple[str, ...] = ()
+    skill_levels: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AllowedAreaComponent(Component):
+    room_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RoomRoleComponent(Component):
+    role: str = "room"
+
+
+@dataclass(frozen=True)
+class RoomStatComponent(Component):
+    beauty: float = 0.0
+    cleanliness: float = 0.0
+    comfort: float = 0.0
+    wealth: float = 0.0
+
+
+@dataclass(frozen=True)
+class RoomQualityComponent(Component):
+    role: str = "room"
+    beauty: float = 0.0
+    cleanliness: float = 0.0
+    comfort: float = 0.0
+    impressiveness: float = 0.0
+    updated_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class ColonyWealthComponent(Component):
+    wealth: float = 0.0
+    expectations: str = "low"
+    updated_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class MedicineComponent(Component):
+    quality: float = 1.0
+    uses: int = 1
+
+
+@dataclass(frozen=True)
+class MedicalBedComponent(Component):
+    quality: float = 1.0
+
+
+@dataclass(frozen=True)
+class BedRestComponent(Component):
+    started_at_epoch: int
+    bed_id: str | None = None
+
+
+@dataclass(frozen=True)
+class InfectionComponent(Component):
+    severity: float = 0.0
+    immunity: float = 0.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class MentalStateComponent(Component):
+    state: str = "stable"
+    reason: str = ""
+    expires_at_epoch: int | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +213,48 @@ class AssignedTo(Edge):
 @dataclass(frozen=True)
 class Owns(Edge):
     since_epoch: int
+
+
+class WorkPrioritySetEvent(DomainEvent):
+    work_type: str
+    priority: int
+
+
+class AllowedAreaSetEvent(DomainEvent):
+    room_ids: tuple[str, ...]
+
+
+class RoomQualityUpdatedEvent(DomainEvent):
+    room_id_updated: str
+    impressiveness: float
+
+
+class ColonyWealthUpdatedEvent(DomainEvent):
+    wealth: float
+    expectations: str
+
+
+class WoundTendedEvent(DomainEvent):
+    patient_id: str
+    injury_id: str
+    medicine_id: str | None = None
+    quality: float = 1.0
+
+
+class CharacterRescuedEvent(DomainEvent):
+    patient_id: str
+    bed_id: str
+
+
+class InfectionChangedEvent(DomainEvent):
+    patient_id: str
+    severity: float
+    immunity: float
+
+
+class MentalStateChangedEvent(DomainEvent):
+    state: str
+    reason: str
 
 
 class ResourceRegenSystem(System):
@@ -150,6 +283,239 @@ class ResourceRegenSystem(System):
             )
 
 
+def _event_base(epoch: int, **kwargs) -> dict:
+    base = {
+        "event_id": uuid4().hex,
+        "world_epoch": epoch,
+        "created_at": datetime.now(UTC),
+        "visibility": EventVisibility.ROOM,
+    }
+    base.update(kwargs)
+    return base
+
+
+class RoomQualityConsequence:
+    """Compute room quality from room role/stat components and contained fixtures."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for room in world.query().with_all([RoomComponent]).execute_entities():
+            role = (
+                room.get_component(RoomRoleComponent).role
+                if room.has_component(RoomRoleComponent)
+                else "room"
+            )
+            beauty = cleanliness = comfort = wealth = 0.0
+            if room.has_component(RoomStatComponent):
+                stats = room.get_component(RoomStatComponent)
+                beauty += stats.beauty
+                cleanliness += stats.cleanliness
+                comfort += stats.comfort
+                wealth += stats.wealth
+            for item_id in contents(room):
+                item = world.get_entity(item_id)
+                if item.has_component(RoomStatComponent):
+                    stats = item.get_component(RoomStatComponent)
+                    beauty += stats.beauty
+                    cleanliness += stats.cleanliness
+                    comfort += stats.comfort
+                    wealth += stats.wealth
+            impressiveness = beauty + cleanliness + comfort + (wealth / 100.0)
+            existing = (
+                room.get_component(RoomQualityComponent)
+                if room.has_component(RoomQualityComponent)
+                else RoomQualityComponent()
+            )
+            updated = RoomQualityComponent(
+                role=role,
+                beauty=beauty,
+                cleanliness=cleanliness,
+                comfort=comfort,
+                impressiveness=round(impressiveness, 3),
+                updated_at_epoch=epoch,
+            )
+            if existing != updated:
+                replace_component(room, updated)
+                events.append(
+                    RoomQualityUpdatedEvent(
+                        **_event_base(
+                            epoch,
+                            room_id=str(room.id),
+                            target_ids=(str(room.id),),
+                            room_id_updated=str(room.id),
+                            impressiveness=updated.impressiveness,
+                        )
+                    )
+                )
+        return events
+
+
+class ColonyWealthConsequence:
+    """Bookkeep settlement wealth from resource stacks, room fixtures, and workstations."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        wealth = 0.0
+        for entity in world.query().execute_entities():
+            if entity.has_component(ResourceStackComponent):
+                wealth += entity.get_component(ResourceStackComponent).quantity
+            if entity.has_component(RoomStatComponent):
+                wealth += entity.get_component(RoomStatComponent).wealth
+            if entity.has_component(WorkstationComponent):
+                wealth += 10.0 * entity.get_component(WorkstationComponent).quality
+        expectations = "low" if wealth < 50 else "moderate" if wealth < 200 else "high"
+        events: list[DomainEvent] = []
+        for marker in world.query().with_all([ColonySimComponent]).execute_entities():
+            existing = (
+                marker.get_component(ColonyWealthComponent)
+                if marker.has_component(ColonyWealthComponent)
+                else ColonyWealthComponent()
+            )
+            updated = ColonyWealthComponent(
+                wealth=round(wealth, 3),
+                expectations=expectations,
+                updated_at_epoch=epoch,
+            )
+            if existing != updated:
+                replace_component(marker, updated)
+                events.append(
+                    ColonyWealthUpdatedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.SYSTEM,
+                            wealth=updated.wealth,
+                            expectations=updated.expectations,
+                        )
+                    )
+                )
+        return events
+
+
+class MedicalRecoveryConsequence:
+    """Advance bed-rest recovery and infection progress."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for patient in world.query().with_all([CharacterComponent]).execute_entities():
+            if patient.has_component(BedRestComponent) and patient.has_component(HealthComponent):
+                rest = patient.get_component(BedRestComponent)
+                health = patient.get_component(HealthComponent)
+                elapsed_hours = max(0, epoch - rest.started_at_epoch) / SECONDS_PER_HOUR
+                if elapsed_hours > 0 and health.current < health.maximum:
+                    bed_quality = 1.0
+                    bed_id = parse_entity_id(rest.bed_id)
+                    if bed_id is not None and world.has_entity(bed_id):
+                        bed = world.get_entity(bed_id)
+                        if bed.has_component(MedicalBedComponent):
+                            bed_quality = bed.get_component(MedicalBedComponent).quality
+                    healed = min(health.maximum, health.current + elapsed_hours * bed_quality)
+                    replace_component(patient, replace(health, current=healed))
+                    replace_component(patient, replace(rest, started_at_epoch=epoch))
+            if not patient.has_component(InfectionComponent):
+                continue
+            infection = patient.get_component(InfectionComponent)
+            elapsed_hours = max(0, epoch - infection.last_updated_epoch) / SECONDS_PER_HOUR
+            if elapsed_hours <= 0:
+                continue
+            resting = patient.has_component(BedRestComponent)
+            immunity = min(1.0, infection.immunity + elapsed_hours * (0.04 if resting else 0.02))
+            severity = max(0.0, infection.severity + elapsed_hours * 0.01 - immunity * 0.02)
+            updated = InfectionComponent(
+                severity=round(severity, 3),
+                immunity=round(immunity, 3),
+                last_updated_epoch=epoch,
+            )
+            replace_component(patient, updated)
+            events.append(
+                InfectionChangedEvent(
+                    **_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(patient.id),
+                        target_ids=(str(patient.id),),
+                        patient_id=str(patient.id),
+                        severity=updated.severity,
+                        immunity=updated.immunity,
+                    )
+                )
+            )
+        return events
+
+
+class MentalStateConsequence:
+    """Trigger mild breaks from severe need/mood pressure and inspirations from high mood."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        from .meter import band
+        from .needs import (
+            ComfortNeedComponent,
+            FatigueComponent,
+            FunNeedComponent,
+            HygieneComponent,
+            PrivacyNeedComponent,
+            SafetyNeedComponent,
+            SocialNeedComponent,
+        )
+
+        events: list[DomainEvent] = []
+        need_types = (
+            FatigueComponent,
+            HygieneComponent,
+            ComfortNeedComponent,
+            FunNeedComponent,
+            SocialNeedComponent,
+            PrivacyNeedComponent,
+            SafetyNeedComponent,
+        )
+        for character in world.query().with_all([CharacterComponent]).execute_entities():
+            existing = (
+                character.get_component(MentalStateComponent)
+                if character.has_component(MentalStateComponent)
+                else MentalStateComponent()
+            )
+            if existing.expires_at_epoch is not None and epoch >= existing.expires_at_epoch:
+                updated = MentalStateComponent()
+            else:
+                updated = existing
+            crisis_needs = [
+                component_type.__name__.removesuffix("Component")
+                for component_type in need_types
+                if character.has_component(component_type)
+                and band(character.get_component(component_type).meter) == "crisis"
+            ]
+            if crisis_needs and existing.state != "mental_break":
+                updated = MentalStateComponent(
+                    state="mental_break",
+                    reason="low " + ", ".join(sorted(crisis_needs)),
+                    expires_at_epoch=epoch + 2 * SECONDS_PER_HOUR,
+                )
+            elif (
+                not crisis_needs
+                and character.has_component(AffectComponent)
+                and character.get_component(AffectComponent).current.valence >= 15
+                and existing.state == "stable"
+            ):
+                updated = MentalStateComponent(
+                    state="inspired",
+                    reason="high mood",
+                    expires_at_epoch=epoch + 4 * SECONDS_PER_HOUR,
+                )
+            if updated != existing:
+                replace_component(character, updated)
+                events.append(
+                    MentalStateChangedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            target_ids=(str(character.id),),
+                            state=updated.state,
+                            reason=updated.reason,
+                        )
+                    )
+                )
+        return events
+
+
 def ensure_colonysim_marker(actor) -> ColonySimComponent:
     for entity in actor.world.query().with_all([ColonySimComponent]).execute_entities():
         return entity.get_component(ColonySimComponent)
@@ -159,6 +525,10 @@ def ensure_colonysim_marker(actor) -> ColonySimComponent:
 
 def install_colonysim(actor) -> None:
     ensure_colonysim_marker(actor)
+    actor.register_consequence(RoomQualityConsequence())
+    actor.register_consequence(ColonyWealthConsequence())
+    actor.register_consequence(MedicalRecoveryConsequence())
+    actor.register_consequence(MentalStateConsequence())
 
 
 def _reservation_holder(entity: Entity) -> EntityId | None:
@@ -266,6 +636,19 @@ def _consume_resource_stack(
     return True
 
 
+def _consume_medicine_use(ctx: HandlerContext, medicine_id: EntityId) -> None:
+    medicine_entity = ctx.entity(medicine_id)
+    medicine = medicine_entity.get_component(MedicineComponent)
+    remaining = medicine.uses - 1
+    if remaining <= 0:
+        holder = container_of(medicine_entity)
+        if holder is not None:
+            ctx.entity(holder).remove_relationship(Contains, medicine_id)
+        ctx.world.remove(medicine_id)
+    else:
+        replace_component(medicine_entity, replace(medicine, uses=remaining))
+
+
 def _move_entity(world: World, entity_id: EntityId, target_id: EntityId) -> None:
     current_container_id = container_of(world.get_entity(entity_id))
     if current_container_id is not None:
@@ -314,6 +697,239 @@ def _has_station(world: World, character: Entity, station_type: str) -> bool:
         ):
             return True
     return False
+
+
+def _spawn_recipe_entity(
+    character: Entity,
+    world: World,
+    resource_type: str,
+    quantity: int,
+    metadata: dict[str, object],
+) -> str:
+    display_name = str(metadata.get("display_name") or _resource_name(resource_type, quantity))
+    kind = str(metadata.get("entity_kind") or metadata.get("kind") or "item")
+    portable = bool(metadata.get("portable", True))
+    uses = int(metadata.get("uses", quantity))
+    components: list[Component] = [
+        IdentityComponent(name=display_name, kind=kind, tags=(resource_type,)),
+        ResourceStackComponent(resource_type=resource_type, quantity=quantity),
+    ]
+    if portable:
+        components.append(PortableComponent(can_pick_up=True))
+    if "satiety" in metadata or "nutrition" in metadata:
+        components.append(
+            FoodComponent(
+                nutrition=float(metadata.get("nutrition", 0.0)),
+                satiety=float(metadata.get("satiety", 0.0)),
+                raw=bool(metadata.get("raw", False)),
+                spoiled=bool(metadata.get("spoiled", False)),
+            )
+        )
+    if "hydration" in metadata:
+        components.append(
+            DrinkableComponent(
+                hydration=float(metadata.get("hydration", 0.0)),
+                purity=float(metadata.get("purity", 1.0)),
+            )
+        )
+    if uses > 0:
+        components.append(ConsumableComponent(current_uses=uses, max_uses=uses))
+    item = spawn_entity(world, components)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    return str(item.id)
+
+
+def _create_recipe_outputs(
+    character: Entity, world: World, recipe: RecipeComponent
+) -> tuple[str, ...]:
+    output_ids: list[str] = []
+    for resource_type, quantity in recipe.outputs.items():
+        metadata = recipe.output_entities.get(resource_type)
+        if metadata:
+            output_ids.append(
+                _spawn_recipe_entity(character, world, resource_type, quantity, metadata)
+            )
+        else:
+            output_ids.append(_add_resource_stack(character, world, resource_type, quantity))
+    return tuple(output_ids)
+
+
+class SetWorkPriorityHandler:
+    command_type = "set-work-priority"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        work_type = str(command.payload.get("work_type", "")).strip()
+        priority = int(command.payload.get("priority", 0))
+        if character_id is None:
+            return rejected("invalid character id")
+        if not work_type:
+            return rejected("missing work type")
+        if priority < 0 or priority > 4:
+            return rejected("priority must be between 0 and 4")
+        character = ctx.entity(character_id)
+        existing = (
+            character.get_component(WorkPriorityComponent)
+            if character.has_component(WorkPriorityComponent)
+            else WorkPriorityComponent()
+        )
+        priorities = dict(existing.priorities)
+        if priority == 0:
+            priorities.pop(work_type, None)
+        else:
+            priorities[work_type] = priority
+        replace_component(character, WorkPriorityComponent(priorities=priorities))
+        return ok(
+            WorkPrioritySetEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    work_type=work_type,
+                    priority=priority,
+                )
+            )
+        )
+
+
+class SetAllowedAreaHandler:
+    command_type = "set-allowed-area"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        raw = command.payload.get("room_ids")
+        room_ids = _parse_types(raw)
+        for room_id_str in room_ids:
+            room_id = parse_entity_id(room_id_str)
+            if room_id is None or not ctx.world.has_entity(room_id):
+                return rejected("room does not exist")
+            if not ctx.entity(room_id).has_component(RoomComponent):
+                return rejected("target is not a room")
+        character = ctx.entity(character_id)
+        replace_component(character, AllowedAreaComponent(room_ids=room_ids))
+        return ok(
+            AllowedAreaSetEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_ids=room_ids,
+                )
+            )
+        )
+
+
+class TendWoundHandler:
+    command_type = "tend-wound"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        doctor_id = parse_entity_id(command.character_id)
+        patient_id = parse_entity_id(command.payload.get("patient_id"))
+        injury_id = parse_entity_id(command.payload.get("injury_id"))
+        medicine_id = parse_entity_id(command.payload.get("medicine_id"))
+        if doctor_id is None or patient_id is None or injury_id is None:
+            return rejected("invalid doctor, patient, or injury id")
+        if not ctx.world.has_entity(patient_id) or not ctx.world.has_entity(injury_id):
+            return rejected("patient or injury does not exist")
+        doctor = ctx.entity(doctor_id)
+        if patient_id not in reachable_ids(ctx.world, doctor) and patient_id != doctor_id:
+            return rejected("patient is not reachable")
+        patient = ctx.entity(patient_id)
+        if not patient.has_relationship(HasInjury, injury_id):
+            return rejected("injury does not belong to patient")
+        injury_entity = ctx.entity(injury_id)
+        if not injury_entity.has_component(InjuryComponent):
+            return rejected("target is not an injury")
+        quality = 0.5
+        if medicine_id is not None:
+            if not ctx.world.has_entity(medicine_id):
+                return rejected("medicine does not exist")
+            if medicine_id not in reachable_ids(ctx.world, doctor):
+                return rejected("medicine is not reachable")
+            medicine_entity = ctx.entity(medicine_id)
+            if not medicine_entity.has_component(MedicineComponent):
+                return rejected("target is not medicine")
+            quality = medicine_entity.get_component(MedicineComponent).quality
+        injury = injury_entity.get_component(InjuryComponent)
+        replace_component(
+            injury_entity,
+            replace(
+                injury,
+                treated=True,
+                pain=max(0.0, injury.pain * (1.0 - min(1.0, quality))),
+                bleeding_rate=max(0.0, injury.bleeding_rate * (1.0 - min(1.0, quality))),
+            ),
+        )
+        if medicine_id is not None:
+            _consume_medicine_use(ctx, medicine_id)
+        if patient.has_component(BleedingComponent):
+            bleeding = patient.get_component(BleedingComponent)
+            replace_component(patient, replace(bleeding, rate=0.0, last_updated_epoch=ctx.epoch))
+        return ok(
+            WoundTendedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(doctor_id),
+                    room_id=_room_id(ctx.world, doctor_id),
+                    target_ids=(str(patient_id), str(injury_id)),
+                    patient_id=str(patient_id),
+                    injury_id=str(injury_id),
+                    medicine_id=str(medicine_id) if medicine_id is not None else None,
+                    quality=quality,
+                )
+            )
+        )
+
+
+class RescueToBedHandler:
+    command_type = "rescue-to-bed"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        rescuer_id = parse_entity_id(command.character_id)
+        patient_id = parse_entity_id(command.payload.get("patient_id"))
+        bed_id = parse_entity_id(command.payload.get("bed_id"))
+        if rescuer_id is None or patient_id is None or bed_id is None:
+            return rejected("invalid rescuer, patient, or bed id")
+        if not ctx.world.has_entity(patient_id) or not ctx.world.has_entity(bed_id):
+            return rejected("patient or bed does not exist")
+        rescuer = ctx.entity(rescuer_id)
+        reachable = reachable_ids(ctx.world, rescuer)
+        if patient_id not in reachable:
+            return rejected("patient is not reachable")
+        if bed_id not in reachable:
+            return rejected("bed is not reachable")
+        patient = ctx.entity(patient_id)
+        bed = ctx.entity(bed_id)
+        if not patient.has_component(CharacterComponent):
+            return rejected("patient is not a character")
+        if not patient.has_component(DownedComponent):
+            return rejected("patient does not need rescue")
+        if not bed.has_component(MedicalBedComponent):
+            return rejected("target is not a medical bed")
+        bed_room = container_of(bed)
+        if bed_room is None:
+            return rejected("bed is not in a room")
+        old_room = container_of(patient)
+        if old_room is not None:
+            ctx.entity(old_room).remove_relationship(Contains, patient_id)
+        ctx.entity(bed_room).add_relationship(
+            Contains(mode=ContainmentMode.ROOM_CONTENT), patient_id
+        )
+        replace_component(patient, BedRestComponent(started_at_epoch=ctx.epoch, bed_id=str(bed_id)))
+        if not patient.has_component(SleepingComponent):
+            patient.add_component(SleepingComponent(started_at_epoch=ctx.epoch))
+        return ok(
+            CharacterRescuedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(rescuer_id),
+                    room_id=str(bed_room),
+                    target_ids=(str(patient_id), str(bed_id)),
+                    patient_id=str(patient_id),
+                    bed_id=str(bed_id),
+                )
+            )
+        )
 
 
 class CreateStockpileHandler:
@@ -748,10 +1364,7 @@ class CraftHandler:
 
         for resource_type, quantity in recipe.inputs.items():
             _consume_resource_stack(character, ctx.world, resource_type, quantity)
-        output_ids = tuple(
-            _add_resource_stack(character, ctx.world, resource_type, quantity)
-            for resource_type, quantity in recipe.outputs.items()
-        )
+        output_ids = _create_recipe_outputs(character, ctx.world, recipe)
         return ok(
             ItemCraftedEvent(
                 **ctx.event_base(
@@ -764,6 +1377,10 @@ class CraftHandler:
                 )
             )
         )
+
+
+class BakeHandler(CraftHandler):
+    command_type = "bake"
 
 
 class AssignJobHandler:
@@ -913,9 +1530,35 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
             inventory.append(f"{stack.quantity} {stack.resource_type}")
     if inventory:
         lines.append("You have resources: " + ", ".join(sorted(inventory)) + ".")
+    if character.has_component(WorkPriorityComponent):
+        priorities = character.get_component(WorkPriorityComponent).priorities
+        if priorities:
+            parts = [f"{work}:{priority}" for work, priority in sorted(priorities.items())]
+            lines.append("Work priorities: " + ", ".join(parts) + ".")
+    if character.has_component(AllowedAreaComponent):
+        allowed = character.get_component(AllowedAreaComponent).room_ids
+        if allowed:
+            lines.append("Allowed work area rooms: " + ", ".join(sorted(allowed)) + ".")
+    if character.has_component(BedRestComponent):
+        lines.append("You are on medical bed rest.")
+    if character.has_component(InfectionComponent):
+        infection = character.get_component(InfectionComponent)
+        lines.append(
+            f"Infection: severity {infection.severity:.2f}, immunity {infection.immunity:.2f}."
+        )
+    if character.has_component(MentalStateComponent):
+        mental = character.get_component(MentalStateComponent)
+        if mental.state != "stable":
+            lines.append(f"Mental state: {mental.state} ({mental.reason}).")
     for entity in world.query().with_all([RecipeComponent]).execute_entities():
         recipe = entity.get_component(RecipeComponent)
         lines.append(f"You know the {recipe.recipe_id} recipe.")
+    for marker in world.query().with_all([ColonySimComponent]).execute_entities():
+        if marker.has_component(ColonyWealthComponent):
+            wealth = marker.get_component(ColonyWealthComponent)
+            lines.append(
+                f"Colony wealth is {wealth.wealth:.0f}; expectations are {wealth.expectations}."
+            )
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
         if entity.has_component(ResourceNodeComponent):
@@ -926,6 +1569,16 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(WorkstationComponent):
             station = entity.get_component(WorkstationComponent)
             lines.append(f"Nearby workstation: {station.station_type}.")
+        if entity.has_component(MedicalBedComponent):
+            lines.append("Nearby medical bed is available.")
+        if entity.has_component(MedicineComponent):
+            medicine = entity.get_component(MedicineComponent)
+            lines.append(f"Nearby medicine: quality {medicine.quality:.2f}, uses {medicine.uses}.")
+        if entity.has_component(RoomQualityComponent):
+            room = entity.get_component(RoomQualityComponent)
+            lines.append(
+                f"Room quality: {room.role}, impressiveness {room.impressiveness:.1f}."
+            )
         if entity.has_component(StockpileComponent):
             stockpile = entity.get_component(StockpileComponent)
             load = _stockpile_load(world, entity)
@@ -964,10 +1617,18 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
 
 __all__ = [
     "AllowItemHandler",
+    "AllowedAreaComponent",
+    "AllowedAreaSetEvent",
     "AssignedTo",
     "AssignJobHandler",
+    "BakeHandler",
+    "BedRestComponent",
+    "CharacterRescuedEvent",
     "ClaimOwnershipHandler",
     "ColonySimComponent",
+    "ColonyWealthComponent",
+    "ColonyWealthConsequence",
+    "ColonyWealthUpdatedEvent",
     "CompleteJobHandler",
     "CreateStockpileHandler",
     "CraftHandler",
@@ -976,7 +1637,15 @@ __all__ = [
     "GatherResourceHandler",
     "HaulItemHandler",
     "HaulableComponent",
+    "InfectionChangedEvent",
+    "InfectionComponent",
     "JobComponent",
+    "MedicalBedComponent",
+    "MedicalRecoveryConsequence",
+    "MedicineComponent",
+    "MentalStateChangedEvent",
+    "MentalStateComponent",
+    "MentalStateConsequence",
     "MergeStackHandler",
     "Owns",
     "RecipeComponent",
@@ -984,14 +1653,27 @@ __all__ = [
     "ReleaseReservationHandler",
     "ReserveHandler",
     "ReservedBy",
+    "RescueToBedHandler",
     "ResourceNodeComponent",
     "ResourceRegenSystem",
     "ResourceStackComponent",
+    "RoomQualityComponent",
+    "RoomQualityConsequence",
+    "RoomQualityUpdatedEvent",
+    "RoomRoleComponent",
+    "RoomStatComponent",
+    "SetAllowedAreaHandler",
     "SetStorageFilterHandler",
+    "SetWorkPriorityHandler",
     "SplitStackHandler",
     "StockpileComponent",
     "StorageFilterComponent",
+    "TendWoundHandler",
+    "WorkCapabilityComponent",
+    "WorkPriorityComponent",
+    "WorkPrioritySetEvent",
     "WorkstationComponent",
+    "WoundTendedEvent",
     "colonysim_fragments",
     "ensure_colonysim_marker",
     "install_colonysim",
