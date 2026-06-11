@@ -138,6 +138,9 @@ class RegionComponent(Component):
 
     name: str
     kind: str = "region"
+    population: int | str | None = None
+    climate: str = ""
+    terrain: str = ""
 
 
 @dataclass(frozen=True)

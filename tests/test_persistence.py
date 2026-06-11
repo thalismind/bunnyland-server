@@ -527,7 +527,18 @@ def test_type_registries_cover_core_and_plugin_types():
 def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):
     actor = WorldActor()
     chain = [
-        spawn_entity(actor.world, [RegionComponent(name="Lapin Prime", kind="planet")]),
+        spawn_entity(
+            actor.world,
+            [
+                RegionComponent(
+                    name="Lapin Prime",
+                    kind="planet",
+                    population="8.4B",
+                    climate="temperate",
+                    terrain="mixed biomes",
+                )
+            ],
+        ),
         spawn_entity(actor.world, [RegionComponent(name="Mossreach", kind="continent")]),
         spawn_entity(actor.world, [RegionComponent(name="Burrowmark", kind="country")]),
         spawn_entity(actor.world, [RegionComponent(name="North Warren", kind="region")]),
@@ -546,6 +557,11 @@ def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):
     path = tmp_path / "regions.json"
     save_world(actor, path, meta=WorldMeta(seed="regional"))
     loaded, _meta = load_world(path)
+
+    loaded_root = loaded.world.get_entity(chain[0].id).get_component(RegionComponent)
+    assert loaded_root.population == "8.4B"
+    assert loaded_root.climate == "temperate"
+    assert loaded_root.terrain == "mixed biomes"
 
     for parent, child in zip(chain, chain[1:], strict=False):
         relationships = loaded.world.get_entity(parent.id).get_relationships(Contains)
