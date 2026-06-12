@@ -8,6 +8,7 @@ surface and mechanics so disabling one removes its components/systems/verbs.
 
 from __future__ import annotations
 
+from ..core.components import AdminComponent
 from ..core.controllers import MCPControllerComponent
 from ..core.handlers import (
     MoveHandler,
@@ -764,6 +765,7 @@ from ..mechanics.storyteller import (
     IncidentHistoryComponent,
     IncidentProposedEvent,
     IncidentResolvedEvent,
+    IncidentSpawned,
     IncidentStartedEvent,
     ResolveIncidentHandler,
     StorytellerComponent,
@@ -929,6 +931,7 @@ def core_verbs_plugin() -> Plugin:
     return Plugin(
         id=CORE_VERBS,
         name="Core Verbs",
+        ecs=EcsContribution(components=(AdminComponent,)),
         commands=CommandContribution(
             action_handlers=(
                 MoveHandler,
@@ -2098,7 +2101,8 @@ def storyteller_plugin() -> Plugin:
                 ThreatPointsComponent,
                 IncidentHistoryComponent,
                 IncidentComponent,
-            )
+            ),
+            edges=(IncidentSpawned,),
         ),
         commands=CommandContribution(
             action_handlers=(ResolveIncidentHandler,),

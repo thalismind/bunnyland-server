@@ -14,6 +14,7 @@ from bunnyland.core import (
     ActionDefinition,
     ActionExample,
     ActionPattern,
+    AdminComponent,
     CommandCost,
     Contains,
     ControllerOutboxMessageComponent,
@@ -30,6 +31,7 @@ from bunnyland.core import (
 from bunnyland.core.events import NoteTakenEvent
 from bunnyland.core.handlers import ok
 from bunnyland.llm_agents.tools import tool_schemas
+from bunnyland.mechanics.storyteller import IncidentSpawned
 from bunnyland.plugins import (
     CommandContribution,
     ContentContribution,
@@ -65,6 +67,8 @@ from bunnyland.plugins.builtin import (
     TOONSIM,
     VOIDSIM,
     WORLDGEN,
+    core_verbs_plugin,
+    storyteller_plugin,
 )
 from bunnyland.plugins.contributions import collect_content_items, collect_ecs_types
 
@@ -141,6 +145,11 @@ def test_collect_ecs_types_preserves_plugin_order():
 
     assert collect_ecs_types(plugins) == ((MemoryProfileComponent,), (Contains,))
     assert collect_ecs_types([]) == ((), ())
+
+
+def test_builtin_admin_and_storyteller_ecs_types_are_registered():
+    assert AdminComponent in core_verbs_plugin().ecs.components
+    assert IncidentSpawned in storyteller_plugin().ecs.edges
 
 
 def test_worldgen_plugin_contributes_named_generators():

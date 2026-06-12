@@ -5,6 +5,6 @@
   "inputs": [
     {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
     {"tick": 1, "content": "!look", "expect": ["Mosslit Burrow", "resource drop", "supply bundle"]},
-    {"tick": 2, "content": "!resolve-incident incident_id=\"resource drop\"", "expect": ["Incident resolved: incident resource drop; kind resource_drop."]}
+    {"tick": 2, "content": "!take supply bundle", "expect": ["Item taken: item supply bundle; from container Mosslit Burrow."]}
   ]
 }

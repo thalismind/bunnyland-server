@@ -379,6 +379,7 @@ def _add_environment_mechanisms_world(scenario):
 
 
 def _install_storyteller_playtest(actor) -> None:
+    actor.register_handler(TakeHandler())
     actor.register_handler(ResolveIncidentHandler())
     install_storyteller(actor)
 
@@ -1535,6 +1536,8 @@ async def test_discord_playtest_dinosim_lifecycle_loop(scenario):
 
 async def test_discord_playtest_dinosim_kaiju_incident_loop(scenario):
     scenario.actor.register_handler(ResolveIncidentHandler())
+    scenario.actor.register_handler(dino.SignalArmyHandler())
+    scenario.actor.register_handler(dino.RepairDamageHandler())
     _add_dinosim_kaiju_world(scenario)
     rejected = _collect_rejections(scenario.actor)
     started: list[IncidentStartedEvent] = []
@@ -1556,8 +1559,8 @@ async def test_discord_playtest_dinosim_kaiju_incident_loop(scenario):
         for _edge, entity_id in room.get_relationships(Contains)
     ]
     assert rejected == []
-    assert result.ticks == 3
-    assert len(result.inputs) == 2
+    assert result.ticks == 5
+    assert len(result.inputs) == 3
     assert len(incidents) == 1
     assert incidents[0].get_component(IncidentComponent).kind == "kaiju_attack"
     assert incidents[0].has_component(dino.SettlementDamageComponent)

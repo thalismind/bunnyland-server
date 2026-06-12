@@ -20,19 +20,25 @@ Active incident: resource drop.
 The incident may also create nearby objects. A resource drop can place a supply bundle in
 the room.
 
-## Resolve the incident
+## Finish the incident
 
-When the incident entity is reachable, resolve it by name:
-
-```text
-!resolve-incident incident_id="resource drop"
-```
-
-Resolving marks the incident complete. It does not automatically collect any spawned
-items, so take useful objects separately:
+Incidents resolve themselves when the work they created is done. For example, take a
+resource drop, kill or capture hostile creatures, pacify creatures that can be talked
+down, complete spawned quests, or repair settlement damage:
 
 ```text
 !take supply bundle
+```
+
+Manual incident resolution is an admin-only command for moderation and cleanup. Normal
+play should handle the spawned objects, threats, quests, or damage and then let the
+storyteller close the incident.
+
+Some incident packs expose their own response verbs. For example:
+
+```text
+!repair-damage
+!attempt-pacify target_id="angry moth" language=Mothwing
 ```
 
 ## Keep checking context

@@ -79,6 +79,15 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - `docs/developer/` is for engine concepts, architecture, persistence, scripting, world generation, and design notes.
 - Keep root-level docs for project entry points only, such as `README.md`, `PLAN.md`, and broad specifications.
 
+## 7. Test Commands
+
+**Use the README's module-form pytest command.**
+
+- Run the default suite with `scripts/test-all`.
+- Run focused tests with `uv run -m pytest ...`, not `uv run pytest ...`.
+- The console `pytest` entrypoint can miss the uv import path and fail to import dependencies such as `relics`.
+- Do not run `uv sync` unless the user explicitly asks for dependency syncing.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

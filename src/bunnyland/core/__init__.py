@@ -31,6 +31,7 @@ from .commands import (
 )
 from .components import (
     ActionPointsComponent,
+    AdminComponent,
     AffectComponent,
     AffectDelta,
     AffectVector,
@@ -136,6 +137,7 @@ from .world_actor import WorldActor
 
 __all__ = [
     "ActionPointsComponent",
+    "AdminComponent",
     "ActionArgument",
     "ActionDefinition",
     "ActionExample",

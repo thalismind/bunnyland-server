@@ -7,23 +7,36 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
-from relics import Component, World
+from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import (
+    AdminComponent,
     CharacterComponent,
     DeadComponent,
+    HealthComponent,
     IdentityComponent,
     PortableComponent,
     RoomComponent,
     SuspendedComponent,
 )
-from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component, spawn_entity
+from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
-from .colonysim import ColonySimComponent
-from .dinosim import DinosimPolicyComponent, KaijuComponent, SettlementDamageComponent
+from .colonysim import ColonySimComponent, PrisonerComponent
+from .daggersim import GeneratedQuestComponent, PacifiedComponent
+from .dinosim import (
+    ApexPredatorComponent,
+    CompanionComponent,
+    DinosimPolicyComponent,
+    EnclosureComponent,
+    GateComponent,
+    KaijuComponent,
+    SettlementDamageComponent,
+    TamingComponent,
+)
+from .dragonsim import QuestComponent
 
 SECONDS_PER_DAY = 24 * 60 * 60
 
@@ -60,6 +73,11 @@ class IncidentComponent(Component):
     started_at_epoch: int
     room_id: str | None = None
     resolved_at_epoch: int | None = None
+
+
+@dataclass(frozen=True)
+class IncidentSpawned(Edge):
+    kind: str = "spawn"
 
 
 class IncidentProposedEvent(DomainEvent):
@@ -147,6 +165,18 @@ def _spawn_incident(world: World, epoch: int, room, kind: str, spent: float):
                 ],
             )
             room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), supply.id)
+            incident.add_relationship(IncidentSpawned(kind="loot"), supply.id)
+        elif kind == "hostile_encounter":
+            hostile = spawn_entity(
+                world,
+                [
+                    IdentityComponent(name="hostile raider", kind="character"),
+                    CharacterComponent(species="raider"),
+                    HealthComponent(current=10.0, maximum=10.0),
+                ],
+            )
+            room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), hostile.id)
+            incident.add_relationship(IncidentSpawned(kind="monster"), hostile.id)
         elif kind == "kaiju_attack":
             kaiju = spawn_entity(
                 world,
@@ -156,8 +186,121 @@ def _spawn_incident(world: World, epoch: int, room, kind: str, spent: float):
                 ],
             )
             room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), kaiju.id)
+            incident.add_relationship(IncidentSpawned(kind="monster"), kaiju.id)
             replace_component(incident, SettlementDamageComponent(severity=3))
+            incident.add_relationship(IncidentSpawned(kind="damage"), incident.id)
     return incident
+
+
+def _is_admin(ctx: HandlerContext, command: SubmittedCommand, actor_id: EntityId) -> bool:
+    actor = ctx.entity(actor_id)
+    if actor.has_component(AdminComponent):
+        return True
+    controller_id = parse_entity_id(command.controller_id)
+    return (
+        controller_id is not None
+        and ctx.world.has_entity(controller_id)
+        and ctx.entity(controller_id).has_component(AdminComponent)
+    )
+
+
+def _loot_claimed(world: World, incident: IncidentComponent, entity: Entity) -> bool:
+    if incident.room_id is None:
+        return False
+    return container_of(entity) != parse_entity_id(incident.room_id)
+
+
+def _monster_neutralized(world: World, entity: Entity) -> bool:
+    if entity.has_component(DeadComponent) or entity.has_component(SuspendedComponent):
+        return True
+    if entity.has_component(PacifiedComponent) or entity.has_component(PrisonerComponent):
+        return True
+    if entity.has_component(CompanionComponent):
+        return True
+    if entity.has_component(TamingComponent) and entity.get_component(TamingComponent).tamed:
+        return True
+    container_id = container_of(entity)
+    if container_id is not None and world.has_entity(container_id):
+        container = world.get_entity(container_id)
+        if container.has_component(EnclosureComponent):
+            gate = (
+                container.get_component(GateComponent)
+                if container.has_component(GateComponent)
+                else GateComponent(locked=True)
+            )
+            if gate.locked:
+                return True
+    if (
+        entity.has_component(KaijuComponent)
+        and entity.get_component(KaijuComponent).threat_level <= 0
+    ):
+        return True
+    if (
+        entity.has_component(ApexPredatorComponent)
+        and entity.get_component(ApexPredatorComponent).threat_level <= 0
+    ):
+        return True
+    return False
+
+
+def _quest_done(entity: Entity) -> bool:
+    if entity.has_component(QuestComponent):
+        return entity.get_component(QuestComponent).status == "completed"
+    if entity.has_component(GeneratedQuestComponent):
+        return entity.get_component(GeneratedQuestComponent).status == "completed"
+    return False
+
+
+def _damage_repaired(entity: Entity) -> bool:
+    if not entity.has_component(SettlementDamageComponent):
+        return True
+    damage = entity.get_component(SettlementDamageComponent)
+    return damage.repaired or damage.severity <= 0
+
+
+def _spawned_requirement_done(
+    world: World, incident: IncidentComponent, kind: str, target_id
+) -> bool:
+    if not world.has_entity(target_id):
+        return True
+    target = world.get_entity(target_id)
+    if kind == "loot":
+        return _loot_claimed(world, incident, target)
+    if kind == "monster":
+        return _monster_neutralized(world, target)
+    if kind == "quest":
+        return _quest_done(target)
+    if kind == "damage":
+        return _damage_repaired(target)
+    return True
+
+
+def _incident_ready_to_resolve(world: World, incident_entity: Entity) -> bool:
+    incident = incident_entity.get_component(IncidentComponent)
+    spawned = tuple(incident_entity.get_relationships(IncidentSpawned))
+    if not spawned:
+        return False
+    return all(
+        _spawned_requirement_done(world, incident, edge.kind, target_id)
+        for edge, target_id in spawned
+    )
+
+
+def _resolve_incident(
+    incident_entity: Entity, incident: IncidentComponent, epoch: int, *, actor_id: str
+) -> IncidentResolvedEvent:
+    replace_component(incident_entity, replace(incident, resolved_at_epoch=epoch))
+    return IncidentResolvedEvent(
+        **_event_base(
+            epoch,
+            visibility=EventVisibility.ROOM if incident.room_id else EventVisibility.SYSTEM,
+            actor_id=actor_id,
+            room_id=incident.room_id,
+            target_ids=(str(incident_entity.id),),
+            incident_id=str(incident_entity.id),
+            kind=incident.kind,
+        )
+    )
 
 
 class StorytellerConsequence:
@@ -240,6 +383,28 @@ class StorytellerConsequence:
         return events
 
 
+class IncidentAutoResolutionConsequence:
+    """Resolve active incidents once every spawned blocker has been handled."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for incident_entity in world.query().with_all([IncidentComponent]).execute_entities():
+            incident = incident_entity.get_component(IncidentComponent)
+            if incident.resolved_at_epoch is not None:
+                continue
+            if not _incident_ready_to_resolve(world, incident_entity):
+                continue
+            events.append(
+                _resolve_incident(
+                    incident_entity,
+                    incident,
+                    epoch,
+                    actor_id=str(incident_entity.id),
+                )
+            )
+        return events
+
+
 class ResolveIncidentHandler:
     command_type = "resolve-incident"
 
@@ -248,30 +413,23 @@ class ResolveIncidentHandler:
         incident_id = parse_entity_id(command.payload.get("incident_id"))
         if actor_id is None or incident_id is None:
             return rejected("invalid character or incident id")
+        if not _is_admin(ctx, command, actor_id):
+            return rejected("admin privileges required")
         if not ctx.world.has_entity(incident_id):
             return rejected("incident does not exist")
-        actor = ctx.entity(actor_id)
-        if incident_id not in reachable_ids(ctx.world, actor):
-            return rejected("incident is not reachable")
         incident_entity = ctx.entity(incident_id)
         if not incident_entity.has_component(IncidentComponent):
             return rejected("target is not an incident")
         incident = incident_entity.get_component(IncidentComponent)
         if incident.resolved_at_epoch is not None:
             return rejected("incident is already resolved")
-        replace_component(incident_entity, replace(incident, resolved_at_epoch=ctx.epoch))
-        return ok(
-            IncidentResolvedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.ROOM,
-                    actor_id=str(actor_id),
-                    room_id=str(container_of(actor)) if container_of(actor) else None,
-                    target_ids=(str(incident_id),),
-                    incident_id=str(incident_id),
-                    kind=incident.kind,
-                )
-            )
+        resolved = _resolve_incident(
+            incident_entity,
+            incident,
+            ctx.epoch,
+            actor_id=str(actor_id),
         )
+        return ok(resolved)
 
 
 def storyteller_fragments(world: World, character) -> list[str]:
@@ -292,14 +450,17 @@ def storyteller_fragments(world: World, character) -> list[str]:
 
 def install_storyteller(actor) -> None:
     actor.register_consequence(StorytellerConsequence())
+    actor.register_consequence(IncidentAutoResolutionConsequence())
 
 
 __all__ = [
     "IncidentBudgetComponent",
     "IncidentComponent",
+    "IncidentAutoResolutionConsequence",
     "IncidentHistoryComponent",
     "IncidentProposedEvent",
     "IncidentResolvedEvent",
+    "IncidentSpawned",
     "IncidentStartedEvent",
     "ResolveIncidentHandler",
     "StorytellerComponent",

@@ -1,5 +1,5 @@
 {
-  "ticks": 3,
+  "ticks": 5,
   "default_user_id": 123,
   "default_channel_id": 456,
   "inputs": [
@@ -10,7 +10,11 @@
     },
     {
       "tick": 2,
-      "content": "!resolve-incident incident_id=\"kaiju attack\""
+      "content": "!signal-army room_id=\"Mosslit Burrow\" creature_id=\"rampaging kaiju\" strength=15"
+    },
+    {
+      "tick": 3,
+      "content": "!repair-damage damage_id=\"kaiju attack\" amount=3"
     }
   ]
 }

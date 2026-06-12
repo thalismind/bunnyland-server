@@ -84,6 +84,13 @@ class ControllerOutboxMessageComponent(Component):
     delivered_at_epoch: int | None = None
 
 
+@dataclass(frozen=True)
+class AdminComponent(Component):
+    """Marks a character or controller entity as allowed to use admin-only verbs."""
+
+    label: str = ""
+
+
 # --------------------------------------------------------------------------------------
 # Affect, thoughts (spec 11.12). Mood is multidimensional, not a single scalar.
 # --------------------------------------------------------------------------------------
@@ -469,6 +476,7 @@ class DeadComponent(Component):
 
 
 __all__ = [
+    "AdminComponent",
     "ActionPointsComponent",
     "AffectComponent",
     "AffectDelta",
