@@ -68,6 +68,18 @@ Raid that target:
 
 Fortifications track durability. Raids apply damage against that durability.
 
+## Storyteller raid incidents
+
+Barbarian raids are also storyteller incidents when both `bunnyland.barbariansim` and
+`bunnyland.colonysim` are enabled. The storyteller budget can select a `barbarian_raid`,
+place an active incident in a room, and split the attack budget into a swarm of weak
+raiders led by a few officers and a warlord. Defeating or pacifying the whole swarm lets
+an admin resolve the incident with the normal storyteller command:
+
+```text
+!resolve-incident incident_id="barbarian raid"
+```
+
 ## Poison and corruption
 
 Poison a reachable character:

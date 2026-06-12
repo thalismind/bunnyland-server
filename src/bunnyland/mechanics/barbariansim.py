@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from random import Random
 from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
@@ -20,6 +21,7 @@ from ..core.components import (
     DeadComponent,
     DownedComponent,
     HealthComponent,
+    IdentityComponent,
     InjuryComponent,
     PortableComponent,
     RoomComponent,
@@ -52,6 +54,30 @@ COLD_SAFE_CELSIUS = 5.0
 EXPOSURE_DANGER = 10.0
 EXPOSURE_DAMAGE_PER_HOUR = 5.0
 EXPOSURE_RECOVERY_PER_HOUR = 4.0
+
+RAIDER_HEALTH = 8.0
+RAIDER_DAMAGE = 4.0
+OFFICER_HEALTH = 16.0
+OFFICER_DAMAGE = 6.0
+WARLORD_HEALTH = 28.0
+WARLORD_DAMAGE = 9.0
+RAIDER_COST = 1
+OFFICER_COST = 3
+WARLORD_COST = 5
+
+_RAIDER_EPITHETS = (
+    "ironjaw",
+    "skullbrand",
+    "the cruel",
+    "redhand",
+    "stormcaller",
+    "blackmane",
+)
+
+
+@dataclass(frozen=True)
+class BarbarianSimPolicyComponent(Component):
+    raid_storyteller_incidents: bool = True
 
 
 @dataclass(frozen=True)
@@ -1034,6 +1060,118 @@ class PickpocketHandler:
         )
 
 
+@dataclass(frozen=True)
+class RaiderSpawnSpec:
+    name: str
+    rank: str
+    health: float
+    damage: float
+    armor: float = 0.0
+    lethal_capable: bool = False
+
+
+def _raid_rank_profile(rank: str) -> tuple[float, float, float, bool]:
+    if rank == "warlord":
+        return WARLORD_HEALTH, WARLORD_DAMAGE, 4.0, True
+    if rank == "officer":
+        return OFFICER_HEALTH, OFFICER_DAMAGE, 2.0, True
+    return RAIDER_HEALTH, RAIDER_DAMAGE, 0.0, False
+
+
+def generate_raid_spawn_specs(
+    attack_budget: int | float, seed: str = ""
+) -> tuple[RaiderSpawnSpec, ...]:
+    """Split an attack budget into a swarm of weak raiders and a few leaders."""
+
+    total = max(1, int(round(attack_budget)))
+    warlords = 1 if total >= WARLORD_COST + OFFICER_COST else 0
+    remaining = total - warlords * WARLORD_COST
+    officers = min(3, max(1, remaining // 6)) if remaining >= OFFICER_COST else 0
+    remaining -= officers * OFFICER_COST
+    raiders = max(1, remaining // RAIDER_COST)
+    rng = Random(seed)
+    epithets = list(_RAIDER_EPITHETS)
+    rng.shuffle(epithets)
+
+    def _spec(name: str, rank: str) -> RaiderSpawnSpec:
+        health, damage, armor, lethal = _raid_rank_profile(rank)
+        return RaiderSpawnSpec(
+            name=name,
+            rank=rank,
+            health=health,
+            damage=damage,
+            armor=armor,
+            lethal_capable=lethal,
+        )
+
+    specs = [_spec(f"raider {index + 1}", "raider") for index in range(raiders)]
+    for index in range(officers):
+        specs.append(_spec(f"raid officer {epithets[index % len(epithets)]}", "officer"))
+    for index in range(warlords):
+        epithet = epithets[(officers + index) % len(epithets)]
+        specs.append(_spec(f"raid warlord {epithet}", "warlord"))
+    return tuple(specs)
+
+
+class BarbarianRaidEnrichment:
+    """Barbarian-sim incident enrichment for generated storyteller raid swarms."""
+
+    def __init__(self, world: World):
+        self.world = world
+
+    def subscribe(self, bus) -> None:
+        from .storyteller import IncidentGeneratedEvent
+
+        bus.subscribe(IncidentGeneratedEvent, self._on_incident)
+
+    def _on_incident(self, event) -> None:
+        if event.kind != "barbarian_raid" and "raid-swarm" not in event.wants:
+            return
+        from .storyteller import IncidentSpawned
+
+        incident_id = parse_entity_id(event.incident_id)
+        room_id = parse_entity_id(event.room_id)
+        if (
+            incident_id is None
+            or room_id is None
+            or not self.world.has_entity(incident_id)
+            or not self.world.has_entity(room_id)
+        ):
+            return
+        incident = self.world.get_entity(incident_id)
+        if incident.get_relationships(IncidentSpawned):
+            return
+        room = self.world.get_entity(room_id)
+        for spec in generate_raid_spawn_specs(event.budget_spent, event.seed):
+            components = [
+                IdentityComponent(
+                    name=spec.name,
+                    kind="character",
+                    tags=("barbariansim", "raider", spec.rank),
+                ),
+                CharacterComponent(species="raider"),
+                HealthComponent(current=spec.health, maximum=spec.health),
+                WeaponComponent(
+                    damage=spec.damage,
+                    damage_type="blade",
+                    lethal_capable=spec.lethal_capable,
+                ),
+                StaminaComponent(),
+            ]
+            if spec.armor > 0:
+                components.append(ArmorComponent(rating=spec.armor))
+            raider = spawn_entity(self.world, components)
+            room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raider.id)
+            incident.add_relationship(IncidentSpawned(kind="monster"), raider.id)
+
+
+def ensure_barbariansim_policy(actor) -> BarbarianSimPolicyComponent:
+    for entity in actor.world.query().with_all([BarbarianSimPolicyComponent]).execute_entities():
+        return entity.get_component(BarbarianSimPolicyComponent)
+    entity = spawn_entity(actor.world, [BarbarianSimPolicyComponent()])
+    return entity.get_component(BarbarianSimPolicyComponent)
+
+
 def barbariansim_fragments(world: World, character) -> list[str]:
     lines: list[str] = []
     if character.has_component(StaminaComponent):
@@ -1084,11 +1222,15 @@ def install_barbariansim(actor) -> None:
     actor.register_gate(
         PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier))
     )
+    ensure_barbariansim_policy(actor)
+    BarbarianRaidEnrichment(actor.world).subscribe(actor.bus)
 
 
 __all__ = [
     "ArmorComponent",
     "AttackHandler",
+    "BarbarianRaidEnrichment",
+    "BarbarianSimPolicyComponent",
     "CharacterPoisonedEvent",
     "ChallengeHandler",
     "CleanseCorruptionHandler",
@@ -1114,6 +1256,7 @@ __all__ = [
     "PoisonProgressedEvent",
     "PoisonTreatedEvent",
     "RaidHandler",
+    "RaiderSpawnSpec",
     "RepairItemHandler",
     "ShelterComponent",
     "SparHandler",
@@ -1126,6 +1269,8 @@ __all__ = [
     "TreatPoisonHandler",
     "WeaponComponent",
     "barbariansim_fragments",
+    "ensure_barbariansim_policy",
+    "generate_raid_spawn_specs",
     "install_barbariansim",
     "lethal_pvp_classifier",
     "pickpocket_classifier",

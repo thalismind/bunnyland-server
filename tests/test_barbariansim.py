@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -10,6 +12,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DownedComponent,
+    GenerationIntentComponent,
     HandlerContext,
     HealthComponent,
     IdentityComponent,
@@ -35,6 +38,7 @@ from bunnyland.core.events import (
 from bunnyland.mechanics.barbariansim import (
     ArmorComponent,
     AttackHandler,
+    BarbarianRaidEnrichment,
     ChallengeHandler,
     CharacterPoisonedEvent,
     CleanseCorruptionHandler,
@@ -57,6 +61,7 @@ from bunnyland.mechanics.barbariansim import (
     PoisonComponent,
     PoisonProgressedEvent,
     PoisonTreatedEvent,
+    RaiderSpawnSpec,
     RaidHandler,
     RepairItemHandler,
     ShelterComponent,
@@ -68,9 +73,19 @@ from bunnyland.mechanics.barbariansim import (
     TreatPoisonHandler,
     WeaponComponent,
     barbariansim_fragments,
+    generate_raid_spawn_specs,
     install_barbariansim,
 )
+from bunnyland.mechanics.colonysim import install_colonysim
 from bunnyland.mechanics.policy import BoundaryTag, install_policy
+from bunnyland.mechanics.storyteller import (
+    IncidentBudgetComponent,
+    IncidentComponent,
+    IncidentGeneratedEvent,
+    IncidentSpawned,
+    StorytellerComponent,
+    StorytellerConsequence,
+)
 
 HOUR = 3600.0
 
@@ -965,3 +980,130 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     assert any("Reachable weapon" in line for line in fragments)
     assert any("durability 2/2" in line for line in fragments)
     assert any("Reachable fortification" in line for line in fragments)
+
+
+def test_generate_raid_spawn_specs_builds_swarm_with_few_leaders():
+    specs = generate_raid_spawn_specs(12, "barbarian_raid:3600:12")
+
+    assert all(isinstance(spec, RaiderSpawnSpec) for spec in specs)
+    assert specs == generate_raid_spawn_specs(12, "barbarian_raid:3600:12")
+    ranks = [spec.rank for spec in specs]
+    assert ranks.count("raider") == 4
+    assert ranks.count("officer") == 1
+    assert ranks.count("warlord") == 1
+    leaders = ranks.count("officer") + ranks.count("warlord")
+    assert ranks.count("raider") > leaders
+    raiders = [spec for spec in specs if spec.rank == "raider"]
+    warlords = [spec for spec in specs if spec.rank == "warlord"]
+    assert all(spec.armor == 0.0 and not spec.lethal_capable for spec in raiders)
+    assert all(spec.lethal_capable and spec.armor > 0 for spec in warlords)
+    # Even a tiny budget still fields at least one weak raider.
+    assert any(spec.rank == "raider" for spec in generate_raid_spawn_specs(1, "tiny"))
+
+
+def test_barbarian_raid_enrichment_is_seeded_and_idempotent():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    incident = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="barbarian raid", kind="incident"),
+            IncidentComponent(kind="barbarian_raid", budget_spent=12, started_at_epoch=0),
+        ],
+    )
+    enrichment = BarbarianRaidEnrichment(world)
+
+    def event_for(
+        target,
+        *,
+        kind: str = "barbarian_raid",
+        incident_id: str | None = None,
+        wants: tuple[str, ...] = ("raid-swarm",),
+    ) -> IncidentGeneratedEvent:
+        return IncidentGeneratedEvent(
+            event_id="event",
+            world_epoch=0,
+            created_at=datetime.now(UTC),
+            room_id=str(target.id),
+            target_ids=(str(incident.id),),
+            seed="raid-seed",
+            incident_id=incident_id if incident_id is not None else str(incident.id),
+            incident_key=kind,
+            kind=kind,
+            budget_spent=12,
+            generation=GenerationIntentComponent(wants=wants),
+        )
+
+    # Unrelated incident kinds without the raid-swarm want are ignored.
+    enrichment._on_incident(
+        event_for(world.get_entity(scenario.room_a), kind="resource_drop", wants=())
+    )
+    assert incident.get_relationships(IncidentSpawned) == []
+
+    # A missing incident id is ignored.
+    enrichment._on_incident(event_for(world.get_entity(scenario.room_a), incident_id="not-an-id"))
+    assert incident.get_relationships(IncidentSpawned) == []
+
+    enrichment._on_incident(event_for(world.get_entity(scenario.room_a)))
+    spawned = incident.get_relationships(IncidentSpawned)
+    raiders = [world.get_entity(target_id) for _edge, target_id in spawned]
+    assert len(raiders) == 6
+    assert all(edge.kind == "monster" for edge, _target_id in spawned)
+    assert all(raider.get_component(CharacterComponent).species == "raider" for raider in raiders)
+    assert all(raider.has_component(WeaponComponent) for raider in raiders)
+    assert {container_of(raider) for raider in raiders} == {scenario.room_a}
+
+    # Re-running the enrichment does not double-spawn the swarm.
+    enrichment._on_incident(event_for(world.get_entity(scenario.room_a)))
+    assert incident.get_relationships(IncidentSpawned) == spawned
+
+
+async def test_storyteller_selects_barbarian_raid_only_when_colonysim_and_barbariansim_enabled():
+    scenario = build_scenario()
+    install_barbariansim(scenario.actor)
+    scenario.actor.register_consequence(StorytellerConsequence())
+    spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="steady storyteller", kind="controller"),
+            StorytellerComponent(interval_seconds=int(HOUR), next_incident_epoch=int(HOUR)),
+            IncidentBudgetComponent(points=13.0, points_per_day=0.0),
+        ],
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    incident = next(
+        entity
+        for entity in scenario.actor.world.query().with_all([IncidentComponent]).execute_entities()
+    )
+    assert incident.get_component(IncidentComponent).kind == "hostile_encounter"
+
+    scenario = build_scenario()
+    install_colonysim(scenario.actor)
+    install_barbariansim(scenario.actor)
+    scenario.actor.register_consequence(StorytellerConsequence())
+    world = scenario.actor.world
+    spawn_entity(
+        world,
+        [
+            IdentityComponent(name="raid storyteller", kind="controller"),
+            StorytellerComponent(interval_seconds=int(HOUR), next_incident_epoch=int(HOUR)),
+            IncidentBudgetComponent(points=13.0, points_per_day=0.0),
+        ],
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    incident = next(
+        entity for entity in world.query().with_all([IncidentComponent]).execute_entities()
+    )
+    assert incident.get_component(IncidentComponent).kind == "barbarian_raid"
+    spawned = incident.get_relationships(IncidentSpawned)
+    raiders = [world.get_entity(target_id) for _edge, target_id in spawned]
+    assert raiders
+    assert all(raider.get_component(CharacterComponent).species == "raider" for raider in raiders)
+    ranks = [raider.get_component(IdentityComponent).tags[-1] for raider in raiders]
+    assert "warlord" in ranks
+    assert ranks.count("raider") > ranks.count("warlord")
+    assert {container_of(raider) for raider in raiders} == {scenario.room_a}

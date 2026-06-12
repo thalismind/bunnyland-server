@@ -26,6 +26,7 @@ from ..mechanics.affect import AffectAggregation, AffectReactor
 from ..mechanics.barbariansim import (
     ArmorComponent,
     AttackHandler,
+    BarbarianSimPolicyComponent,
     ChallengeHandler,
     CharacterPoisonedEvent,
     CleanseCorruptionHandler,
@@ -1380,6 +1381,7 @@ def barbariansim_plugin() -> Plugin:
                 TemperatureResistanceComponent,
                 ShelterComponent,
                 TemperatureExposureComponent,
+                BarbarianSimPolicyComponent,
             )
         ),
         commands=CommandContribution(

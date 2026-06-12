@@ -25,6 +25,7 @@ from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_e
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from .barbariansim import BarbarianSimPolicyComponent
 from .colonysim import ColonySimComponent, PrisonerComponent
 from .daggersim import GeneratedQuestComponent, PacifiedComponent
 from .dinosim import (
@@ -157,9 +158,23 @@ def _kaiju_storyteller_enabled(world: World) -> bool:
     return colony_enabled and dino_enabled
 
 
+def _barbarian_storyteller_enabled(world: World) -> bool:
+    colony_enabled = any(
+        marker.get_component(ColonySimComponent).enabled
+        for marker in world.query().with_all([ColonySimComponent]).execute_entities()
+    )
+    barbarian_enabled = any(
+        policy.get_component(BarbarianSimPolicyComponent).raid_storyteller_incidents
+        for policy in world.query().with_all([BarbarianSimPolicyComponent]).execute_entities()
+    )
+    return colony_enabled and barbarian_enabled
+
+
 def _choose_incident(world: World, points: float) -> tuple[str, float]:
     if points >= 15 and _kaiju_storyteller_enabled(world):
         return "kaiju_attack", 15.0
+    if points >= 12 and _barbarian_storyteller_enabled(world):
+        return "barbarian_raid", 12.0
     if points >= 10:
         return "hostile_encounter", 10.0
     if points >= 5:
@@ -193,6 +208,18 @@ def _incident_generation(kind: str, spent: float) -> GenerationIntentComponent:
             tags=("incident", "kaiju", "regional-threat"),
             wants=("kaiju-spawn", "regional-placement", "settlement-damage"),
             needs=("dinosim",),
+            source_key=kind,
+            entity_kind="incident",
+        )
+    if kind == "barbarian_raid":
+        return GenerationIntentComponent(
+            description=(
+                f"a barbarian raid incident with total attack budget {spent:g}; "
+                "spawn a swarm of weak raiders led by a few officers or a warlord"
+            ),
+            tags=("incident", "raid", "swarm"),
+            wants=("raid-swarm", "enemy-threat"),
+            needs=("barbariansim",),
             source_key=kind,
             entity_kind="incident",
         )
