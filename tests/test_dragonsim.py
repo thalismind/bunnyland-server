@@ -267,6 +267,35 @@ async def test_read_lore_book_marks_book_and_grants_lifesim_skill_xp_once():
     assert [event.skill_xp_awarded for event in read] == [12.0, 0.0]
 
 
+async def test_read_lore_book_without_skill_only_marks_read():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    book = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hold Almanac", kind="book"),
+            PortableComponent(),
+            LoreBookComponent(title="Hold Almanac", lore="Boundary stones and old roads."),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), book.id
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert "Unread lore book nearby: Hold Almanac." in dragonsim_fragments(
+        scenario.actor.world, character
+    )
+    read: list[LoreBookReadEvent] = []
+    scenario.actor.bus.subscribe(LoreBookReadEvent, read.append)
+
+    await scenario.actor.submit(_cmd(scenario, "read-lore-book", book_id=str(book.id)))
+    await scenario.actor.tick(HOUR)
+
+    assert read and read[0].skill_xp_awarded == 0.0
+    assert book.get_component(LoreBookComponent).read_by == (str(scenario.character),)
+    assert not character.has_component(SkillSetComponent)
+
+
 async def test_complete_final_objective_rejects_missing_reward_item_without_completion():
     scenario = build_scenario()
     _install(scenario.actor)

@@ -713,6 +713,95 @@ async def test_ecology_territory_herd_and_nest_loop():
     assert any("Nest fern nest: triceratops, prepared" in line for line in fragments)
 
 
+def test_ecology_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    territory = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="ridge", kind="territory"), TerritoryComponent()],
+    )
+    herd = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="herd", kind="herd"), HerdComponent(species_name="stego")],
+    )
+    nest = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="nest", kind="nest"), NestComponent(species_name="stego")],
+    )
+    prepared = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ready nest", kind="nest"),
+            NestComponent(species_name="stego", prepared=True),
+        ],
+    )
+    rock = spawn_entity(scenario.actor.world, [IdentityComponent(name="rock", kind="prop")])
+    distant = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far ridge", kind="territory"), TerritoryComponent()],
+    )
+    distant_herd = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far herd", kind="herd"), HerdComponent(species_name="stego")],
+    )
+    distant_nest = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far nest", kind="nest"), NestComponent(species_name="stego")],
+    )
+    for entity in (territory, herd, nest, prepared, rock):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    mark = MarkTerritoryHandler()
+    track = TrackHerdHandler()
+    prepare = PrepareNestHandler()
+    assert mark.execute(
+        ctx, _handler_cmd(scenario, "mark-territory", character_id="x")
+    ).reason == "invalid character or territory id"
+    assert mark.execute(
+        ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(distant.id))
+    ).reason == "territory is not reachable"
+    assert mark.execute(
+        ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(rock.id))
+    ).reason == "target is not a territory"
+    assert mark.execute(
+        ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(territory.id))
+    ).ok
+    assert mark.execute(
+        ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(territory.id))
+    ).reason == "territory is already marked by you"
+
+    assert track.execute(
+        ctx, _handler_cmd(scenario, "track-herd", character_id="x")
+    ).reason == "invalid character or herd id"
+    assert track.execute(
+        ctx, _handler_cmd(scenario, "track-herd", herd_id=str(distant_herd.id))
+    ).reason == "herd is not reachable"
+    assert track.execute(
+        ctx, _handler_cmd(scenario, "track-herd", herd_id=str(rock.id))
+    ).reason == "target is not a herd"
+    assert track.execute(
+        ctx, _handler_cmd(scenario, "track-herd", herd_id=str(herd.id))
+    ).ok
+
+    assert prepare.execute(
+        ctx, _handler_cmd(scenario, "prepare-nest", character_id="x")
+    ).reason == "invalid character or nest id"
+    assert prepare.execute(
+        ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(distant_nest.id))
+    ).reason == "nest is not reachable"
+    assert prepare.execute(
+        ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(rock.id))
+    ).reason == "target is not a nest"
+    assert prepare.execute(
+        ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(prepared.id))
+    ).reason == "nest is already prepared"
+    assert prepare.execute(
+        ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(nest.id))
+    ).ok
+
+
 async def test_enclosure_escape_recapture_hide_and_evacuation_loop():
     scenario = build_scenario()
     _install(scenario.actor)

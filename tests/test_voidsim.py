@@ -2309,6 +2309,288 @@ async def test_claim_salvage_requires_accepted_rights_and_marks_claim():
     assert claimed and claimed[0].contract_id == str(contract)
 
 
+def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    contract, cargo, ship = _cargo_contract(scenario)
+    wrong = _spawn_in_room_a(scenario, [IdentityComponent(name="loose panel", kind="prop")])
+    other_cargo = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="wrong crate", kind="cargo"),
+            CargoComponent(cargo_type="ore"),
+        ],
+    )
+    loaded_cargo = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="loaded crate", kind="cargo"),
+            CargoComponent(cargo_type="ore", loaded_on=str(ship)),
+        ],
+    )
+    delivered_cargo = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="delivered crate", kind="cargo"),
+            CargoComponent(cargo_type="ore", delivered=True),
+        ],
+    )
+    claim = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="wreck claim", kind="salvage"),
+            SalvageClaimComponent(site_id=str(scenario.room_b)),
+        ],
+    )
+
+    accept = AcceptContractHandler()
+    load = LoadCargoHandler()
+    deliver = DeliverCargoHandler()
+    salvage = ClaimSalvageHandler()
+
+    assert accept.execute(
+        ctx, _handler_cmd(scenario, "accept-contract", character_id="x")
+    ).reason == "invalid character id"
+    assert accept.execute(
+        ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(wrong))
+    ).reason == "target is the wrong kind"
+    assert accept.execute(
+        ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(contract))
+    ).ok
+    assert accept.execute(
+        ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(contract))
+    ).reason == "contract is not available"
+
+    assert load.execute(
+        ctx, _handler_cmd(scenario, "load-cargo", character_id="x")
+    ).reason == "invalid character id"
+    inactive = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="inactive contract", kind="contract"),
+            ContractComponent(contract_type="cargo"),
+        ],
+    )
+    assert load.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "load-cargo",
+            contract_id=str(inactive),
+            cargo_id=str(cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "cargo contract is not active"
+    assert load.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "load-cargo",
+            contract_id=str(contract),
+            cargo_id=str(other_cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "cargo does not match contract"
+    delivered_contract = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="delivered contract", kind="contract"),
+            ContractComponent(
+                contract_type="cargo",
+                status="active",
+                accepted_by=str(scenario.character),
+            ),
+        ],
+    )
+    assert load.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "load-cargo",
+            contract_id=str(delivered_contract),
+            cargo_id=str(delivered_cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "cargo is already delivered"
+    assert load.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "load-cargo",
+            contract_id=str(contract),
+            cargo_id=str(cargo),
+            ship_id=str(wrong),
+        ),
+    ).reason == "target is the wrong kind"
+    assert load.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "load-cargo",
+            contract_id=str(contract),
+            cargo_id=str(cargo),
+            ship_id=str(ship),
+        ),
+    ).ok
+    assert load.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "load-cargo",
+            contract_id=str(contract),
+            cargo_id=str(cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "target is not reachable"
+    flexible_contract = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="flex contract", kind="contract"),
+            ContractComponent(
+                contract_type="cargo",
+                status="active",
+                accepted_by=str(scenario.character),
+            ),
+        ],
+    )
+    assert load.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "load-cargo",
+            contract_id=str(flexible_contract),
+            cargo_id=str(loaded_cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "cargo is already loaded"
+
+    assert deliver.execute(
+        ctx, _handler_cmd(scenario, "deliver-cargo", character_id="x")
+    ).reason == "invalid character id"
+    assert deliver.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(contract),
+            cargo_id="x",
+            ship_id=str(ship),
+        ),
+    ).reason == "invalid cargo or ship id"
+    assert deliver.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(inactive),
+            cargo_id=str(cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "cargo contract is not active"
+    assert deliver.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(contract),
+            cargo_id="entity_999",
+            ship_id=str(ship),
+        ),
+    ).reason == "cargo or ship does not exist"
+    assert deliver.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(contract),
+            cargo_id=str(wrong),
+            ship_id=str(ship),
+        ),
+    ).reason == "target is not cargo"
+    assert deliver.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(contract),
+            cargo_id=str(cargo),
+            ship_id=str(wrong),
+        ),
+    ).reason == "target is not a ship"
+    assert deliver.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(contract),
+            cargo_id=str(other_cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "cargo is not loaded on that ship"
+    assert deliver.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(contract),
+            cargo_id=str(cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "ship is not at the destination"
+    missing_destination_contract = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="missing destination contract", kind="contract"),
+            ContractComponent(
+                contract_type="cargo",
+                status="active",
+                accepted_by=str(scenario.character),
+                destination_id="entity_999",
+            ),
+        ],
+    )
+    assert deliver.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(missing_destination_contract),
+            cargo_id=str(cargo),
+            ship_id=str(ship),
+        ),
+    ).reason == "destination does not exist"
+
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "claim-salvage", character_id="x")
+    ).reason == "invalid character id"
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(wrong))
+    ).reason == "target is the wrong kind"
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(claim), contract_id=str(inactive))
+    ).reason == "salvage rights are not held"
+    rights_claim = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="rights claim", kind="salvage"),
+            SalvageClaimComponent(
+                site_id=str(scenario.room_b),
+                rights_contract_id="entity_999",
+            ),
+        ],
+    )
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(rights_claim))
+    ).reason == "salvage contract does not exist"
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(claim))
+    ).ok
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(claim))
+    ).reason == "salvage is already claimed"
+
+
 def test_fabrication_handlers_reject_bad_state_directly():
     scenario = build_scenario()
     _install(scenario.actor)

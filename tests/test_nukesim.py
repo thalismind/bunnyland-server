@@ -813,6 +813,121 @@ async def test_claim_settlement_build_purifier_and_power_generator():
     assert powered and powered[0].fuel_spent == 1
 
 
+def test_settlement_utility_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    settlement = _room_entity(
+        scenario,
+        "unclaimed outpost",
+        "settlement",
+        [SettlementComponent(name="unclaimed outpost"), WaterPurifierComponent(scrap_cost=2)],
+    )
+    claimed = _room_entity(
+        scenario,
+        "claimed outpost",
+        "settlement",
+        [
+            SettlementComponent(name="claimed outpost", claimed_by=str(scenario.character)),
+            WaterPurifierComponent(scrap_cost=2),
+        ],
+    )
+    unclaimed_build = _room_entity(
+        scenario,
+        "unclaimed purifier site",
+        "settlement",
+        [SettlementComponent(name="unclaimed purifier site"), WaterPurifierComponent()],
+    )
+    built = _room_entity(
+        scenario,
+        "wet outpost",
+        "settlement",
+        [
+            SettlementComponent(name="wet outpost", claimed_by=str(scenario.character)),
+            WaterPurifierComponent(built=True),
+        ],
+    )
+    bare_claimed = _room_entity(
+        scenario,
+        "bare outpost",
+        "settlement",
+        [SettlementComponent(name="bare outpost", claimed_by=str(scenario.character))],
+    )
+    generator = _room_entity(
+        scenario,
+        "dry generator",
+        "generator",
+        [GeneratorComponent(fuel_cost=1)],
+    )
+    powered = _room_entity(
+        scenario,
+        "lit generator",
+        "generator",
+        [GeneratorComponent(powered=True)],
+    )
+    rock = _room_entity(scenario, "rock", "prop", [])
+
+    claim = ClaimSettlementHandler()
+    build = BuildPurifierHandler()
+    power = PowerGeneratorHandler()
+    assert claim.execute(
+        ctx, _handler_cmd(scenario, "claim-settlement", character_id="x")
+    ).reason == "invalid character id"
+    assert claim.execute(
+        ctx, _handler_cmd(scenario, "claim-settlement", settlement_id=str(rock))
+    ).reason == "target is the wrong kind"
+    assert claim.execute(
+        ctx, _handler_cmd(scenario, "claim-settlement", settlement_id=str(claimed))
+    ).reason == "settlement is already claimed"
+    assert claim.execute(
+        ctx, _handler_cmd(scenario, "claim-settlement", settlement_id=str(settlement))
+    ).ok
+
+    assert build.execute(
+        ctx, _handler_cmd(scenario, "build-purifier", character_id="x")
+    ).reason == "invalid character id"
+    assert build.execute(
+        ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(rock))
+    ).reason == "target is the wrong kind"
+    assert build.execute(
+        ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(unclaimed_build))
+    ).reason == "claim the settlement first"
+    assert build.execute(
+        ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(built))
+    ).reason == "purifier is already built"
+    assert build.execute(
+        ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(claimed))
+    ).reason == "not enough scrap to build purifier"
+    _scrap(scenario, 2)
+    assert build.execute(
+        ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(claimed))
+    ).ok
+    _scrap(scenario, 2)
+    assert build.execute(
+        ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(bare_claimed))
+    ).ok
+    assert scenario.actor.world.get_entity(bare_claimed).get_component(
+        WaterPurifierComponent
+    ).built
+
+    assert power.execute(
+        ctx, _handler_cmd(scenario, "power-generator", character_id="x")
+    ).reason == "invalid character id"
+    assert power.execute(
+        ctx, _handler_cmd(scenario, "power-generator", generator_id=str(rock))
+    ).reason == "target is the wrong kind"
+    assert power.execute(
+        ctx, _handler_cmd(scenario, "power-generator", generator_id=str(powered))
+    ).reason == "generator is already powered"
+    assert power.execute(
+        ctx, _handler_cmd(scenario, "power-generator", generator_id=str(generator))
+    ).reason == "not enough fuel to power generator"
+    _fuel(scenario, 1)
+    assert power.execute(
+        ctx, _handler_cmd(scenario, "power-generator", generator_id=str(generator))
+    ).ok
+
+
 def test_old_world_tech_handlers_reject_invalid_and_cover_edges_directly():
     scenario = build_scenario()
     _install(scenario.actor)

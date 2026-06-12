@@ -694,6 +694,31 @@ def test_barbariansim_handlers_reject_bad_state_directly():
     scenario.actor.world.get_entity(target).add_relationship(
         Contains(mode=ContainmentMode.INVENTORY), stuck_item.id
     )
+    claimed_room = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="claimed camp", kind="room"),
+            RoomComponent(title="claimed camp"),
+            BaseClaimComponent(claimed_by=str(scenario.character)),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), claimed_room.id
+    )
+    trap = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="snare", kind="trap"), TrapComponent()],
+    )
+    disarmed_trap = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="sprung snare", kind="trap"), TrapComponent(armed=False)],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), trap.id
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), disarmed_trap.id
+    )
 
     cases = [
         (
@@ -735,6 +760,61 @@ def test_barbariansim_handlers_reject_bad_state_directly():
             FortifyHandler(),
             _handler_cmd(scenario, "fortify", strength=0),
             "fortification strength must be positive",
+        ),
+        (
+            ClaimBaseHandler(),
+            _handler_cmd(scenario, "claim-base", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            ClaimBaseHandler(),
+            _handler_cmd(scenario, "claim-base", base_id="entity_999"),
+            "base does not exist",
+        ),
+        (
+            ClaimBaseHandler(),
+            _handler_cmd(scenario, "claim-base", base_id=str(unreachable_target.id)),
+            "base is not reachable",
+        ),
+        (
+            ClaimBaseHandler(),
+            _handler_cmd(scenario, "claim-base", base_id=str(claimed_room.id)),
+            "base is already claimed",
+        ),
+        (
+            PlaceTrapHandler(),
+            _handler_cmd(scenario, "place-trap", character_id="not-an-id"),
+            "invalid character id",
+        ),
+        (
+            PlaceTrapHandler(),
+            _handler_cmd(scenario, "place-trap", damage=0),
+            "trap damage must be positive",
+        ),
+        (
+            DisarmTrapHandler(),
+            _handler_cmd(scenario, "disarm-trap", trap_id="not-an-id"),
+            "invalid character or trap id",
+        ),
+        (
+            DisarmTrapHandler(),
+            _handler_cmd(scenario, "disarm-trap", trap_id="entity_999"),
+            "trap does not exist",
+        ),
+        (
+            DisarmTrapHandler(),
+            _handler_cmd(scenario, "disarm-trap", trap_id=str(unreachable_target.id)),
+            "trap is not reachable",
+        ),
+        (
+            DisarmTrapHandler(),
+            _handler_cmd(scenario, "disarm-trap", trap_id=str(non_durable_item.id)),
+            "target is not a trap",
+        ),
+        (
+            DisarmTrapHandler(),
+            _handler_cmd(scenario, "disarm-trap", trap_id=str(disarmed_trap.id)),
+            "trap is already disarmed",
         ),
         (
             RaidHandler(),
