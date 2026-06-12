@@ -126,6 +126,32 @@ class JunkComponent(Component):
     contaminated_rads: float = 0.0
 
 
+@dataclass(frozen=True)
+class ChemComponent(Component):
+    """A consumable wasteland chem; using it relieves radiation but builds addiction."""
+
+    chem_type: str = "stimulant"
+    dose_relief: float = 0.0
+    sickness_relief: float = 0.0
+    addiction_per_dose: float = 0.2
+
+
+@dataclass(frozen=True)
+class AddictionComponent(Component):
+    """Per-chem addiction levels on a character; withdrawal decays them over time."""
+
+    levels: dict[str, float]
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class WaterPurityComponent(Component):
+    """A drinkable water source; ``rads_per_drink`` applies unless it is purified."""
+
+    rads_per_drink: float = 0.0
+    purified: bool = False
+
+
 class RadiationExposureEvent(DomainEvent):
     character_id: str
     source_id: str
@@ -204,6 +230,28 @@ class HazardTriggeredEvent(DomainEvent):
 class ItemScrappedEvent(DomainEvent):
     item_id: str
     output_ids: tuple[str, ...] = ()
+
+
+class ChemTakenEvent(DomainEvent):
+    character_id: str
+    chem_type: str
+    addiction: float
+
+
+class WithdrawalProgressedEvent(DomainEvent):
+    character_id: str
+    chem_type: str
+    level: float
+
+
+class WaterPurifiedEvent(DomainEvent):
+    item_id: str
+
+
+class ContaminatedWaterDrunkEvent(DomainEvent):
+    character_id: str
+    item_id: str
+    rads: float
 
 
 def _event_base(epoch: int, **kwargs) -> dict:
@@ -535,6 +583,60 @@ class MutationResolutionConsequence:
         return events
 
 
+WITHDRAWAL_DECAY_PER_HOUR = 0.1
+
+
+class AddictionWithdrawalConsequence:
+    """Decay chem addiction over time; clearing a chem ends the addiction."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for character in (
+            world.query()
+            .with_all([AddictionComponent])
+            .with_none([DeadComponent])
+            .execute_entities()
+        ):
+            addiction = character.get_component(AddictionComponent)
+            elapsed = max(0, epoch - addiction.last_updated_epoch)
+            if elapsed <= 0:
+                continue
+            decay = WITHDRAWAL_DECAY_PER_HOUR * (elapsed / SECONDS_PER_HOUR)
+            new_levels: dict[str, float] = {}
+            changed = False
+            for chem_type, level in addiction.levels.items():
+                reduced = max(0.0, level - decay)
+                if reduced != level:
+                    changed = True
+                if reduced > 0.0:
+                    new_levels[chem_type] = reduced
+            if not changed:
+                replace_component(character, replace(addiction, last_updated_epoch=epoch))
+                continue
+            if new_levels:
+                replace_component(
+                    character, AddictionComponent(levels=new_levels, last_updated_epoch=epoch)
+                )
+            else:
+                character.remove_component(AddictionComponent)
+            for chem_type, level in new_levels.items():
+                events.append(
+                    WithdrawalProgressedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            room_id=_room_id(world, character.id),
+                            target_ids=(str(character.id),),
+                            character_id=str(character.id),
+                            chem_type=chem_type,
+                            level=level,
+                        )
+                    )
+                )
+        return events
+
+
 class ScanRadiationHandler:
     command_type = "scan-radiation"
 
@@ -689,6 +791,133 @@ class UseRadMedicineHandler:
                     dose=dose,
                     sickness=sickness,
                     mutation_pressure=pressure,
+                )
+            )
+        )
+
+
+class TakeChemHandler:
+    command_type = "take-chem"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        chem_entity, error = _reachable_component(
+            ctx, character_id, command.payload.get("chem_id"), ChemComponent
+        )
+        if chem_entity is None:
+            return rejected(error if error else "item is not a chem")
+        chem = chem_entity.get_component(ChemComponent)
+        character = ctx.entity(character_id)
+
+        if chem.dose_relief > 0.0 or chem.sickness_relief > 0.0:
+            _reduce_radiation_state(
+                character,
+                ctx.epoch,
+                dose_reduction=chem.dose_relief,
+                sickness_reduction=chem.sickness_relief,
+                mutation_pressure_reduction=0.0,
+            )
+        levels = (
+            dict(character.get_component(AddictionComponent).levels)
+            if character.has_component(AddictionComponent)
+            else {}
+        )
+        levels[chem.chem_type] = levels.get(chem.chem_type, 0.0) + chem.addiction_per_dose
+        if character.has_component(AddictionComponent):
+            replace_component(
+                character,
+                replace(
+                    character.get_component(AddictionComponent),
+                    levels=levels,
+                    last_updated_epoch=ctx.epoch,
+                ),
+            )
+        else:
+            character.add_component(
+                AddictionComponent(levels=levels, last_updated_epoch=ctx.epoch)
+            )
+        _remove_from_container(ctx.world, chem_entity.id)
+        return ok(
+            ChemTakenEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(chem_entity.id),),
+                    character_id=str(character_id),
+                    chem_type=chem.chem_type,
+                    addiction=levels[chem.chem_type],
+                )
+            )
+        )
+
+
+class PurifyWaterHandler:
+    command_type = "purify-water"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        water, error = _reachable_component(
+            ctx, character_id, command.payload.get("water_id"), WaterPurityComponent
+        )
+        if water is None:
+            return rejected(error if error else "target is not a water source")
+        purity = water.get_component(WaterPurityComponent)
+        if purity.purified:
+            return rejected("water is already purified")
+        replace_component(water, replace(purity, purified=True))
+        return ok(
+            WaterPurifiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(water.id),),
+                    item_id=str(water.id),
+                )
+            )
+        )
+
+
+class DrinkContaminatedWaterHandler:
+    command_type = "drink-water"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        water, error = _reachable_component(
+            ctx, character_id, command.payload.get("water_id"), WaterPurityComponent
+        )
+        if water is None:
+            return rejected(error if error else "target is not a water source")
+        purity = water.get_component(WaterPurityComponent)
+        rads = 0.0 if purity.purified else max(0.0, purity.rads_per_drink)
+        character = ctx.entity(character_id)
+        if rads > 0.0:
+            current = (
+                character.get_component(RadiationDoseComponent)
+                if character.has_component(RadiationDoseComponent)
+                else RadiationDoseComponent()
+            )
+            replace_component(
+                character,
+                replace(current, amount=current.amount + rads, last_updated_epoch=ctx.epoch),
+            )
+        return ok(
+            ContaminatedWaterDrunkEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(water.id),),
+                    character_id=str(character_id),
+                    item_id=str(water.id),
+                    rads=rads,
                 )
             )
         )
@@ -1001,9 +1230,23 @@ def nukesim_fragments(world: World, character: Entity) -> list[str]:
         mutation = character.get_component(MutationComponent)
         state = "stable" if mutation.stable else "unstable"
         lines.append(f"Mutation: {mutation.label} ({state}).")
+    if character.has_component(AddictionComponent):
+        for chem_type, level in character.get_component(AddictionComponent).levels.items():
+            lines.append(f"Addiction to {chem_type}: {level:.1f}.")
 
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
+        if entity.has_component(ChemComponent):
+            lines.append(f"Chem available: {entity.get_component(ChemComponent).chem_type}.")
+        if entity.has_component(WaterPurityComponent):
+            purity = entity.get_component(WaterPurityComponent)
+            if purity.purified:
+                state = "purified"
+            elif purity.rads_per_drink > 0.0:
+                state = f"contaminated ({purity.rads_per_drink:g} rads/drink)"
+            else:
+                state = "clean"
+            lines.append(f"Water source {_name(entity)}: {state}.")
         if entity.has_component(RadiationSourceComponent):
             source = entity.get_component(RadiationSourceComponent)
             status = "sealed" if source.sealed else f"{source.rads_per_hour:g} rads/hour"
@@ -1038,12 +1281,19 @@ def nukesim_fragments(world: World, character: Entity) -> list[str]:
 def install_nukesim(actor) -> None:
     actor.register_consequence(RadiationExposureConsequence())
     actor.register_consequence(MutationResolutionConsequence())
+    actor.register_consequence(AddictionWithdrawalConsequence())
 
 
 __all__ = [
+    "AddictionComponent",
+    "AddictionWithdrawalConsequence",
+    "ChemComponent",
+    "ChemTakenEvent",
+    "ContaminatedWaterDrunkEvent",
     "DecontaminateHandler",
     "DecontaminationAppliedEvent",
     "DecontaminationComponent",
+    "DrinkContaminatedWaterHandler",
     "HazardTriggeredEvent",
     "IdentifyTechHandler",
     "ItemScrappedEvent",
@@ -1060,6 +1310,7 @@ __all__ = [
     "MutationResolutionConsequence",
     "MutationStabilizedEvent",
     "MutationThresholdComponent",
+    "PurifyWaterHandler",
     "RadMedicineComponent",
     "RadMedicineUsedEvent",
     "RadProtectionComponent",
@@ -1079,8 +1330,12 @@ __all__ = [
     "SealRadiationSourceHandler",
     "SiteScavengedEvent",
     "StabilizeMutationHandler",
+    "TakeChemHandler",
     "TechLeadComponent",
     "UseRadMedicineHandler",
+    "WaterPurifiedEvent",
+    "WaterPurityComponent",
+    "WithdrawalProgressedEvent",
     "install_nukesim",
     "nukesim_fragments",
 ]

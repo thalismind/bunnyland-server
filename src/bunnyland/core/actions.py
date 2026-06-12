@@ -1102,6 +1102,9 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("scavenge", ("site_id",), tool_name="scavenge"),
     _definition("scrap-item", ("item_id",), tool_name="scrap_item"),
     _definition("stabilize-mutation", ("mutation_id",), tool_name="stabilize_mutation"),
+    _definition("take-chem", ("chem_id",), tool_name="take_chem"),
+    _definition("purify-water", ("water_id",), tool_name="purify_water"),
+    _definition("drink-water", ("water_id",), tool_name="drink_water"),
     _definition(
         "identify-tech",
         ("tech_id",),

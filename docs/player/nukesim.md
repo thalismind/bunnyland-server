@@ -41,6 +41,33 @@ Use rad medicine from your inventory or current room:
 
 Both reduce radiation dose, sickness, and radiation mutation pressure.
 
+## Chems, addiction, and water
+
+Take a reachable chem to relieve radiation sickness fast — at the cost of a growing
+addiction to that chem type:
+
+```text
+!take-chem chem_id=stimpak
+```
+
+Addiction levels show in your character context and decay on their own over time as the
+chem clears your system (withdrawal). Take the same chem again and the addiction climbs.
+
+Wasteland water is often contaminated. Drinking from a dirty source adds radiation:
+
+```text
+!drink-water water_id="rad puddle"
+```
+
+Purify a water source first so it is safe to drink:
+
+```text
+!purify-water water_id="rad puddle"
+```
+
+Nearby chems and water sources, with each source's contamination, show in your character
+context.
+
 ## Mutation
 
 Radiation exposure adds radiation mutation pressure. When pressure crosses the current

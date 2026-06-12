@@ -13,6 +13,7 @@ from bunnyland.core import (
     Lane,
     PortableComponent,
     build_submitted_command,
+    container_of,
     parse_entity_id,
     replace_component,
     spawn_entity,
@@ -20,9 +21,14 @@ from bunnyland.core import (
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.colonysim import ResourceStackComponent
 from bunnyland.mechanics.nukesim import (
+    AddictionComponent,
+    ChemComponent,
+    ChemTakenEvent,
+    ContaminatedWaterDrunkEvent,
     DecontaminateHandler,
     DecontaminationAppliedEvent,
     DecontaminationComponent,
+    DrinkContaminatedWaterHandler,
     IdentifyTechHandler,
     ItemScrappedEvent,
     JunkComponent,
@@ -33,6 +39,7 @@ from bunnyland.mechanics.nukesim import (
     OldWorldTechComponent,
     OldWorldTechIdentifiedEvent,
     OldWorldTechRestoredEvent,
+    PurifyWaterHandler,
     RadiationDoseComponent,
     RadiationExposureEvent,
     RadiationScannedEvent,
@@ -48,8 +55,12 @@ from bunnyland.mechanics.nukesim import (
     ScrapItemHandler,
     SealRadiationSourceHandler,
     StabilizeMutationHandler,
+    TakeChemHandler,
     TechLeadComponent,
     UseRadMedicineHandler,
+    WaterPurifiedEvent,
+    WaterPurityComponent,
+    WithdrawalProgressedEvent,
     install_nukesim,
     nukesim_fragments,
 )
@@ -68,6 +79,9 @@ def _install(actor):
     actor.register_handler(StabilizeMutationHandler())
     actor.register_handler(IdentifyTechHandler())
     actor.register_handler(RestoreTechHandler())
+    actor.register_handler(TakeChemHandler())
+    actor.register_handler(PurifyWaterHandler())
+    actor.register_handler(DrinkContaminatedWaterHandler())
     install_nukesim(actor)
 
 
@@ -794,3 +808,145 @@ def test_nukesim_fragments_show_unidentified_tech_and_leads():
     fragments = nukesim_fragments(scenario.actor.world, character)
     assert any("unknown device (unidentified)" in line for line in fragments)
     assert any("Tech lead: fusion core near the old reactor" in line for line in fragments)
+
+
+async def test_take_chem_relieves_sickness_and_builds_addiction():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        RadiationSicknessComponent(severity=5.0)
+    )
+    chem = _inventory_entity(
+        scenario,
+        "stimpak",
+        "chem",
+        [ChemComponent(chem_type="stimulant", sickness_relief=2.0, addiction_per_dose=0.3)],
+    )
+    taken: list[ChemTakenEvent] = []
+    scenario.actor.bus.subscribe(ChemTakenEvent, taken.append)
+
+    await scenario.actor.submit(_cmd(scenario, "take-chem", chem_id=str(chem)))
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    assert character.get_component(RadiationSicknessComponent).severity == 3.0
+    assert character.get_component(AddictionComponent).levels["stimulant"] == 0.3
+    assert container_of(world.get_entity(chem)) is None  # consumed from inventory
+    assert taken and taken[0].chem_type == "stimulant"
+
+
+async def test_addiction_decays_with_withdrawal_over_time():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        AddictionComponent(levels={"stimulant": 0.5}, last_updated_epoch=0)
+    )
+    withdrawals: list[WithdrawalProgressedEvent] = []
+    scenario.actor.bus.subscribe(WithdrawalProgressedEvent, withdrawals.append)
+
+    await scenario.actor.tick(HOUR)
+
+    level = scenario.actor.world.get_entity(scenario.character).get_component(
+        AddictionComponent
+    ).levels["stimulant"]
+    assert level == 0.4
+    assert withdrawals and withdrawals[0].level == 0.4
+
+
+async def test_addiction_clears_after_enough_withdrawal():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        AddictionComponent(levels={"stimulant": 0.05}, last_updated_epoch=0)
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(
+        AddictionComponent
+    )
+
+
+async def test_drinking_contaminated_water_adds_rads_until_purified():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    water = _room_entity(
+        scenario, "rad puddle", "water", [WaterPurityComponent(rads_per_drink=4.0)]
+    )
+    drunk: list[ContaminatedWaterDrunkEvent] = []
+    purified: list[WaterPurifiedEvent] = []
+    scenario.actor.bus.subscribe(ContaminatedWaterDrunkEvent, drunk.append)
+    scenario.actor.bus.subscribe(WaterPurifiedEvent, purified.append)
+
+    await scenario.actor.submit(_cmd(scenario, "drink-water", water_id=str(water)))
+    await scenario.actor.tick(HOUR)
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(RadiationDoseComponent).amount == 4.0
+    assert drunk and drunk[0].rads == 4.0
+
+    await scenario.actor.submit(_cmd(scenario, "purify-water", water_id=str(water)))
+    await scenario.actor.tick(HOUR)
+    assert purified
+    dose_before = character.get_component(RadiationDoseComponent).amount
+    await scenario.actor.submit(_cmd(scenario, "drink-water", water_id=str(water)))
+    await scenario.actor.tick(HOUR)
+    assert character.get_component(RadiationDoseComponent).amount == dose_before
+
+
+def test_chem_and_water_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    junk = _room_entity(scenario, "scrap", "junk", [JunkComponent(outputs={"scrap": 1})])
+    clean = _room_entity(scenario, "clean spring", "water", [WaterPurityComponent(purified=True)])
+
+    cases = [
+        (
+            TakeChemHandler(),
+            _handler_cmd(scenario, "take-chem", character_id="x"),
+            "invalid character",
+        ),
+        (TakeChemHandler(), _handler_cmd(scenario, "take-chem", chem_id=str(junk)), "wrong kind"),
+        (
+            PurifyWaterHandler(),
+            _handler_cmd(scenario, "purify-water", character_id="x"),
+            "invalid character",
+        ),
+        (
+            PurifyWaterHandler(),
+            _handler_cmd(scenario, "purify-water", water_id=str(clean)),
+            "already purified",
+        ),
+        (
+            DrinkContaminatedWaterHandler(),
+            _handler_cmd(scenario, "drink-water", character_id="x"),
+            "invalid character",
+        ),
+        (
+            DrinkContaminatedWaterHandler(),
+            _handler_cmd(scenario, "drink-water", water_id=str(junk)),
+            "wrong kind",
+        ),
+    ]
+    for handler, command, expected in cases:
+        result = handler.execute(ctx, command)
+        assert not result.ok, expected
+        assert expected in result.reason, (expected, result.reason)
+
+
+def test_nukesim_fragments_show_chems_water_and_addiction():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        AddictionComponent(levels={"stimulant": 0.6})
+    )
+    _room_entity(scenario, "stimpak", "chem", [ChemComponent(chem_type="stimulant")])
+    _room_entity(scenario, "rad puddle", "water", [WaterPurityComponent(rads_per_drink=4.0)])
+
+    lines = nukesim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+    assert any("Addiction to stimulant" in line for line in lines)
+    assert any("Chem available: stimulant" in line for line in lines)
+    assert any("Water source" in line and "contaminated" in line for line in lines)

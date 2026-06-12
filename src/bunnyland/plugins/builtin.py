@@ -746,9 +746,14 @@ from ..mechanics.needs import (
     need_fragments,
 )
 from ..mechanics.nukesim import (
+    AddictionComponent,
+    ChemComponent,
+    ChemTakenEvent,
+    ContaminatedWaterDrunkEvent,
     DecontaminateHandler,
     DecontaminationAppliedEvent,
     DecontaminationComponent,
+    DrinkContaminatedWaterHandler,
     HazardTriggeredEvent,
     IdentifyTechHandler,
     ItemScrappedEvent,
@@ -764,6 +769,7 @@ from ..mechanics.nukesim import (
     OldWorldTechComponent,
     OldWorldTechIdentifiedEvent,
     OldWorldTechRestoredEvent,
+    PurifyWaterHandler,
     RadiationDoseComponent,
     RadiationExposureEvent,
     RadiationScannedEvent,
@@ -782,8 +788,12 @@ from ..mechanics.nukesim import (
     SealRadiationSourceHandler,
     SiteScavengedEvent,
     StabilizeMutationHandler,
+    TakeChemHandler,
     TechLeadComponent,
     UseRadMedicineHandler,
+    WaterPurifiedEvent,
+    WaterPurityComponent,
+    WithdrawalProgressedEvent,
     install_nukesim,
     nukesim_fragments,
 )
@@ -2139,7 +2149,7 @@ def nukesim_plugin() -> Plugin:
         name="Nuke Sim",
         dependencies=DependencyContribution(
             requires=(CORE_VERBS,),
-            recommends=(COLONYSIM, VOIDSIM),
+            recommends=(COLONYSIM, VOIDSIM, BARBARIANSIM),
         ),
         ecs=EcsContribution(
             components=(
@@ -2159,6 +2169,9 @@ def nukesim_plugin() -> Plugin:
                 ResourceStackComponent,
                 OldWorldTechComponent,
                 TechLeadComponent,
+                ChemComponent,
+                AddictionComponent,
+                WaterPurityComponent,
             )
         ),
         commands=CommandContribution(
@@ -2172,6 +2185,9 @@ def nukesim_plugin() -> Plugin:
                 StabilizeMutationHandler,
                 IdentifyTechHandler,
                 RestoreTechHandler,
+                TakeChemHandler,
+                PurifyWaterHandler,
+                DrinkContaminatedWaterHandler,
             ),
             typed_events=(
                 RadiationExposureEvent,
@@ -2189,6 +2205,10 @@ def nukesim_plugin() -> Plugin:
                 ItemScrappedEvent,
                 OldWorldTechIdentifiedEvent,
                 OldWorldTechRestoredEvent,
+                ChemTakenEvent,
+                WithdrawalProgressedEvent,
+                WaterPurifiedEvent,
+                ContaminatedWaterDrunkEvent,
             ),
         ),
         runtime=RuntimeContribution(service_factories=(install_nukesim,)),
