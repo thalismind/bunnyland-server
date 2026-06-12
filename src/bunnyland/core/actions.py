@@ -964,6 +964,12 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("pay bounty {faction_id}",),
     ),
     _definition(
+        "read-lore-book",
+        ("book_id",),
+        tool_name="read_lore_book",
+        patterns=("read {book_id}",),
+    ),
+    _definition(
         "attack",
         ("target_id", "weapon_id", "lethal", "body_part", "stamina_cost", "durability_cost"),
         tool_name="attack",

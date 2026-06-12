@@ -31,7 +31,7 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
-from .lifesim import SkillSetComponent
+from .lifesim import SkillSetComponent, _add_skill_xp
 
 
 @dataclass(frozen=True)
@@ -159,6 +159,17 @@ class WantedComponent(Component):
     amounts: dict[str, int]
 
 
+@dataclass(frozen=True)
+class LoreBookComponent(Component):
+    """Readable lore or skill book (catalogue 6: books/lore)."""
+
+    title: str
+    lore: str = ""
+    skill_name: str = ""
+    skill_xp: float = 0.0
+    read_by: tuple[str, ...] = ()
+
+
 class LocationDiscoveredEvent(DomainEvent):
     location_id: str
     location_type: str
@@ -239,6 +250,13 @@ class BountyPaidEvent(DomainEvent):
     character_id: str
     faction_id: str
     amount: int
+
+
+class LoreBookReadEvent(DomainEvent):
+    book_id: str
+    title: str
+    skill_name: str = ""
+    skill_xp_awarded: float = 0.0
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -904,6 +922,59 @@ class PayBountyHandler:
         )
 
 
+class ReadLoreBookHandler:
+    command_type = "read-lore-book"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        book_id = parse_entity_id(command.payload.get("book_id"))
+        if character_id is None or book_id is None:
+            return rejected("invalid character or book id")
+        if book_id not in reachable_ids(ctx.world, ctx.entity(character_id)):
+            return rejected("book is not reachable")
+        book = ctx.entity(book_id)
+        if not book.has_component(LoreBookComponent):
+            return rejected("target is not a lore book")
+
+        component = book.get_component(LoreBookComponent)
+        read_by = set(component.read_by)
+        first_read = str(character_id) not in read_by
+        skill_name = component.skill_name.strip().lower()
+        skill_xp_awarded = component.skill_xp if first_read and skill_name else 0.0
+        if first_read:
+            replace_component(
+                book,
+                replace(component, read_by=tuple(sorted((*component.read_by, str(character_id))))),
+            )
+
+        events: list[DomainEvent] = [
+            LoreBookReadEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(book_id),),
+                    book_id=str(book_id),
+                    title=component.title,
+                    skill_name=skill_name,
+                    skill_xp_awarded=skill_xp_awarded,
+                )
+            )
+        ]
+        if skill_xp_awarded > 0:
+            events.extend(
+                _add_skill_xp(
+                    ctx,
+                    ctx.entity(character_id),
+                    skill=skill_name,
+                    amount=skill_xp_awarded,
+                    actor_id=str(character_id),
+                    target_ids=(str(book_id),),
+                )
+            )
+        return ok(*events)
+
+
 def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for edge, faction_id in character.get_relationships(MemberOf):
@@ -956,6 +1027,15 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
             poi = entity.get_component(PointOfInterestComponent)
             if not poi.discovered:
                 lines.append(f"Nearby undiscovered {poi.location_type}: {_name(entity)}.")
+        if entity.has_component(LoreBookComponent):
+            book = entity.get_component(LoreBookComponent)
+            if str(character.id) not in book.read_by:
+                if book.skill_name:
+                    lines.append(
+                        f"Unread skill book nearby: {book.title} ({book.skill_name})."
+                    )
+                else:
+                    lines.append(f"Unread lore book nearby: {book.title}.")
     return sorted(lines)
 
 
@@ -980,6 +1060,8 @@ __all__ = [
     "KnowsWord",
     "LearnWordOfPowerHandler",
     "LeaveFactionHandler",
+    "LoreBookComponent",
+    "LoreBookReadEvent",
     "LocationDiscoveredEvent",
     "MemberOf",
     "PayBountyHandler",
@@ -993,6 +1075,7 @@ __all__ = [
     "QuestObjectiveComponent",
     "QuestRewardComponent",
     "QuestStageComponent",
+    "ReadLoreBookHandler",
     "SneakHandler",
     "SpeakWordOfPowerHandler",
     "StealHandler",

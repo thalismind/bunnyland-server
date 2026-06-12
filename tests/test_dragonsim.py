@@ -38,6 +38,8 @@ from bunnyland.mechanics.dragonsim import (
     KnowsWord,
     LearnWordOfPowerHandler,
     LeaveFactionHandler,
+    LoreBookComponent,
+    LoreBookReadEvent,
     LocationDiscoveredEvent,
     MemberOf,
     PayBountyHandler,
@@ -50,6 +52,7 @@ from bunnyland.mechanics.dragonsim import (
     QuestObjectiveCompletedEvent,
     QuestObjectiveComponent,
     QuestRewardComponent,
+    ReadLoreBookHandler,
     SneakHandler,
     SpeakWordOfPowerHandler,
     StealHandler,
@@ -81,6 +84,7 @@ def _install(actor):
     actor.register_handler(SneakHandler())
     actor.register_handler(StealHandler())
     actor.register_handler(PayBountyHandler())
+    actor.register_handler(ReadLoreBookHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -172,6 +176,26 @@ def _faction(scenario):
     return faction.id
 
 
+def _skill_book(scenario):
+    book = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Manual of Quiet Feet", kind="book"),
+            PortableComponent(),
+            LoreBookComponent(
+                title="Manual of Quiet Feet",
+                lore="A spy's marginalia explains how to cross creaking floors.",
+                skill_name="stealth",
+                skill_xp=12.0,
+            ),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), book.id
+    )
+    return book.id
+
+
 async def test_discover_location_marks_poi_and_records_discovery():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -222,6 +246,25 @@ async def test_accept_and_complete_quest_objective_completes_quest_and_grants_re
     )
     assert reward_component.claimed is True
     assert reward_component.claimed_by == str(scenario.character)
+
+
+async def test_read_lore_book_marks_book_and_grants_lifesim_skill_xp_once():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    book = _skill_book(scenario)
+    read: list[LoreBookReadEvent] = []
+    scenario.actor.bus.subscribe(LoreBookReadEvent, read.append)
+
+    await scenario.actor.submit(_cmd(scenario, "read-lore-book", book_id=str(book)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "read-lore-book", book_id=str(book)))
+    await scenario.actor.tick(HOUR)
+
+    book_component = scenario.actor.world.get_entity(book).get_component(LoreBookComponent)
+    skills = scenario.actor.world.get_entity(scenario.character).get_component(SkillSetComponent)
+    assert book_component.read_by == (str(scenario.character),)
+    assert skills.xp["stealth"] == 12.0
+    assert [event.skill_xp_awarded for event in read] == [12.0, 0.0]
 
 
 async def test_complete_final_objective_rejects_missing_reward_item_without_completion():
@@ -276,6 +319,13 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
         [
             IdentityComponent(name="far watchtower", kind="location"),
             PointOfInterestComponent(location_type="ruin", region="north meadow"),
+        ],
+    )
+    distant_book = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far manual", kind="book"),
+            LoreBookComponent(title="Far Manual"),
         ],
     )
     discovered_poi = spawn_entity(
@@ -480,6 +530,26 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
             _handler_cmd(scenario, "leave-faction", faction_id=str(faction.id)),
             "not a faction member",
         ),
+        (
+            ReadLoreBookHandler(),
+            _handler_cmd(
+                scenario,
+                "read-lore-book",
+                character_id="not-an-id",
+                book_id=str(distant_book.id),
+            ),
+            "invalid character or book id",
+        ),
+        (
+            ReadLoreBookHandler(),
+            _handler_cmd(scenario, "read-lore-book", book_id=str(distant_book.id)),
+            "book is not reachable",
+        ),
+        (
+            ReadLoreBookHandler(),
+            _handler_cmd(scenario, "read-lore-book", book_id=str(wrong_kind.id)),
+            "target is not a lore book",
+        ),
     ]
 
     for handler, command, reason in cases:
@@ -542,6 +612,7 @@ def test_dragonsim_fragments_show_quests_factions_and_nearby_locations():
     poi = _poi(scenario)
     faction = _faction(scenario)
     quest, _objective = _quest(scenario)
+    book = _skill_book(scenario)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_relationship(MemberOf(rank="scout", since_epoch=0), faction)
     quest_entity = scenario.actor.world.get_entity(quest)
@@ -561,6 +632,8 @@ def test_dragonsim_fragments_show_quests_factions_and_nearby_locations():
     assert any("Moss Wardens" in line for line in fragments)
     assert any("Active quest: Find the Lost Ring" in line for line in fragments)
     assert any("old watchtower" in line for line in fragments)
+    assert any("Manual of Quiet Feet" in line and "stealth" in line for line in fragments)
+    assert scenario.actor.world.get_entity(book).has_component(LoreBookComponent)
 
 
 def _set_skill_level(scenario, skill_name, level):

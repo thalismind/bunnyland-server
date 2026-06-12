@@ -565,7 +565,12 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     } <= {event.__name__ for event in garden.commands.typed_events}
 
     dragon = plugins[DRAGONSIM]
-    assert {"PerkComponent", "AncientBeastComponent", "WordOfPowerComponent"} <= {
+    assert {
+        "PerkComponent",
+        "AncientBeastComponent",
+        "WordOfPowerComponent",
+        "LoreBookComponent",
+    } <= {
         component.__name__ for component in dragon.ecs.components
     }
     assert {"HasPerk", "KnowsWord"} <= {edge.__name__ for edge in dragon.ecs.edges}
@@ -574,8 +579,14 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "absorb-great-soul",
         "learn-word-of-power",
         "speak-word-of-power",
+        "read-lore-book",
     } <= {handler.command_type for handler in dragon.commands.action_handlers}
-    assert {"PerkUnlockedEvent", "GreatSoulAbsorbedEvent", "WordOfPowerLearnedEvent"} <= {
+    assert {
+        "PerkUnlockedEvent",
+        "GreatSoulAbsorbedEvent",
+        "WordOfPowerLearnedEvent",
+        "LoreBookReadEvent",
+    } <= {
         event.__name__ for event in dragon.commands.typed_events
     }
     assert LIFESIM in dragon.dependencies.requires
