@@ -180,6 +180,30 @@ Repair settlement damage after a kaiju or predator incident:
 !repair-damage damage_id="damaged gatehouse" amount=2
 ```
 
+## Creature needs
+
+Living creatures grow hungry over time, and a hungry creature slowly becomes stressed.
+Observe a reachable creature to read its current hunger and stress:
+
+```text
+!observe-creature creature_id="clever raptor"
+```
+
+Feed it from a reachable feed store to bring hunger back down:
+
+```text
+!feed-creature creature_id="clever raptor" feed_store_id="Fern Paddock"
+```
+
+Calm a stressed creature down:
+
+```text
+!calm-creature creature_id="clever raptor"
+```
+
+Each nearby creature's hunger and stress show in your character context, so you can keep
+your ranch fed and settled before stress turns into trouble.
+
 ## Creature products and ranch work
 
 Feed stores can be stocked on an enclosure, pen, or nearby room:

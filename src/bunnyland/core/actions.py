@@ -668,6 +668,13 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("creature_id", "location_id"),
         tool_name="assign_guard",
     ),
+    _definition(
+        "feed-creature",
+        ("creature_id", "feed_store_id"),
+        tool_name="feed_creature",
+    ),
+    _definition("calm-creature", ("creature_id",), tool_name="calm_creature"),
+    _definition("observe-creature", ("creature_id",), tool_name="observe_creature"),
     # Life sim.
     _definition("eat", ("item_id",), tool_name="eat", patterns=("eat {item_id}",)),
     _definition("drink", ("source_id",), tool_name="drink", patterns=("drink {source_id}",)),

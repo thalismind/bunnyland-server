@@ -370,6 +370,20 @@ class FeedStoreComponent(Component):
 
 
 @dataclass(frozen=True)
+class CreatureNeedComponent(Component):
+    """Hunger and stress needs for a living creature (catalogue 11.2).
+
+    Hunger rises over time and feeds stress once the creature goes hungry; feeding and
+    calming bring them back down.
+    """
+
+    hunger: float = 0.0
+    stress: float = 0.0
+    hunger_per_hour: float = 5.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class CreatureProductComponent(Component):
     product_type: str
     quantity: float = 1.0
@@ -633,6 +647,28 @@ class FeedStockedEvent(DomainEvent):
     feed_store_id: str
     amount: float
     feed: float
+
+
+class CreatureNeedsChangedEvent(DomainEvent):
+    creature_id: str
+    hunger: float
+    stress: float
+
+
+class CreatureFedEvent(DomainEvent):
+    creature_id: str
+    hunger: float
+
+
+class CreatureCalmedEvent(DomainEvent):
+    creature_id: str
+    stress: float
+
+
+class CreatureObservedEvent(DomainEvent):
+    creature_id: str
+    hunger: float
+    stress: float
 
 
 class CreatureProductCollectedEvent(DomainEvent):
@@ -2588,6 +2624,164 @@ class RepairDamageHandler:
         )
 
 
+SECONDS_PER_HOUR = 60 * 60
+HUNGRY_THRESHOLD = 60.0
+HUNGER_STRESS_PER_HOUR = 4.0
+FEED_HUNGER_RELIEF = 50.0
+FEED_COST = 1.0
+CALM_STRESS_RELIEF = 30.0
+
+
+class CreatureNeedConsequence:
+    """Raise creature hunger over time and let hunger feed stress."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for creature in (
+            world.query().with_all([CreatureNeedComponent]).execute_entities()
+        ):
+            need = creature.get_component(CreatureNeedComponent)
+            elapsed = max(0, epoch - need.last_updated_epoch)
+            if elapsed <= 0:
+                continue
+            hours = elapsed / SECONDS_PER_HOUR
+            hunger = min(100.0, need.hunger + need.hunger_per_hour * hours)
+            stress = need.stress
+            if hunger >= HUNGRY_THRESHOLD:
+                stress = min(100.0, stress + HUNGER_STRESS_PER_HOUR * hours)
+            updated = replace(
+                need, hunger=hunger, stress=stress, last_updated_epoch=epoch
+            )
+            if updated == need:
+                continue
+            replace_component(creature, updated)
+            became_hungry = need.hunger < HUNGRY_THRESHOLD <= hunger
+            if became_hungry:
+                events.append(
+                    CreatureNeedsChangedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.ROOM,
+                            room_id=_creature_room_id(world, creature),
+                            target_ids=(str(creature.id),),
+                            creature_id=str(creature.id),
+                            hunger=hunger,
+                            stress=stress,
+                        )
+                    )
+                )
+        return events
+
+
+def _creature_room_id(world: World, creature: Entity) -> str | None:
+    room = container_of(creature)
+    return str(room) if room is not None and world.has_entity(room) else None
+
+
+class FeedCreatureHandler:
+    command_type = "feed-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        creature_id = parse_entity_id(command.payload.get("creature_id"))
+        store_id = parse_entity_id(command.payload.get("feed_store_id"))
+        if character_id is None or creature_id is None or store_id is None:
+            return rejected("invalid character, creature, or feed store id")
+        if not ctx.world.has_entity(creature_id) or not ctx.world.has_entity(store_id):
+            return rejected("creature or feed store does not exist")
+        creature = _reachable_entity(ctx, character_id, creature_id)
+        store = _reachable_entity(ctx, character_id, store_id)
+        if creature is None or store is None:
+            return rejected("creature or feed store is not reachable")
+        if not creature.has_component(CreatureNeedComponent):
+            return rejected("target is not a creature with needs")
+        if not store.has_component(FeedStoreComponent):
+            return rejected("target is not a feed store")
+        feed_store = store.get_component(FeedStoreComponent)
+        if feed_store.feed < FEED_COST:
+            return rejected("feed store is empty")
+
+        replace_component(store, replace(feed_store, feed=feed_store.feed - FEED_COST))
+        need = creature.get_component(CreatureNeedComponent)
+        hunger = max(0.0, need.hunger - FEED_HUNGER_RELIEF)
+        replace_component(creature, replace(need, hunger=hunger, last_updated_epoch=ctx.epoch))
+        return ok(
+            CreatureFedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature_id), str(store_id)),
+                    creature_id=str(creature_id),
+                    hunger=hunger,
+                )
+            )
+        )
+
+
+class CalmCreatureHandler:
+    command_type = "calm-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        creature_id = parse_entity_id(command.payload.get("creature_id"))
+        if character_id is None or creature_id is None:
+            return rejected("invalid character or creature id")
+        if not ctx.world.has_entity(creature_id):
+            return rejected("creature does not exist")
+        creature = _reachable_entity(ctx, character_id, creature_id)
+        if creature is None:
+            return rejected("creature is not reachable")
+        if not creature.has_component(CreatureNeedComponent):
+            return rejected("target is not a creature with needs")
+        need = creature.get_component(CreatureNeedComponent)
+        stress = max(0.0, need.stress - CALM_STRESS_RELIEF)
+        replace_component(creature, replace(need, stress=stress, last_updated_epoch=ctx.epoch))
+        return ok(
+            CreatureCalmedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature_id),),
+                    creature_id=str(creature_id),
+                    stress=stress,
+                )
+            )
+        )
+
+
+class ObserveCreatureHandler:
+    command_type = "observe-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        creature_id = parse_entity_id(command.payload.get("creature_id"))
+        if character_id is None or creature_id is None:
+            return rejected("invalid character or creature id")
+        if not ctx.world.has_entity(creature_id):
+            return rejected("creature does not exist")
+        creature = _reachable_entity(ctx, character_id, creature_id)
+        if creature is None:
+            return rejected("creature is not reachable")
+        if not creature.has_component(CreatureNeedComponent):
+            return rejected("target is not a creature with needs")
+        need = creature.get_component(CreatureNeedComponent)
+        return ok(
+            CreatureObservedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature_id),),
+                    creature_id=str(creature_id),
+                    hunger=need.hunger,
+                    stress=need.stress,
+                )
+            )
+        )
+
+
 class StockFeedHandler:
     command_type = "stock-feed"
 
@@ -2919,6 +3113,12 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(TrackComponent):
             track = entity.get_component(TrackComponent)
             lines.append(f"Tracked creature: {name} near {track.room_id}.")
+        if entity.has_component(CreatureNeedComponent):
+            need = entity.get_component(CreatureNeedComponent)
+            state = "hungry" if need.hunger >= HUNGRY_THRESHOLD else "fed"
+            lines.append(
+                f"Creature {name}: hunger {need.hunger:g} ({state}), stress {need.stress:g}."
+            )
         if entity.has_component(TamingComponent):
             taming = entity.get_component(TamingComponent)
             state = "tamed" if taming.tamed else f"{taming.progress:g}/{taming.required:g}"
@@ -3017,6 +3217,7 @@ def install_dinosim(actor) -> None:
     ensure_dinosim_policy(actor)
     actor.register_consequence(IncubationConsequence())
     actor.register_consequence(EscapeRiskConsequence())
+    actor.register_consequence(CreatureNeedConsequence())
     DinoIncidentEnrichment(actor.world).subscribe(actor.bus)
 
 
@@ -3036,6 +3237,7 @@ __all__ = [
     "BoneComponent",
     "BreachComponent",
     "BuildEnclosureHandler",
+    "CalmCreatureHandler",
     "CallForHelpHandler",
     "ChargeComponent",
     "CloneCandidateComponent",
@@ -3050,8 +3252,14 @@ __all__ = [
     "ContainmentTriggeredEvent",
     "CreatureAttackComponent",
     "CreatureAttackedEvent",
+    "CreatureCalmedEvent",
     "CreatureChargedEvent",
+    "CreatureFedEvent",
     "CreatureMilkComponent",
+    "CreatureNeedComponent",
+    "CreatureNeedConsequence",
+    "CreatureNeedsChangedEvent",
+    "CreatureObservedEvent",
     "CreatureProductCollectedEvent",
     "CreatureProductComponent",
     "CreatureEscapedEvent",
@@ -3079,6 +3287,7 @@ __all__ = [
     "EscapeRiskConsequence",
     "EvacuateRoomHandler",
     "ExtractAncientSampleHandler",
+    "FeedCreatureHandler",
     "FeedStockedEvent",
     "FeedStoreComponent",
     "FeedingPenComponent",
@@ -3114,6 +3323,7 @@ __all__ = [
     "LockPenHandler",
     "MountComponent",
     "MountCreatureHandler",
+    "ObserveCreatureHandler",
     "OpenPenHandler",
     "PackHuntComponent",
     "PenLockedEvent",

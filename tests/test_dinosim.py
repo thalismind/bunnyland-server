@@ -42,6 +42,7 @@ from bunnyland.mechanics.dinosim import (
     BoneComponent,
     BuildEnclosureHandler,
     CallForHelpHandler,
+    CalmCreatureHandler,
     ChargeComponent,
     CloneCandidateComponent,
     CollectEggHandler,
@@ -54,10 +55,15 @@ from bunnyland.mechanics.dinosim import (
     ContainmentTriggeredEvent,
     CreatureAttackComponent,
     CreatureAttackedEvent,
+    CreatureCalmedEvent,
     CreatureChargedEvent,
     CreatureEscapedEvent,
+    CreatureFedEvent,
     CreatureMilkComponent,
     CreatureMountedEvent,
+    CreatureNeedComponent,
+    CreatureNeedsChangedEvent,
+    CreatureObservedEvent,
     CreatureProductCollectedEvent,
     CreatureProductComponent,
     CreatureRecalledEvent,
@@ -80,6 +86,7 @@ from bunnyland.mechanics.dinosim import (
     EscapeRiskConsequence,
     EvacuateRoomHandler,
     ExtractAncientSampleHandler,
+    FeedCreatureHandler,
     FeedingPenComponent,
     FeedStockedEvent,
     FeedStoreComponent,
@@ -113,6 +120,7 @@ from bunnyland.mechanics.dinosim import (
     LockPenHandler,
     MountComponent,
     MountCreatureHandler,
+    ObserveCreatureHandler,
     OpenPenHandler,
     PackHuntComponent,
     PenLockedEvent,
@@ -215,6 +223,9 @@ def _install(actor):
     actor.register_handler(HarvestProductHandler())
     actor.register_handler(AssignRanchWorkHandler())
     actor.register_handler(AssignGuardHandler())
+    actor.register_handler(FeedCreatureHandler())
+    actor.register_handler(CalmCreatureHandler())
+    actor.register_handler(ObserveCreatureHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -2514,3 +2525,166 @@ async def test_storyteller_selects_kaiju_attack_only_when_colonysim_and_dinosim_
     assert all(entity.has_component(CharacterComponent) for entity in kaiju)
     assert all(entity.get_component(KaijuComponent).difficulty for entity in kaiju)
     assert len({container_of(entity) for entity in kaiju}) > 1
+
+
+def _creature(scenario, **need_kwargs):
+    creature = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="raptor", kind="creature"),
+            CreatureNeedComponent(**need_kwargs),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), creature.id
+    )
+    return creature.id
+
+
+def _feed_store(scenario, feed=3.0):
+    store = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="feed bin", kind="store"), FeedStoreComponent(feed=feed)],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), store.id
+    )
+    return store.id
+
+
+async def test_creature_grows_hungry_and_stressed_over_time():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    creature = _creature(scenario, hunger=58.0, hunger_per_hour=5.0, last_updated_epoch=0)
+    # An already-hungry creature keeps gaining hunger/stress without re-crossing.
+    already = _creature(scenario, hunger=70.0, hunger_per_hour=5.0, last_updated_epoch=0)
+    changes: list[CreatureNeedsChangedEvent] = []
+    scenario.actor.bus.subscribe(CreatureNeedsChangedEvent, changes.append)
+
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    need = world.get_entity(creature).get_component(CreatureNeedComponent)
+    assert need.hunger == 63.0
+    assert need.stress > 0.0
+    already_need = world.get_entity(already).get_component(CreatureNeedComponent)
+    assert already_need.hunger == 75.0
+    assert already_need.stress > 0.0
+    # Only the creature that newly crossed into hunger emits a change event.
+    assert [event.creature_id for event in changes] == [str(creature)]
+
+
+async def test_feed_creature_draws_from_store_and_lowers_hunger():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    creature = _creature(scenario, hunger=80.0)
+    store = _feed_store(scenario, feed=3.0)
+    fed: list[CreatureFedEvent] = []
+    scenario.actor.bus.subscribe(CreatureFedEvent, fed.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "feed-creature", creature_id=str(creature), feed_store_id=str(store))
+    )
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    assert world.get_entity(store).get_component(FeedStoreComponent).feed == 2.0
+    assert world.get_entity(creature).get_component(CreatureNeedComponent).hunger == 30.0
+    assert fed and fed[0].hunger == 30.0
+
+
+async def test_calm_creature_lowers_stress():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    creature = _creature(scenario, stress=50.0)
+    calmed: list[CreatureCalmedEvent] = []
+    scenario.actor.bus.subscribe(CreatureCalmedEvent, calmed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "calm-creature", creature_id=str(creature)))
+    await scenario.actor.tick(HOUR)
+
+    assert scenario.actor.world.get_entity(creature).get_component(
+        CreatureNeedComponent
+    ).stress == 20.0
+    assert calmed and calmed[0].stress == 20.0
+
+
+async def test_observe_creature_reports_needs_without_mutating():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    creature = _creature(scenario, hunger=40.0, stress=10.0)
+    observed: list[CreatureObservedEvent] = []
+    scenario.actor.bus.subscribe(CreatureObservedEvent, observed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "observe-creature", creature_id=str(creature)))
+    await scenario.actor.tick(HOUR)
+
+    assert observed and observed[0].hunger == 40.0 and observed[0].stress == 10.0
+
+
+def test_creature_need_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    creature = _creature(scenario, hunger=20.0)
+    empty_store = _feed_store(scenario, feed=0.0)
+    not_a_creature = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="rock", kind="item")]
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), not_a_creature.id
+    )
+    far_creature = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="distant raptor", kind="creature"), CreatureNeedComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), far_creature.id
+    )
+
+    def feed(**payload):
+        return FeedCreatureHandler(), _handler_cmd(scenario, "feed-creature", **payload)
+
+    def calm(**payload):
+        return CalmCreatureHandler(), _handler_cmd(scenario, "calm-creature", **payload)
+
+    def observe(**payload):
+        return ObserveCreatureHandler(), _handler_cmd(scenario, "observe-creature", **payload)
+
+    cases = [
+        (*feed(character_id="x"), "invalid character"),
+        (*feed(creature_id="ghost_1", feed_store_id=str(empty_store)), "does not exist"),
+        (*feed(creature_id=str(far_creature.id), feed_store_id=str(empty_store)), "not reachable"),
+        (
+            *feed(creature_id=str(not_a_creature.id), feed_store_id=str(empty_store)),
+            "not a creature",
+        ),
+        (
+            *feed(creature_id=str(creature), feed_store_id=str(not_a_creature.id)),
+            "not a feed store",
+        ),
+        (*feed(creature_id=str(creature), feed_store_id=str(empty_store)), "feed store is empty"),
+        (*calm(character_id="x"), "invalid character"),
+        (*calm(creature_id="ghost_1"), "does not exist"),
+        (*calm(creature_id=str(far_creature.id)), "not reachable"),
+        (*calm(creature_id=str(not_a_creature.id)), "not a creature"),
+        (*observe(character_id="x"), "invalid character"),
+        (*observe(creature_id="ghost_1"), "does not exist"),
+        (*observe(creature_id=str(far_creature.id)), "not reachable"),
+        (*observe(creature_id=str(not_a_creature.id)), "not a creature"),
+    ]
+    for handler, command, expected in cases:
+        result = handler.execute(ctx, command)
+        assert not result.ok, expected
+        assert expected in result.reason, (expected, result.reason)
+
+
+def test_dinosim_fragments_show_creature_needs():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _creature(scenario, hunger=70.0, stress=15.0)
+
+    lines = dinosim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+    assert any("Creature raptor" in line and "hungry" in line for line in lines)
