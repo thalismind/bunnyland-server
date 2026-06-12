@@ -573,6 +573,18 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     assert "PerkUnlockedEvent" in {event.__name__ for event in dragon.commands.typed_events}
     assert LIFESIM in dragon.dependencies.requires
 
+    void = plugins[VOIDSIM]
+    assert {"DutyShiftComponent", "CrewDutyStatusComponent"} <= {
+        component.__name__ for component in void.ecs.components
+    }
+    assert "WorksShift" in {edge.__name__ for edge in void.ecs.edges}
+    assert {"assign-crew-shift", "relieve-crew-shift"} <= {
+        handler.command_type for handler in void.commands.action_handlers
+    }
+    assert {"CrewShiftAssignedEvent", "CrewDutyChangedEvent"} <= {
+        event.__name__ for event in void.commands.typed_events
+    }
+
 
 def test_ecs_systems_can_be_instances_or_classes():
     # apply should accept a system instance as well as a class.

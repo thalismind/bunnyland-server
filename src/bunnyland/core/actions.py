@@ -1031,6 +1031,18 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("scan", ("ship_id",), tool_name="scan"),
     _definition("answer-distress-signal", ("signal_id",), tool_name="answer_distress_signal"),
     _definition("refuel", ("ship_id", "amount"), tool_name="refuel"),
+    _definition(
+        "assign-crew-shift",
+        ("shift_id", "station"),
+        tool_name="assign_crew_shift",
+        patterns=("take watch {shift_id}",),
+    ),
+    _definition(
+        "relieve-crew-shift",
+        ("shift_id",),
+        tool_name="relieve_crew_shift",
+        patterns=("stand down from watch {shift_id}",),
+    ),
     _definition("enter-orbit", ("ship_id", "body_id"), tool_name="enter_orbit"),
     _definition("leave-orbit", ("ship_id",), tool_name="leave_orbit"),
     _definition("land", ("ship_id",), tool_name="land"),

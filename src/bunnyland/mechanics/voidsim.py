@@ -36,6 +36,9 @@ from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .barbariansim import CorruptionComponent, CorruptionGainedEvent
 
+SECONDS_PER_HOUR = 60 * 60
+SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
+
 
 @dataclass(frozen=True)
 class ShipComponent(Component):
@@ -1244,6 +1247,201 @@ class ChaosInfluenceConsequence:
         return events
 
 
+# --- Crew duty shifts (catalogue 8.3) -------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DutyShiftComponent(Component):
+    """A watch rotation: a time slot plus the role and tasks it covers."""
+
+    name: str
+    start_hour: int = 0
+    end_hour: int = 8
+    role: str = ""
+    tasks: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CrewDutyStatusComponent(Component):
+    """Cached on/off-duty flag so prompt fragments can read it without the clock."""
+
+    on_duty: bool = False
+    last_changed_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class WorksShift(Edge):
+    """crew -> duty-shift entity; ``station`` is the post this crew covers."""
+
+    station: str = ""
+
+
+class CrewShiftAssignedEvent(DomainEvent):
+    character_id: str
+    shift_id: str
+    shift_name: str
+    station: str = ""
+
+
+class CrewShiftRelievedEvent(DomainEvent):
+    character_id: str
+    shift_id: str
+    shift_name: str
+
+
+class CrewDutyChangedEvent(DomainEvent):
+    character_id: str
+    shift_id: str
+    shift_name: str
+    on_duty: bool
+
+
+def _hour_of_day(epoch: int) -> int:
+    return (epoch % SECONDS_PER_DAY) // SECONDS_PER_HOUR
+
+
+def _shift_covers_hour(shift: DutyShiftComponent, hour: int) -> bool:
+    if shift.start_hour == shift.end_hour:
+        return True  # a round-the-clock watch
+    if shift.start_hour < shift.end_hour:
+        return shift.start_hour <= hour < shift.end_hour
+    # the watch wraps past midnight, e.g. 22:00 -> 06:00
+    return hour >= shift.start_hour or hour < shift.end_hour
+
+
+class AssignCrewShiftHandler:
+    command_type = "assign-crew-shift"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        shift_id = parse_entity_id(command.payload.get("shift_id"))
+        if character_id is None or shift_id is None:
+            return rejected("invalid crew or shift id")
+        if not ctx.world.has_entity(shift_id):
+            return rejected("shift does not exist")
+        shift_entity = ctx.entity(shift_id)
+        if not shift_entity.has_component(DutyShiftComponent):
+            return rejected("target is not a duty shift")
+        character = ctx.entity(character_id)
+        if character.has_relationship(WorksShift, shift_id):
+            return rejected("already assigned to this shift")
+
+        station = str(command.payload.get("station", "")).strip()
+        character.add_relationship(WorksShift(station=station), shift_id)
+        shift = shift_entity.get_component(DutyShiftComponent)
+        room_id = container_of(character)
+        return ok(
+            CrewShiftAssignedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room_id) if room_id is not None else None,
+                    target_ids=(str(shift_id),),
+                    character_id=str(character_id),
+                    shift_id=str(shift_id),
+                    shift_name=shift.name,
+                    station=station,
+                )
+            )
+        )
+
+
+class RelieveCrewShiftHandler:
+    command_type = "relieve-crew-shift"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        shift_id = parse_entity_id(command.payload.get("shift_id"))
+        if character_id is None or shift_id is None:
+            return rejected("invalid crew or shift id")
+        if not ctx.world.has_entity(shift_id):
+            return rejected("shift does not exist")
+        character = ctx.entity(character_id)
+        if not character.has_relationship(WorksShift, shift_id):
+            return rejected("not assigned to this shift")
+
+        character.remove_relationship(WorksShift, shift_id)
+        shift_entity = ctx.entity(shift_id)
+        shift_name = (
+            shift_entity.get_component(DutyShiftComponent).name
+            if shift_entity.has_component(DutyShiftComponent)
+            else _name(shift_entity)
+        )
+        room_id = container_of(character)
+        return ok(
+            CrewShiftRelievedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room_id) if room_id is not None else None,
+                    target_ids=(str(shift_id),),
+                    character_id=str(character_id),
+                    shift_id=str(shift_id),
+                    shift_name=shift_name,
+                )
+            )
+        )
+
+
+class CrewDutyConsequence:
+    """Flip crew on and off duty as the ship clock enters and leaves their watch."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        hour = _hour_of_day(epoch)
+        query = (
+            world.query()
+            .with_all([CharacterComponent])
+            .with_none([DeadComponent, SuspendedComponent])
+        )
+        for crew in query.execute_entities():
+            shifts = [
+                shift_id
+                for _edge, shift_id in crew.get_relationships(WorksShift)
+                if world.has_entity(shift_id)
+            ]
+            had_status = crew.has_component(CrewDutyStatusComponent)
+            if not shifts and not had_status:
+                continue
+
+            on_duty = False
+            active_id: EntityId | None = None
+            active_name = ""
+            for shift_id in shifts:
+                shift = world.get_entity(shift_id)
+                if shift.has_component(DutyShiftComponent) and _shift_covers_hour(
+                    shift.get_component(DutyShiftComponent), hour
+                ):
+                    on_duty = True
+                    active_id = shift_id
+                    active_name = shift.get_component(DutyShiftComponent).name
+                    break
+
+            prev = crew.get_component(CrewDutyStatusComponent).on_duty if had_status else False
+            if had_status and on_duty == prev:
+                continue
+            replace_component(
+                crew,
+                CrewDutyStatusComponent(on_duty=on_duty, last_changed_epoch=epoch),
+            )
+            if on_duty != prev:
+                events.append(
+                    CrewDutyChangedEvent(
+                        **_void_event(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(crew.id),
+                            target_ids=(str(active_id),) if active_id is not None else (),
+                            character_id=str(crew.id),
+                            shift_id=str(active_id) if active_id is not None else "",
+                            shift_name=active_name,
+                            on_duty=on_duty,
+                        )
+                    )
+                )
+        return events
+
+
 def voidsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     module_id = container_of(character)
@@ -1338,6 +1536,23 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
         pressure = character.get_component(CyberneticMutationPressureComponent)
         if pressure.amount > 0.0:
             lines.append(f"Cybernetic mutation pressure: {pressure.amount:g}.")
+    for edge, shift_id in character.get_relationships(WorksShift):
+        if not world.has_entity(shift_id):
+            continue
+        shift_entity = world.get_entity(shift_id)
+        if shift_entity.has_component(DutyShiftComponent):
+            shift = shift_entity.get_component(DutyShiftComponent)
+            station = f", station {edge.station}" if edge.station else ""
+            lines.append(
+                f"Duty shift: {shift.name} watch "
+                f"({shift.start_hour:02d}:00-{shift.end_hour:02d}:00) "
+                f"as {shift.role or 'crew'}{station}."
+            )
+    if (
+        character.has_component(CrewDutyStatusComponent)
+        and character.get_component(CrewDutyStatusComponent).on_duty
+    ):
+        lines.append("You are currently on duty.")
     return sorted(lines)
 
 
@@ -1345,12 +1560,14 @@ def install_voidsim(actor) -> None:
     actor.register_consequence(LifeSupportConsequence())
     actor.register_consequence(JumpTravelConsequence())
     actor.register_consequence(ChaosInfluenceConsequence())
+    actor.register_consequence(CrewDutyConsequence())
 
 
 __all__ = [
     "AirlockComponent",
     "AirlockCycledEvent",
     "AnswerDistressSignalHandler",
+    "AssignCrewShiftHandler",
     "AstrogationComponent",
     "BulkheadComponent",
     "ChaosInfluenceAppliedEvent",
@@ -1359,8 +1576,14 @@ __all__ = [
     "ChaosMutationPressureComponent",
     "ChaosWardComponent",
     "CoursePlottedEvent",
+    "CrewDutyChangedEvent",
+    "CrewDutyConsequence",
+    "CrewDutyStatusComponent",
+    "CrewShiftAssignedEvent",
+    "CrewShiftRelievedEvent",
     "CycleAirlockHandler",
     "DistressSignalComponent",
+    "DutyShiftComponent",
     "DockHandler",
     "DockedTo",
     "DockingCompletedEvent",
@@ -1400,6 +1623,7 @@ __all__ = [
     "RadiationShieldComponent",
     "RadiationMutationPressureComponent",
     "RefuelHandler",
+    "RelieveCrewShiftHandler",
     "RepairSystemHandler",
     "ReroutePowerHandler",
     "ScanHandler",
@@ -1413,6 +1637,7 @@ __all__ = [
     "StarSystemComponent",
     "StationComponent",
     "UndockHandler",
+    "WorksShift",
     "install_voidsim",
     "voidsim_fragments",
 ]

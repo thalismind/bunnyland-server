@@ -121,6 +121,27 @@ Plot a course and jump:
 Jumps consume fuel and complete after their route duration. The ship arrives at the plotted
 destination when the jump completes.
 
+## Crew duty shifts
+
+A ship runs on watches. A duty shift is its own entity describing a time slot and the role
+it covers (for example an `alpha` engineering watch from 08:00 to 16:00). Crew take a watch,
+optionally naming the station they cover:
+
+```text
+!assign-crew-shift shift_id="alpha watch" station=reactor
+```
+
+Stand down from it later:
+
+```text
+!relieve-crew-shift shift_id="alpha watch"
+```
+
+While the ship clock is inside your watch window you are "on duty", and your character
+context shows your assigned watch and current duty status. Watches can wrap past midnight
+(for example a 22:00–06:00 overnight watch). Coordinate watches so critical systems are
+always crewed.
+
 ## Chaos influence and mutation pressure
 
 Some void-sim worlds include warp breaches, machine possessions, daemon whispers, or other

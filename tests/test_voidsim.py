@@ -23,6 +23,7 @@ from bunnyland.mechanics.voidsim import (
     AirlockComponent,
     AirlockCycledEvent,
     AnswerDistressSignalHandler,
+    AssignCrewShiftHandler,
     AstrogationComponent,
     BulkheadComponent,
     ChaosInfluenceAppliedEvent,
@@ -31,12 +32,18 @@ from bunnyland.mechanics.voidsim import (
     ChaosMutationPressureComponent,
     ChaosWardComponent,
     CoursePlottedEvent,
+    CrewDutyChangedEvent,
+    CrewDutyConsequence,
+    CrewDutyStatusComponent,
+    CrewShiftAssignedEvent,
+    CrewShiftRelievedEvent,
     CyberneticMutationPressureComponent,
     CycleAirlockHandler,
     DistressSignalComponent,
     DockedTo,
     DockHandler,
     DockingCompletedEvent,
+    DutyShiftComponent,
     EnterOrbitHandler,
     EvacuateModuleHandler,
     FuelChangedEvent,
@@ -72,6 +79,7 @@ from bunnyland.mechanics.voidsim import (
     RadiationMutationPressureComponent,
     RadiationShieldComponent,
     RefuelHandler,
+    RelieveCrewShiftHandler,
     RepairSystemHandler,
     ReroutePowerHandler,
     ScanHandler,
@@ -85,6 +93,7 @@ from bunnyland.mechanics.voidsim import (
     StarSystemComponent,
     StationComponent,
     UndockHandler,
+    WorksShift,
     install_voidsim,
     voidsim_fragments,
 )
@@ -111,9 +120,12 @@ def _install(actor):
     actor.register_handler(LeaveOrbitHandler())
     actor.register_handler(LandHandler())
     actor.register_handler(LaunchHandler())
+    actor.register_handler(AssignCrewShiftHandler())
+    actor.register_handler(RelieveCrewShiftHandler())
     actor.register_consequence(LifeSupportConsequence())
     actor.register_consequence(JumpTravelConsequence())
     actor.register_consequence(ChaosInfluenceConsequence())
+    actor.register_consequence(CrewDutyConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -1912,4 +1924,141 @@ def test_install_voidsim_registers_plugin_consequences():
         "LifeSupportConsequence",
         "JumpTravelConsequence",
         "ChaosInfluenceConsequence",
+        "CrewDutyConsequence",
     }
+
+
+def _make_shift(scenario, *, name="alpha", start_hour=8, end_hour=16, role="engineering"):
+    return spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=f"{name} watch", kind="shift"),
+            DutyShiftComponent(
+                name=name, start_hour=start_hour, end_hour=end_hour, role=role
+            ),
+        ],
+    ).id
+
+
+async def test_assign_and_relieve_crew_shift_updates_roster_edge():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    shift = _make_shift(scenario)
+    assigned: list[CrewShiftAssignedEvent] = []
+    relieved: list[CrewShiftRelievedEvent] = []
+    scenario.actor.bus.subscribe(CrewShiftAssignedEvent, assigned.append)
+    scenario.actor.bus.subscribe(CrewShiftRelievedEvent, relieved.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "assign-crew-shift", shift_id=str(shift), station="reactor")
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_relationship(WorksShift, shift)
+    assert assigned[0].station == "reactor"
+    assert assigned[0].shift_name == "alpha"
+
+    await scenario.actor.submit(_cmd(scenario, "relieve-crew-shift", shift_id=str(shift)))
+    await scenario.actor.tick(HOUR)
+    assert not character.has_relationship(WorksShift, shift)
+    assert relieved[0].shift_name == "alpha"
+
+
+def test_crew_duty_consequence_flips_on_and_off_watch():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    shift = _make_shift(scenario, start_hour=8, end_hour=16)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(WorksShift(station="reactor"), shift)
+    consequence = CrewDutyConsequence()
+
+    # Before the watch: status initialised off duty, no event.
+    assert consequence.process(scenario.actor.world, 6 * HOUR) == []
+    assert character.get_component(CrewDutyStatusComponent).on_duty is False
+
+    # The clock enters the watch window.
+    on_events = consequence.process(scenario.actor.world, 9 * HOUR)
+    assert len(on_events) == 1
+    assert isinstance(on_events[0], CrewDutyChangedEvent)
+    assert on_events[0].on_duty is True
+    assert character.get_component(CrewDutyStatusComponent).on_duty is True
+    # Re-running mid-watch is idempotent.
+    assert consequence.process(scenario.actor.world, 12 * HOUR) == []
+
+    # The clock leaves the watch window.
+    off_events = consequence.process(scenario.actor.world, 18 * HOUR)
+    assert len(off_events) == 1
+    assert off_events[0].on_duty is False
+    assert character.get_component(CrewDutyStatusComponent).on_duty is False
+
+    fragments = voidsim_fragments(scenario.actor.world, character)
+    assert any("Duty shift: alpha watch (08:00-16:00) as engineering" in line for line in fragments)
+
+
+def test_crew_duty_consequence_handles_overnight_watch_and_skips_unrostered_crew():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    overnight = _make_shift(scenario, name="gamma", start_hour=22, end_hour=6, role="watch")
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(WorksShift(), overnight)
+    consequence = CrewDutyConsequence()
+
+    assert consequence.process(scenario.actor.world, 23 * HOUR)[0].on_duty is True
+    assert consequence.process(scenario.actor.world, 3 * HOUR) == []  # still within 22->06
+    assert consequence.process(scenario.actor.world, 12 * HOUR)[0].on_duty is False
+
+    # A character with neither a shift nor a status component is ignored entirely.
+    bystander = spawn_entity(scenario.actor.world, [CharacterComponent(species="bunny")])
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), bystander.id
+    )
+    assert consequence.process(scenario.actor.world, 9 * HOUR) == []
+    assert not scenario.actor.world.get_entity(bystander.id).has_component(
+        CrewDutyStatusComponent
+    )
+
+
+def test_crew_shift_handlers_reject_invalid_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    not_a_shift = spawn_entity(scenario.actor.world, [IdentityComponent(name="crate", kind="prop")])
+    shift = _make_shift(scenario)
+
+    assign = AssignCrewShiftHandler()
+    relieve = RelieveCrewShiftHandler()
+    reasons = {
+        assign.execute(
+            ctx, _handler_cmd(scenario, "assign-crew-shift", character_id="x", shift_id="y")
+        ).reason,
+        assign.execute(
+            ctx, _handler_cmd(scenario, "assign-crew-shift", shift_id="entity_999")
+        ).reason,
+        assign.execute(
+            ctx, _handler_cmd(scenario, "assign-crew-shift", shift_id=str(not_a_shift.id))
+        ).reason,
+        relieve.execute(
+            ctx, _handler_cmd(scenario, "relieve-crew-shift", character_id="x", shift_id="y")
+        ).reason,
+        relieve.execute(
+            ctx, _handler_cmd(scenario, "relieve-crew-shift", shift_id="entity_999")
+        ).reason,
+        relieve.execute(
+            ctx, _handler_cmd(scenario, "relieve-crew-shift", shift_id=str(shift))
+        ).reason,
+    }
+    assert "invalid crew or shift id" in reasons
+    assert "shift does not exist" in reasons
+    assert "target is not a duty shift" in reasons
+    assert "not assigned to this shift" in reasons
+
+    assert assign.execute(
+        ctx, _handler_cmd(scenario, "assign-crew-shift", shift_id=str(shift))
+    ).ok
+    assert (
+        assign.execute(
+            ctx, _handler_cmd(scenario, "assign-crew-shift", shift_id=str(shift))
+        ).reason
+        == "already assigned to this shift"
+    )
