@@ -69,6 +69,29 @@ A perk lists the skill and minimum level it needs. If your skill is too low the 
 rejected; once unlocked, the perk is durable world state and shows up in your character
 context.
 
+## Great souls and words of power
+
+Ancient beasts carry great souls. When one has been slain, claim its great soul:
+
+```text
+!absorb-great-soul beast_id="Ancient Wyrm"
+```
+
+Great souls let you learn words of power. A word can require a number of great souls and,
+sometimes, a minimum skill level. Learn one you qualify for:
+
+```text
+!learn-word-of-power word_id="Unrelenting Force"
+```
+
+Then speak a word you have learned:
+
+```text
+!speak-word-of-power word_id="Unrelenting Force"
+```
+
+Your absorbed great souls and known words show up in your character context.
+
 ## Core loop
 
 A simple adventure loop:

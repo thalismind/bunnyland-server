@@ -418,7 +418,9 @@ from ..mechanics.dinosim import (
     install_dinosim,
 )
 from ..mechanics.dragonsim import (
+    AbsorbGreatSoulHandler,
     AcceptQuestHandler,
+    AncientBeastComponent,
     CompleteObjectiveHandler,
     DiscoverLocationHandler,
     DiscoveryComponent,
@@ -426,8 +428,12 @@ from ..mechanics.dragonsim import (
     FactionJoinedEvent,
     FactionLeftEvent,
     FactionReputationComponent,
+    GreatSoulAbsorbedEvent,
+    GreatSoulComponent,
     HasPerk,
     JoinFactionHandler,
+    KnowsWord,
+    LearnWordOfPowerHandler,
     LeaveFactionHandler,
     LocationDiscoveredEvent,
     MemberOf,
@@ -441,7 +447,11 @@ from ..mechanics.dragonsim import (
     QuestObjectiveComponent,
     QuestRewardComponent,
     QuestStageComponent,
+    SpeakWordOfPowerHandler,
     UnlockPerkHandler,
+    WordOfPowerComponent,
+    WordOfPowerLearnedEvent,
+    WordOfPowerSpokenEvent,
     dragonsim_fragments,
 )
 from ..mechanics.eat_drink import DrinkHandler, EatHandler
@@ -1785,8 +1795,11 @@ def dragonsim_plugin() -> Plugin:
                 FactionComponent,
                 FactionReputationComponent,
                 PerkComponent,
+                AncientBeastComponent,
+                GreatSoulComponent,
+                WordOfPowerComponent,
             ),
-            edges=(MemberOf, HasPerk),
+            edges=(MemberOf, HasPerk, KnowsWord),
         ),
         commands=CommandContribution(
             action_handlers=(
@@ -1796,6 +1809,9 @@ def dragonsim_plugin() -> Plugin:
                 JoinFactionHandler,
                 LeaveFactionHandler,
                 UnlockPerkHandler,
+                AbsorbGreatSoulHandler,
+                LearnWordOfPowerHandler,
+                SpeakWordOfPowerHandler,
             ),
             typed_events=(
                 LocationDiscoveredEvent,
@@ -1805,6 +1821,9 @@ def dragonsim_plugin() -> Plugin:
                 FactionJoinedEvent,
                 FactionLeftEvent,
                 PerkUnlockedEvent,
+                GreatSoulAbsorbedEvent,
+                WordOfPowerLearnedEvent,
+                WordOfPowerSpokenEvent,
             ),
         ),
         content=ContentContribution(

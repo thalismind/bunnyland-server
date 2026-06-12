@@ -13,7 +13,7 @@ from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.commands import SubmittedCommand
-from ..core.components import IdentityComponent
+from ..core.components import DeadComponent, IdentityComponent
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
@@ -99,6 +99,38 @@ class HasPerk(Edge):
     unlocked_at_epoch: int = 0
 
 
+@dataclass(frozen=True)
+class AncientBeastComponent(Component):
+    """A great beast whose soul can be claimed once it is slain."""
+
+    name: str
+    soul_absorbed: bool = False
+
+
+@dataclass(frozen=True)
+class GreatSoulComponent(Component):
+    """Count of great souls a character has absorbed from slain ancient beasts."""
+
+    souls: int = 0
+
+
+@dataclass(frozen=True)
+class WordOfPowerComponent(Component):
+    """A learnable word of power, gated on great souls and an optional lifesim skill."""
+
+    name: str
+    min_souls: int = 1
+    skill_name: str = ""
+    min_skill_level: int = 0
+
+
+@dataclass(frozen=True)
+class KnowsWord(Edge):
+    """character -> learned word-of-power entity."""
+
+    learned_at_epoch: int = 0
+
+
 class LocationDiscoveredEvent(DomainEvent):
     location_id: str
     location_type: str
@@ -138,6 +170,22 @@ class PerkUnlockedEvent(DomainEvent):
     perk_id: str
     perk_name: str
     skill_name: str
+
+
+class GreatSoulAbsorbedEvent(DomainEvent):
+    beast_id: str
+    beast_name: str
+    souls: int
+
+
+class WordOfPowerLearnedEvent(DomainEvent):
+    word_id: str
+    word_name: str
+
+
+class WordOfPowerSpokenEvent(DomainEvent):
+    word_id: str
+    word_name: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -496,6 +544,127 @@ class UnlockPerkHandler:
         )
 
 
+class AbsorbGreatSoulHandler:
+    command_type = "absorb-great-soul"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        beast_id = parse_entity_id(command.payload.get("beast_id"))
+        if character_id is None or beast_id is None:
+            return rejected("invalid character or beast id")
+        if not ctx.world.has_entity(beast_id):
+            return rejected("beast does not exist")
+        character = ctx.entity(character_id)
+        if beast_id not in reachable_ids(ctx.world, character):
+            return rejected("beast is not reachable")
+        beast = ctx.entity(beast_id)
+        if not beast.has_component(AncientBeastComponent):
+            return rejected("target is not an ancient beast")
+        if not beast.has_component(DeadComponent):
+            return rejected("the beast still lives")
+        ancient = beast.get_component(AncientBeastComponent)
+        if ancient.soul_absorbed:
+            return rejected("its great soul is already claimed")
+
+        replace_component(beast, replace(ancient, soul_absorbed=True))
+        current = (
+            character.get_component(GreatSoulComponent)
+            if character.has_component(GreatSoulComponent)
+            else GreatSoulComponent()
+        )
+        souls = current.souls + 1
+        replace_component(character, replace(current, souls=souls))
+        return ok(
+            GreatSoulAbsorbedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(beast_id),),
+                    beast_id=str(beast_id),
+                    beast_name=ancient.name,
+                    souls=souls,
+                )
+            )
+        )
+
+
+class LearnWordOfPowerHandler:
+    command_type = "learn-word-of-power"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        word_id = parse_entity_id(command.payload.get("word_id"))
+        if character_id is None or word_id is None:
+            return rejected("invalid character or word id")
+        if not ctx.world.has_entity(word_id):
+            return rejected("word does not exist")
+        word_entity = ctx.entity(word_id)
+        if not word_entity.has_component(WordOfPowerComponent):
+            return rejected("target is not a word of power")
+        word = word_entity.get_component(WordOfPowerComponent)
+
+        character = ctx.entity(character_id)
+        if character.has_relationship(KnowsWord, word_id):
+            return rejected("word already learned")
+        souls = (
+            character.get_component(GreatSoulComponent).souls
+            if character.has_component(GreatSoulComponent)
+            else 0
+        )
+        if souls < word.min_souls:
+            return rejected("not enough great souls to learn this word")
+        if word.skill_name and _skill_level(character, word.skill_name) < word.min_skill_level:
+            return rejected("skill level too low for this word")
+
+        character.add_relationship(KnowsWord(learned_at_epoch=ctx.epoch), word_id)
+        return ok(
+            WordOfPowerLearnedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(word_id),),
+                    word_id=str(word_id),
+                    word_name=word.name,
+                )
+            )
+        )
+
+
+class SpeakWordOfPowerHandler:
+    command_type = "speak-word-of-power"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        word_id = parse_entity_id(command.payload.get("word_id"))
+        if character_id is None or word_id is None:
+            return rejected("invalid character or word id")
+        if not ctx.world.has_entity(word_id):
+            return rejected("word does not exist")
+        character = ctx.entity(character_id)
+        if not character.has_relationship(KnowsWord, word_id):
+            return rejected("you have not learned that word")
+        word_entity = ctx.entity(word_id)
+        word_name = (
+            word_entity.get_component(WordOfPowerComponent).name
+            if word_entity.has_component(WordOfPowerComponent)
+            else _name(word_entity)
+        )
+        return ok(
+            WordOfPowerSpokenEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(word_id),),
+                    word_id=str(word_id),
+                    word_name=word_name,
+                )
+            )
+        )
+
+
 def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for edge, faction_id in character.get_relationships(MemberOf):
@@ -519,6 +688,17 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         if perk.has_component(PerkComponent):
             lines.append(f"Perk unlocked: {perk.get_component(PerkComponent).name}.")
 
+    if character.has_component(GreatSoulComponent):
+        souls = character.get_component(GreatSoulComponent).souls
+        if souls > 0:
+            lines.append(f"Great souls absorbed: {souls}.")
+    for _word_edge, word_id in character.get_relationships(KnowsWord):
+        if not world.has_entity(word_id):
+            continue
+        word = world.get_entity(word_id)
+        if word.has_component(WordOfPowerComponent):
+            lines.append(f"Word of power known: {word.get_component(WordOfPowerComponent).name}.")
+
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
         if entity.has_component(PointOfInterestComponent):
@@ -529,7 +709,9 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
 
 
 __all__ = [
+    "AbsorbGreatSoulHandler",
     "AcceptQuestHandler",
+    "AncientBeastComponent",
     "CompleteObjectiveHandler",
     "DiscoverLocationHandler",
     "DiscoveryComponent",
@@ -537,8 +719,12 @@ __all__ = [
     "FactionJoinedEvent",
     "FactionLeftEvent",
     "FactionReputationComponent",
+    "GreatSoulAbsorbedEvent",
+    "GreatSoulComponent",
     "HasPerk",
     "JoinFactionHandler",
+    "KnowsWord",
+    "LearnWordOfPowerHandler",
     "LeaveFactionHandler",
     "LocationDiscoveredEvent",
     "MemberOf",
@@ -552,6 +738,10 @@ __all__ = [
     "QuestObjectiveComponent",
     "QuestRewardComponent",
     "QuestStageComponent",
+    "SpeakWordOfPowerHandler",
     "UnlockPerkHandler",
+    "WordOfPowerComponent",
+    "WordOfPowerLearnedEvent",
+    "WordOfPowerSpokenEvent",
     "dragonsim_fragments",
 ]

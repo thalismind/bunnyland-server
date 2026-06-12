@@ -8,6 +8,7 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    DeadComponent,
     IdentityComponent,
     Lane,
     PortableComponent,
@@ -18,15 +19,21 @@ from bunnyland.core import (
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.dragonsim import (
+    AbsorbGreatSoulHandler,
     AcceptQuestHandler,
+    AncientBeastComponent,
     CompleteObjectiveHandler,
     DiscoverLocationHandler,
     DiscoveryComponent,
     FactionComponent,
     FactionJoinedEvent,
     FactionLeftEvent,
+    GreatSoulAbsorbedEvent,
+    GreatSoulComponent,
     HasPerk,
     JoinFactionHandler,
+    KnowsWord,
+    LearnWordOfPowerHandler,
     LeaveFactionHandler,
     LocationDiscoveredEvent,
     MemberOf,
@@ -39,7 +46,11 @@ from bunnyland.mechanics.dragonsim import (
     QuestObjectiveCompletedEvent,
     QuestObjectiveComponent,
     QuestRewardComponent,
+    SpeakWordOfPowerHandler,
     UnlockPerkHandler,
+    WordOfPowerComponent,
+    WordOfPowerLearnedEvent,
+    WordOfPowerSpokenEvent,
     dragonsim_fragments,
 )
 from bunnyland.mechanics.lifesim import SkillSetComponent
@@ -52,6 +63,9 @@ def _install(actor):
     actor.register_handler(AcceptQuestHandler())
     actor.register_handler(CompleteObjectiveHandler())
     actor.register_handler(UnlockPerkHandler())
+    actor.register_handler(AbsorbGreatSoulHandler())
+    actor.register_handler(LearnWordOfPowerHandler())
+    actor.register_handler(SpeakWordOfPowerHandler())
     actor.register_handler(JoinFactionHandler())
     actor.register_handler(LeaveFactionHandler())
 
@@ -628,3 +642,160 @@ def test_unlock_perk_rejects_invalid_directly():
         ).reason
         == "perk already unlocked"
     )
+
+
+def _dead_beast(scenario, name="Ancient Wyrm"):
+    beast = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=name, kind="character"),
+            AncientBeastComponent(name=name),
+            DeadComponent(died_at_epoch=0, cause="slain"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), beast.id
+    )
+    return beast.id
+
+
+def _word(scenario, *, name="Unrelenting Force", min_souls=1, skill_name="", min_skill_level=0):
+    return spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=name, kind="word"),
+            WordOfPowerComponent(
+                name=name,
+                min_souls=min_souls,
+                skill_name=skill_name,
+                min_skill_level=min_skill_level,
+            ),
+        ],
+    ).id
+
+
+async def test_absorb_great_soul_then_learn_and_speak_word():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    beast = _dead_beast(scenario)
+    word = _word(scenario, skill_name="voice", min_skill_level=2)
+    _set_skill_level(scenario, "voice", 2)
+    absorbed: list[GreatSoulAbsorbedEvent] = []
+    learned: list[WordOfPowerLearnedEvent] = []
+    spoken: list[WordOfPowerSpokenEvent] = []
+    scenario.actor.bus.subscribe(GreatSoulAbsorbedEvent, absorbed.append)
+    scenario.actor.bus.subscribe(WordOfPowerLearnedEvent, learned.append)
+    scenario.actor.bus.subscribe(WordOfPowerSpokenEvent, spoken.append)
+
+    await scenario.actor.submit(_cmd(scenario, "absorb-great-soul", beast_id=str(beast)))
+    await scenario.actor.tick(HOUR)
+    assert absorbed[0].souls == 1
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(GreatSoulComponent).souls == 1
+    assert scenario.actor.world.get_entity(beast).get_component(AncientBeastComponent).soul_absorbed
+
+    await scenario.actor.submit(_cmd(scenario, "learn-word-of-power", word_id=str(word)))
+    await scenario.actor.tick(HOUR)
+    assert character.has_relationship(KnowsWord, word)
+    assert learned[0].word_name == "Unrelenting Force"
+
+    await scenario.actor.submit(_cmd(scenario, "speak-word-of-power", word_id=str(word)))
+    await scenario.actor.tick(HOUR)
+    assert spoken[0].word_name == "Unrelenting Force"
+
+    fragments = dragonsim_fragments(scenario.actor.world, character)
+    assert any("Great souls absorbed: 1" in line for line in fragments)
+    assert any("Word of power known: Unrelenting Force" in line for line in fragments)
+
+
+def test_soul_and_word_handlers_reject_invalid_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    living_beast = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Live Wyrm", kind="character"),
+            AncientBeastComponent(name="Live Wyrm"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), living_beast.id
+    )
+    not_a_beast = spawn_entity(scenario.actor.world, [IdentityComponent(name="stump", kind="prop")])
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), not_a_beast.id
+    )
+    word = _word(scenario, min_souls=2, skill_name="voice", min_skill_level=2)
+
+    absorb = AbsorbGreatSoulHandler()
+    learn = LearnWordOfPowerHandler()
+    speak = SpeakWordOfPowerHandler()
+
+    assert absorb.execute(
+        ctx, _handler_cmd(scenario, "absorb-great-soul", character_id="x", beast_id="y")
+    ).reason == "invalid character or beast id"
+    assert absorb.execute(
+        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id="entity_999")
+    ).reason == "beast does not exist"
+    assert absorb.execute(
+        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(not_a_beast.id))
+    ).reason == "target is not an ancient beast"
+    assert absorb.execute(
+        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(living_beast.id))
+    ).reason == "the beast still lives"
+    unreachable = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Distant Wyrm", kind="character"),
+            AncientBeastComponent(name="Distant Wyrm"),
+            DeadComponent(died_at_epoch=0, cause="slain"),
+        ],
+    )
+    assert absorb.execute(
+        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(unreachable.id))
+    ).reason == "beast is not reachable"
+
+    # Word handler validation paths.
+    assert learn.execute(
+        ctx, _handler_cmd(scenario, "learn-word-of-power", character_id="x", word_id="y")
+    ).reason == "invalid character or word id"
+    assert learn.execute(
+        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id="entity_999")
+    ).reason == "word does not exist"
+    assert learn.execute(
+        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(not_a_beast.id))
+    ).reason == "target is not a word of power"
+    assert speak.execute(
+        ctx, _handler_cmd(scenario, "speak-word-of-power", character_id="x", word_id="y")
+    ).reason == "invalid character or word id"
+    assert speak.execute(
+        ctx, _handler_cmd(scenario, "speak-word-of-power", word_id="entity_999")
+    ).reason == "word does not exist"
+
+    # Learning is gated on souls, then on skill level.
+    assert speak.execute(
+        ctx, _handler_cmd(scenario, "speak-word-of-power", word_id=str(word))
+    ).reason == "you have not learned that word"
+    assert learn.execute(
+        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
+    ).reason == "not enough great souls to learn this word"
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(GreatSoulComponent(souls=2))
+    assert learn.execute(
+        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
+    ).reason == "skill level too low for this word"
+
+    _set_skill_level(scenario, "voice", 2)
+    assert learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).ok
+    assert learn.execute(
+        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
+    ).reason == "word already learned"
+
+    # Re-absorbing a claimed soul is rejected.
+    dead = _dead_beast(scenario, name="Claimed Wyrm")
+    assert absorb.execute(ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))).ok
+    assert absorb.execute(
+        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))
+    ).reason == "its great soul is already claimed"

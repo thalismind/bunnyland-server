@@ -926,6 +926,24 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("unlock perk {perk_id}",),
     ),
     _definition(
+        "absorb-great-soul",
+        ("beast_id",),
+        tool_name="absorb_great_soul",
+        patterns=("absorb great soul {beast_id}",),
+    ),
+    _definition(
+        "learn-word-of-power",
+        ("word_id",),
+        tool_name="learn_word_of_power",
+        patterns=("learn word {word_id}",),
+    ),
+    _definition(
+        "speak-word-of-power",
+        ("word_id",),
+        tool_name="speak_word_of_power",
+        patterns=("speak word {word_id}",),
+    ),
+    _definition(
         "attack",
         ("target_id", "weapon_id", "lethal", "body_part", "stamina_cost", "durability_cost"),
         tool_name="attack",
