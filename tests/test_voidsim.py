@@ -20,7 +20,7 @@ from bunnyland.core.components import CharacterComponent
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.barbariansim import CorruptionComponent, CorruptionGainedEvent
-from bunnyland.mechanics.colonysim import TechUnlockComponent
+from bunnyland.mechanics.colonysim import ResourceStackComponent, TechUnlockComponent
 from bunnyland.mechanics.voidsim import (
     AcceptContractHandler,
     AirlockComponent,
@@ -115,6 +115,7 @@ from bunnyland.mechanics.voidsim import (
     UndockHandler,
     UpgradeInstalledEvent,
     WorksShift,
+    _spend_inventory_resources,
     install_voidsim,
     voidsim_fragments,
 )
@@ -2098,7 +2099,7 @@ def _fabricator(scenario):
     )
 
 
-def _blueprint(scenario, *, required_tech="", system_type="shields"):
+def _blueprint(scenario, *, required_tech="", system_type="shields", resource_inputs=()):
     return _spawn_in_room_a(
         scenario,
         [
@@ -2108,15 +2109,46 @@ def _blueprint(scenario, *, required_tech="", system_type="shields"):
                 system_type=system_type,
                 required_tech=required_tech,
                 integrity_bonus=30.0,
+                resource_inputs=resource_inputs,
             ),
         ],
     )
+
+
+def _inventory_resource(scenario, resource_type, quantity):
+    entity = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=resource_type, kind="resource"),
+            ResourceStackComponent(resource_type=resource_type, quantity=quantity),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), entity.id
+    )
+    return entity.id
 
 
 def _unlock_tech(scenario, tech_id):
     return _spawn_in_room_a(
         scenario, [TechUnlockComponent(tech_id=tech_id, unlocked_at_epoch=0)]
     )
+
+
+def test_voidsim_inventory_resource_spending_helper_covers_edge_cases():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    rock = spawn_entity(world, [IdentityComponent(name="rock", kind="prop")])
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), rock.id)
+    scrap = _inventory_resource(scenario, "scrap", 3)
+
+    assert _spend_inventory_resources(character, world, (("crystal", 1),)) is False
+    assert _spend_inventory_resources(character, world, (("scrap", 4),)) is False
+    assert _spend_inventory_resources(character, world, (("scrap", 0),)) is True
+    assert world.get_entity(scrap).get_component(ResourceStackComponent).quantity == 3
+    assert _spend_inventory_resources(character, world, (("scrap", 2),)) is True
+    assert world.get_entity(scrap).get_component(ResourceStackComponent).quantity == 1
 
 
 async def test_fabricate_requires_unlocked_tech_then_yields_an_upgrade_part():
@@ -2148,6 +2180,56 @@ async def test_fabricate_requires_unlocked_tech_then_yields_an_upgrade_part():
     part = scenario.actor.world.get_entity(part_id)
     assert part.get_component(ShipUpgradeComponent).system_type == "shields"
     assert container_of(part) == scenario.character
+
+
+async def test_fabricate_consumes_colony_resource_inputs():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    fabricator = _fabricator(scenario)
+    blueprint = _blueprint(
+        scenario,
+        resource_inputs=(("scrap", 2), ("crystal", 1)),
+    )
+    scrap = _inventory_resource(scenario, "scrap", 3)
+    crystal = _inventory_resource(scenario, "crystal", 1)
+    fabricated: list[ItemFabricatedEvent] = []
+    scenario.actor.bus.subscribe(ItemFabricatedEvent, fabricated.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "fabricate", fabricator_id=str(fabricator), blueprint_id=str(blueprint))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert fabricated[0].resource_inputs == (("scrap", 2), ("crystal", 1))
+    assert (
+        scenario.actor.world.get_entity(scrap)
+        .get_component(ResourceStackComponent)
+        .quantity
+        == 1
+    )
+    assert (
+        scenario.actor.world.get_entity(crystal)
+        .get_component(ResourceStackComponent)
+        .quantity
+        == 0
+    )
+
+
+async def test_fabricate_rejects_missing_colony_resource_inputs():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    fabricator = _fabricator(scenario)
+    blueprint = _blueprint(scenario, resource_inputs=(("scrap", 2),))
+    _inventory_resource(scenario, "scrap", 1)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "fabricate", fabricator_id=str(fabricator), blueprint_id=str(blueprint))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "not enough resources to fabricate" for event in rejects)
 
 
 async def test_install_upgrade_boosts_matching_ship_system():
@@ -2279,7 +2361,10 @@ async def test_claim_salvage_requires_accepted_rights_and_marks_claim():
         scenario,
         [
             IdentityComponent(name="derelict hulk rights", kind="salvage"),
-            SalvageClaimComponent(site_id=str(scenario.room_b)),
+            SalvageClaimComponent(
+                site_id=str(scenario.room_b),
+                resource_outputs=(("scrap", 4), ("fuel", 1)),
+            ),
         ],
     )
     contract = _spawn_in_room_a(
@@ -2307,6 +2392,22 @@ async def test_claim_salvage_requires_accepted_rights_and_marks_claim():
     assert claim_state.claimed is True
     assert claim_state.claimed_by == str(scenario.character)
     assert claimed and claimed[0].contract_id == str(contract)
+    output_ids = [parse_entity_id(raw) for raw in claimed[0].output_ids]
+    assert all(output_id is not None for output_id in output_ids)
+    outputs = [
+        scenario.actor.world.get_entity(output_id).get_component(ResourceStackComponent)
+        for output_id in output_ids
+        if output_id is not None
+    ]
+    assert {(stack.resource_type, stack.quantity) for stack in outputs} == {
+        ("scrap", 4),
+        ("fuel", 1),
+    }
+    assert all(
+        container_of(scenario.actor.world.get_entity(output_id)) == scenario.character
+        for output_id in output_ids
+        if output_id is not None
+    )
 
 
 def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():

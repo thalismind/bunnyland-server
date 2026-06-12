@@ -1,10 +1,14 @@
 # Nuke-sim wasteland survival
 
 Nuke-sim adds radiation sources, radiation dose, sickness, mutation pressure,
-decontamination, rad medicine, scavenging, scrapping, and wasteland crafting loops that
-reuse colony-sim resource stacks and recipes.
+decontamination, rad medicine, chems, dirty water, scavenging, scrapping, settlements,
+old-world tech, and wasteland crafting loops that reuse colony-sim resource stacks and
+recipes.
 
 In Discord, prefix these commands with `!`.
+
+For settlement claiming, salvage, purifiers, generators, and old-world tech recovery, see
+[Nuke-sim settlements and old-world tech](nuke-settlements-tech.md).
 
 ## Radiation
 
@@ -15,7 +19,7 @@ Scan a reachable source:
 ```
 
 Radiation sources expose reachable active characters over time. Protection from
-`RadProtectionComponent` or void-sim `RadiationShieldComponent` reduces the rate.
+`RadProtectionComponent` or shared `RadiationShieldComponent` reduces the rate.
 
 Seal a reachable source when the world offers a plausible way to contain it:
 
@@ -119,12 +123,41 @@ Restoring consumes scrap from your inventory and marks the device functional. No
 rumors can also point you toward specific old-world tech as salvage leads, which show up in
 your character context.
 
+## Settlement salvage
+
+Claim a reachable wasteland settlement before working its salvage:
+
+```text
+!claim-settlement settlement_id="Red Rocket burrow"
+```
+
+If the settlement has a salvage component, strip useful materials from it:
+
+```text
+!salvage-settlement settlement_id="Red Rocket burrow"
+```
+
+Settlement salvage creates colony-sim resource stacks in your inventory. When the
+settlement also has barbarian-sim durability, salvage spends durability and can leave the
+site broken if you strip it too hard. The dedicated settlement guide covers the full
+claim, salvage, purifier, generator, and tech recovery loop.
+
+Build a purifier or power a generator with resources from scavenging, scrapping, or
+settlement salvage:
+
+```text
+!build-purifier settlement_id="Red Rocket burrow"
+!power-generator generator_id="patched generator"
+```
+
 ## Example loop
 
 ```text
 !scan-radiation target_id="cracked isotope case"
 !seal-radiation-source target_id="cracked isotope case"
 !take item_id="patched rad poncho"
+!claim-settlement settlement_id="Red Rocket burrow"
+!salvage-settlement settlement_id="Red Rocket burrow"
 !scavenge site_id="pharmacy backroom cache"
 !scrap-item item_id="bent pressure cooker"
 !decontaminate target_id="Mara" station_id="decon arch"

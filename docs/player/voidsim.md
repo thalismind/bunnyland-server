@@ -2,9 +2,12 @@
 
 Void-sim adds ships, stations, habitat modules, airlocks, bulkheads, life support, power
 grids, docking, fuel, sensors, distress signals, orbit, landing, launch, plotted courses,
-and jumps.
+contracts, cargo, salvage, resource-backed fabrication, crew watches, and jumps.
 
 In Discord, prefix these commands with `!`.
+
+For the resource economy, contracts, cargo, salvage claims, and crew watches, see
+[Void-sim contracts, fabrication, and salvage](void-contracts-fabrication.md).
 
 ## Airlocks, pressure, and bulkheads
 
@@ -63,6 +66,10 @@ reachable fabricator and blueprint:
 ```text
 !fabricate fabricator_id=nanoforge blueprint_id="shield booster"
 ```
+
+Some blueprints also require colony-sim resource stacks, such as scrap or crystal, in your
+inventory. Fabrication validates every required stack before spending anything; if you do
+not have enough resources, the command is refused and nothing is consumed.
 
 The fabricated part lands in your inventory. Install it on a matching ship system to raise
 its integrity and bring it back online:
@@ -143,6 +150,32 @@ Plot a course and jump:
 Jumps consume fuel and complete after their route duration. The ship arrives at the plotted
 destination when the jump completes.
 
+## Contracts, cargo, and salvage
+
+Accept a reachable contract:
+
+```text
+!accept-contract contract_id="derelict salvage writ"
+```
+
+Cargo contracts move cargo onto a ship and complete when delivered to the destination:
+
+```text
+!load-cargo cargo_id="ore crates" ship_id="Burrow Runner"
+!deliver-cargo cargo_id="ore crates"
+```
+
+Salvage contracts grant rights to a salvage claim:
+
+```text
+!claim-salvage claim_id="derelict hulk rights" contract_id="derelict salvage writ"
+```
+
+Claiming salvage can create colony-sim resource stacks in your inventory, such as scrap or
+fuel, so space salvage can feed the same resource economy as colony work and wasteland
+repair. The dedicated contracts and fabrication guide covers the full resource-backed
+ship economy loop.
+
 ## Crew duty shifts
 
 A ship runs on watches. A duty shift is its own entity describing a time slot and the role
@@ -186,7 +219,7 @@ Chaos sources can:
 Chaos wards reduce the corruption rate. Radiation shields also help a little, so future
 radiation and mutation mechanics can cooperate with the same pressure model.
 
-Mutation outcomes are intentionally not active yet. The current void-sim implementation
-only records chaos mutation pressure. It also defines separate radiation and cybernetic
-pressure components as stubs, so the follow-up nuke-sim pack can accumulate radiation,
-chaos, and augmentation pressure independently before deciding when actual mutations occur.
+Mutation outcomes are intentionally not active yet. Void-sim records chaos mutation
+pressure using the shared source-specific pressure components, so nuke-sim radiation,
+chaos, and future augmentation pressure can accumulate independently before any package
+decides when outcomes occur.

@@ -174,6 +174,11 @@ before generating or loading the world so the server imports and applies the pro
 mechanics from startup. Docker deployments can set `BUNNYLAND_STARTER_PACK` to the same
 pack name.
 
+Starter packs include required base layers. For example, `futuristic` includes
+life-sim, colony-sim, garden-sim, barbarian-sim, void-sim, and nuke-sim so salvage,
+resources, survival pressure, and radiation all load together. If you use repeated
+`--plugin` flags instead, include every required plugin listed in [admin](./).
+
 ## Running long-term
 
 `--ticks 0` runs until interrupted:

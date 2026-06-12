@@ -194,6 +194,41 @@ class BountyComponent(Component):
 
 
 @dataclass(frozen=True)
+class RegionalReputationComponent(Component):
+    scores: dict[str, int]
+
+
+@dataclass(frozen=True)
+class InstitutionReputationComponent(Component):
+    scores: dict[str, int]
+
+
+@dataclass(frozen=True)
+class LegalReputationComponent(Component):
+    scores: dict[str, int]
+
+
+@dataclass(frozen=True)
+class ServiceAccessComponent(Component):
+    service_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PropertyDeedComponent(Component):
+    property_id: str = ""
+    region_id: str = ""
+    price: int = 0
+    owner_id: str | None = None
+    purchased_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class OwnsProperty(Edge):
+    deed_id: str
+    purchased_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class ClassTemplateComponent(Component):
     class_name: str
     primary_skills: tuple[str, ...] = ()
@@ -502,6 +537,27 @@ class FinePaidEvent(DomainEvent):
     amount: int
 
 
+class InstitutionReputationChangedEvent(DomainEvent):
+    institution_id: str
+    score: int
+
+
+class LegalReputationChangedEvent(DomainEvent):
+    region_id: str
+    score: int
+
+
+class ServiceAccessChangedEvent(DomainEvent):
+    service_id: str
+    granted: bool = True
+
+
+class PropertyPurchasedEvent(DomainEvent):
+    property_id: str
+    deed_id: str
+    price: int
+
+
 class CustomClassCreatedEvent(DomainEvent):
     class_name: str
     primary_skills: tuple[str, ...] = ()
@@ -621,6 +677,44 @@ def _name(entity: Entity) -> str:
     if entity.has_component(IdentityComponent):
         return entity.get_component(IdentityComponent).name
     return str(entity.id)
+
+
+def _adjust_institution_reputation(
+    character: Entity, institution_id: EntityId, delta: int
+) -> int:
+    current = (
+        character.get_component(InstitutionReputationComponent)
+        if character.has_component(InstitutionReputationComponent)
+        else InstitutionReputationComponent(scores={})
+    )
+    scores = dict(current.scores)
+    key = str(institution_id)
+    scores[key] = scores.get(key, 0) + delta
+    replace_component(character, replace(current, scores=scores))
+    return scores[key]
+
+
+def _adjust_legal_reputation(character: Entity, region_id: str, delta: int) -> int:
+    current = (
+        character.get_component(LegalReputationComponent)
+        if character.has_component(LegalReputationComponent)
+        else LegalReputationComponent(scores={})
+    )
+    scores = dict(current.scores)
+    scores[region_id] = scores.get(region_id, 0) + delta
+    replace_component(character, replace(current, scores=scores))
+    return scores[region_id]
+
+
+def _grant_service_access(character: Entity, service_id: EntityId) -> bool:
+    current = (
+        character.get_component(ServiceAccessComponent)
+        if character.has_component(ServiceAccessComponent)
+        else ServiceAccessComponent()
+    )
+    service_ids = tuple(dict.fromkeys((*current.service_ids, str(service_id))))
+    replace_component(character, replace(current, service_ids=service_ids))
+    return len(service_ids) != len(current.service_ids)
 
 
 class ExpandSiteHandler:
@@ -957,6 +1051,7 @@ class JoinInstitutionHandler:
             MemberOfInstitution(rank=rank, since_epoch=ctx.epoch), institution_id
         )
         component = institution.get_component(InstitutionComponent)
+        reputation = _adjust_institution_reputation(character, institution_id, 1)
         return ok(
             InstitutionJoinedEvent(
                 **ctx.event_base(
@@ -967,6 +1062,16 @@ class JoinInstitutionHandler:
                     institution_id=str(institution_id),
                     institution_name=component.name,
                     rank=rank,
+                )
+            ),
+            InstitutionReputationChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(institution_id),),
+                    institution_id=str(institution_id),
+                    score=reputation,
                 )
             )
         )
@@ -1012,6 +1117,8 @@ class UseInstitutionServiceHandler:
                 ctx.world, character, service.output_item_name, kind="service-output"
             )
             output_item_id = str(output.id)
+        access_granted = _grant_service_access(character, service_id)
+        reputation = _adjust_institution_reputation(character, institution_id, 1)
         return ok(
             InstitutionServiceUsedEvent(
                 **ctx.event_base(
@@ -1023,6 +1130,26 @@ class UseInstitutionServiceHandler:
                     service_id=str(service_id),
                     service_name=service.service_name,
                     output_item_id=output_item_id,
+                )
+            ),
+            ServiceAccessChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(service_id),),
+                    service_id=str(service_id),
+                    granted=access_granted,
+                )
+            ),
+            InstitutionReputationChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(institution_id),),
+                    institution_id=str(institution_id),
+                    score=reputation,
                 )
             )
         )
@@ -1476,6 +1603,7 @@ class CommitCrimeHandler:
             ],
         )
         character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), crime.id)
+        legal_score = _adjust_legal_reputation(character, law.region_id, -fine)
         return ok(
             CrimeCommittedEvent(
                 **ctx.event_base(
@@ -1496,6 +1624,16 @@ class CommitCrimeHandler:
                     target_ids=(str(crime.id),),
                     crime_id=str(crime.id),
                     amount=fine,
+                )
+            ),
+            LegalReputationChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(region_id),
+                    target_ids=(str(crime.id),),
+                    region_id=law.region_id,
+                    score=legal_score,
                 )
             ),
         )
@@ -1534,6 +1672,7 @@ class PayFineHandler:
         replace_component(crime_entity, replace(crime, status="paid"))
         if crime_entity.has_component(BountyComponent):
             crime_entity.remove_component(BountyComponent)
+        legal_score = _adjust_legal_reputation(character, crime.region_id, crime.fine)
         return ok(
             FinePaidEvent(
                 **ctx.event_base(
@@ -1543,6 +1682,75 @@ class PayFineHandler:
                     target_ids=(str(crime_id), str(account.id)),
                     crime_id=str(crime_id),
                     amount=crime.fine,
+                )
+            ),
+            LegalReputationChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(crime_id),),
+                    region_id=crime.region_id,
+                    score=legal_score,
+                )
+            )
+        )
+
+
+class BuyPropertyHandler:
+    command_type = "buy-property"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        property_id = parse_entity_id(command.payload.get("property_id"))
+        if character_id is None or property_id is None:
+            return rejected("invalid character or property id")
+        if not ctx.world.has_entity(property_id):
+            return rejected("property does not exist")
+        character = ctx.entity(character_id)
+        if property_id not in reachable_ids(ctx.world, character):
+            return rejected("property is not reachable")
+        property_entity = ctx.entity(property_id)
+        deed = (
+            property_entity.get_component(PropertyDeedComponent)
+            if property_entity.has_component(PropertyDeedComponent)
+            else None
+        )
+        if deed is None:
+            return rejected("target is not purchasable property")
+        if deed.owner_id is not None:
+            return rejected("property already has an owner")
+        account = _any_bank_account(ctx.world, character_id)
+        if account is None:
+            return rejected("bank account does not exist")
+        account_component = account.get_component(BankAccountComponent)
+        if account_component.balance < deed.price:
+            return rejected("insufficient bank balance")
+
+        replace_component(
+            account, replace(account_component, balance=account_component.balance - deed.price)
+        )
+        updated = replace(
+            deed,
+            property_id=deed.property_id or str(property_id),
+            owner_id=str(character_id),
+            purchased_at_epoch=ctx.epoch,
+        )
+        replace_component(property_entity, updated)
+        character.add_relationship(
+            OwnsProperty(deed_id=str(property_id), purchased_at_epoch=ctx.epoch),
+            property_id,
+        )
+        return ok(
+            PropertyPurchasedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(property_id), str(account.id)),
+                    property_id=str(property_id),
+                    deed_id=str(property_id),
+                    price=deed.price,
                 )
             )
         )
@@ -2656,6 +2864,22 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(FeedingNeedComponent):
         need = character.get_component(FeedingNeedComponent)
         lines.append(f"Feeding need: {need.current:.1f}/{need.maximum:.1f}.")
+    if character.has_component(InstitutionReputationComponent):
+        for institution_id, score in character.get_component(
+            InstitutionReputationComponent
+        ).scores.items():
+            label = institution_id
+            parsed = parse_entity_id(institution_id)
+            if parsed is not None and world.has_entity(parsed):
+                label = _name(world.get_entity(parsed))
+            lines.append(f"Institution reputation with {label}: {score}.")
+    if character.has_component(LegalReputationComponent):
+        for region_id, score in character.get_component(LegalReputationComponent).scores.items():
+            lines.append(f"Legal reputation in {region_id}: {score}.")
+    if character.has_component(ServiceAccessComponent):
+        access = character.get_component(ServiceAccessComponent)
+        if access.service_ids:
+            lines.append(f"Unlocked institution services: {len(access.service_ids)}.")
     if character.has_component(WereformComponent):
         lines.append(
             f"Transformed into {character.get_component(WereformComponent).form_name}."
@@ -2673,6 +2897,9 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
                     f"Institution membership: "
                     f"{institution.get_component(InstitutionComponent).name} ({edge.rank})."
                 )
+    for _edge, property_id in character.get_relationships(OwnsProperty):
+        if world.has_entity(property_id):
+            lines.append(f"Property owned: {_name(world.get_entity(property_id))}.")
     return sorted(lines)
 
 
@@ -2777,6 +3004,7 @@ __all__ = [
     "BountyComponent",
     "BountyPostedEvent",
     "AttemptPacifyHandler",
+    "BuyPropertyHandler",
     "CompleteGeneratedQuestHandler",
     "CommitCrimeHandler",
     "ContractAfflictionHandler",
@@ -2812,11 +3040,15 @@ __all__ = [
     "InvestigateRumorHandler",
     "InstitutionComponent",
     "InstitutionJoinedEvent",
+    "InstitutionReputationChangedEvent",
+    "InstitutionReputationComponent",
     "InstitutionServiceComponent",
     "InstitutionServiceUsedEvent",
     "ItemEnchantedEvent",
     "JoinInstitutionHandler",
     "LawRegionComponent",
+    "LegalReputationChangedEvent",
+    "LegalReputationComponent",
     "LanguageSkillComponent",
     "LoanComponent",
     "LoanDefaultedEvent",
@@ -2825,11 +3057,15 @@ __all__ = [
     "LoanRepaidEvent",
     "MemberOfInstitution",
     "OpenBankAccountHandler",
+    "OwnsProperty",
     "PayFineHandler",
     "PacificationAttemptedEvent",
     "PacifiedComponent",
     "PlanTravelHandler",
     "ProceduralSiteComponent",
+    "PropertyDeedComponent",
+    "PropertyPurchasedEvent",
+    "RegionalReputationComponent",
     "GeneratedQuestComponent",
     "QuestAcceptedEvent",
     "QuestCompletedEvent",
@@ -2879,6 +3115,8 @@ __all__ = [
     "DungeonEnteredEvent",
     "DungeonRoomDiscoveredEvent",
     "SecretDoorFoundEvent",
+    "ServiceAccessChangedEvent",
+    "ServiceAccessComponent",
     "RecallAnchorSetEvent",
     "RecallUsedEvent",
     "DungeonObjectiveFoundEvent",

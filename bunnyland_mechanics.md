@@ -3092,7 +3092,7 @@ RewardClaimedEvent
 
 # 6. `dragonsim` package — Skyrim-inspired mechanics
 
-Skyrim’s replayability comes from wandering, discovering locations, joining factions, following questlines, building skills by use, collecting loot, crafting, stealth, magic, followers, dragons, shouts, books/lore, and radiant quests. Skyrim includes factions with quest paths, dual-hand combat/magic, stamina-consuming power attacks, stealth/pickpocketing, followers, random dragons, word walls, dragon souls, and shouts composed of words of power. ([Wikipedia][7])
+Skyrim’s replayability comes from wandering, discovering locations, joining factions, following questlines, building skills by use, collecting loot, crafting, stealth, magic, followers, ancient beasts, voice powers, books/lore, and repeatable adventure quests. Bunnyland should keep those broad loops while using its own presentation: voice phrases can be written, painted, or carved on ordinary writable/carvable world objects instead of depending on a special fixed monument type. ([Wikipedia][7])
 
 ## 6.1 Open-world exploration and discovery
 
@@ -3501,7 +3501,7 @@ ArtifactDiscoveredEvent
 
 ---
 
-## 6.7 Dragons, shouts, words, and souls
+## 6.7 Ancient beasts, voice phrases, and souls
 
 ### Mechanics
 
@@ -3520,36 +3520,37 @@ world events
 ### Components
 
 ```python
-DragonComponent
 AncientBeastComponent
 VoicePowerComponent
 WordOfPowerComponent
+VoiceInscriptionComponent
+CarvableComponent
 EssenceComponent
-ShoutCooldownComponent
-DragonSoulComponent
+VoicePowerCooldownComponent
+GreatSoulComponent
 ```
 
 ### Systems
 
 ```text
-DragonSpawnSystem
-DragonEncounterSystem
-WordWallDiscoverySystem
+AncientBeastEncounterSystem
+VoiceInscriptionSystem
 EssenceAbsorptionSystem
 VoicePowerUnlockSystem
 VoicePowerCooldownSystem
-DragonThreatSystem
+AncientBeastThreatSystem
 ```
 
 ### Actions
 
 ```text
-study word wall
+inscribe voice phrase
+study voice inscription
 absorb essence
 use voice power
-fight dragon
-negotiate with dragon
-ride dragon, later
+fight ancient beast
+negotiate with ancient beast
+ride ancient beast, later
 ```
 
 ### Events

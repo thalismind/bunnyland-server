@@ -35,6 +35,7 @@ from bunnyland.mechanics.daggersim import (
     BankComponent,
     BountyComponent,
     BountyPostedEvent,
+    BuyPropertyHandler,
     CastSpellHandler,
     ClassTemplateComponent,
     CommitCrimeHandler,
@@ -82,6 +83,8 @@ from bunnyland.mechanics.daggersim import (
     HostilityComponent,
     InstitutionComponent,
     InstitutionJoinedEvent,
+    InstitutionReputationChangedEvent,
+    InstitutionReputationComponent,
     InstitutionServiceComponent,
     InstitutionServiceUsedEvent,
     InvestigateRumorHandler,
@@ -90,6 +93,8 @@ from bunnyland.mechanics.daggersim import (
     LanguageSkillComponent,
     LawRegionComponent,
     LeaveDungeonHandler,
+    LegalReputationChangedEvent,
+    LegalReputationComponent,
     LoanComponent,
     LoanDefaultedEvent,
     LoanDueConsequence,
@@ -99,11 +104,14 @@ from bunnyland.mechanics.daggersim import (
     MemberOfInstitution,
     OpenBankAccountHandler,
     OpenSecretDoorHandler,
+    OwnsProperty,
     PacificationAttemptedEvent,
     PacifiedComponent,
     PayFineHandler,
     PlanTravelHandler,
     ProceduralSiteComponent,
+    PropertyDeedComponent,
+    PropertyPurchasedEvent,
     QuestAcceptedEvent,
     QuestCompletedEvent,
     QuestDeadlineComponent,
@@ -128,6 +136,8 @@ from bunnyland.mechanics.daggersim import (
     SecretDoorComponent,
     SecretDoorFoundEvent,
     SetRecallHandler,
+    ServiceAccessChangedEvent,
+    ServiceAccessComponent,
     SocialRegisterComponent,
     SocialRegisterReactor,
     SpellCastEvent,
@@ -185,6 +195,7 @@ def _install(actor):
     actor.register_handler(RepayLoanHandler())
     actor.register_handler(CommitCrimeHandler())
     actor.register_handler(PayFineHandler())
+    actor.register_handler(BuyPropertyHandler())
     actor.register_handler(CreateCustomClassHandler())
     actor.register_handler(CreateSpellHandler())
     actor.register_handler(EnchantItemHandler())
@@ -338,6 +349,20 @@ def _bank(scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), bank.id
     )
     return bank.id
+
+
+def _property(scenario, *, price=15):
+    property_entity = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Moss Road Cottage", kind="property"),
+            PropertyDeedComponent(region_id="moss-road", price=price),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), property_entity.id
+    )
+    return property_entity.id
 
 
 def _law_region(scenario):
@@ -1935,6 +1960,83 @@ def test_pay_fine_succeeds_when_crime_has_no_bounty_component():
     assert crime.get_component(CrimeRecordComponent).status == "paid"
 
 
+def test_buy_property_handler_rejects_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="notice board", kind="prop")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id
+    )
+    distant_property = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Far Cottage", kind="property"),
+            PropertyDeedComponent(price=1),
+        ],
+    )
+    owned_property = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Owned Cottage", kind="property"),
+            PropertyDeedComponent(price=1, owner_id="entity_999"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), owned_property.id
+    )
+    property_id = _property(scenario, price=5)
+
+    handler = BuyPropertyHandler()
+    cases = [
+        (
+            _handler_cmd(scenario, "buy-property", property_id="entity_999"),
+            "property does not exist",
+        ),
+        (
+            _handler_cmd(scenario, "buy-property", property_id=str(distant_property.id)),
+            "property is not reachable",
+        ),
+        (
+            _handler_cmd(scenario, "buy-property", property_id=str(wrong_kind.id)),
+            "target is not purchasable property",
+        ),
+        (
+            _handler_cmd(scenario, "buy-property", property_id=str(owned_property.id)),
+            "property already has an owner",
+        ),
+        (
+            _handler_cmd(scenario, "buy-property", property_id=str(property_id)),
+            "bank account does not exist",
+        ),
+    ]
+    for command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    bank_id = _bank(scenario)
+    account = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="bank account", kind="bank-account"),
+            BankAccountComponent(bank_id=str(bank_id), owner_id=str(scenario.character)),
+        ],
+    )
+    scenario.actor.world.get_entity(bank_id).add_relationship(
+        Contains(mode=ContainmentMode.CONTAINER), account.id
+    )
+    result = handler.execute(
+        ctx,
+        _handler_cmd(scenario, "buy-property", property_id=str(property_id)),
+    )
+    assert result.ok is False
+    assert result.reason == "insufficient bank balance"
+
+
 def test_enchant_item_can_use_spell_template_as_source():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -2061,6 +2163,12 @@ def test_daggersim_handlers_reject_invalid_character_ids_directly():
             "pay-fine",
             {"crime_id": str(scenario.room_a)},
             "invalid character or crime id",
+        ),
+        (
+            BuyPropertyHandler(),
+            "buy-property",
+            {"property_id": str(scenario.room_a)},
+            "invalid character or property id",
         ),
         (
             CreateCustomClassHandler(),
@@ -2198,8 +2306,12 @@ async def test_join_institution_and_use_member_service_grants_output_item():
     institution_id, service_id = _institution(scenario)
     joined: list[InstitutionJoinedEvent] = []
     used: list[InstitutionServiceUsedEvent] = []
+    reputation: list[InstitutionReputationChangedEvent] = []
+    access: list[ServiceAccessChangedEvent] = []
     scenario.actor.bus.subscribe(InstitutionJoinedEvent, joined.append)
     scenario.actor.bus.subscribe(InstitutionServiceUsedEvent, used.append)
+    scenario.actor.bus.subscribe(InstitutionReputationChangedEvent, reputation.append)
+    scenario.actor.bus.subscribe(ServiceAccessChangedEvent, access.append)
 
     await scenario.actor.submit(
         _cmd(scenario, "join-institution", institution_id=str(institution_id))
@@ -2212,7 +2324,13 @@ async def test_join_institution_and_use_member_service_grants_output_item():
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.has_relationship(MemberOfInstitution, institution_id)
+    assert character.get_component(InstitutionReputationComponent).scores[
+        str(institution_id)
+    ] == 2
+    assert character.get_component(ServiceAccessComponent).service_ids == (str(service_id),)
     assert joined[0].institution_name == "Burrow Cartographers"
+    assert [event.score for event in reputation] == [1, 2]
+    assert access[0].service_id == str(service_id)
     output_id = parse_entity_id(used[0].output_item_id)
     assert output_id is not None
     output = scenario.actor.world.get_entity(output_id)
@@ -2375,10 +2493,12 @@ async def test_crime_posts_bounty_and_pay_fine_resolves_record_from_bank_account
     crimes: list[CrimeCommittedEvent] = []
     bounties: list[BountyPostedEvent] = []
     paid: list[FinePaidEvent] = []
+    legal: list[LegalReputationChangedEvent] = []
     scenario.actor.bus.subscribe(AccountOpenedEvent, opened.append)
     scenario.actor.bus.subscribe(CrimeCommittedEvent, crimes.append)
     scenario.actor.bus.subscribe(BountyPostedEvent, bounties.append)
     scenario.actor.bus.subscribe(FinePaidEvent, paid.append)
+    scenario.actor.bus.subscribe(LegalReputationChangedEvent, legal.append)
 
     await scenario.actor.submit(_cmd(scenario, "open-bank-account", bank_id=str(bank_id)))
     await scenario.actor.tick(HOUR)
@@ -2395,6 +2515,8 @@ async def test_crime_posts_bounty_and_pay_fine_resolves_record_from_bank_account
     assert crime.get_component(CrimeRecordComponent).fine == 15
     assert crime.get_component(BountyComponent).amount == 15
     assert bounties[0].amount == 15
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(LegalReputationComponent).scores["moss-road"] == -15
 
     await scenario.actor.submit(_cmd(scenario, "pay-fine", crime_id=str(crime_id)))
     await scenario.actor.tick(HOUR)
@@ -2404,6 +2526,41 @@ async def test_crime_posts_bounty_and_pay_fine_resolves_record_from_bank_account
     assert crime.get_component(CrimeRecordComponent).status == "paid"
     assert not crime.has_component(BountyComponent)
     assert paid[0].crime_id == str(crime_id)
+    assert character.get_component(LegalReputationComponent).scores["moss-road"] == 0
+    assert [event.score for event in legal] == [-15, 0]
+
+
+async def test_buy_property_spends_bank_balance_and_records_deed_edge():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    bank_id = _bank(scenario)
+    property_id = _property(scenario, price=12)
+    opened: list[AccountOpenedEvent] = []
+    purchased: list[PropertyPurchasedEvent] = []
+    scenario.actor.bus.subscribe(AccountOpenedEvent, opened.append)
+    scenario.actor.bus.subscribe(PropertyPurchasedEvent, purchased.append)
+
+    await scenario.actor.submit(_cmd(scenario, "open-bank-account", bank_id=str(bank_id)))
+    await scenario.actor.tick(HOUR)
+    account_id = parse_entity_id(opened[0].account_id)
+    assert account_id is not None
+    await scenario.actor.submit(_cmd(scenario, "deposit", bank_id=str(bank_id), amount=20))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "buy-property", property_id=str(property_id)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    property_entity = scenario.actor.world.get_entity(property_id)
+    account = scenario.actor.world.get_entity(account_id)
+    assert character.has_relationship(OwnsProperty, property_id)
+    assert property_entity.get_component(PropertyDeedComponent).owner_id == str(
+        scenario.character
+    )
+    assert account.get_component(BankAccountComponent).balance == 8
+    assert purchased[0].price == 12
+    assert "Property owned: Moss Road Cottage." in daggersim_fragments(
+        scenario.actor.world, character
+    )
 
 
 async def test_create_custom_class_from_template_sets_character_build():

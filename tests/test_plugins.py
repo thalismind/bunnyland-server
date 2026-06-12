@@ -216,7 +216,51 @@ def test_resolve_order_places_dependencies_first():
     ordered = resolve_order(bunnyland_plugins())
     ids = [p.id for p in ordered]
     assert ids.index(CORE_VERBS) < ids.index(LIFESIM)
+    assert ids.index(LIFESIM) < ids.index(COLONYSIM)
+    assert ids.index(COLONYSIM) < ids.index(GARDENSIM)
+    assert ids.index(GARDENSIM) < ids.index(BARBARIANSIM)
+    assert ids.index(LIFESIM) < ids.index(DRAGONSIM)
+    assert ids.index(BARBARIANSIM) < ids.index(VOIDSIM)
+    assert ids.index(VOIDSIM) < ids.index(NUKESIM)
+    assert ids.index(LIFESIM) < ids.index(DINOSIM)
+    assert ids.index(COLONYSIM) < ids.index(DINOSIM)
     assert ids.index(CORE_VERBS) < ids.index(MEMORY)
+
+
+def test_builtin_sim_dependencies_match_layering_contracts():
+    plugins = {plugin.id: plugin for plugin in bunnyland_plugins()}
+
+    assert plugins[LIFESIM].dependencies.requires == (CORE_VERBS,)
+    assert plugins[COLONYSIM].dependencies.requires == (CORE_VERBS, LIFESIM)
+    assert plugins[GARDENSIM].dependencies.requires == (
+        CORE_VERBS,
+        LIFESIM,
+        COLONYSIM,
+    )
+    assert plugins[BARBARIANSIM].dependencies.requires == (
+        CORE_VERBS,
+        LIFESIM,
+        COLONYSIM,
+        GARDENSIM,
+    )
+    assert plugins[DRAGONSIM].dependencies.requires == (CORE_VERBS, LIFESIM)
+    assert plugins[DAGGERSIM].dependencies.requires == (CORE_VERBS,)
+    assert plugins[VOIDSIM].dependencies.requires == (
+        CORE_VERBS,
+        COLONYSIM,
+        BARBARIANSIM,
+    )
+    assert plugins[NUKESIM].dependencies.requires == (
+        CORE_VERBS,
+        COLONYSIM,
+        BARBARIANSIM,
+    )
+    assert plugins[DINOSIM].dependencies.requires == (CORE_VERBS, LIFESIM, COLONYSIM)
+
+
+def test_selecting_later_sim_without_required_layers_fails_clearly():
+    with pytest.raises(PluginError, match="depends on missing"):
+        resolve_order([select(bunnyland_plugins(), [NUKESIM])[0]])
 
 
 def test_missing_dependency_raises():
@@ -577,30 +621,87 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
 
     dragon = plugins[DRAGONSIM]
     assert {
+        "MapMarkerComponent",
+        "EncounterZoneComponent",
         "PerkComponent",
         "AncientBeastComponent",
         "WordOfPowerComponent",
+        "VoiceInscriptionComponent",
+        "CarvableComponent",
         "LoreBookComponent",
+        "LockDifficultyComponent",
+        "MagickaComponent",
+        "SpellComponent",
+        "PotionRecipeComponent",
+        "ArtifactComponent",
     } <= {
         component.__name__ for component in dragon.ecs.components
     }
-    assert {"HasPerk", "KnowsWord"} <= {edge.__name__ for edge in dragon.ecs.edges}
+    assert {"HasPerk", "KnowsWord", "KnowsSpell"} <= {
+        edge.__name__ for edge in dragon.ecs.edges
+    }
     assert {
+        "mark-map",
+        "trigger-encounter",
         "unlock-perk",
         "absorb-great-soul",
         "learn-word-of-power",
         "speak-word-of-power",
+        "inscribe-voice-phrase",
+        "study-voice-inscription",
+        "change-faction-rank",
+        "bribe-guard",
+        "serve-jail-time",
+        "pick-lock",
         "read-lore-book",
+        "learn-spell",
+        "cast-dragon-spell",
+        "brew-potion",
+        "use-artifact",
     } <= {handler.command_type for handler in dragon.commands.action_handlers}
     assert {
+        "MapMarkerAddedEvent",
+        "EncounterTriggeredEvent",
         "PerkUnlockedEvent",
         "GreatSoulAbsorbedEvent",
         "WordOfPowerLearnedEvent",
+        "VoicePhraseInscribedEvent",
+        "VoiceInscriptionStudiedEvent",
+        "FactionRankChangedEvent",
+        "GuardBribedEvent",
+        "JailSentenceServedEvent",
+        "LockPickedEvent",
         "LoreBookReadEvent",
+        "SpellLearnedEvent",
+        "DragonSpellCastEvent",
+        "PotionBrewedEvent",
+        "ArtifactUsedEvent",
     } <= {
         event.__name__ for event in dragon.commands.typed_events
     }
     assert LIFESIM in dragon.dependencies.requires
+
+    dagger = plugins[DAGGERSIM]
+    assert {
+        "InstitutionReputationComponent",
+        "LegalReputationComponent",
+        "ServiceAccessComponent",
+        "PropertyDeedComponent",
+    } <= {
+        component.__name__ for component in dagger.ecs.components
+    }
+    assert "OwnsProperty" in {edge.__name__ for edge in dagger.ecs.edges}
+    assert "buy-property" in {
+        handler.command_type for handler in dagger.commands.action_handlers
+    }
+    assert {
+        "InstitutionReputationChangedEvent",
+        "LegalReputationChangedEvent",
+        "ServiceAccessChangedEvent",
+        "PropertyPurchasedEvent",
+    } <= {
+        event.__name__ for event in dagger.commands.typed_events
+    }
 
     void = plugins[VOIDSIM]
     assert {
@@ -639,6 +740,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "OldWorldTechComponent",
         "TechLeadComponent",
         "SettlementComponent",
+        "SettlementSalvageComponent",
         "WaterPurifierComponent",
         "GeneratorComponent",
     } <= {
@@ -648,6 +750,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "identify-tech",
         "restore-tech",
         "claim-settlement",
+        "salvage-settlement",
         "build-purifier",
         "power-generator",
     } <= {
@@ -657,6 +760,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "OldWorldTechIdentifiedEvent",
         "OldWorldTechRestoredEvent",
         "SettlementClaimedEvent",
+        "SettlementSalvagedEvent",
         "PurifierBuiltEvent",
         "GeneratorPoweredEvent",
     } <= {

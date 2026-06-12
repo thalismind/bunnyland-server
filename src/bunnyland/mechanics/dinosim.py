@@ -27,6 +27,7 @@ from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_com
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from .colonysim import ResourceStackComponent
 from .lifesim import AgeComponent, LifeStageComponent
 
 DEFAULT_INCUBATION_SECONDS = 24 * 60 * 60
@@ -686,6 +687,8 @@ class FeedStockedEvent(DomainEvent):
     feed_store_id: str
     amount: float
     feed: float
+    resource_type: str = ""
+    resource_spent: int = 0
 
 
 class CreatureNeedsChangedEvent(DomainEvent):
@@ -2924,6 +2927,23 @@ class ObserveCreatureHandler:
         )
 
 
+def _consume_inventory_resource(
+    character: Entity, world: World, resource_type: str, quantity: int
+) -> bool:
+    for edge, item_id in character.get_relationships(Contains):
+        if edge.mode != ContainmentMode.INVENTORY or not world.has_entity(item_id):
+            continue
+        item = world.get_entity(item_id)
+        if not item.has_component(ResourceStackComponent):
+            continue
+        stack = item.get_component(ResourceStackComponent)
+        if stack.resource_type != resource_type or stack.quantity < quantity:
+            continue
+        replace_component(item, replace(stack, quantity=stack.quantity - quantity))
+        return True
+    return False
+
+
 class StockFeedHandler:
     command_type = "stock-feed"
 
@@ -2945,6 +2965,12 @@ class StockFeedHandler:
             else FeedStoreComponent()
         )
         amount = max(0.0, float(command.payload.get("amount") or 1.0))
+        resource_type = str(command.payload.get("resource_type") or "").strip()
+        resource_spent = int(amount)
+        if resource_type and not _consume_inventory_resource(
+            ctx.entity(character_id), ctx.world, resource_type, resource_spent
+        ):
+            return rejected("not enough feed resource")
         updated = replace(
             feed_store,
             feed=min(feed_store.capacity, feed_store.feed + amount),
@@ -2960,6 +2986,8 @@ class StockFeedHandler:
                     feed_store_id=str(store.id),
                     amount=amount,
                     feed=updated.feed,
+                    resource_type=resource_type,
+                    resource_spent=resource_spent if resource_type else 0,
                 )
             )
         )

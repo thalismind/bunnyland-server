@@ -84,11 +84,11 @@ behaviour is added by **plugins**; the builtins are:
 | `bunnyland.colonysim`   | resources, stockpiles, work, recipes, health, rooms, wealth  |
 | `bunnyland.gardensim`   | crops, trees, machines, animals, fishing, mining, bundles    |
 | `bunnyland.barbariansim` | combat, stamina, exposure, gear durability, poison, corruption |
-| `bunnyland.dragonsim`   | discovery, quests, objectives, factions, and reputation       |
-| `bunnyland.daggersim`   | rumors, travel, guilds, banks, law, spells, and dungeons      |
-| `bunnyland.voidsim`     | ships, pressure, airlocks, power, repair, docking, and jumps  |
-| `bunnyland.nukesim`     | radiation, mutation pressure, scavenging, and scrapping       |
-| `bunnyland.dinosim`     | fossils, clone eggs, hatching, taming, enclosures, kaiju      |
+| `bunnyland.dragonsim`   | discovery, map markers, encounter zones, quests, factions     |
+| `bunnyland.daggersim`   | rumors, travel, guilds, banks, law, property, spells, dungeons |
+| `bunnyland.voidsim`     | ships, pressure, fabrication, salvage, cargo, docking, jumps  |
+| `bunnyland.nukesim`     | radiation, mutation pressure, scavenging, settlement salvage  |
+| `bunnyland.dinosim`     | fossils, clone eggs, hatching, taming, feed stores, kaiju     |
 | `bunnyland.mcp`         | optional HTTP MCP endpoint for agentic clients                |
 
 The sim packages (`bunnyland.lifesim`, `colonysim`, `gardensim`, `barbariansim`,
@@ -122,19 +122,33 @@ The bundled packs are:
 | Pack | Sim plugins |
 |------|-------------|
 | `peaceful` | `bunnyland.lifesim`, `bunnyland.colonysim`, `bunnyland.gardensim` |
-| `fantastic` | `bunnyland.lifesim`, `bunnyland.barbariansim`, `bunnyland.dragonsim` |
-| `futuristic` | `bunnyland.lifesim`, `bunnyland.nukesim`, `bunnyland.voidsim` |
+| `fantastic` | `bunnyland.lifesim`, `bunnyland.colonysim`, `bunnyland.gardensim`, `bunnyland.barbariansim`, `bunnyland.dragonsim` |
+| `futuristic` | `bunnyland.lifesim`, `bunnyland.colonysim`, `bunnyland.gardensim`, `bunnyland.barbariansim`, `bunnyland.voidsim`, `bunnyland.nukesim` |
 
 Each pack also includes `bunnyland.core_verbs` and `bunnyland.worldgen`, so the normal
 startup generators remain available. You can set the same preset for Docker deployments
 with `BUNNYLAND_STARTER_PACK=peaceful`.
 
-Dependency order is resolved automatically (e.g. `lifesim` and `memory` depend on
-`core_verbs`). When you pass an explicit plugin list, include each required plugin yourself;
-missing requirements are logged as errors and the server exits. Recommended plugins are
-logged as warnings and the server continues. A future `--auto-load-requires` flag may add
-missing requirements automatically. A verb whose plugin isn't loaded simply has no handler,
-and commands for it are rejected — disabling a plugin cleanly removes its surface.
+Dependency order is resolved automatically, but selection is explicit. When you pass a
+plugin list, include each required plugin yourself; missing requirements are logged as
+errors and the server exits. The main built-in sim requirements are:
+
+| Plugin | Required built-in layers |
+|--------|--------------------------|
+| `bunnyland.lifesim` | `bunnyland.core_verbs` |
+| `bunnyland.colonysim` | `bunnyland.core_verbs`, `bunnyland.lifesim` |
+| `bunnyland.gardensim` | `bunnyland.core_verbs`, `bunnyland.lifesim`, `bunnyland.colonysim` |
+| `bunnyland.barbariansim` | `bunnyland.core_verbs`, `bunnyland.lifesim`, `bunnyland.colonysim`, `bunnyland.gardensim` |
+| `bunnyland.dragonsim` | `bunnyland.core_verbs`, `bunnyland.lifesim` |
+| `bunnyland.daggersim` | `bunnyland.core_verbs` |
+| `bunnyland.voidsim` | `bunnyland.core_verbs`, `bunnyland.colonysim`, `bunnyland.barbariansim` |
+| `bunnyland.nukesim` | `bunnyland.core_verbs`, `bunnyland.colonysim`, `bunnyland.barbariansim`, `bunnyland.voidsim` |
+| `bunnyland.dinosim` | `bunnyland.core_verbs`, `bunnyland.lifesim`, `bunnyland.colonysim` |
+
+Recommended plugins are logged as warnings and the server continues. A future
+`--auto-load-requires` flag may add missing requirements automatically. A verb whose plugin
+isn't loaded simply has no handler, and commands for it are rejected — disabling a plugin
+cleanly removes its surface.
 
 The MCP plugin is disabled by default. Prefer `--mcp` when running the HTTP API; it adds
 `bunnyland.mcp` to the selected plugin set and mounts the MCP app on the same FastAPI

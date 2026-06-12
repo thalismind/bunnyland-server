@@ -26,7 +26,7 @@ from bunnyland.core.components import (
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
-from bunnyland.mechanics.colonysim import install_colonysim
+from bunnyland.mechanics.colonysim import ResourceStackComponent, install_colonysim
 from bunnyland.mechanics.dinosim import (
     AncientSampleComponent,
     ApexPredatorAppearedEvent,
@@ -171,6 +171,7 @@ from bunnyland.mechanics.dinosim import (
     TriggerContainmentHandler,
     WeakPointComponent,
     WeakPointHitEvent,
+    _consume_inventory_resource,
     _entity_room_id,
     _species_name,
     dinosim_fragments,
@@ -1431,6 +1432,16 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             EggComponent(species_name="raptor", laid_at_epoch=0),
         ],
     )
+    distant_feed_store = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far trough", kind="feed-store"),
+            FeedStoreComponent(feed=0.0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant_feed_store.id
+    )
     for entity in (
         rock,
         plain,
@@ -1458,6 +1469,11 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             StockFeedHandler(),
             _handler_cmd(scenario, "stock-feed", feed_store_id="entity_999"),
             "feed store does not exist",
+        ),
+        (
+            StockFeedHandler(),
+            _handler_cmd(scenario, "stock-feed", feed_store_id=str(distant_feed_store.id)),
+            "feed store is not reachable",
         ),
         (
             CollectEggHandler(),
@@ -2713,6 +2729,35 @@ def _feed_store(scenario, feed=3.0):
     return store.id
 
 
+def _inventory_resource(scenario, resource_type, quantity):
+    item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=resource_type, kind="resource"),
+            ResourceStackComponent(resource_type=resource_type, quantity=quantity),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), item.id
+    )
+    return item.id
+
+
+def test_dinosim_consume_inventory_resource_helper_covers_edge_cases():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    rock = spawn_entity(world, [IdentityComponent(name="rock", kind="prop")])
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), rock.id)
+    hay = _inventory_resource(scenario, "hay", 4)
+
+    assert _consume_inventory_resource(character, world, "berries", 1) is False
+    assert _consume_inventory_resource(character, world, "hay", 5) is False
+    assert world.get_entity(hay).get_component(ResourceStackComponent).quantity == 4
+    assert _consume_inventory_resource(character, world, "hay", 2) is True
+    assert world.get_entity(hay).get_component(ResourceStackComponent).quantity == 2
+
+
 async def test_creature_grows_hungry_and_stressed_over_time():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -2752,6 +2797,58 @@ async def test_feed_creature_draws_from_store_and_lowers_hunger():
     assert world.get_entity(store).get_component(FeedStoreComponent).feed == 2.0
     assert world.get_entity(creature).get_component(CreatureNeedComponent).hunger == 30.0
     assert fed and fed[0].hunger == 30.0
+
+
+async def test_stock_feed_can_consume_colony_feed_resource():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    store = _feed_store(scenario, feed=1.0)
+    hay = _inventory_resource(scenario, "hay", 5)
+    stocked: list[FeedStockedEvent] = []
+    scenario.actor.bus.subscribe(FeedStockedEvent, stocked.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "stock-feed",
+            feed_store_id=str(store),
+            amount=3.0,
+            resource_type="hay",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    assert world.get_entity(store).get_component(FeedStoreComponent).feed == 4.0
+    assert world.get_entity(hay).get_component(ResourceStackComponent).quantity == 2
+    assert stocked[0].resource_type == "hay"
+    assert stocked[0].resource_spent == 3
+
+
+async def test_stock_feed_rejects_missing_colony_feed_resource():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    store = _feed_store(scenario, feed=1.0)
+    _inventory_resource(scenario, "hay", 1)
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "stock-feed",
+            feed_store_id=str(store),
+            amount=3.0,
+            resource_type="hay",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "not enough feed resource" for event in rejects)
+    assert (
+        scenario.actor.world.get_entity(store).get_component(FeedStoreComponent).feed
+        == 1.0
+    )
 
 
 async def test_calm_creature_lowers_stress():

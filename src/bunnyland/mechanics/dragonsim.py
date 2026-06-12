@@ -1,9 +1,4 @@
-"""Dragon-sim exploration, quests, and faction foundations.
-
-This first slice intentionally avoids combat, magic, dragons, and radiant generation. It
-adds explicit state for discoverable locations, quest logs, objectives, and faction
-membership so later systems have stable entities and events to build on.
-"""
+"""Dragon-sim exploration, quests, factions, law, and fixed adventure magic."""
 
 from __future__ import annotations
 
@@ -19,7 +14,9 @@ from ..core.components import (
     DownedComponent,
     IdentityComponent,
     PortableComponent,
+    ReadableComponent,
     SleepingComponent,
+    WritableComponent,
 )
 from ..core.ecs import (
     container_of,
@@ -27,6 +24,7 @@ from ..core.ecs import (
     parse_entity_id,
     reachable_ids,
     replace_component,
+    spawn_entity,
 )
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
@@ -45,6 +43,22 @@ class PointOfInterestComponent(Component):
 class DiscoveryComponent(Component):
     discovered_by: tuple[str, ...] = ()
     first_discovered_at_epoch: int | None = None
+
+
+@dataclass(frozen=True)
+class MapMarkerComponent(Component):
+    label: str = ""
+    marker_type: str = "landmark"
+    marked_by: tuple[str, ...] = ()
+    marked_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class EncounterZoneComponent(Component):
+    zone_type: str = "wilderness"
+    danger_rating: int = 1
+    active: bool = True
+    last_triggered_at_epoch: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,6 +102,19 @@ class FactionComponent(Component):
 @dataclass(frozen=True)
 class FactionReputationComponent(Component):
     scores: dict[str, int]
+
+
+@dataclass(frozen=True)
+class GuardComponent(Component):
+    faction_id: str
+    bribe_amount: int = 10
+
+
+@dataclass(frozen=True)
+class JailComponent(Component):
+    faction_id: str
+    release_epoch: int
+    reason: str = "sentence"
 
 
 @dataclass(frozen=True)
@@ -160,6 +187,12 @@ class WantedComponent(Component):
 
 
 @dataclass(frozen=True)
+class LockDifficultyComponent(Component):
+    difficulty: int = 1
+    locked: bool = True
+
+
+@dataclass(frozen=True)
 class LoreBookComponent(Component):
     """Readable lore or skill book (catalogue 6: books/lore)."""
 
@@ -170,10 +203,82 @@ class LoreBookComponent(Component):
     read_by: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class MagickaComponent(Component):
+    current: int = 10
+    maximum: int = 10
+
+
+@dataclass(frozen=True)
+class SpellComponent(Component):
+    name: str
+    school: str = "alteration"
+    magicka_cost: int = 1
+    skill_name: str = "magic"
+    min_skill_level: int = 0
+    effect: str = ""
+    magnitude: int = 1
+
+
+@dataclass(frozen=True)
+class PotionRecipeComponent(Component):
+    name: str
+    potion_name: str
+    school: str = "alchemy"
+    skill_name: str = "alchemy"
+    min_skill_level: int = 0
+    ingredient_ids: tuple[str, ...] = ()
+    effect: str = ""
+
+
+@dataclass(frozen=True)
+class PotionComponent(Component):
+    name: str
+    effect: str = ""
+    potency: int = 1
+
+
+@dataclass(frozen=True)
+class ArtifactComponent(Component):
+    name: str
+    effect: str = ""
+    charges: int = 1
+    identified_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CarvableComponent(Component):
+    remaining_space: int | None = None
+
+
+@dataclass(frozen=True)
+class VoiceInscriptionComponent(Component):
+    word_id: str
+    phrase: str = ""
+    studied_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class KnowsSpell(Edge):
+    learned_at_epoch: int = 0
+
+
 class LocationDiscoveredEvent(DomainEvent):
     location_id: str
     location_type: str
     region: str = ""
+
+
+class MapMarkerAddedEvent(DomainEvent):
+    location_id: str
+    label: str
+    marker_type: str
+
+
+class EncounterTriggeredEvent(DomainEvent):
+    zone_id: str
+    zone_type: str
+    danger_rating: int
 
 
 class QuestAcceptedEvent(DomainEvent):
@@ -252,11 +357,69 @@ class BountyPaidEvent(DomainEvent):
     amount: int
 
 
+class FactionRankChangedEvent(DomainEvent):
+    faction_id: str
+    faction_name: str
+    old_rank: str
+    new_rank: str
+
+
+class GuardBribedEvent(DomainEvent):
+    guard_id: str
+    faction_id: str
+    amount: int
+
+
+class JailSentenceServedEvent(DomainEvent):
+    character_id: str
+    faction_id: str
+
+
+class LockPickedEvent(DomainEvent):
+    lock_id: str
+    difficulty: int
+
+
 class LoreBookReadEvent(DomainEvent):
     book_id: str
     title: str
     skill_name: str = ""
     skill_xp_awarded: float = 0.0
+
+
+class SpellLearnedEvent(DomainEvent):
+    spell_id: str
+    spell_name: str
+
+
+class DragonSpellCastEvent(DomainEvent):
+    spell_id: str
+    spell_name: str
+    school: str
+    magicka_spent: int
+
+
+class PotionBrewedEvent(DomainEvent):
+    recipe_id: str
+    potion_id: str
+    potion_name: str
+
+
+class ArtifactUsedEvent(DomainEvent):
+    artifact_id: str
+    artifact_name: str
+    remaining_charges: int
+
+
+class VoicePhraseInscribedEvent(DomainEvent):
+    target_id: str
+    word_id: str
+    phrase: str
+
+
+class VoiceInscriptionStudiedEvent(DomainEvent):
+    target_id: str
+    word_id: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -364,6 +527,95 @@ class DiscoverLocationHandler:
                     location_id=str(location_id),
                     location_type=poi.location_type,
                     region=poi.region,
+                )
+            )
+        )
+
+
+class MarkMapHandler:
+    command_type = "mark-map"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        location_id = parse_entity_id(command.payload.get("location_id"))
+        if character_id is None or location_id is None:
+            return rejected("invalid character or location id")
+        if not ctx.world.has_entity(location_id):
+            return rejected("location does not exist")
+        character = ctx.entity(character_id)
+        if location_id not in reachable_ids(ctx.world, character):
+            return rejected("location is not reachable")
+        location = ctx.entity(location_id)
+        if not location.has_component(PointOfInterestComponent):
+            return rejected("target is not a mappable location")
+
+        poi = location.get_component(PointOfInterestComponent)
+        marker = (
+            location.get_component(MapMarkerComponent)
+            if location.has_component(MapMarkerComponent)
+            else MapMarkerComponent(
+                label=str(command.payload.get("label") or _name(location)),
+                marker_type=poi.location_type,
+            )
+        )
+        if str(character_id) in marker.marked_by:
+            return rejected("location is already marked")
+        marked_by = tuple((*marker.marked_by, str(character_id)))
+        label = str(command.payload.get("label") or marker.label or _name(location))
+        updated = replace(
+            marker,
+            label=label,
+            marker_type=marker.marker_type or poi.location_type,
+            marked_by=marked_by,
+            marked_at_epoch=ctx.epoch,
+        )
+        replace_component(location, updated)
+        return ok(
+            MapMarkerAddedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(location_id),),
+                    location_id=str(location_id),
+                    label=updated.label,
+                    marker_type=updated.marker_type,
+                )
+            )
+        )
+
+
+class TriggerEncounterHandler:
+    command_type = "trigger-encounter"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        zone_id = parse_entity_id(command.payload.get("zone_id"))
+        if character_id is None or zone_id is None:
+            return rejected("invalid character or encounter zone id")
+        if not ctx.world.has_entity(zone_id):
+            return rejected("encounter zone does not exist")
+        character = ctx.entity(character_id)
+        if zone_id not in reachable_ids(ctx.world, character):
+            return rejected("encounter zone is not reachable")
+        zone_entity = ctx.entity(zone_id)
+        if not zone_entity.has_component(EncounterZoneComponent):
+            return rejected("target is not an encounter zone")
+        zone = zone_entity.get_component(EncounterZoneComponent)
+        if not zone.active:
+            return rejected("encounter zone is inactive")
+
+        replace_component(zone_entity, replace(zone, last_triggered_at_epoch=ctx.epoch))
+        return ok(
+            EncounterTriggeredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(zone_id),),
+                    zone_id=str(zone_id),
+                    zone_type=zone.zone_type,
+                    danger_rating=zone.danger_rating,
                 )
             )
         )
@@ -922,6 +1174,167 @@ class PayBountyHandler:
         )
 
 
+class ChangeFactionRankHandler:
+    command_type = "change-faction-rank"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        faction_id = parse_entity_id(command.payload.get("faction_id"))
+        new_rank = str(command.payload.get("rank", "")).strip()
+        if character_id is None or faction_id is None or not new_rank:
+            return rejected("invalid character, faction, or rank")
+        if not ctx.world.has_entity(faction_id):
+            return rejected("faction does not exist")
+        faction = ctx.entity(faction_id)
+        if not faction.has_component(FactionComponent):
+            return rejected("target is not a faction")
+        character = ctx.entity(character_id)
+        memberships = character.get_relationships(MemberOf)
+        current = next((edge for edge, target in memberships if target == faction_id), None)
+        if current is None:
+            return rejected("not a faction member")
+
+        character.remove_relationship(MemberOf, faction_id)
+        character.add_relationship(
+            MemberOf(rank=new_rank, since_epoch=current.since_epoch), faction_id
+        )
+        faction_name = faction.get_component(FactionComponent).name
+        return ok(
+            FactionRankChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(faction_id),),
+                    faction_id=str(faction_id),
+                    faction_name=faction_name,
+                    old_rank=current.rank,
+                    new_rank=new_rank,
+                )
+            )
+        )
+
+
+class BribeGuardHandler:
+    command_type = "bribe-guard"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        guard_id = parse_entity_id(command.payload.get("guard_id"))
+        if character_id is None or guard_id is None:
+            return rejected("invalid character or guard id")
+        if not ctx.world.has_entity(guard_id):
+            return rejected("guard does not exist")
+        character = ctx.entity(character_id)
+        if guard_id not in reachable_ids(ctx.world, character):
+            return rejected("guard is not reachable")
+        guard = ctx.entity(guard_id)
+        if not guard.has_component(GuardComponent):
+            return rejected("target is not a guard")
+        component = guard.get_component(GuardComponent)
+        if character.has_component(WantedComponent):
+            amounts = dict(character.get_component(WantedComponent).amounts)
+            if component.faction_id in amounts:
+                amounts[component.faction_id] = max(
+                    0, amounts[component.faction_id] - component.bribe_amount
+                )
+                if amounts[component.faction_id] == 0:
+                    amounts.pop(component.faction_id)
+                replace_component(character, WantedComponent(amounts=amounts))
+        return ok(
+            GuardBribedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(guard_id),),
+                    guard_id=str(guard_id),
+                    faction_id=component.faction_id,
+                    amount=component.bribe_amount,
+                )
+            )
+        )
+
+
+class ServeJailTimeHandler:
+    command_type = "serve-jail-time"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(JailComponent):
+            return rejected("not jailed")
+        sentence = character.get_component(JailComponent)
+        if ctx.epoch < sentence.release_epoch:
+            return rejected("sentence is not complete")
+        character.remove_component(JailComponent)
+        if character.has_component(WantedComponent):
+            amounts = dict(character.get_component(WantedComponent).amounts)
+            amounts.pop(sentence.faction_id, None)
+            replace_component(character, WantedComponent(amounts=amounts))
+        return ok(
+            JailSentenceServedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                    faction_id=sentence.faction_id,
+                )
+            )
+        )
+
+
+class PickLockHandler:
+    command_type = "pick-lock"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        lock_id = parse_entity_id(command.payload.get("lock_id"))
+        if character_id is None or lock_id is None:
+            return rejected("invalid character or lock id")
+        if not ctx.world.has_entity(lock_id):
+            return rejected("lock does not exist")
+        character = ctx.entity(character_id)
+        if lock_id not in reachable_ids(ctx.world, character):
+            return rejected("lock is not reachable")
+        locked = ctx.entity(lock_id)
+        if not locked.has_component(LockDifficultyComponent):
+            return rejected("target is not locked")
+        difficulty = locked.get_component(LockDifficultyComponent)
+        if not difficulty.locked:
+            return rejected("lock is already open")
+        if _skill_level(character, "lockpicking") < difficulty.difficulty:
+            return rejected("lockpicking skill too low")
+
+        replace_component(locked, replace(difficulty, locked=False))
+        events: list[DomainEvent] = [
+            LockPickedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(lock_id),),
+                    lock_id=str(lock_id),
+                    difficulty=difficulty.difficulty,
+                )
+            )
+        ]
+        events.extend(
+            _add_skill_xp(
+                ctx,
+                character,
+                skill="lockpicking",
+                amount=float(difficulty.difficulty),
+                actor_id=str(character_id),
+                target_ids=(str(lock_id),),
+            )
+        )
+        return ok(*events)
+
+
 class ReadLoreBookHandler:
     command_type = "read-lore-book"
 
@@ -975,6 +1388,327 @@ class ReadLoreBookHandler:
         return ok(*events)
 
 
+class LearnSpellHandler:
+    command_type = "learn-spell"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        spell_id = parse_entity_id(command.payload.get("spell_id"))
+        if character_id is None or spell_id is None:
+            return rejected("invalid character or spell id")
+        if not ctx.world.has_entity(spell_id):
+            return rejected("spell does not exist")
+        character = ctx.entity(character_id)
+        if spell_id not in reachable_ids(ctx.world, character):
+            return rejected("spell is not reachable")
+        spell_entity = ctx.entity(spell_id)
+        if not spell_entity.has_component(SpellComponent):
+            return rejected("target is not a spell")
+        spell = spell_entity.get_component(SpellComponent)
+        if character.has_relationship(KnowsSpell, spell_id):
+            return rejected("spell already learned")
+        if spell.skill_name and _skill_level(character, spell.skill_name) < spell.min_skill_level:
+            return rejected("skill level too low for this spell")
+
+        character.add_relationship(KnowsSpell(learned_at_epoch=ctx.epoch), spell_id)
+        return ok(
+            SpellLearnedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(spell_id),),
+                    spell_id=str(spell_id),
+                    spell_name=spell.name,
+                )
+            )
+        )
+
+
+class CastDragonSpellHandler:
+    command_type = "cast-dragon-spell"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        spell_id = parse_entity_id(command.payload.get("spell_id"))
+        if character_id is None or spell_id is None:
+            return rejected("invalid character or spell id")
+        if not ctx.world.has_entity(spell_id):
+            return rejected("spell does not exist")
+        character = ctx.entity(character_id)
+        if not character.has_relationship(KnowsSpell, spell_id):
+            return rejected("spell is not learned")
+        spell_entity = ctx.entity(spell_id)
+        if not spell_entity.has_component(SpellComponent):
+            return rejected("target is not a spell")
+        spell = spell_entity.get_component(SpellComponent)
+        magicka = (
+            character.get_component(MagickaComponent)
+            if character.has_component(MagickaComponent)
+            else MagickaComponent()
+        )
+        if magicka.current < spell.magicka_cost:
+            return rejected("not enough magicka")
+
+        replace_component(character, replace(magicka, current=magicka.current - spell.magicka_cost))
+        events: list[DomainEvent] = [
+            DragonSpellCastEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(spell_id),),
+                    spell_id=str(spell_id),
+                    spell_name=spell.name,
+                    school=spell.school,
+                    magicka_spent=spell.magicka_cost,
+                )
+            )
+        ]
+        if spell.skill_name:
+            events.extend(
+                _add_skill_xp(
+                    ctx,
+                    character,
+                    skill=spell.skill_name,
+                    amount=max(1.0, float(spell.magicka_cost)),
+                    actor_id=str(character_id),
+                    target_ids=(str(spell_id),),
+                )
+            )
+        return ok(*events)
+
+
+class BrewPotionHandler:
+    command_type = "brew-potion"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        recipe_id = parse_entity_id(command.payload.get("recipe_id"))
+        if character_id is None or recipe_id is None:
+            return rejected("invalid character or recipe id")
+        if not ctx.world.has_entity(recipe_id):
+            return rejected("recipe does not exist")
+        character = ctx.entity(character_id)
+        if recipe_id not in reachable_ids(ctx.world, character):
+            return rejected("recipe is not reachable")
+        recipe_entity = ctx.entity(recipe_id)
+        if not recipe_entity.has_component(PotionRecipeComponent):
+            return rejected("target is not a potion recipe")
+        recipe = recipe_entity.get_component(PotionRecipeComponent)
+        if (
+            recipe.skill_name
+            and _skill_level(character, recipe.skill_name) < recipe.min_skill_level
+        ):
+            return rejected("skill level too low for this recipe")
+        for raw_id in recipe.ingredient_ids:
+            ingredient_id = parse_entity_id(raw_id)
+            if (
+                ingredient_id is None
+                or container_of(ctx.world.get_entity(ingredient_id)) != character_id
+            ):
+                return rejected("required ingredient is not carried")
+
+        for raw_id in recipe.ingredient_ids:
+            ingredient_id = parse_entity_id(raw_id)
+            if ingredient_id is not None:
+                character.remove_relationship(Contains, ingredient_id)
+        potion = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=recipe.potion_name, kind="potion"),
+                PortableComponent(),
+                PotionComponent(name=recipe.potion_name, effect=recipe.effect),
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), potion.id)
+        events: list[DomainEvent] = [
+            PotionBrewedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(recipe_id), str(potion.id)),
+                    recipe_id=str(recipe_id),
+                    potion_id=str(potion.id),
+                    potion_name=recipe.potion_name,
+                )
+            )
+        ]
+        if recipe.skill_name:
+            events.extend(
+                _add_skill_xp(
+                    ctx,
+                    character,
+                    skill=recipe.skill_name,
+                    amount=2.0,
+                    actor_id=str(character_id),
+                    target_ids=(str(recipe_id),),
+                )
+            )
+        return ok(*events)
+
+
+class UseArtifactHandler:
+    command_type = "use-artifact"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        artifact_id = parse_entity_id(command.payload.get("artifact_id"))
+        if character_id is None or artifact_id is None:
+            return rejected("invalid character or artifact id")
+        if not ctx.world.has_entity(artifact_id):
+            return rejected("artifact does not exist")
+        character = ctx.entity(character_id)
+        if artifact_id not in reachable_ids(ctx.world, character):
+            return rejected("artifact is not reachable")
+        artifact_entity = ctx.entity(artifact_id)
+        if not artifact_entity.has_component(ArtifactComponent):
+            return rejected("target is not an artifact")
+        artifact = artifact_entity.get_component(ArtifactComponent)
+        if artifact.charges <= 0:
+            return rejected("artifact has no charges")
+        identified_by = tuple(sorted((*artifact.identified_by, str(character_id))))
+        updated = replace(artifact, charges=artifact.charges - 1, identified_by=identified_by)
+        replace_component(artifact_entity, updated)
+        return ok(
+            ArtifactUsedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(artifact_id),),
+                    artifact_id=str(artifact_id),
+                    artifact_name=artifact.name,
+                    remaining_charges=updated.charges,
+                )
+            )
+        )
+
+
+class InscribeVoicePhraseHandler:
+    command_type = "inscribe-voice-phrase"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        word_id = parse_entity_id(command.payload.get("word_id"))
+        phrase = str(command.payload.get("phrase", "")).strip()
+        if character_id is None or target_id is None or word_id is None:
+            return rejected("invalid character, target, or word id")
+        if not phrase:
+            return rejected("nothing to inscribe")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        if not ctx.world.has_entity(word_id):
+            return rejected("word does not exist")
+        character = ctx.entity(character_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+        target = ctx.entity(target_id)
+        writable = (
+            target.get_component(WritableComponent)
+            if target.has_component(WritableComponent)
+            else None
+        )
+        carvable = (
+            target.get_component(CarvableComponent)
+            if target.has_component(CarvableComponent)
+            else None
+        )
+        if writable is None and carvable is None:
+            return rejected("target is not writable or carvable")
+        remaining = (
+            writable.remaining_space if writable is not None else carvable.remaining_space
+        )
+        if remaining is not None and len(phrase) > remaining:
+            return rejected("not enough room to inscribe that")
+        word = ctx.entity(word_id)
+        if not word.has_component(WordOfPowerComponent):
+            return rejected("target word is not a word of power")
+
+        existing = (
+            target.get_component(ReadableComponent)
+            if target.has_component(ReadableComponent)
+            else ReadableComponent()
+        )
+        new_text = phrase if not existing.text else f"{existing.text}\n{phrase}"
+        replace_component(target, replace(existing, text=new_text))
+        if writable is not None and writable.remaining_space is not None:
+            replace_component(
+                target,
+                replace(writable, remaining_space=writable.remaining_space - len(phrase)),
+            )
+        if carvable is not None and carvable.remaining_space is not None:
+            replace_component(
+                target,
+                replace(carvable, remaining_space=carvable.remaining_space - len(phrase)),
+            )
+        replace_component(
+            target,
+            VoiceInscriptionComponent(word_id=str(word_id), phrase=phrase),
+        )
+        return ok(
+            VoicePhraseInscribedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id), str(word_id)),
+                    target_id=str(target_id),
+                    word_id=str(word_id),
+                    phrase=phrase,
+                )
+            )
+        )
+
+
+class StudyVoiceInscriptionHandler:
+    command_type = "study-voice-inscription"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if character_id is None or target_id is None:
+            return rejected("invalid character or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        character = ctx.entity(character_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+        target = ctx.entity(target_id)
+        if not target.has_component(VoiceInscriptionComponent):
+            return rejected("target has no voice inscription")
+        inscription = target.get_component(VoiceInscriptionComponent)
+        word_id = parse_entity_id(inscription.word_id)
+        if word_id is None or not ctx.world.has_entity(word_id):
+            return rejected("voice inscription has no valid word")
+        if str(character_id) in inscription.studied_by:
+            return rejected("voice inscription already studied")
+
+        replace_component(
+            target,
+            replace(
+                inscription,
+                studied_by=tuple(sorted((*inscription.studied_by, str(character_id)))),
+            ),
+        )
+        if not character.has_relationship(KnowsWord, word_id):
+            character.add_relationship(KnowsWord(learned_at_epoch=ctx.epoch), word_id)
+        return ok(
+            VoiceInscriptionStudiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id), str(word_id)),
+                    target_id=str(target_id),
+                    word_id=str(word_id),
+                )
+            )
+        )
+
+
 def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for edge, faction_id in character.get_relationships(MemberOf):
@@ -1008,6 +1742,18 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         word = world.get_entity(word_id)
         if word.has_component(WordOfPowerComponent):
             lines.append(f"Word of power known: {word.get_component(WordOfPowerComponent).name}.")
+    for _spell_edge, spell_id in character.get_relationships(KnowsSpell):
+        if not world.has_entity(spell_id):
+            continue
+        spell = world.get_entity(spell_id)
+        if spell.has_component(SpellComponent):
+            lines.append(f"Spell learned: {spell.get_component(SpellComponent).name}.")
+    if character.has_component(MagickaComponent):
+        magicka = character.get_component(MagickaComponent)
+        lines.append(f"Magicka: {magicka.current}/{magicka.maximum}.")
+    if character.has_component(JailComponent):
+        sentence = character.get_component(JailComponent)
+        lines.append(f"Serving jail time for {sentence.faction_id} until {sentence.release_epoch}.")
 
     if _is_sneaking(character):
         lines.append("You are sneaking.")
@@ -1027,6 +1773,17 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
             poi = entity.get_component(PointOfInterestComponent)
             if not poi.discovered:
                 lines.append(f"Nearby undiscovered {poi.location_type}: {_name(entity)}.")
+        if entity.has_component(MapMarkerComponent):
+            marker = entity.get_component(MapMarkerComponent)
+            if str(character.id) in marker.marked_by:
+                lines.append(f"Map marker: {marker.label} ({marker.marker_type}).")
+        if entity.has_component(EncounterZoneComponent):
+            zone = entity.get_component(EncounterZoneComponent)
+            if zone.active:
+                lines.append(
+                    f"Encounter zone nearby: {zone.zone_type} "
+                    f"(danger {zone.danger_rating})."
+                )
         if entity.has_component(LoreBookComponent):
             book = entity.get_component(LoreBookComponent)
             if str(character.id) not in book.read_by:
@@ -1036,6 +1793,27 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
                     )
                 else:
                     lines.append(f"Unread lore book nearby: {book.title}.")
+        if entity.has_component(LockDifficultyComponent):
+            lock = entity.get_component(LockDifficultyComponent)
+            if lock.locked:
+                lines.append(
+                    f"Locked target nearby: {_name(entity)} (difficulty {lock.difficulty})."
+                )
+        if entity.has_component(SpellComponent) and not character.has_relationship(
+            KnowsSpell, entity_id
+        ):
+            lines.append(f"Learnable spell nearby: {entity.get_component(SpellComponent).name}.")
+        if entity.has_component(PotionRecipeComponent):
+            lines.append(
+                f"Potion recipe nearby: {entity.get_component(PotionRecipeComponent).name}."
+            )
+        if entity.has_component(ArtifactComponent):
+            artifact = entity.get_component(ArtifactComponent)
+            lines.append(f"Artifact nearby: {artifact.name} ({artifact.charges} charges).")
+        if entity.has_component(VoiceInscriptionComponent):
+            inscription = entity.get_component(VoiceInscriptionComponent)
+            if str(character.id) not in inscription.studied_by:
+                lines.append(f"Voice inscription nearby: {_name(entity)}.")
     return sorted(lines)
 
 
@@ -1043,31 +1821,57 @@ __all__ = [
     "AbsorbGreatSoulHandler",
     "AcceptQuestHandler",
     "AncientBeastComponent",
+    "ArtifactComponent",
+    "ArtifactUsedEvent",
+    "BrewPotionHandler",
+    "BribeGuardHandler",
     "WantedComponent",
     "BountyPaidEvent",
+    "CastDragonSpellHandler",
+    "ChangeFactionRankHandler",
     "CompleteObjectiveHandler",
     "CrimeWitnessedEvent",
     "DiscoverLocationHandler",
     "DiscoveryComponent",
+    "DragonSpellCastEvent",
+    "EncounterTriggeredEvent",
+    "EncounterZoneComponent",
     "FactionComponent",
     "FactionJoinedEvent",
     "FactionLeftEvent",
+    "FactionRankChangedEvent",
     "FactionReputationComponent",
+    "GuardBribedEvent",
+    "GuardComponent",
     "GreatSoulAbsorbedEvent",
     "GreatSoulComponent",
     "HasPerk",
     "JoinFactionHandler",
+    "JailComponent",
+    "JailSentenceServedEvent",
     "KnowsWord",
+    "KnowsSpell",
     "LearnWordOfPowerHandler",
+    "LearnSpellHandler",
     "LeaveFactionHandler",
+    "LockDifficultyComponent",
+    "LockPickedEvent",
     "LoreBookComponent",
     "LoreBookReadEvent",
+    "MagickaComponent",
     "LocationDiscoveredEvent",
+    "MapMarkerAddedEvent",
+    "MapMarkerComponent",
+    "MarkMapHandler",
     "MemberOf",
     "PayBountyHandler",
     "PerkComponent",
     "PerkUnlockedEvent",
+    "PickLockHandler",
     "PointOfInterestComponent",
+    "PotionBrewedEvent",
+    "PotionComponent",
+    "PotionRecipeComponent",
     "QuestAcceptedEvent",
     "QuestComponent",
     "QuestCompletedEvent",
@@ -1078,13 +1882,23 @@ __all__ = [
     "ReadLoreBookHandler",
     "SneakHandler",
     "SpeakWordOfPowerHandler",
+    "SpellComponent",
+    "SpellLearnedEvent",
     "StealHandler",
     "StealthChangedEvent",
     "StealthComponent",
+    "CarvableComponent",
+    "InscribeVoicePhraseHandler",
+    "StudyVoiceInscriptionHandler",
     "TheftCommittedEvent",
+    "TriggerEncounterHandler",
     "UnlockPerkHandler",
+    "UseArtifactHandler",
     "WordOfPowerComponent",
     "WordOfPowerLearnedEvent",
     "WordOfPowerSpokenEvent",
+    "VoiceInscriptionComponent",
+    "VoiceInscriptionStudiedEvent",
+    "VoicePhraseInscribedEvent",
     "dragonsim_fragments",
 ]

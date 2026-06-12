@@ -1,7 +1,10 @@
 # Dragon-sim exploration and quests
 
-Dragon-sim adds open-world adventure structure: discovering locations, accepting quests,
-completing objectives, earning rewards, and joining or leaving factions.
+Dragon-sim adds open-world adventure structure: discovering locations, marking maps,
+triggering local encounter zones, accepting quests, completing objectives, earning
+rewards, joining or leaving factions, unlocking perks, learning words of power, and
+handling stealth theft with faction bounties. Voice phrases are ordinary inscriptions:
+they can be written or carved on world objects that support writing or carving.
 
 In Discord, prefix these commands with `!`.
 
@@ -15,6 +18,25 @@ Discover a reachable point of interest:
 
 Discovery marks that location as known and adds adventure context such as the location
 type and region.
+
+Mark a reachable point of interest on your map:
+
+```text
+!mark-map location_id="old watchtower" label="Old Watchtower"
+```
+
+Map markers are personal exploration state. Marked locations show in your character
+context, so you can keep track of useful roads, ruins, shrines, and landmarks.
+
+Some locations are encounter zones. Enter or trigger a reachable zone when the world
+offers one:
+
+```text
+!trigger-encounter zone_id="wolf road"
+```
+
+Encounter zones record their danger rating and last trigger time. They are local
+adventure pressure, separate from dagger-sim's larger procedural world expansion.
 
 ## Accept quests
 
@@ -92,6 +114,15 @@ Then speak a word you have learned:
 
 Your absorbed great souls and known words show up in your character context.
 
+Voice phrases can also be inscribed on any reachable writable or carvable target:
+
+```text
+!inscribe-voice-phrase target_id="scratched slate" word_id="Storm Call" phrase="storm listens"
+!study-voice-inscription target_id="scratched slate"
+```
+
+Studying a voice inscription teaches the linked word if you do not already know it.
+
 ## Stealth, theft, and bounties
 
 Slip into stealth so witnesses cannot see your next move (toggle it off with the same
@@ -118,17 +149,59 @@ Whether you are sneaking and any outstanding bounties show up in your character 
 When barbarian-sim is also enabled, the same world gives you its combat verbs to back up
 a life of crime.
 
+## Law, locks, and fixed magic
+
+Faction rank can change over time:
+
+```text
+!change-faction-rank faction_id="Moss Wardens" rank=warden
+```
+
+If a guard is reachable, a bribe can reduce your bounty with that guard's faction:
+
+```text
+!bribe-guard guard_id="Moss Guard"
+```
+
+Jail sentences clear when their release time has passed:
+
+```text
+!serve-jail-time
+```
+
+Pick a reachable lock when your lockpicking skill is high enough:
+
+```text
+!pick-lock lock_id="old chest"
+```
+
+Dragon-sim fixed magic is separate from dagger-sim's custom spellmaker. Learn a prepared
+spell, cast it from your magicka pool, brew a prepared potion recipe, or trigger a charged
+artifact:
+
+```text
+!learn-spell spell_id=Spark
+!cast-dragon-spell spell_id=Spark
+!brew-potion recipe_id="blue tonic recipe"
+!use-artifact artifact_id="star mirror"
+```
+
 ## Core loop
 
 A simple adventure loop:
 
 ```text
 !discover-location old watchtower
+!mark-map location_id="old watchtower" label="Old Watchtower"
+!trigger-encounter zone_id="wolf road"
 !accept-quest quest_id="Find the Lost Ring"
 !complete-objective objective_id="lost ring objective"
 !join-faction faction_id="Moss Wardens" rank=scout
 !leave-faction Moss Wardens
+!inscribe-voice-phrase target_id="scratched slate" word_id="Storm Call" phrase="storm listens"
+!study-voice-inscription target_id="scratched slate"
 !sneak
 !steal ruby ring from Mara
 !pay-bounty faction_id="Moss Wardens"
+!pick-lock lock_id="old chest"
 ```

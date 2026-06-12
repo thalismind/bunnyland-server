@@ -8,6 +8,10 @@ active.
 
 In Discord, prefix these commands with `!`.
 
+For day-to-day ranching, feed stores, colony-sim resource-backed feed, creature needs,
+eggs, products, ranch work, and guard duty, see
+[Dino-sim ranching, feed, and creature products](dino-ranching-products.md).
+
 ## Fossils and cloning
 
 Identify a reachable fossil by species:
@@ -202,7 +206,8 @@ Calm a stressed creature down:
 ```
 
 Each nearby creature's hunger and stress show in your character context, so you can keep
-your ranch fed and settled before stress turns into trouble.
+your ranch fed and settled before stress turns into trouble. The dedicated ranching guide
+covers the feed and product loops in more detail.
 
 ## Creature products and ranch work
 
@@ -211,6 +216,16 @@ Feed stores can be stocked on an enclosure, pen, or nearby room:
 ```text
 !stock-feed feed_store_id="Fern Paddock" amount=5
 ```
+
+In worlds with colony-sim resources, stock feed from a carried resource stack:
+
+```text
+!stock-feed feed_store_id="Fern Paddock" amount=3 resource_type=hay
+```
+
+When `resource_type` is present, the command spends that many units from your inventory
+before adding feed to the store. If you do not have enough of the resource, the feed store
+is unchanged.
 
 Collect eggs into inventory or harvest products from a reachable creature:
 
@@ -227,6 +242,9 @@ Assign ranch labor or guard duty to a creature:
 !assign-ranch-work creature_id="clever raptor" work_type="haul" target_id="Fern Paddock"
 !assign-guard creature_id="clever raptor" location_id="Fern Paddock"
 ```
+
+See the ranching guide for how feed stores, products, colony-sim feed resources, ranch
+labor, and guard duty fit together.
 
 ## Kaiju storyteller incidents
 

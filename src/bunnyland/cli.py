@@ -56,8 +56,25 @@ BUILTIN_MODULE = "bunnyland.plugins.builtin"
 OLLAMA_CLOUD_HOST = "https://ollama.com"
 STARTER_PACKS: dict[str, tuple[str, ...]] = {
     "peaceful": (CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM),
-    "fantastic": (CORE_VERBS, WORLDGEN, LIFESIM, BARBARIANSIM, DRAGONSIM),
-    "futuristic": (CORE_VERBS, WORLDGEN, LIFESIM, NUKESIM, VOIDSIM),
+    "fantastic": (
+        CORE_VERBS,
+        WORLDGEN,
+        LIFESIM,
+        COLONYSIM,
+        GARDENSIM,
+        BARBARIANSIM,
+        DRAGONSIM,
+    ),
+    "futuristic": (
+        CORE_VERBS,
+        WORLDGEN,
+        LIFESIM,
+        COLONYSIM,
+        GARDENSIM,
+        BARBARIANSIM,
+        VOIDSIM,
+        NUKESIM,
+    ),
 }
 
 

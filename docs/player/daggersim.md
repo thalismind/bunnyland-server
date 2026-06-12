@@ -2,9 +2,12 @@
 
 Dagger-sim adds a broad frontier-adventure loop: rumors, procedural site expansion,
 travel, institutions, generated work, banking, law, custom classes, spells, pacification,
-supernatural afflictions, and dungeons.
+supernatural afflictions, property, civic reputation, and dungeons.
 
 In Discord, prefix these commands with `!`.
+
+For a focused guide to institution reputation, generated work, banking, legal reputation,
+and property deeds, see [Dagger-sim civic life and property](dagger-civic-property.md).
 
 ## Rumors, expansion, and travel
 
@@ -65,6 +68,11 @@ Then accept and complete the generated quest:
 Services and generated work can create items, quest records, rewards, deadlines, and
 institution context.
 
+Joining an institution and using its services also changes your institution reputation.
+Services you successfully use are recorded as unlocked service access, and both reputation
+and access can show in your character context. The dedicated civic guide covers the
+reputation, service access, law, banking, and property details.
+
 ## Banking, loans, law, and fines
 
 Open an account at a reachable bank:
@@ -99,8 +107,20 @@ Some regions track crimes and fines:
 !pay-fine crime_id="trespass charge"
 ```
 
-Unpaid loans and fines are durable state. They can appear in prompts and can be used by
-story or law systems.
+Committing a crime lowers legal reputation for that region. Paying the fine raises it back
+toward neutral and removes the active bounty from the crime record. Unpaid loans and fines
+are durable state. They can appear in prompts and can be used by story or law systems.
+
+Some worlds expose purchasable property deeds. Buy a reachable property from any bank
+account with enough balance:
+
+```text
+!buy-property property_id="Moss Road Cottage"
+```
+
+Buying property spends from your bank account, marks the deed as owned by you, and adds an
+ownership relationship that appears in character context. See the civic guide for the
+full property purchase loop.
 
 ## Classes, spells, pacification, and afflictions
 

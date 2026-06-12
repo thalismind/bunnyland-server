@@ -2,8 +2,8 @@
 
 This slice covers radiation exposure, source-specific mutation pressure, deterministic
 mutation manifestation, decontamination, rad medicine, scavenging, and scrapping. It
-reuses colony-sim resource stacks/recipes and void-sim radiation pressure so other packs
-can interoperate without sharing one large mutation system.
+reuses colony-sim resource stacks/recipes and shared radiation pressure so other packs can
+interoperate without sharing one large mutation system.
 """
 
 from __future__ import annotations
@@ -33,8 +33,9 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from .barbariansim import DurabilityComponent
 from .colonysim import ResourceStackComponent
-from .voidsim import RadiationMutationPressureComponent, RadiationShieldComponent
+from .mutation import RadiationMutationPressureComponent, RadiationShieldComponent
 
 SECONDS_PER_HOUR = 60 * 60
 DEFAULT_MUTATION_THRESHOLD = 10.0
@@ -1130,6 +1131,13 @@ class SettlementComponent(Component):
 
 
 @dataclass(frozen=True)
+class SettlementSalvageComponent(Component):
+    outputs: dict[str, int]
+    durability_cost: float = 1.0
+    depleted: bool = False
+
+
+@dataclass(frozen=True)
 class WaterPurifierComponent(Component):
     output_per_day: int = 1
     built: bool = False
@@ -1175,6 +1183,12 @@ class OldWorldTechRestoredEvent(DomainEvent):
 class SettlementClaimedEvent(DomainEvent):
     settlement_id: str
     name: str
+
+
+class SettlementSalvagedEvent(DomainEvent):
+    settlement_id: str
+    output_ids: tuple[str, ...] = ()
+    durability: float | None = None
 
 
 class PurifierBuiltEvent(DomainEvent):
@@ -1296,6 +1310,64 @@ class ClaimSettlementHandler:
                     target_ids=(str(settlement.id),),
                     settlement_id=str(settlement.id),
                     name=component.name,
+                )
+            )
+        )
+
+
+class SalvageSettlementHandler:
+    command_type = "salvage-settlement"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        settlement, error = _reachable_component(
+            ctx, character_id, command.payload.get("settlement_id"), SettlementComponent
+        )
+        if settlement is None:
+            return rejected(error if error else "target is not a settlement")
+        component = settlement.get_component(SettlementComponent)
+        if component.claimed_by != str(character_id):
+            return rejected("claim the settlement first")
+        if not settlement.has_component(SettlementSalvageComponent):
+            return rejected("settlement has no salvage")
+        salvage = settlement.get_component(SettlementSalvageComponent)
+        if salvage.depleted:
+            return rejected("settlement salvage is depleted")
+
+        durability_value: float | None = None
+        if settlement.has_component(DurabilityComponent):
+            durability = settlement.get_component(DurabilityComponent)
+            if durability.broken or durability.current <= 0.0:
+                return rejected("settlement is too damaged to salvage")
+            durability_value = max(0.0, durability.current - salvage.durability_cost)
+            replace_component(
+                settlement,
+                replace(
+                    durability,
+                    current=durability_value,
+                    broken=durability_value <= 0.0,
+                ),
+            )
+
+        character = ctx.entity(character_id)
+        output_ids = tuple(
+            _add_resource_stack(character, ctx.world, resource_type, quantity)
+            for resource_type, quantity in salvage.outputs.items()
+            if quantity > 0
+        )
+        replace_component(settlement, replace(salvage, depleted=True))
+        return ok(
+            SettlementSalvagedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(settlement.id), *output_ids),
+                    settlement_id=str(settlement.id),
+                    output_ids=output_ids,
+                    durability=durability_value,
                 )
             )
         )
@@ -1441,6 +1513,10 @@ def nukesim_fragments(world: World, character: Entity) -> list[str]:
             settlement = entity.get_component(SettlementComponent)
             owner = "unclaimed" if settlement.claimed_by is None else "claimed"
             lines.append(f"Settlement {_name(entity)}: {owner}.")
+        if entity.has_component(SettlementSalvageComponent):
+            salvage = entity.get_component(SettlementSalvageComponent)
+            state = "depleted" if salvage.depleted else "available"
+            lines.append(f"Settlement salvage {_name(entity)}: {state}.")
         if entity.has_component(WaterPurifierComponent):
             purifier = entity.get_component(WaterPurifierComponent)
             state = "built" if purifier.built else f"needs {purifier.scrap_cost} scrap"
@@ -1508,8 +1584,11 @@ __all__ = [
     "ScavengeSiteComponent",
     "ScrapItemHandler",
     "SealRadiationSourceHandler",
+    "SalvageSettlementHandler",
     "SettlementClaimedEvent",
     "SettlementComponent",
+    "SettlementSalvageComponent",
+    "SettlementSalvagedEvent",
     "SiteScavengedEvent",
     "StabilizeMutationHandler",
     "TakeChemHandler",

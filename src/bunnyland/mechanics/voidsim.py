@@ -36,7 +36,13 @@ from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .barbariansim import CorruptionComponent, CorruptionGainedEvent
-from .colonysim import TechUnlockComponent
+from .colonysim import ResourceStackComponent, TechUnlockComponent
+from .mutation import (
+    ChaosMutationPressureComponent,
+    CyberneticMutationPressureComponent,
+    RadiationMutationPressureComponent,
+    RadiationShieldComponent,
+)
 
 SECONDS_PER_HOUR = 60 * 60
 SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
@@ -104,11 +110,6 @@ class OxygenComponent(Component):
 
 
 @dataclass(frozen=True)
-class RadiationShieldComponent(Component):
-    strength: float = 100.0
-
-
-@dataclass(frozen=True)
 class ChaosInfluenceComponent(Component):
     """Warp/chaos pressure source.
 
@@ -128,38 +129,6 @@ class ChaosWardComponent(Component):
     """Protection against nearby chaos influence."""
 
     protection_per_hour: float = 1.0
-
-
-@dataclass(frozen=True)
-class ChaosMutationPressureComponent(Component):
-    """Chaos-specific mutation pressure from warp/corruption exposure."""
-
-    amount: float = 0.0
-    last_updated_epoch: int = 0
-
-
-@dataclass(frozen=True)
-class RadiationMutationPressureComponent(Component):
-    """Radiation-specific mutation pressure reserved for nuke-sim.
-
-    TODO(nuke-sim): accumulate ionizing radiation here and resolve radiation-specific
-    mutation outcomes without mixing it into chaos pressure.
-    """
-
-    amount: float = 0.0
-    last_updated_epoch: int = 0
-
-
-@dataclass(frozen=True)
-class CyberneticMutationPressureComponent(Component):
-    """Cybernetic/body-mod pressure reserved for future augmentation systems.
-
-    TODO(nuke-sim): decide whether cybernetics compete with, suppress, or amplify organic
-    mutation outcomes while still tracking their pressure independently.
-    """
-
-    amount: float = 0.0
-    last_updated_epoch: int = 0
 
 
 # --- 8.4 Technology, fabrication, and upgrades ----------------------------------------
@@ -184,6 +153,7 @@ class BlueprintComponent(Component):
     system_type: str
     required_tech: str = ""
     integrity_bonus: float = 25.0
+    resource_inputs: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -221,6 +191,7 @@ class CargoComponent(Component):
 class SalvageClaimComponent(Component):
     site_id: str
     rights_contract_id: str | None = None
+    resource_outputs: tuple[tuple[str, int], ...] = ()
     claimed_by: str | None = None
     claimed: bool = False
 
@@ -334,6 +305,7 @@ class ItemFabricatedEvent(DomainEvent):
     item_id: str
     name: str
     system_type: str
+    resource_inputs: tuple[tuple[str, int], ...] = ()
 
 
 class UpgradeInstalledEvent(DomainEvent):
@@ -369,6 +341,7 @@ class SalvageClaimedEvent(DomainEvent):
     claim_id: str
     site_id: str
     contract_id: str | None = None
+    output_ids: tuple[str, ...] = ()
 
 
 class DockingCompletedEvent(DomainEvent):
@@ -670,6 +643,58 @@ def _tech_unlocked(world: World, tech_id: str) -> bool:
     return False
 
 
+def _inventory_resource_stack(
+    character: Entity, world: World, resource_type: str
+) -> Entity | None:
+    for _edge, item_id in character.get_relationships(Contains):
+        if not world.has_entity(item_id):
+            continue
+        item = world.get_entity(item_id)
+        if (
+            item.has_component(ResourceStackComponent)
+            and item.get_component(ResourceStackComponent).resource_type == resource_type
+        ):
+            return item
+    return None
+
+
+def _spend_inventory_resources(
+    character: Entity, world: World, inputs: tuple[tuple[str, int], ...]
+) -> bool:
+    stacks: list[tuple[Entity, ResourceStackComponent, int]] = []
+    for resource_type, quantity in inputs:
+        needed = max(0, int(quantity))
+        if needed == 0:
+            continue
+        stack = _inventory_resource_stack(character, world, resource_type)
+        if stack is None:
+            return False
+        component = stack.get_component(ResourceStackComponent)
+        if component.quantity < needed:
+            return False
+        stacks.append((stack, component, needed))
+    for stack, component, needed in stacks:
+        replace_component(
+            stack,
+            replace(component, quantity=component.quantity - needed),
+        )
+    return True
+
+
+def _spawn_inventory_resource(
+    world: World, character: Entity, resource_type: str, quantity: int
+) -> Entity:
+    stack = spawn_entity(
+        world,
+        [
+            IdentityComponent(name=resource_type, kind="resource"),
+            ResourceStackComponent(resource_type=resource_type, quantity=quantity),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), stack.id)
+    return stack
+
+
 class FabricateHandler:
     command_type = "fabricate"
 
@@ -692,6 +717,11 @@ class FabricateHandler:
         blueprint = blueprint_entity.get_component(BlueprintComponent)
         if not _tech_unlocked(ctx.world, blueprint.required_tech):
             return rejected("required technology has not been researched")
+        character = ctx.entity(character_id)
+        if not _spend_inventory_resources(
+            character, ctx.world, blueprint.resource_inputs
+        ):
+            return rejected("not enough resources to fabricate")
 
         part = spawn_entity(
             ctx.world,
@@ -703,9 +733,7 @@ class FabricateHandler:
                 ),
             ],
         )
-        ctx.entity(character_id).add_relationship(
-            Contains(mode=ContainmentMode.INVENTORY), part.id
-        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), part.id)
         return ok(
             ItemFabricatedEvent(
                 **ctx.event_base(
@@ -718,6 +746,7 @@ class FabricateHandler:
                     item_id=str(part.id),
                     name=blueprint.name,
                     system_type=blueprint.system_type,
+                    resource_inputs=blueprint.resource_inputs,
                 )
             )
         )
@@ -971,6 +1000,12 @@ class ClaimSalvageHandler:
                 != str(character_id)
             ):
                 return rejected("salvage rights are not held")
+        character = ctx.entity(character_id)
+        output_ids = tuple(
+            str(_spawn_inventory_resource(ctx.world, character, resource_type, quantity).id)
+            for resource_type, quantity in component.resource_outputs
+            if quantity > 0
+        )
         replace_component(
             claim,
             replace(component, claimed=True, claimed_by=str(character_id)),
@@ -985,6 +1020,7 @@ class ClaimSalvageHandler:
                     claim_id=str(claim.id),
                     site_id=component.site_id,
                     contract_id=str(contract_id) if contract_id is not None else None,
+                    output_ids=output_ids,
                 )
             )
         )

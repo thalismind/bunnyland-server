@@ -13,8 +13,12 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     PortableComponent,
+    ReadableComponent,
+    SleepingComponent,
+    WritableComponent,
     build_submitted_command,
     container_of,
+    parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
@@ -23,29 +27,57 @@ from bunnyland.mechanics.dragonsim import (
     AbsorbGreatSoulHandler,
     AcceptQuestHandler,
     AncientBeastComponent,
+    ArtifactComponent,
+    ArtifactUsedEvent,
     BountyPaidEvent,
+    BrewPotionHandler,
+    BribeGuardHandler,
+    CarvableComponent,
+    CastDragonSpellHandler,
+    ChangeFactionRankHandler,
     CompleteObjectiveHandler,
     CrimeWitnessedEvent,
     DiscoverLocationHandler,
     DiscoveryComponent,
+    DragonSpellCastEvent,
+    EncounterTriggeredEvent,
+    EncounterZoneComponent,
     FactionComponent,
     FactionJoinedEvent,
     FactionLeftEvent,
+    FactionRankChangedEvent,
     GreatSoulAbsorbedEvent,
     GreatSoulComponent,
+    GuardBribedEvent,
+    GuardComponent,
     HasPerk,
+    InscribeVoicePhraseHandler,
+    JailComponent,
+    JailSentenceServedEvent,
     JoinFactionHandler,
+    KnowsSpell,
     KnowsWord,
+    LearnSpellHandler,
     LearnWordOfPowerHandler,
     LeaveFactionHandler,
+    LocationDiscoveredEvent,
+    LockDifficultyComponent,
+    LockPickedEvent,
     LoreBookComponent,
     LoreBookReadEvent,
-    LocationDiscoveredEvent,
+    MagickaComponent,
+    MapMarkerAddedEvent,
+    MapMarkerComponent,
+    MarkMapHandler,
     MemberOf,
     PayBountyHandler,
     PerkComponent,
     PerkUnlockedEvent,
+    PickLockHandler,
     PointOfInterestComponent,
+    PotionBrewedEvent,
+    PotionComponent,
+    PotionRecipeComponent,
     QuestAcceptedEvent,
     QuestCompletedEvent,
     QuestComponent,
@@ -53,13 +85,22 @@ from bunnyland.mechanics.dragonsim import (
     QuestObjectiveComponent,
     QuestRewardComponent,
     ReadLoreBookHandler,
+    ServeJailTimeHandler,
     SneakHandler,
     SpeakWordOfPowerHandler,
+    SpellComponent,
+    SpellLearnedEvent,
     StealHandler,
     StealthChangedEvent,
     StealthComponent,
+    StudyVoiceInscriptionHandler,
     TheftCommittedEvent,
+    TriggerEncounterHandler,
     UnlockPerkHandler,
+    UseArtifactHandler,
+    VoiceInscriptionComponent,
+    VoiceInscriptionStudiedEvent,
+    VoicePhraseInscribedEvent,
     WantedComponent,
     WordOfPowerComponent,
     WordOfPowerLearnedEvent,
@@ -73,6 +114,8 @@ HOUR = 60 * 60
 
 def _install(actor):
     actor.register_handler(DiscoverLocationHandler())
+    actor.register_handler(MarkMapHandler())
+    actor.register_handler(TriggerEncounterHandler())
     actor.register_handler(AcceptQuestHandler())
     actor.register_handler(CompleteObjectiveHandler())
     actor.register_handler(UnlockPerkHandler())
@@ -81,10 +124,20 @@ def _install(actor):
     actor.register_handler(SpeakWordOfPowerHandler())
     actor.register_handler(JoinFactionHandler())
     actor.register_handler(LeaveFactionHandler())
+    actor.register_handler(ChangeFactionRankHandler())
     actor.register_handler(SneakHandler())
     actor.register_handler(StealHandler())
     actor.register_handler(PayBountyHandler())
+    actor.register_handler(BribeGuardHandler())
+    actor.register_handler(ServeJailTimeHandler())
+    actor.register_handler(PickLockHandler())
     actor.register_handler(ReadLoreBookHandler())
+    actor.register_handler(LearnSpellHandler())
+    actor.register_handler(CastDragonSpellHandler())
+    actor.register_handler(BrewPotionHandler())
+    actor.register_handler(UseArtifactHandler())
+    actor.register_handler(InscribeVoicePhraseHandler())
+    actor.register_handler(StudyVoiceInscriptionHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -123,6 +176,21 @@ def _poi(scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), poi.id
     )
     return poi.id
+
+
+def _encounter_zone(scenario):
+    zone = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="wolf road", kind="location"),
+            PointOfInterestComponent(location_type="road", region="north meadow"),
+            EncounterZoneComponent(zone_type="wolf ambush", danger_rating=2),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), zone.id
+    )
+    return zone.id
 
 
 def _quest(scenario):
@@ -212,6 +280,45 @@ async def test_discover_location_marks_poi_and_records_discovery():
     assert discovered[0].location_type == "ruin"
 
 
+async def test_mark_map_records_marker_for_character():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    poi = _poi(scenario)
+    marked: list[MapMarkerAddedEvent] = []
+    scenario.actor.bus.subscribe(MapMarkerAddedEvent, marked.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "mark-map", location_id=str(poi), label="Old Watchtower")
+    )
+    await scenario.actor.tick(HOUR)
+
+    marker = scenario.actor.world.get_entity(poi).get_component(MapMarkerComponent)
+    assert marker.label == "Old Watchtower"
+    assert marker.marker_type == "ruin"
+    assert marker.marked_by == (str(scenario.character),)
+    assert marked[0].location_id == str(poi)
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert "Map marker: Old Watchtower (ruin)." in dragonsim_fragments(
+        scenario.actor.world, character
+    )
+
+
+async def test_trigger_encounter_zone_updates_last_triggered_epoch():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    zone = _encounter_zone(scenario)
+    triggered: list[EncounterTriggeredEvent] = []
+    scenario.actor.bus.subscribe(EncounterTriggeredEvent, triggered.append)
+
+    await scenario.actor.submit(_cmd(scenario, "trigger-encounter", zone_id=str(zone)))
+    await scenario.actor.tick(HOUR)
+
+    component = scenario.actor.world.get_entity(zone).get_component(EncounterZoneComponent)
+    assert component.last_triggered_at_epoch == HOUR
+    assert triggered[0].zone_type == "wolf ambush"
+    assert triggered[0].danger_rating == 2
+
+
 async def test_accept_and_complete_quest_objective_completes_quest_and_grants_reward():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -246,6 +353,80 @@ async def test_accept_and_complete_quest_objective_completes_quest_and_grants_re
     )
     assert reward_component.claimed is True
     assert reward_component.claimed_by == str(scenario.character)
+
+
+async def test_complete_quest_grants_reward_item_without_source_container():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    quest, objective = _quest(scenario)
+    item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="loose silver carrot", kind="item"),
+            PortableComponent(),
+        ],
+    )
+    spawn_entity(
+        scenario.actor.world,
+        [
+            QuestRewardComponent(
+                quest_id="lost-ring",
+                description="A loose silver carrot",
+                item_ids=(str(item.id),),
+            )
+        ],
+    )
+    completed_quests: list[QuestCompletedEvent] = []
+    scenario.actor.bus.subscribe(QuestCompletedEvent, completed_quests.append)
+
+    await scenario.actor.submit(_cmd(scenario, "accept-quest", quest_id=str(quest)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "complete-objective", objective_id=str(objective))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert completed_quests[0].quest_key == "lost-ring"
+    assert container_of(item) == scenario.character
+
+
+async def test_complete_nonfinal_objective_by_description_keeps_quest_active():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    quest, objective = _quest(scenario)
+    spawn_entity(
+        scenario.actor.world,
+        [
+            QuestObjectiveComponent(
+                quest_id="lost-ring",
+                description="Report back to the warden",
+            )
+        ],
+    )
+    completed_objectives: list[QuestObjectiveCompletedEvent] = []
+    completed_quests: list[QuestCompletedEvent] = []
+    scenario.actor.bus.subscribe(QuestObjectiveCompletedEvent, completed_objectives.append)
+    scenario.actor.bus.subscribe(QuestCompletedEvent, completed_quests.append)
+
+    await scenario.actor.submit(_cmd(scenario, "accept-quest", quest_id=str(quest)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "complete-objective",
+            objective_id="Recover the ring from the watchtower",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    quest_component = scenario.actor.world.get_entity(quest).get_component(QuestComponent)
+    objective_component = scenario.actor.world.get_entity(objective).get_component(
+        QuestObjectiveComponent
+    )
+    assert objective_component.completed is True
+    assert completed_objectives[0].description == "Recover the ring from the watchtower"
+    assert quest_component.status == "active"
+    assert completed_quests == []
 
 
 async def test_read_lore_book_marks_book_and_grants_lifesim_skill_xp_once():
@@ -366,6 +547,30 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), discovered_poi.id)
+    marked_poi = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="marked watchtower", kind="location"),
+            PointOfInterestComponent(location_type="ruin", region="north meadow"),
+            MapMarkerComponent(marked_by=(str(scenario.character),)),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), marked_poi.id)
+    distant_zone = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far wolf road", kind="location"),
+            EncounterZoneComponent(zone_type="wolf ambush"),
+        ],
+    )
+    inactive_zone = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="quiet wolf road", kind="location"),
+            EncounterZoneComponent(zone_type="wolf ambush", active=False),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), inactive_zone.id)
     spawn_entity(
         scenario.actor.world,
         [QuestComponent(quest_id="guard-duty", title="Guard Duty")],
@@ -457,6 +662,70 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
             "location already discovered",
         ),
         (
+            MarkMapHandler(),
+            _handler_cmd(
+                scenario,
+                "mark-map",
+                character_id="not-an-id",
+                location_id=str(distant_poi.id),
+            ),
+            "invalid character or location id",
+        ),
+        (
+            MarkMapHandler(),
+            _handler_cmd(scenario, "mark-map", location_id="entity_999"),
+            "location does not exist",
+        ),
+        (
+            MarkMapHandler(),
+            _handler_cmd(scenario, "mark-map", location_id=str(distant_poi.id)),
+            "location is not reachable",
+        ),
+        (
+            MarkMapHandler(),
+            _handler_cmd(scenario, "mark-map", location_id=str(wrong_kind.id)),
+            "target is not a mappable location",
+        ),
+        (
+            MarkMapHandler(),
+            _handler_cmd(scenario, "mark-map", location_id=str(marked_poi.id)),
+            "location is already marked",
+        ),
+        (
+            TriggerEncounterHandler(),
+            _handler_cmd(
+                scenario,
+                "trigger-encounter",
+                character_id="not-an-id",
+                zone_id=str(distant_zone.id),
+            ),
+            "invalid character or encounter zone id",
+        ),
+        (
+            TriggerEncounterHandler(),
+            _handler_cmd(scenario, "trigger-encounter", zone_id="entity_999"),
+            "encounter zone does not exist",
+        ),
+        (
+            TriggerEncounterHandler(),
+            _handler_cmd(
+                scenario,
+                "trigger-encounter",
+                zone_id=str(distant_zone.id),
+            ),
+            "encounter zone is not reachable",
+        ),
+        (
+            TriggerEncounterHandler(),
+            _handler_cmd(scenario, "trigger-encounter", zone_id=str(wrong_kind.id)),
+            "target is not an encounter zone",
+        ),
+        (
+            TriggerEncounterHandler(),
+            _handler_cmd(scenario, "trigger-encounter", zone_id=str(inactive_zone.id)),
+            "encounter zone is inactive",
+        ),
+        (
             AcceptQuestHandler(),
             _handler_cmd(scenario, "accept-quest", character_id="not-an-id", quest_id="x"),
             "invalid character or quest id",
@@ -465,6 +734,11 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
             AcceptQuestHandler(),
             _handler_cmd(scenario, "accept-quest", quest_id="missing"),
             "quest does not exist",
+        ),
+        (
+            AcceptQuestHandler(),
+            _handler_cmd(scenario, "accept-quest", quest_id=str(wrong_kind.id)),
+            "target is not a quest",
         ),
         (
             AcceptQuestHandler(),
@@ -490,6 +764,15 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
             CompleteObjectiveHandler(),
             _handler_cmd(scenario, "complete-objective", objective_id="missing"),
             "objective does not exist",
+        ),
+        (
+            CompleteObjectiveHandler(),
+            _handler_cmd(
+                scenario,
+                "complete-objective",
+                objective_id=str(wrong_kind.id),
+            ),
+            "target is not a quest objective",
         ),
         (
             CompleteObjectiveHandler(),
@@ -640,10 +923,12 @@ def test_dragonsim_fragments_show_quests_factions_and_nearby_locations():
     scenario = build_scenario()
     poi = _poi(scenario)
     faction = _faction(scenario)
+    nameless_group = spawn_entity(scenario.actor.world, [])
     quest, _objective = _quest(scenario)
     book = _skill_book(scenario)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_relationship(MemberOf(rank="scout", since_epoch=0), faction)
+    character.add_relationship(MemberOf(rank="ally", since_epoch=0), nameless_group.id)
     quest_entity = scenario.actor.world.get_entity(quest)
     quest_entity.remove_component(QuestComponent)
     quest_entity.add_component(
@@ -659,6 +944,7 @@ def test_dragonsim_fragments_show_quests_factions_and_nearby_locations():
 
     assert scenario.actor.world.get_entity(poi).has_component(PointOfInterestComponent)
     assert any("Moss Wardens" in line for line in fragments)
+    assert any(f"ally of {nameless_group.id}" in line for line in fragments)
     assert any("Active quest: Find the Lost Ring" in line for line in fragments)
     assert any("old watchtower" in line for line in fragments)
     assert any("Manual of Quiet Feet" in line and "stealth" in line for line in fragments)
@@ -916,6 +1202,222 @@ def test_soul_and_word_handlers_reject_invalid_directly():
     ).reason == "its great soul is already claimed"
 
 
+async def test_voice_phrase_can_be_inscribed_on_writable_or_carvable_target_and_studied():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    word = _word(scenario, name="Storm Call", min_souls=0)
+    slate = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="scratched slate", kind="prop"),
+            CarvableComponent(remaining_space=40),
+        ],
+    )
+    paper = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="blank paper", kind="item"),
+            WritableComponent(remaining_space=40),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), slate.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), paper.id)
+    inscribed: list[VoicePhraseInscribedEvent] = []
+    studied: list[VoiceInscriptionStudiedEvent] = []
+    scenario.actor.bus.subscribe(VoicePhraseInscribedEvent, inscribed.append)
+    scenario.actor.bus.subscribe(VoiceInscriptionStudiedEvent, studied.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "inscribe-voice-phrase",
+            target_id=str(slate.id),
+            word_id=str(word),
+            phrase="storm listens",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert slate.get_component(VoiceInscriptionComponent).word_id == str(word)
+    assert slate.get_component(ReadableComponent).text == "storm listens"
+    assert slate.get_component(CarvableComponent).remaining_space == 27
+    assert inscribed[0].target_id == str(slate.id)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "study-voice-inscription", target_id=str(slate.id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_relationship(KnowsWord, word)
+    assert studied[0].word_id == str(word)
+    assert any(
+        "Word of power known: Storm Call" in line
+        for line in dragonsim_fragments(scenario.actor.world, character)
+    )
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "inscribe-voice-phrase",
+            target_id=str(paper.id),
+            word_id=str(word),
+            phrase="rain remembers",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert paper.get_component(ReadableComponent).text == "rain remembers"
+    assert paper.get_component(WritableComponent).remaining_space == 26
+
+
+async def test_change_rank_bribe_guard_serve_jail_and_pick_lock():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    faction = _faction(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(MemberOf(rank="scout", since_epoch=3), faction)
+    character.add_component(WantedComponent(amounts={str(faction): 15}))
+    guard = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Moss Guard", kind="character"),
+            CharacterComponent(species="bunny"),
+            GuardComponent(faction_id=str(faction), bribe_amount=10),
+        ],
+    )
+    lock = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="old chest", kind="container"),
+            LockDifficultyComponent(difficulty=2),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), guard.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), lock.id)
+    _set_skill_level(scenario, "lockpicking", 2)
+    ranked: list[FactionRankChangedEvent] = []
+    bribed: list[GuardBribedEvent] = []
+    jailed: list[JailSentenceServedEvent] = []
+    picked: list[LockPickedEvent] = []
+    scenario.actor.bus.subscribe(FactionRankChangedEvent, ranked.append)
+    scenario.actor.bus.subscribe(GuardBribedEvent, bribed.append)
+    scenario.actor.bus.subscribe(JailSentenceServedEvent, jailed.append)
+    scenario.actor.bus.subscribe(LockPickedEvent, picked.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "change-faction-rank", faction_id=str(faction), rank="warden")
+    )
+    await scenario.actor.tick(HOUR)
+    assert ranked[0].old_rank == "scout"
+    assert ranked[0].new_rank == "warden"
+
+    await scenario.actor.submit(_cmd(scenario, "bribe-guard", guard_id=str(guard.id)))
+    await scenario.actor.tick(HOUR)
+    assert bribed[0].amount == 10
+    assert character.get_component(WantedComponent).amounts[str(faction)] == 5
+
+    character.remove_component(WantedComponent)
+    character.add_component(WantedComponent(amounts={str(faction): 5}))
+    character.add_component(JailComponent(faction_id=str(faction), release_epoch=0))
+    await scenario.actor.submit(_cmd(scenario, "serve-jail-time"))
+    await scenario.actor.tick(HOUR)
+    assert not character.has_component(JailComponent)
+    assert character.get_component(WantedComponent).amounts == {}
+    assert jailed[0].faction_id == str(faction)
+
+    await scenario.actor.submit(_cmd(scenario, "pick-lock", lock_id=str(lock.id)))
+    await scenario.actor.tick(HOUR)
+    assert lock.get_component(LockDifficultyComponent).locked is False
+    assert picked[0].difficulty == 2
+    assert character.get_component(SkillSetComponent).xp["lockpicking"] == 2.0
+
+
+async def test_learn_cast_brew_and_use_fixed_adventure_magic():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MagickaComponent(current=5, maximum=5))
+    _set_skill_level(scenario, "destruction", 1)
+    _set_skill_level(scenario, "alchemy", 1)
+    spell = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Spark", kind="spell"),
+            SpellComponent(
+                name="Spark",
+                school="destruction",
+                magicka_cost=3,
+                skill_name="destruction",
+                min_skill_level=1,
+            ),
+        ],
+    )
+    herb = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="blue herb", kind="item"), PortableComponent()],
+    )
+    recipe = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="blue tonic recipe", kind="recipe"),
+            PotionRecipeComponent(
+                name="blue tonic recipe",
+                potion_name="Blue Tonic",
+                skill_name="alchemy",
+                min_skill_level=1,
+                ingredient_ids=(str(herb.id),),
+                effect="restore",
+            ),
+        ],
+    )
+    artifact = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="star mirror", kind="artifact"),
+            ArtifactComponent(name="Star Mirror", effect="flare", charges=2),
+        ],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), spell.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), recipe.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), artifact.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), herb.id)
+    learned: list[SpellLearnedEvent] = []
+    cast: list[DragonSpellCastEvent] = []
+    brewed: list[PotionBrewedEvent] = []
+    used: list[ArtifactUsedEvent] = []
+    scenario.actor.bus.subscribe(SpellLearnedEvent, learned.append)
+    scenario.actor.bus.subscribe(DragonSpellCastEvent, cast.append)
+    scenario.actor.bus.subscribe(PotionBrewedEvent, brewed.append)
+    scenario.actor.bus.subscribe(ArtifactUsedEvent, used.append)
+
+    await scenario.actor.submit(_cmd(scenario, "learn-spell", spell_id=str(spell.id)))
+    await scenario.actor.tick(HOUR)
+    assert character.has_relationship(KnowsSpell, spell.id)
+    assert learned[0].spell_name == "Spark"
+
+    await scenario.actor.submit(_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id)))
+    await scenario.actor.tick(HOUR)
+    assert character.get_component(MagickaComponent).current == 2
+    assert cast[0].school == "destruction"
+    assert character.get_component(SkillSetComponent).xp["destruction"] == 3.0
+
+    await scenario.actor.submit(_cmd(scenario, "brew-potion", recipe_id=str(recipe.id)))
+    await scenario.actor.tick(HOUR)
+    potion = scenario.actor.world.get_entity(parse_entity_id(brewed[0].potion_id))
+    assert potion.get_component(PotionComponent).name == "Blue Tonic"
+    assert container_of(potion) == scenario.character
+    assert container_of(herb) is None
+
+    await scenario.actor.submit(_cmd(scenario, "use-artifact", artifact_id=str(artifact.id)))
+    await scenario.actor.tick(HOUR)
+    assert artifact.get_component(ArtifactComponent).charges == 1
+    assert used[0].artifact_name == "Star Mirror"
+
+
 def _victim_with_item(scenario, *, faction_id=None, room=None, name="Mara"):
     world = scenario.actor.world
     room = room if room is not None else scenario.room_a
@@ -974,6 +1476,51 @@ async def test_witnessed_theft_takes_item_and_raises_faction_bounty():
     assert crimes and crimes[0].faction_id == str(faction)
     bounty = world.get_entity(scenario.character).get_component(WantedComponent)
     assert bounty.amounts[str(faction)] == 10
+
+
+async def test_repeat_witnessed_theft_updates_existing_bounty_and_ignores_invalid_witnesses():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    faction = _faction(scenario)
+    victim, first_item = _victim_with_item(scenario, faction_id=faction)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    room.add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        spawn_entity(world, [IdentityComponent(name="statue", kind="prop")]).id,
+    )
+    sleeping_witness = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="sleeping scout", kind="character"),
+            CharacterComponent(species="bunny"),
+            SleepingComponent(started_at_epoch=0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), sleeping_witness.id)
+    second_item = spawn_entity(
+        world,
+        [IdentityComponent(name="emerald ring", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    world.get_entity(victim).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), second_item.id
+    )
+    crimes: list[CrimeWitnessedEvent] = []
+    scenario.actor.bus.subscribe(CrimeWitnessedEvent, crimes.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "steal", target_id=str(victim), item_id=str(first_item))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "steal", target_id=str(victim), item_id=str(second_item.id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    bounty = world.get_entity(scenario.character).get_component(WantedComponent)
+    assert bounty.amounts[str(faction)] == 20
+    assert len(crimes) == 2
+    assert str(sleeping_witness.id) not in crimes[-1].witness_ids
 
 
 async def test_sneaking_thief_is_not_witnessed():

@@ -19,7 +19,9 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.mechanics.barbariansim import DurabilityComponent
 from bunnyland.mechanics.colonysim import ResourceStackComponent
+from bunnyland.mechanics.mutation import RadiationMutationPressureComponent
 from bunnyland.mechanics.nukesim import (
     AddictionComponent,
     BuildPurifierHandler,
@@ -55,6 +57,7 @@ from bunnyland.mechanics.nukesim import (
     RadMedicineComponent,
     RadProtectionComponent,
     RestoreTechHandler,
+    SalvageSettlementHandler,
     ScanRadiationHandler,
     ScavengeHandler,
     ScavengeSiteComponent,
@@ -62,18 +65,19 @@ from bunnyland.mechanics.nukesim import (
     SealRadiationSourceHandler,
     SettlementClaimedEvent,
     SettlementComponent,
+    SettlementSalvageComponent,
+    SettlementSalvagedEvent,
     StabilizeMutationHandler,
     TakeChemHandler,
     TechLeadComponent,
     UseRadMedicineHandler,
-    WaterPurifierComponent,
     WaterPurifiedEvent,
+    WaterPurifierComponent,
     WaterPurityComponent,
     WithdrawalProgressedEvent,
     install_nukesim,
     nukesim_fragments,
 )
-from bunnyland.mechanics.voidsim import RadiationMutationPressureComponent
 
 HOUR = 3600.0
 
@@ -92,6 +96,7 @@ def _install(actor):
     actor.register_handler(PurifyWaterHandler())
     actor.register_handler(DrinkContaminatedWaterHandler())
     actor.register_handler(ClaimSettlementHandler())
+    actor.register_handler(SalvageSettlementHandler())
     actor.register_handler(BuildPurifierHandler())
     actor.register_handler(PowerGeneratorHandler())
     install_nukesim(actor)
@@ -813,6 +818,87 @@ async def test_claim_settlement_build_purifier_and_power_generator():
     assert powered and powered[0].fuel_spent == 1
 
 
+async def test_salvage_settlement_outputs_resources_and_spends_durability():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    settlement = _room_entity(
+        scenario,
+        "Red Rocket burrow",
+        "settlement",
+        [
+            SettlementComponent(name="Red Rocket burrow"),
+            SettlementSalvageComponent(
+                outputs={"scrap": 3, "fuel": 1},
+                durability_cost=2.0,
+            ),
+            DurabilityComponent(current=5.0, maximum=5.0),
+        ],
+    )
+    salvaged: list[SettlementSalvagedEvent] = []
+    scenario.actor.bus.subscribe(SettlementSalvagedEvent, salvaged.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "claim-settlement", settlement_id=str(settlement))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "salvage-settlement", settlement_id=str(settlement))
+    )
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    settlement_entity = world.get_entity(settlement)
+    salvage = settlement_entity.get_component(SettlementSalvageComponent)
+    durability = settlement_entity.get_component(DurabilityComponent)
+    character = world.get_entity(scenario.character)
+    stacks = [
+        world.get_entity(item_id).get_component(ResourceStackComponent)
+        for _edge, item_id in character.get_relationships(Contains)
+        if world.get_entity(item_id).has_component(ResourceStackComponent)
+    ]
+    assert salvage.depleted is True
+    assert durability.current == 3.0
+    assert salvaged[0].durability == 3.0
+    assert {(stack.resource_type, stack.quantity) for stack in stacks} == {
+        ("scrap", 3),
+        ("fuel", 1),
+    }
+
+
+async def test_salvage_settlement_without_durability_skips_empty_outputs():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    settlement = _room_entity(
+        scenario,
+        "Picked Red Rocket",
+        "settlement",
+        [
+            SettlementComponent(name="Picked Red Rocket"),
+            SettlementSalvageComponent(outputs={"scrap": 2, "fuel": 0}),
+        ],
+    )
+    salvaged: list[SettlementSalvagedEvent] = []
+    scenario.actor.bus.subscribe(SettlementSalvagedEvent, salvaged.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "claim-settlement", settlement_id=str(settlement))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "salvage-settlement", settlement_id=str(settlement))
+    )
+    await scenario.actor.tick(HOUR)
+
+    output_ids = [parse_entity_id(raw) for raw in salvaged[0].output_ids]
+    assert salvaged[0].durability is None
+    assert len(output_ids) == 1
+    assert output_ids[0] is not None
+    stack = scenario.actor.world.get_entity(output_ids[0]).get_component(
+        ResourceStackComponent
+    )
+    assert (stack.resource_type, stack.quantity) == ("scrap", 2)
+
+
 def test_settlement_utility_handlers_reject_bad_state_directly():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -853,6 +939,34 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
         "settlement",
         [SettlementComponent(name="bare outpost", claimed_by=str(scenario.character))],
     )
+    unclaimed_salvage = _room_entity(
+        scenario,
+        "unclaimed salvage",
+        "settlement",
+        [
+            SettlementComponent(name="unclaimed salvage"),
+            SettlementSalvageComponent(outputs={"scrap": 1}),
+        ],
+    )
+    depleted_salvage = _room_entity(
+        scenario,
+        "picked outpost",
+        "settlement",
+        [
+            SettlementComponent(name="picked outpost", claimed_by=str(scenario.character)),
+            SettlementSalvageComponent(outputs={"scrap": 1}, depleted=True),
+        ],
+    )
+    broken_salvage = _room_entity(
+        scenario,
+        "broken outpost",
+        "settlement",
+        [
+            SettlementComponent(name="broken outpost", claimed_by=str(scenario.character)),
+            SettlementSalvageComponent(outputs={"scrap": 1}),
+            DurabilityComponent(current=0.0, maximum=5.0, broken=True),
+        ],
+    )
     generator = _room_entity(
         scenario,
         "dry generator",
@@ -868,6 +982,7 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
     rock = _room_entity(scenario, "rock", "prop", [])
 
     claim = ClaimSettlementHandler()
+    salvage = SalvageSettlementHandler()
     build = BuildPurifierHandler()
     power = PowerGeneratorHandler()
     assert claim.execute(
@@ -882,6 +997,30 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
     assert claim.execute(
         ctx, _handler_cmd(scenario, "claim-settlement", settlement_id=str(settlement))
     ).ok
+
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "salvage-settlement", character_id="x")
+    ).reason == "invalid character id"
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(rock))
+    ).reason == "target is the wrong kind"
+    assert salvage.execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "salvage-settlement",
+            settlement_id=str(unclaimed_salvage),
+        ),
+    ).reason == "claim the settlement first"
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(bare_claimed))
+    ).reason == "settlement has no salvage"
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(depleted_salvage))
+    ).reason == "settlement salvage is depleted"
+    assert salvage.execute(
+        ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(broken_salvage))
+    ).reason == "settlement is too damaged to salvage"
 
     assert build.execute(
         ctx, _handler_cmd(scenario, "build-purifier", character_id="x")
@@ -1000,18 +1139,62 @@ def test_nukesim_fragments_show_unidentified_tech_and_leads():
         "settlement",
         [
             SettlementComponent(name="hilltop burrow"),
+            SettlementSalvageComponent(outputs={"scrap": 1}),
             WaterPurifierComponent(scrap_cost=4),
             GeneratorComponent(fuel_cost=2),
+        ],
+    )
+    _room_entity(
+        scenario,
+        "workshop burrow",
+        "settlement",
+        [
+            SettlementComponent(name="workshop burrow", claimed_by=str(scenario.character)),
+            SettlementSalvageComponent(outputs={"scrap": 1}, depleted=True),
+            WaterPurifierComponent(built=True),
+            GeneratorComponent(powered=True),
+        ],
+    )
+    _room_entity(
+        scenario,
+        "clear spring",
+        "water",
+        [WaterPurityComponent()],
+    )
+    _room_entity(
+        scenario,
+        "filtered cistern",
+        "water",
+        [WaterPurityComponent(purified=True)],
+    )
+    _room_entity(
+        scenario,
+        "old recycler",
+        "item",
+        [
+            OldWorldTechComponent(
+                tech_name="recycler",
+                identified=True,
+                restore_scrap=5,
+            )
         ],
     )
 
     character = scenario.actor.world.get_entity(scenario.character)
     fragments = nukesim_fragments(scenario.actor.world, character)
     assert any("unknown device (unidentified)" in line for line in fragments)
+    assert any("recycler (identified, needs 5 scrap to restore)" in line for line in fragments)
     assert any("Tech lead: fusion core near the old reactor" in line for line in fragments)
     assert any("Settlement hilltop burrow: unclaimed" in line for line in fragments)
+    assert any("Settlement workshop burrow: claimed" in line for line in fragments)
+    assert any("Settlement salvage hilltop burrow: available" in line for line in fragments)
+    assert any("Settlement salvage workshop burrow: depleted" in line for line in fragments)
     assert any("Water purifier hilltop burrow: needs 4 scrap" in line for line in fragments)
+    assert any("Water purifier workshop burrow: built" in line for line in fragments)
     assert any("Generator hilltop burrow: needs 2 fuel" in line for line in fragments)
+    assert any("Generator workshop burrow: powered" in line for line in fragments)
+    assert any("Water source clear spring: clean" in line for line in fragments)
+    assert any("Water source filtered cistern: purified" in line for line in fragments)
 
 
 async def test_take_chem_relieves_sickness_and_builds_addiction():

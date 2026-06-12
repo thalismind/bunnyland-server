@@ -100,8 +100,31 @@ def test_select_plugins_records_imported_module_namespace(monkeypatch):
     ("pack", "expected"),
     [
         ("peaceful", {CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM}),
-        ("fantastic", {CORE_VERBS, WORLDGEN, LIFESIM, BARBARIANSIM, DRAGONSIM}),
-        ("futuristic", {CORE_VERBS, WORLDGEN, LIFESIM, NUKESIM, VOIDSIM}),
+        (
+            "fantastic",
+            {
+                CORE_VERBS,
+                WORLDGEN,
+                LIFESIM,
+                COLONYSIM,
+                GARDENSIM,
+                BARBARIANSIM,
+                DRAGONSIM,
+            },
+        ),
+        (
+            "futuristic",
+            {
+                CORE_VERBS,
+                WORLDGEN,
+                LIFESIM,
+                COLONYSIM,
+                GARDENSIM,
+                BARBARIANSIM,
+                NUKESIM,
+                VOIDSIM,
+            },
+        ),
     ],
 )
 def test_select_plugins_expands_starter_pack(pack, expected):
@@ -216,7 +239,16 @@ def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
 
     assert result == 0
     _actor, meta = load_world(path)
-    assert meta.plugins == (CORE_VERBS, WORLDGEN, LIFESIM, NUKESIM, VOIDSIM)
+    assert meta.plugins == (
+        CORE_VERBS,
+        WORLDGEN,
+        LIFESIM,
+        COLONYSIM,
+        GARDENSIM,
+        BARBARIANSIM,
+        VOIDSIM,
+        NUKESIM,
+    )
 
 
 def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):

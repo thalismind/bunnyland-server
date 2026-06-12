@@ -132,12 +132,24 @@ branch tags and `latest` for the default branch. The web repo publishes
 - **[Life-sim homes, work, and family](docs/player/lifesim.md)** — aspirations, skills,
   jobs, businesses, households, homes, room claims, rent, and family.
 - **[Dagger-sim frontier play](docs/player/daggersim.md)** — rumors, travel, institutions,
-  banking, law, magic, afflictions, and dungeons.
+  banking, law, property, magic, afflictions, and dungeons.
+- **[Dagger civic life and property](docs/player/dagger-civic-property.md)** —
+  institution reputation, service access, generated work, legal reputation, banking, and
+  purchasable deeds.
 - **[Void-sim ships and space travel](docs/player/voidsim.md)** — airlocks, life support,
-  power, docking, fuel, sensors, orbit, landing, and jumps.
+  power, docking, fuel, sensors, orbit, landing, contracts, and jumps.
+- **[Void contracts, fabrication, and salvage](docs/player/void-contracts-fabrication.md)** —
+  resource-backed fabrication, cargo, salvage claims, and crew watches.
+- **[Nuke-sim wasteland survival](docs/player/nukesim.md)** — radiation, mutation
+  pressure, scavenging, settlement salvage, old-world tech, and dirty water.
+- **[Nuke settlements and old-world tech](docs/player/nuke-settlements-tech.md)** —
+  claiming settlements, salvage, purifiers, generators, and device restoration.
 - **[Dino-sim fossils, eggs, companions, and kaiju incidents](docs/player/dinosim.md)** —
   identifying fossils, cloning eggs, hatching dinos, taming companions, and handling kaiju
   storyteller incidents.
+- **[Dino ranching, feed, and creature products](docs/player/dino-ranching-products.md)** —
+  feed stores, resource-backed feed, hunger and stress, egg collection, product harvests,
+  ranch work, and guard duty.
 
 ### Technical docs
 
