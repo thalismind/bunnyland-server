@@ -564,6 +564,15 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "CollectionUpdatedEvent",
     } <= {event.__name__ for event in garden.commands.typed_events}
 
+    dragon = plugins[DRAGONSIM]
+    assert "PerkComponent" in {component.__name__ for component in dragon.ecs.components}
+    assert "HasPerk" in {edge.__name__ for edge in dragon.ecs.edges}
+    assert "unlock-perk" in {
+        handler.command_type for handler in dragon.commands.action_handlers
+    }
+    assert "PerkUnlockedEvent" in {event.__name__ for event in dragon.commands.typed_events}
+    assert LIFESIM in dragon.dependencies.requires
+
 
 def test_ecs_systems_can_be_instances_or_classes():
     # apply should accept a system instance as well as a class.

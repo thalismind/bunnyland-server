@@ -18,6 +18,7 @@ from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_com
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from .lifesim import SkillSetComponent
 
 
 @dataclass(frozen=True)
@@ -77,9 +78,25 @@ class FactionReputationComponent(Component):
 
 
 @dataclass(frozen=True)
+class PerkComponent(Component):
+    """A perk gated on a lifesim skill reaching ``min_level``."""
+
+    name: str
+    skill_name: str
+    min_level: int = 2
+
+
+@dataclass(frozen=True)
 class MemberOf(Edge):
     rank: str = "member"
     since_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class HasPerk(Edge):
+    """character -> unlocked perk entity."""
+
+    unlocked_at_epoch: int = 0
 
 
 class LocationDiscoveredEvent(DomainEvent):
@@ -115,6 +132,12 @@ class FactionJoinedEvent(DomainEvent):
 class FactionLeftEvent(DomainEvent):
     faction_id: str
     faction_name: str
+
+
+class PerkUnlockedEvent(DomainEvent):
+    perk_id: str
+    perk_name: str
+    skill_name: str
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -429,6 +452,50 @@ class LeaveFactionHandler:
         )
 
 
+def _skill_level(character: Entity, skill_name: str) -> int:
+    """Read a character's lifesim skill level (0 when unknown)."""
+    if not character.has_component(SkillSetComponent):
+        return 0
+    return character.get_component(SkillSetComponent).levels.get(skill_name, 0)
+
+
+class UnlockPerkHandler:
+    command_type = "unlock-perk"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        perk_id = parse_entity_id(command.payload.get("perk_id"))
+        if character_id is None or perk_id is None:
+            return rejected("invalid character or perk id")
+        if not ctx.world.has_entity(perk_id):
+            return rejected("perk does not exist")
+        perk_entity = ctx.entity(perk_id)
+        if not perk_entity.has_component(PerkComponent):
+            return rejected("target is not a perk")
+        perk = perk_entity.get_component(PerkComponent)
+
+        character = ctx.entity(character_id)
+        if character.has_relationship(HasPerk, perk_id):
+            return rejected("perk already unlocked")
+        if _skill_level(character, perk.skill_name) < perk.min_level:
+            return rejected("skill level too low for this perk")
+
+        character.add_relationship(HasPerk(unlocked_at_epoch=ctx.epoch), perk_id)
+        return ok(
+            PerkUnlockedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(perk_id),),
+                    perk_id=str(perk_id),
+                    perk_name=perk.name,
+                    skill_name=perk.skill_name,
+                )
+            )
+        )
+
+
 def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for edge, faction_id in character.get_relationships(MemberOf):
@@ -444,6 +511,13 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         component = quest.get_component(QuestComponent)
         if component.status == "active" and str(character.id) in component.accepted_by:
             lines.append(f"Active quest: {component.title}.")
+
+    for _perk_edge, perk_id in character.get_relationships(HasPerk):
+        if not world.has_entity(perk_id):
+            continue
+        perk = world.get_entity(perk_id)
+        if perk.has_component(PerkComponent):
+            lines.append(f"Perk unlocked: {perk.get_component(PerkComponent).name}.")
 
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
@@ -463,10 +537,13 @@ __all__ = [
     "FactionJoinedEvent",
     "FactionLeftEvent",
     "FactionReputationComponent",
+    "HasPerk",
     "JoinFactionHandler",
     "LeaveFactionHandler",
     "LocationDiscoveredEvent",
     "MemberOf",
+    "PerkComponent",
+    "PerkUnlockedEvent",
     "PointOfInterestComponent",
     "QuestAcceptedEvent",
     "QuestComponent",
@@ -475,5 +552,6 @@ __all__ = [
     "QuestObjectiveComponent",
     "QuestRewardComponent",
     "QuestStageComponent",
+    "UnlockPerkHandler",
     "dragonsim_fragments",
 ]

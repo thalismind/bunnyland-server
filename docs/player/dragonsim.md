@@ -55,6 +55,20 @@ Leave it later:
 Faction membership is durable world state. It can affect prompts, reputation, available
 work, and server-side story rules.
 
+## Perks
+
+Perks are adventuring talents gated behind your life-sim skills. You raise skills by using
+them (life-sim's skill-by-use progression); once a skill reaches a perk's required level you
+can unlock that perk:
+
+```text
+!unlock-perk perk_id="Power Attack"
+```
+
+A perk lists the skill and minimum level it needs. If your skill is too low the unlock is
+rejected; once unlocked, the perk is durable world state and shows up in your character
+context.
+
 ## Core loop
 
 A simple adventure loop:

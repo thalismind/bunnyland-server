@@ -920,6 +920,12 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("leave faction {faction_id}",),
     ),
     _definition(
+        "unlock-perk",
+        ("perk_id",),
+        tool_name="unlock_perk",
+        patterns=("unlock perk {perk_id}",),
+    ),
+    _definition(
         "attack",
         ("target_id", "weapon_id", "lethal", "body_part", "stamina_cost", "durability_cost"),
         tool_name="attack",

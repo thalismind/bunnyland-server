@@ -25,10 +25,13 @@ from bunnyland.mechanics.dragonsim import (
     FactionComponent,
     FactionJoinedEvent,
     FactionLeftEvent,
+    HasPerk,
     JoinFactionHandler,
     LeaveFactionHandler,
     LocationDiscoveredEvent,
     MemberOf,
+    PerkComponent,
+    PerkUnlockedEvent,
     PointOfInterestComponent,
     QuestAcceptedEvent,
     QuestCompletedEvent,
@@ -36,8 +39,10 @@ from bunnyland.mechanics.dragonsim import (
     QuestObjectiveCompletedEvent,
     QuestObjectiveComponent,
     QuestRewardComponent,
+    UnlockPerkHandler,
     dragonsim_fragments,
 )
+from bunnyland.mechanics.lifesim import SkillSetComponent
 
 HOUR = 60 * 60
 
@@ -46,6 +51,7 @@ def _install(actor):
     actor.register_handler(DiscoverLocationHandler())
     actor.register_handler(AcceptQuestHandler())
     actor.register_handler(CompleteObjectiveHandler())
+    actor.register_handler(UnlockPerkHandler())
     actor.register_handler(JoinFactionHandler())
     actor.register_handler(LeaveFactionHandler())
 
@@ -528,3 +534,97 @@ def test_dragonsim_fragments_show_quests_factions_and_nearby_locations():
     assert any("Moss Wardens" in line for line in fragments)
     assert any("Active quest: Find the Lost Ring" in line for line in fragments)
     assert any("old watchtower" in line for line in fragments)
+
+
+def _set_skill_level(scenario, skill_name, level):
+    """Set a lifesim skill level directly (lifesim owns skill-by-use progression)."""
+    character = scenario.actor.world.get_entity(scenario.character)
+    state = (
+        character.get_component(SkillSetComponent)
+        if character.has_component(SkillSetComponent)
+        else SkillSetComponent()
+    )
+    levels = dict(state.levels)
+    levels[skill_name] = level
+    if character.has_component(SkillSetComponent):
+        character.remove_component(SkillSetComponent)
+    character.add_component(SkillSetComponent(levels=levels, xp=dict(state.xp)))
+
+
+async def test_unlock_perk_gates_on_lifesim_skill_level():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    perk = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Power Attack", kind="perk"),
+            PerkComponent(name="Power Attack", skill_name="blade", min_level=2),
+        ],
+    )
+    rejects: list[CommandRejectedEvent] = []
+    unlocked: list[PerkUnlockedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+    scenario.actor.bus.subscribe(PerkUnlockedEvent, unlocked.append)
+
+    # Skill not yet high enough.
+    _set_skill_level(scenario, "blade", 1)
+    await scenario.actor.submit(_cmd(scenario, "unlock-perk", perk_id=str(perk.id)))
+    await scenario.actor.tick(HOUR)
+    assert any("skill level too low" in event.reason for event in rejects)
+    assert unlocked == []
+
+    # Reach the gating level and unlock.
+    _set_skill_level(scenario, "blade", 2)
+    await scenario.actor.submit(_cmd(scenario, "unlock-perk", perk_id=str(perk.id)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_relationship(HasPerk, perk.id)
+    assert unlocked[0].perk_name == "Power Attack"
+    fragments = dragonsim_fragments(scenario.actor.world, character)
+    assert any("Perk unlocked: Power Attack" in line for line in fragments)
+
+
+def test_unlock_perk_rejects_invalid_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="not a perk", kind="prop")],
+    )
+    perk = spawn_entity(
+        scenario.actor.world,
+        [PerkComponent(name="Power Attack", skill_name="blade", min_level=2)],
+    )
+
+    unlock = UnlockPerkHandler()
+    rejections = {
+        unlock.execute(
+            ctx, _handler_cmd(scenario, "unlock-perk", character_id="not-an-id", perk_id="x")
+        ).reason,
+        unlock.execute(ctx, _handler_cmd(scenario, "unlock-perk", perk_id="entity_999")).reason,
+        unlock.execute(
+            ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(wrong_kind.id))
+        ).reason,
+        # No SkillSetComponent at all -> treated as level 0.
+        unlock.execute(
+            ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
+        ).reason,
+    }
+    assert "invalid character or perk id" in rejections
+    assert "perk does not exist" in rejections
+    assert "target is not a perk" in rejections
+    assert "skill level too low for this perk" in rejections
+
+    # Once the gating skill is high enough, unlocking succeeds; a second unlock is rejected.
+    _set_skill_level(scenario, "blade", 2)
+    assert unlock.execute(
+        ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
+    ).ok
+    assert (
+        unlock.execute(
+            ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
+        ).reason
+        == "perk already unlocked"
+    )

@@ -426,10 +426,13 @@ from ..mechanics.dragonsim import (
     FactionJoinedEvent,
     FactionLeftEvent,
     FactionReputationComponent,
+    HasPerk,
     JoinFactionHandler,
     LeaveFactionHandler,
     LocationDiscoveredEvent,
     MemberOf,
+    PerkComponent,
+    PerkUnlockedEvent,
     PointOfInterestComponent,
     QuestAcceptedEvent,
     QuestCompletedEvent,
@@ -438,6 +441,7 @@ from ..mechanics.dragonsim import (
     QuestObjectiveComponent,
     QuestRewardComponent,
     QuestStageComponent,
+    UnlockPerkHandler,
     dragonsim_fragments,
 )
 from ..mechanics.eat_drink import DrinkHandler, EatHandler
@@ -1755,7 +1759,7 @@ def dragonsim_plugin() -> Plugin:
     return Plugin(
         id=DRAGONSIM,
         name="Dragon Sim",
-        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
+        dependencies=DependencyContribution(requires=(CORE_VERBS, LIFESIM)),
         ecs=EcsContribution(
             components=(
                 PointOfInterestComponent,
@@ -1766,8 +1770,9 @@ def dragonsim_plugin() -> Plugin:
                 QuestRewardComponent,
                 FactionComponent,
                 FactionReputationComponent,
+                PerkComponent,
             ),
-            edges=(MemberOf,),
+            edges=(MemberOf, HasPerk),
         ),
         commands=CommandContribution(
             action_handlers=(
@@ -1776,6 +1781,7 @@ def dragonsim_plugin() -> Plugin:
                 CompleteObjectiveHandler,
                 JoinFactionHandler,
                 LeaveFactionHandler,
+                UnlockPerkHandler,
             ),
             typed_events=(
                 LocationDiscoveredEvent,
@@ -1784,6 +1790,7 @@ def dragonsim_plugin() -> Plugin:
                 QuestCompletedEvent,
                 FactionJoinedEvent,
                 FactionLeftEvent,
+                PerkUnlockedEvent,
             ),
         ),
         content=ContentContribution(
