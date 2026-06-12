@@ -35,7 +35,7 @@ from bunnyland.core.events import (
     RoomGeneratedEvent,
     WorldGeneratedEvent,
 )
-from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
+from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from bunnyland.plugins import ContentContribution, Plugin, apply_plugins, bunnyland_plugins
 from bunnyland.worldgen import (
     CharacterProposal,
@@ -70,6 +70,39 @@ def test_validate_rejects_dangling_references():
     assert any("unknown room" in e for e in errors)
 
 
+def test_validate_reports_duplicate_and_invalid_generation_references():
+    proposal = WorldProposal(
+        seed="bad",
+        rooms=[
+            RoomSpec(key="room", title="Room"),
+            RoomSpec(key="room", title="Duplicate Room"),
+        ],
+        exits=[ExitSpec(from_key="ghost", direction="north", to_key="missing")],
+        objects=[
+            ObjectSpec(key="apple", room_key="room", name="apple"),
+            ObjectSpec(key="apple", room_key="missing", name="duplicate apple"),
+        ],
+        characters=[
+            CharacterSpec(
+                key="helper",
+                name="Helper",
+                room_key="missing",
+                controller="player",
+            )
+        ],
+    )
+
+    errors = validate_proposal(proposal)
+
+    assert "duplicate room keys" in errors
+    assert "duplicate object keys" in errors
+    assert "exit from unknown room 'ghost'" in errors
+    assert "exit to unknown room 'missing'" in errors
+    assert "object 'apple' in unknown room 'missing'" in errors
+    assert "character 'helper' in unknown room 'missing'" in errors
+    assert "character 'helper' has invalid controller" in errors
+
+
 def test_validate_accepts_stub_proposal():
     proposal = StubWorldBuilder().propose("a quiet marsh")
     assert validate_proposal(proposal) == []
@@ -94,6 +127,18 @@ def test_character_proposal_coerces_object_llm_profile_to_string():
     )
 
     assert proposal.llm_profile == "meadow-shepherd"
+
+
+def test_character_proposal_defaults_unrecognized_object_llm_profile():
+    proposal = CharacterProposal.model_validate(
+        {
+            "name": "Elara",
+            "controller": "llm",
+            "llm_profile": {"role": "guide"},
+        }
+    )
+
+    assert proposal.llm_profile == "default"
 
 
 def test_character_spec_defaults_to_flash_controller_model():
@@ -141,6 +186,53 @@ def test_story_event_proposal_accepts_common_severity_labels():
     assert event.severity == 1.0
     assert event.budget_spent == 1.0
     assert event.stimulus_intensity == 3.0
+
+
+def test_generation_intent_models_accept_legacy_and_component_forms():
+    legacy = RoomSpec.model_validate(
+        {
+            "key": "room",
+            "title": "Room",
+            "intent": "legacy room",
+            "tags": ("old",),
+            "wants": ("light",),
+            "needs": ("water",),
+        }
+    )
+    component = RoomSpec.model_validate(
+        {
+            "key": "room2",
+            "title": "Room 2",
+            "generation": GenerationIntentComponent(
+                description="component room",
+                tags=("component",),
+                wants=("shade",),
+                needs=("soil",),
+            ),
+        }
+    )
+    scalar_generation = RoomSpec.model_validate(
+        {"key": "room3", "title": "Room 3", "generation": 123}
+    )
+
+    with pytest.raises(ValueError):
+        RoomSpec.model_validate("not a mapping")
+
+    assert legacy.description == "legacy room"
+    assert legacy.tags == ("old",)
+    assert legacy.wants == ("light",)
+    assert legacy.needs == ("water",)
+    assert component.description == "component room"
+    assert component.tags == ("component",)
+    assert component.wants == ("shade",)
+    assert component.needs == ("soil",)
+    assert scalar_generation.description == ""
+
+
+def test_story_event_proposal_keeps_numeric_severity_values():
+    event = StoryEventProposal(title="A clue", severity=2.5)
+
+    assert event.severity == 2.5
 
 
 def test_item_and_object_proposals_default_explicit_null_scalars():
@@ -204,6 +296,12 @@ def test_repair_world_proposal_moves_nested_objects_to_first_room_and_drops_bad_
     assert repaired.exits == []
 
 
+def test_repair_world_proposal_leaves_empty_proposals_unchanged():
+    proposal = WorldProposal(seed="empty")
+
+    assert repair_world_proposal(proposal) is proposal
+
+
 def test_generation_options_default_to_pro_worldgen_model():
     assert GenOptions(llm=True).model == "deepseek-v4-pro"
     assert GenOptions(llm=True).provider == "ollama"
@@ -232,6 +330,66 @@ async def test_waiting_room_generator_builds_single_white_room_with_red_chair():
     assert identity.kind == "chair"
     assert not chair.has_component(PortableComponent)
     assert container_of(chair) == result.rooms["waiting_room"]
+
+
+async def test_instantiate_builds_water_container_and_writable_paper_objects():
+    from bunnyland.mechanics.needs import HungerComponent, ThirstComponent
+
+    actor = WorldActor()
+    proposal = WorldProposal(
+        seed="objects",
+        rooms=[RoomSpec(key="room", title="Room")],
+        objects=[
+            ObjectSpec(
+                key="water",
+                room_key="room",
+                name="canteen",
+                kind="water",
+                hydration=2.0,
+                renewable=False,
+            ),
+            ObjectSpec(
+                key="box",
+                room_key="room",
+                name="box",
+                kind="container",
+                open=False,
+            ),
+            ObjectSpec(
+                key="paper",
+                room_key="room",
+                name="paper",
+                kind="paper",
+                writable=True,
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="minimal",
+                name="Minimal",
+                room_key="room",
+                traits=("bunny", "calm"),
+                with_needs=False,
+                with_memory=False,
+            )
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    water = actor.world.get_entity(result.objects["water"])
+    box = actor.world.get_entity(result.objects["box"])
+    paper = actor.world.get_entity(result.objects["paper"])
+    assert water.get_component(DrinkableComponent).hydration == 2.0
+    assert water.has_component(ConsumableComponent)
+    assert box.get_component(ContainerComponent).open is False
+    assert paper.has_component(ReadableComponent)
+    assert paper.has_component(WritableComponent)
+    minimal = actor.world.get_entity(result.characters["minimal"])
+    assert not minimal.has_component(HungerComponent)
+    assert not minimal.has_component(ThirstComponent)
+    assert not minimal.has_component(MemoryProfileComponent)
+    assert minimal.get_component(GenerationIntentComponent).tags == ("bunny", "calm")
 
 
 @pytest.mark.parametrize(
@@ -509,6 +667,7 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
         BodyPartHealthComponent,
         ColonyIncidentComponent,
         JobBillComponent,
+        JobComponent,
         PawnProfileComponent,
         PrisonerComponent,
         ResearchProjectComponent,
@@ -593,6 +752,13 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
                 wants=("seed",),
             ),
             ObjectSpec(
+                key="default_seed",
+                room_key="garden_ship",
+                name="mystery packet",
+                kind="seed",
+                wants=("seed",),
+            ),
+            ObjectSpec(
                 key="blade",
                 room_key="garden_ship",
                 name="a survival sword",
@@ -619,6 +785,13 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
                 name="a work order bill",
                 kind="job",
                 wants=("job-bill",),
+            ),
+            ObjectSpec(
+                key="stockpile_job",
+                room_key="garden_ship",
+                name="a generated assignment marker",
+                kind="marker",
+                wants=("stockpile", "job"),
             ),
             ObjectSpec(
                 key="research",
@@ -734,11 +907,19 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
 
     assert actor.world.get_entity(result.objects["ore"]).has_component(ResourceNodeComponent)
     assert actor.world.get_entity(result.objects["seeds"]).has_component(SeedComponent)
+    assert (
+        actor.world.get_entity(result.objects["default_seed"])
+        .get_component(SeedComponent)
+        .crop_type
+        == "packet"
+    )
     assert actor.world.get_entity(result.objects["blade"]).has_component(WeaponComponent)
     assert actor.world.get_entity(result.objects["drive"]).has_component(ShipSystemComponent)
     assert actor.world.get_entity(result.objects["chair"]).has_component(HomeObjectComponent)
     assert actor.world.get_entity(result.objects["chair"]).has_component(WhimComponent)
     assert actor.world.get_entity(result.objects["work_order"]).has_component(JobBillComponent)
+    assert actor.world.get_entity(result.objects["stockpile_job"]).has_component(StockpileComponent)
+    assert actor.world.get_entity(result.objects["stockpile_job"]).has_component(JobComponent)
     assert actor.world.get_entity(result.objects["research"]).has_component(
         ResearchProjectComponent
     )
@@ -1108,6 +1289,117 @@ async def test_builtin_worldgen_hooks_cover_cross_package_mention_branches():
     assert fighter.has_component(RadiationDoseComponent)
     assert fighter.has_component(MutationThresholdComponent)
     assert fighter.has_component(FactionReputationComponent)
+
+
+def test_builtin_worldgen_hooks_ignore_missing_generated_entities():
+    from bunnyland.worldgen.enrichment import (
+        BarbarianWorldgenHook,
+        ColonyWorldgenHook,
+        DaggerWorldgenHook,
+        DinoWorldgenHook,
+        DragonWorldgenHook,
+        EnvironmentWorldgenHook,
+        GardenWorldgenHook,
+        LifeWorldgenHook,
+        NukeWorldgenHook,
+        VoidWorldgenHook,
+        _crop_type,
+    )
+
+    actor = WorldActor()
+    room_event = RoomGeneratedEvent(
+        event_id="evt-room",
+        created_at="2026-01-01T00:00:00Z",
+        world_epoch=0,
+        seed="missing",
+        entity_id="entity_999",
+        entity_key="missing-room",
+        entity_kind="room",
+        room_key="missing-room",
+    )
+    object_event = ObjectGeneratedEvent(
+        event_id="evt-object",
+        created_at="2026-01-01T00:00:00Z",
+        world_epoch=0,
+        seed="missing",
+        entity_id="entity_999",
+        entity_key="missing-object",
+        entity_kind="item",
+        object_key="missing-object",
+    )
+    character_event = CharacterGeneratedEvent(
+        event_id="evt-character",
+        created_at="2026-01-01T00:00:00Z",
+        world_epoch=0,
+        seed="missing",
+        entity_id="entity_999",
+        entity_key="missing-character",
+        entity_kind="character",
+        character_key="missing-character",
+        room_id="entity_1",
+    )
+    generic_object_event = ObjectGeneratedEvent(
+        event_id="evt-generic-object",
+        created_at="2026-01-01T00:00:00Z",
+        world_epoch=0,
+        seed="missing",
+        entity_id="entity_999",
+        entity_key="generic-object",
+        entity_kind="item",
+        object_key="generic-object",
+    )
+
+    assert _crop_type(generic_object_event) == "turnip"
+
+    environment = EnvironmentWorldgenHook()
+    life = LifeWorldgenHook()
+    colony = ColonyWorldgenHook()
+    garden = GardenWorldgenHook()
+    barbarian = BarbarianWorldgenHook()
+    dragon = DragonWorldgenHook()
+    dagger = DaggerWorldgenHook()
+    dino = DinoWorldgenHook()
+    void = VoidWorldgenHook()
+    nuke = NukeWorldgenHook()
+    for hook in (
+        environment,
+        life,
+        colony,
+        garden,
+        barbarian,
+        dragon,
+        dagger,
+        dino,
+        void,
+        nuke,
+    ):
+        hook.actor = actor
+
+    environment._on_entity(room_event)
+    environment._on_entity(object_event)
+    life._on_character(character_event)
+    life._on_object(object_event)
+    colony._on_room(room_event)
+    colony._on_character(character_event)
+    colony._on_object(object_event)
+    garden._on_room(room_event)
+    garden._on_object(object_event)
+    barbarian._on_character(character_event)
+    barbarian._on_object(object_event)
+    barbarian._on_room(room_event)
+    dragon._on_site(room_event)
+    dragon._on_site(object_event)
+    dragon._on_character(character_event)
+    dagger._on_room(room_event)
+    dagger._on_object(object_event)
+    dino._on_character(character_event)
+    dino._on_object(object_event)
+    dino._on_room(room_event)
+    void._on_room(room_event)
+    void._on_object(object_event)
+    nuke._on_entity(room_event)
+    nuke._on_entity(object_event)
+    nuke._on_character(character_event)
 
 
 async def test_generated_world_is_playable_via_plugins():

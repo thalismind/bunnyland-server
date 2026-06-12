@@ -139,6 +139,19 @@ def execute_item_handler(handler, scenario, item_id):
     )
 
 
+def execute_drop(scenario, item_id, *, character_id=None):
+    command = build_submitted_command(
+        character_id=character_id or str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="drop",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"item_id": str(item_id)},
+    )
+    return DropHandler().execute(handler_context(scenario), command)
+
+
 async def test_take_moves_item_into_inventory():
     scenario = setup_inventory_scenario()
     item = place_item(scenario, scenario.room_a)
@@ -255,6 +268,15 @@ def test_equipment_handlers_reject_invalid_missing_and_unheld_items_directly():
         "item does not exist"
     )
     assert execute_item_handler(HoldHandler(), scenario, item).reason == (
+        "item is not in inventory"
+    )
+    assert execute_item_handler(UnholdHandler(), scenario, item).reason == (
+        "item is not in inventory"
+    )
+    assert execute_item_handler(WearHandler(), scenario, item).reason == (
+        "item is not in inventory"
+    )
+    assert execute_item_handler(RemoveHandler(), scenario, item).reason == (
         "item is not in inventory"
     )
 
@@ -429,6 +451,19 @@ def test_take_rejects_full_inventory():
     assert execute_take(scenario, target).reason == "inventory is full"
 
 
+def test_take_allows_inventory_with_available_slots():
+    scenario = setup_inventory_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(InventoryComponent(max_slots=2))
+    carried = place_item(scenario, scenario.room_a, name="carried")
+    target = place_item(scenario, scenario.room_a, name="target")
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, carried)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried)
+
+    assert execute_take(scenario, target).ok is True
+    assert container_of(scenario.actor.world.get_entity(target)) == scenario.character
+
+
 def test_put_rejects_invalid_and_missing_item_ids():
     scenario = setup_inventory_scenario()
     item = place_item(scenario, scenario.room_a)
@@ -449,6 +484,26 @@ def test_put_drop_rejects_when_character_has_no_room():
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item)
 
     assert execute_put(scenario, item).reason == "character is not in a room"
+
+
+def test_drop_rejects_invalid_missing_unheld_and_roomless_items():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a)
+
+    assert execute_drop(scenario, item, character_id="not-an-id").reason == (
+        "invalid character or item id"
+    )
+    assert execute_drop(scenario, "entity_999").reason == "item does not exist"
+    assert execute_drop(scenario, item).reason == "item is not in inventory"
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, item)
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains,
+        scenario.character,
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item)
+    assert execute_drop(scenario, item).reason == "character is not in a room"
 
 
 def test_put_rejects_unreachable_self_and_non_container_targets():

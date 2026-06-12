@@ -13,9 +13,11 @@ from bunnyland.core import (
     ContainerComponent,
     ContainmentMode,
     Contains,
+    DoorComponent,
     IdentityComponent,
     Lane,
     LightComponent,
+    LockableComponent,
     PerceptionComponent,
     RoomSummaryComponent,
     SayHandler,
@@ -23,6 +25,7 @@ from bunnyland.core import (
     StealthComponent,
     TemperatureComponent,
     build_submitted_command,
+    parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.ecs import replace_component
@@ -98,6 +101,39 @@ def test_build_room_facts_reflects_occupants_objects_exits_and_bands():
     assert facts.bands == {"light": "dim", "temperature": "warm"}
 
 
+def test_room_fact_bands_and_object_states_cover_thresholds():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    room.add_component(LightComponent(level=0.9))
+    room.add_component(TemperatureComponent(celsius=2))
+    add_object(
+        scenario,
+        scenario.room_a,
+        [
+            IdentityComponent(name="locked door", kind="door"),
+            DoorComponent(open=False),
+            LockableComponent(locked=True),
+        ],
+    )
+
+    facts = build_room_facts(world, scenario.room_a)
+
+    assert facts.bands == {"light": "bright", "temperature": "cold"}
+    assert any(
+        obj.name == "locked door" and obj.states == ("closed", "locked")
+        for obj in facts.objects
+    )
+
+    for light, expected in [(0.05, "dark"), (0.2, "dim"), (0.7, "lit")]:
+        replace_component(room, replace(room.get_component(LightComponent), level=light))
+        assert build_room_facts(world, scenario.room_a).bands["light"] == expected
+
+    for temp, expected in [(10, "cool"), (20, "mild"), (35, "hot")]:
+        replace_component(room, replace(room.get_component(TemperatureComponent), celsius=temp))
+        assert build_room_facts(world, scenario.room_a).bands["temperature"] == expected
+
+
 def test_render_summary_is_deterministic_template():
     scenario = build_scenario()
     facts = build_room_facts(scenario.actor.world, scenario.room_a)
@@ -118,6 +154,28 @@ def test_room_summary_projection_accepts_custom_renderer():
     summary = projection.summary(scenario.room_a, scenario.actor.epoch)
 
     assert summary.visible_summary == "Mosslit Burrow: prose from renderer"
+
+
+def test_room_summary_projection_dirty_edge_cases():
+    scenario = build_scenario()
+    projection = RoomSummaryProjection(scenario.actor.world).attach()
+    projection.summary(scenario.room_a, scenario.actor.epoch)
+
+    assert projection.attach(scenario.actor.world) is projection
+    projection.mark_dirty(parse_entity_id("entity_999"))
+
+    item = spawn_entity(scenario.actor.world, [IdentityComponent(name="loose", kind="item")])
+    projection.mark_dirty(item.id)
+    projection._dirty(item)
+
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        item.id,
+    )
+    projection._dirty(item)
+    assert scenario.actor.world.get_entity(scenario.room_a).get_component(
+        RoomSummaryComponent
+    ).dirty is True
 
 
 # -- projection dirty/rebuild -----------------------------------------------------------

@@ -278,6 +278,20 @@ def test_inspect_describes_rooms_nameless_entities_descriptions_and_locked_state
     )
     assert locked_result.events[0].state == "closed, locked"
 
+    door = in_room(
+        scenario,
+        [
+            IdentityComponent(name="locked door", kind="door"),
+            DoorComponent(open=False),
+            LockableComponent(locked=True, key_name="brass"),
+        ],
+    )
+    door_result = InspectHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "inspect", door.id),
+    )
+    assert door_result.events[0].state == "closed, locked"
+
 
 def test_reachable_target_rejects_invalid_and_missing_target_directly():
     scenario = interaction_scenario()
@@ -421,15 +435,92 @@ def test_open_close_lock_unlock_reject_bad_state_directly():
         .reason
         == "it is locked"
     )
+    assert (
+        OpenHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "open", keyed.id))
+        .reason
+        == "it is locked"
+    )
+    assert (
+        OpenHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "open", "entity_999"))
+        .reason
+        == "target does not exist"
+    )
+    assert (
+        CloseHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "close", "entity_999"))
+        .reason
+        == "target does not exist"
+    )
     assert UnlockHandler().execute(
         handler_context(scenario),
         target_cmd(scenario, "unlock", keyed.id),
     ).reason == "matching key is required"
     assert (
+        UnlockHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "unlock", rock.id))
+        .reason
+        == "target is not lockable"
+    )
+    assert (
+        UnlockHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "unlock", "entity_999"))
+        .reason
+        == "target does not exist"
+    )
+    assert (
         LockHandler()
         .execute(handler_context(scenario), target_cmd(scenario, "lock", rock.id))
         .reason
         == "target is not lockable"
+    )
+    assert (
+        LockHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "lock", "entity_999"))
+        .reason
+        == "target does not exist"
+    )
+
+
+def test_open_close_lock_unlock_reject_unreachable_targets_directly():
+    scenario = interaction_scenario()
+    far = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far gate", kind="door"),
+            DoorComponent(open=True),
+            LockableComponent(locked=False),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        far.id,
+    )
+
+    assert (
+        OpenHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "open", far.id))
+        .reason
+        == "target is not reachable"
+    )
+    assert (
+        CloseHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "close", far.id))
+        .reason
+        == "target is not reachable"
+    )
+    assert (
+        LockHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "lock", far.id))
+        .reason
+        == "target is not reachable"
+    )
+    assert (
+        UnlockHandler()
+        .execute(handler_context(scenario), target_cmd(scenario, "unlock", far.id))
+        .reason
+        == "target is not reachable"
     )
 
 
@@ -513,6 +604,39 @@ def test_lock_and_unlock_key_variants_directly():
         handler_context(scenario),
         target_cmd(scenario, "lock", latch.id),
     ).ok is True
+    assert UnlockHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "unlock", latch.id),
+    ).ok is True
+    assert UnlockHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "unlock", latch.id),
+    ).reason == "it is already unlocked"
+    assert LockHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "lock", latch.id),
+    ).ok is True
+    assert LockHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "lock", latch.id),
+    ).reason == "it is already locked"
+
+    invalid_character = command_with_payload(
+        scenario,
+        "lock",
+        {"target_id": str(latch.id)},
+        character_id="not-an-id",
+    )
+    assert LockHandler().execute(handler_context(scenario), invalid_character).reason == (
+        "invalid character or target id"
+    )
+
+    latch.remove_component(LockableComponent)
+    latch.add_component(LockableComponent(locked=False, key_name="brass"))
+    assert LockHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "lock", latch.id, tool_id=wrong_key.id),
+    ).reason == "matching key is required"
 
 
 # -- use --------------------------------------------------------------------------------

@@ -86,10 +86,8 @@ def _matching_key(ctx: HandlerContext, command: SubmittedCommand, lock: Lockable
     tool_id = parse_entity_id(command.payload.get("tool_id"))
     if tool_id is None:
         return None, "matching key is required"
-    character_id = parse_entity_id(command.character_id)
-    if character_id is None:
-        return None, "invalid character or target id"
-    if tool_id not in reachable_ids(ctx.world, ctx.entity(character_id)):
+    character = ctx.entity(parse_entity_id(command.character_id))
+    if tool_id not in reachable_ids(ctx.world, character):
         return None, "tool is not reachable"
     tool = ctx.entity(tool_id)
     if (

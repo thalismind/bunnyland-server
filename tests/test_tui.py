@@ -152,6 +152,46 @@ def test_entity_presentation():
     assert entity_icon(world.get(APPLE)) == "🍎"
 
 
+def test_world_model_empty_and_missing_lookup_fallbacks():
+    world = World.parse(None)
+
+    assert world.epoch == 0
+    assert world.first_room_id() is None
+    assert world.room_of(None) is None
+    assert world.room_members("missing") == []
+    assert world.doors("missing") == []
+    assert world.carried("missing") == []
+    assert world.target_candidates("missing", "unknown") == []
+
+
+def test_entity_presentation_fallbacks():
+    room = {"id": "room:missing-title", "components": {"RoomComponent": {}}, "relationships": {}}
+    door = {"id": "door:1", "components": {"DoorComponent": {}}, "relationships": {}}
+    container = {
+        "id": "container:1",
+        "components": {"ContainerComponent": {}},
+        "relationships": {},
+    }
+    custom = {
+        "id": "custom:1",
+        "components": {
+            "IdentityComponent": {"name": "", "kind": "mystery"},
+            "EditorDisplayComponent": {"emoji": "?" },
+        },
+        "relationships": {},
+    }
+    nameless = {"id": "nameless-entity-123456789", "components": {}, "relationships": {}}
+
+    assert entity_type(door) == "door"
+    assert entity_type(container) == "container"
+    assert entity_type(nameless) == "other"
+    assert entity_icon(custom) == "?"
+    assert entity_icon(nameless) == "⬡"
+    assert entity_name(None) == "?"
+    assert entity_name(room) == "room:missing-title"
+    assert entity_name(nameless) == "nameless-entity-"
+
+
 # ── verb catalogue ────────────────────────────────────────────────────────────
 def test_verb_catalogue_costs():
     by_tool = {v.tool: v for v in ACTION_VERBS}
@@ -256,6 +296,40 @@ def test_persistent_client_id_reuses_config_file(tmp_path):
     assert path.read_text(encoding="utf-8").strip() == first
 
 
+def test_persistent_client_id_recovers_from_invalid_or_unreadable_config(tmp_path):
+    invalid = tmp_path / "invalid-client-id"
+    invalid.write_text("not-a-uuid\n", encoding="utf-8")
+    recovered = persistent_client_id(invalid)
+    assert recovered != "not-a-uuid"
+
+    class UnreadablePath:
+        parent = tmp_path
+
+        def exists(self):
+            return True
+
+        def read_text(self, *, encoding):
+            raise OSError("cannot read")
+
+        def write_text(self, text, *, encoding):
+            self.text = text
+
+    assert persistent_client_id(UnreadablePath())
+
+
+def test_persistent_client_id_tolerates_unwritable_config(tmp_path):
+    class UnwritablePath:
+        parent = tmp_path
+
+        def exists(self):
+            return False
+
+        def write_text(self, text, *, encoding):
+            raise OSError("cannot write")
+
+    assert persistent_client_id(UnwritablePath())
+
+
 async def test_remote_backend_claims_web_controller():
     class Response:
         is_success = True
@@ -296,6 +370,29 @@ async def test_remote_backend_claims_web_controller():
             },
         )
     ]
+
+
+async def test_remote_backend_failed_claim_returns_none():
+    class Response:
+        is_success = False
+        status_code = 503
+        text = "nope"
+
+    class Client:
+        async def post(self, url: str, json: dict):
+            return Response()
+
+    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend._client = Client()
+
+    assert await backend.claim(PLAYER, World.parse(_snapshot())) is None
+
+
+async def test_local_backend_rejects_unknown_generator():
+    backend = LocalBackend(generator="missing-generator", autorun=False)
+
+    with pytest.raises(SystemExit, match="unknown generator 'missing-generator'"):
+        await backend.start()
 
 
 async def test_remote_backend_http_methods_use_async_client(monkeypatch):

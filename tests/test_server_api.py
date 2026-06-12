@@ -20,6 +20,7 @@ from bunnyland.core import (
     DoorComponent,
     ExitTo,
     IdentityComponent,
+    LockableComponent,
     RoomComponent,
     SuspendedComponent,
     WebControllerComponent,
@@ -65,6 +66,12 @@ from bunnyland.server.runtime import run_loop_with_api
 from bunnyland.server.schema import _type_schema, world_schema
 from bunnyland.server.worldgen import (
     _room_description,
+    build_character_generation_response,
+    build_event_generation_response,
+    build_room_generation_response,
+    collect_container_selection_context,
+    collect_room_expansion_context,
+    collect_room_selection_context,
     generate_character_patch,
     generate_event_patch,
     generate_item_patch,
@@ -1578,6 +1585,81 @@ def test_worldgen_room_patch_expands_selected_door(scenario):
     assert scenario.actor.world.get_entity(target_ids[0]).has_component(RoomComponent)
 
 
+def test_worldgen_room_expansion_context_rejects_invalid_door_states(scenario):
+    not_door = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="painted arch", kind="arch")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        not_door.id,
+    )
+    with pytest.raises(WorldPatchError, match="is not a door"):
+        collect_room_expansion_context(
+            scenario.actor,
+            WorldRoomGenerationRequest(door_entity_id=str(not_door.id), direction="east"),
+        )
+
+    orphan = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="north door", kind="door"), DoorComponent(open=False)],
+    )
+    with pytest.raises(WorldPatchError, match="door is not contained by a room"):
+        collect_room_expansion_context(
+            scenario.actor,
+            WorldRoomGenerationRequest(door_entity_id=str(orphan.id)),
+        )
+
+    container = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="door rack", kind="container"), ContainerComponent()],
+    )
+    contained = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="south door", kind="door"), DoorComponent(open=False)],
+    )
+    container.add_relationship(Contains(mode=ContainmentMode.CONTAINER), contained.id)
+    with pytest.raises(WorldPatchError, match="door container is not a room"):
+        collect_room_expansion_context(
+            scenario.actor,
+            WorldRoomGenerationRequest(door_entity_id=str(contained.id)),
+        )
+
+    vague = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="sealed portal", kind="door"), DoorComponent(open=False)],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        vague.id,
+    )
+    with pytest.raises(WorldPatchError, match="direction is required"):
+        collect_room_expansion_context(
+            scenario.actor,
+            WorldRoomGenerationRequest(door_entity_id=str(vague.id)),
+        )
+
+
+def test_worldgen_room_selection_uses_short_description_fallback(scenario):
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(DescriptionComponent(short="short room"))
+
+    context = collect_room_selection_context(
+        scenario.actor,
+        WorldCharacterGenerationRequest(room_entity_id=str(scenario.room_a)),
+    )
+
+    assert context.room.description == "short room"
+
+
+def test_worldgen_room_selection_rejects_non_room_entity(scenario):
+    with pytest.raises(WorldPatchError, match="is not a room"):
+        collect_room_selection_context(
+            scenario.actor,
+            WorldCharacterGenerationRequest(room_entity_id=str(scenario.character)),
+        )
+
+
 def test_worldgen_character_patch_places_character_in_selected_room(scenario):
     generated = generate_character_patch(
         scenario.actor,
@@ -1600,6 +1682,27 @@ def test_worldgen_character_patch_places_character_in_selected_room(scenario):
     ]
     assert response.ok is True
     assert len(character_ids) == 2
+
+
+def test_worldgen_character_response_can_assign_llm_controller(scenario):
+    generated = build_character_generation_response(
+        collect_room_selection_context(
+            scenario.actor,
+            WorldCharacterGenerationRequest(room_entity_id=str(scenario.room_a)),
+        ),
+        CharacterProposal(
+            name="Mossy Guide",
+            controller="llm",
+            llm_profile="guide",
+            llm_model="local-model",
+        ),
+        epoch=scenario.actor.epoch,
+    )
+
+    controller_op = generated.patch.operations[2]
+    assert controller_op.components[0].type == "LLMControllerComponent"
+    assert controller_op.components[0].fields["profile_name"] == "guide"
+    assert controller_op.components[0].fields["model"] == "local-model"
 
 
 def test_worldgen_item_patch_accepts_room_character_and_container_destinations(scenario):
@@ -1636,6 +1739,56 @@ def test_worldgen_item_patch_accepts_room_character_and_container_destinations(s
         )
 
 
+def test_worldgen_item_context_rejects_non_container_destination(scenario):
+    rock = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="flat rock", kind="item")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        rock.id,
+    )
+
+    with pytest.raises(WorldPatchError, match="cannot contain generated items"):
+        collect_container_selection_context(
+            scenario.actor,
+            WorldItemGenerationRequest(container_entity_id=str(rock.id)),
+        )
+
+
+def test_worldgen_room_response_can_generate_locked_hidden_doors(scenario):
+    door = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="east door", kind="door"),
+            DoorComponent(open=False),
+            LockableComponent(locked=True),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        door.id,
+    )
+    context = collect_room_expansion_context(
+        scenario.actor,
+        WorldRoomGenerationRequest(door_entity_id=str(door.id), prompt="cellar"),
+    )
+
+    response = build_room_generation_response(
+        context,
+        room=RoomNodeProposal(title="Cellar"),
+        contents=RoomContentsProposal(),
+        doors=[DoorProposal(direction="south", locked=True, hidden=True)],
+        epoch=scenario.actor.epoch,
+    )
+
+    generated_door = response.patch.operations[-2]
+    assert generated_door.components[0].fields["name"] == "a hidden south door"
+    assert generated_door.components[2].type == "LockableComponent"
+    exit_edge = response.patch.operations[1].edge.fields
+    assert exit_edge["locked"] is True
+
+
 def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
     generated = generate_event_patch(
         scenario.actor,
@@ -1666,6 +1819,30 @@ def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
         for _edge, target in room_contains
         if scenario.actor.world.get_entity(target).has_component(IdentityComponent)
     )
+
+
+def test_worldgen_event_response_can_include_generated_characters(scenario):
+    context = collect_room_selection_context(
+        scenario.actor,
+        WorldEventGenerationRequest(room_entity_id=str(scenario.room_a)),
+    )
+
+    response = build_event_generation_response(
+        context,
+        StoryEventProposal(
+            title="Market Day",
+            characters=[CharacterProposal(name="Visiting Merchant")],
+        ),
+        epoch=scenario.actor.epoch,
+    )
+
+    client_ids = [
+        operation.client_id
+        for operation in response.patch.operations
+        if getattr(operation, "op", "") == "add_entity"
+    ]
+    assert "$generated_event_character_0" in client_ids
+    assert "$generated_event_controller_0" in client_ids
 
 
 async def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypatch):

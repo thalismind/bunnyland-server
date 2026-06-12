@@ -21,6 +21,7 @@ from bunnyland.core import (
     DiscordControllerComponent,
     DownedComponent,
     EncumbranceComponent,
+    GenerationIntentComponent,
     HandlerResult,
     HasInjury,
     HealthComponent,
@@ -55,6 +56,7 @@ from bunnyland.core.events import (
     EncumbranceChangedEvent,
     EntitySeenEvent,
     FocusPointsChangedEvent,
+    GeneratedEntityEvent,
     InjuryAddedEvent,
     NoiseHeardEvent,
 )
@@ -68,6 +70,29 @@ def collect(actor, event_type):
     seen = []
     actor.bus.subscribe(event_type, seen.append)
     return seen
+
+
+def test_generated_entity_event_exposes_generation_intent_fields():
+    event = GeneratedEntityEvent(
+        event_id="evt-generated",
+        created_at="2026-01-01T00:00:00Z",
+        world_epoch=0,
+        seed="seed",
+        entity_id="entity_1",
+        entity_key="room-1",
+        entity_kind="room",
+        generation=GenerationIntentComponent(
+            description="moss room",
+            tags=("moss",),
+            wants=("light",),
+            needs=("water",),
+        ),
+    )
+
+    assert event.intent == "moss room"
+    assert event.tags == ("moss",)
+    assert event.wants == ("light",)
+    assert event.needs == ("water",)
 
 
 def _command(scenario, command_type="move", **kwargs):
