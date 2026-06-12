@@ -500,6 +500,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "JobBillComponent",
         "PrisonerComponent",
         "ResearchProjectComponent",
+        "ColonyIncidentComponent",
         "TradeOfferComponent",
         "SurgeryBillComponent",
     } <= {component.__name__ for component in colony.ecs.components}
@@ -510,6 +511,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "set-prisoner-policy",
         "recruit-prisoner",
         "research-project",
+        "resolve-colony-incident",
         "complete-trade",
         "perform-surgery",
     } <= {handler.command_type for handler in colony.commands.action_handlers}
@@ -518,6 +520,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "JobBillProgressedEvent",
         "RecruitmentProgressedEvent",
         "TechUnlockedEvent",
+        "ColonyIncidentResolvedEvent",
         "SurgeryPerformedEvent",
     } <= {event.__name__ for event in colony.commands.typed_events}
 

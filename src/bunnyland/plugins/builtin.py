@@ -73,6 +73,8 @@ from ..mechanics.colonysim import (
     CaravanComponent,
     CaravanFormedEvent,
     ClaimOwnershipHandler,
+    ColonyIncidentComponent,
+    ColonyIncidentResolvedEvent,
     ColonySimComponent,
     ColonyWealthComponent,
     CompleteJobHandler,
@@ -114,6 +116,7 @@ from ..mechanics.colonysim import (
     ResearchProjectHandler,
     ReservedBy,
     ReserveHandler,
+    ResolveColonyIncidentHandler,
     ResourceNodeComponent,
     ResourceRegenSystem,
     ResourceStackComponent,
@@ -140,15 +143,6 @@ from ..mechanics.colonysim import (
     WorkstationComponent,
     colonysim_fragments,
     install_colonysim,
-)
-from ..mechanics.colonysim import (
-    IncidentComponent as ColonyIncidentComponent,
-)
-from ..mechanics.colonysim import (
-    IncidentResolvedEvent as ColonyIncidentResolvedEvent,
-)
-from ..mechanics.colonysim import (
-    ResolveIncidentHandler as ResolveColonyIncidentHandler,
 )
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.daggersim import (

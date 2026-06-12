@@ -207,7 +207,7 @@ class TechUnlockComponent(Component):
 
 
 @dataclass(frozen=True)
-class IncidentComponent(Component):
+class ColonyIncidentComponent(Component):
     incident_type: str
     severity: int = 1
     resolved: bool = False
@@ -385,7 +385,7 @@ class TechUnlockedEvent(DomainEvent):
     tech_id: str
 
 
-class IncidentResolvedEvent(DomainEvent):
+class ColonyIncidentResolvedEvent(DomainEvent):
     incident_id: str
     incident_type: str
 
@@ -1838,8 +1838,8 @@ class ResearchProjectHandler:
         return ok(*events)
 
 
-class ResolveIncidentHandler:
-    command_type = "resolve-incident"
+class ResolveColonyIncidentHandler:
+    command_type = "resolve-colony-incident"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
@@ -1849,14 +1849,14 @@ class ResolveIncidentHandler:
         if not ctx.world.has_entity(incident_id):
             return rejected("incident does not exist")
         incident_entity = ctx.entity(incident_id)
-        if not incident_entity.has_component(IncidentComponent):
+        if not incident_entity.has_component(ColonyIncidentComponent):
             return rejected("target is not an incident")
-        incident = incident_entity.get_component(IncidentComponent)
+        incident = incident_entity.get_component(ColonyIncidentComponent)
         if incident.resolved:
             return rejected("incident is already resolved")
         replace_component(incident_entity, replace(incident, resolved=True))
         return ok(
-            IncidentResolvedEvent(
+            ColonyIncidentResolvedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.SYSTEM,
                     actor_id=str(character_id),
@@ -2208,8 +2208,8 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
                 else f"{project.work_done:.1f}/{project.work_required:.1f}"
             )
             lines.append(f"Research project: {project.project_id} ({state}).")
-        if entity.has_component(IncidentComponent):
-            incident = entity.get_component(IncidentComponent)
+        if entity.has_component(ColonyIncidentComponent):
+            incident = entity.get_component(ColonyIncidentComponent)
             if not incident.resolved:
                 lines.append(
                     f"Colony incident: {incident.incident_type} severity {incident.severity}."
@@ -2278,8 +2278,8 @@ __all__ = [
     "HaulableComponent",
     "InfectionChangedEvent",
     "InfectionComponent",
-    "IncidentComponent",
-    "IncidentResolvedEvent",
+    "ColonyIncidentComponent",
+    "ColonyIncidentResolvedEvent",
     "JobComponent",
     "JobBillComponent",
     "JobBillProgressedEvent",

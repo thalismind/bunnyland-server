@@ -21,7 +21,7 @@ from ..mechanics.barbariansim import (
 )
 from ..mechanics.colonysim import (
     BodyPartHealthComponent,
-    IncidentComponent,
+    ColonyIncidentComponent,
     JobBillComponent,
     JobComponent,
     PawnProfileComponent,
@@ -294,7 +294,7 @@ class ColonyWorldgenHook:
                 ResearchProjectComponent(project_id=resource_type, work_required=10.0),
             )
         if _wants(event, "incident") or _mentions(event, "incident", "raid", "blight"):
-            replace_component(entity, IncidentComponent(incident_type=resource_type))
+            replace_component(entity, ColonyIncidentComponent(incident_type=resource_type))
         if _wants(event, "trade-offer") or _mentions(event, "trade", "trader"):
             replace_component(
                 entity,

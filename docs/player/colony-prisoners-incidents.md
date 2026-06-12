@@ -29,7 +29,7 @@ When recruitment reaches the prisoner's difficulty, the prisoner component is re
 Resolve an active colony incident:
 
 ```text
-!resolve-incident incident_id="mad hare"
+!resolve-colony-incident incident_id="mad hare"
 ```
 
 Resolution marks the incident entity resolved. It does not delete history or override

@@ -363,8 +363,8 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
     from ..core.components import IdentityComponent, PortableComponent
     from ..mechanics.colonysim import (
         BodyPartHealthComponent,
+        ColonyIncidentComponent,
         HasBodyPart,
-        IncidentComponent,
         JobBillComponent,
         JobComponent,
         PawnProfileComponent,
@@ -459,7 +459,7 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
         ])
         _add(actor, camp, [
             IdentityComponent(name="minor crop blight incident", kind="incident"),
-            IncidentComponent(incident_type="crop blight", severity=1),
+            ColonyIncidentComponent(incident_type="crop blight", severity=1),
         ])
         _add(actor, camp, [
             IdentityComponent(name="install splint surgery", kind="surgery"),

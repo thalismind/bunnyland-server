@@ -16,7 +16,7 @@ from bunnyland.core.components import (
 )
 from bunnyland.mechanics.barbariansim import WeaponComponent
 from bunnyland.mechanics.colonysim import (
-    IncidentComponent,
+    ColonyIncidentComponent,
     JobBillComponent,
     PawnProfileComponent,
     PrisonerComponent,
@@ -198,7 +198,7 @@ async def test_colonysim_demo_includes_stockpile_storage():
     assert _has(actor, JobBillComponent)
     assert _has(actor, ResearchProjectComponent)
     assert _has(actor, TradeOfferComponent)
-    assert _has(actor, IncidentComponent)
+    assert _has(actor, ColonyIncidentComponent)
     assert _has(actor, SurgeryBillComponent)
 
 

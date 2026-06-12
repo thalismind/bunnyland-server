@@ -507,7 +507,7 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
     from bunnyland.mechanics.barbariansim import StaminaComponent, WeaponComponent
     from bunnyland.mechanics.colonysim import (
         BodyPartHealthComponent,
-        IncidentComponent,
+        ColonyIncidentComponent,
         JobBillComponent,
         PawnProfileComponent,
         PrisonerComponent,
@@ -742,7 +742,7 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
     assert actor.world.get_entity(result.objects["research"]).has_component(
         ResearchProjectComponent
     )
-    assert actor.world.get_entity(result.objects["incident"]).has_component(IncidentComponent)
+    assert actor.world.get_entity(result.objects["incident"]).has_component(ColonyIncidentComponent)
     assert actor.world.get_entity(result.objects["trade"]).has_component(TradeOfferComponent)
     assert actor.world.get_entity(result.objects["surgery"]).has_component(SurgeryBillComponent)
     assert actor.world.get_entity(result.objects["surgery"]).has_component(BodyPartHealthComponent)
@@ -765,6 +765,349 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
     assert raptor.has_component(StaminaComponent)
     assert raptor.has_component(MutationThresholdComponent)
     assert raptor.has_component(FactionReputationComponent)
+
+
+async def test_builtin_worldgen_hooks_enrich_from_descriptive_mentions():
+    from bunnyland.mechanics.colonysim import (
+        ColonyIncidentComponent,
+        JobBillComponent,
+        PawnProfileComponent,
+        PrisonerComponent,
+        ResearchProjectComponent,
+        ResourceStackComponent,
+        StockpileComponent,
+        SurgeryBillComponent,
+        TradeOfferComponent,
+        WorkstationComponent,
+    )
+    from bunnyland.mechanics.gardensim import (
+        CropQualityComponent,
+        FarmQuestComponent,
+        FertilizerComponent,
+        GeodeComponent,
+        LadderComponent,
+        MachineComponent,
+        MailComponent,
+        MineLevelComponent,
+        PestComponent,
+        RegrowableComponent,
+        ShippingBinComponent,
+        TreeComponent,
+        WeedComponent,
+    )
+    from bunnyland.mechanics.lifesim import (
+        CharacterProfileComponent,
+        HomeObjectComponent,
+        WhimComponent,
+    )
+
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    proposal = WorldProposal(
+        seed="mentions",
+        rooms=[
+            RoomSpec(
+                key="room",
+                title="Farm Warehouse Cavern",
+                description="a greenhouse farm warehouse cavern",
+            )
+        ],
+        objects=[
+            ObjectSpec(
+                key="wish_chair",
+                room_key="room",
+                name="a wish chair for the home",
+                kind="furniture",
+            ),
+            ObjectSpec(
+                key="stack",
+                room_key="room",
+                name="a pile of wood",
+                kind="resource",
+            ),
+            ObjectSpec(key="forge", room_key="room", name="a metal forge", kind="bench"),
+            ObjectSpec(
+                key="research",
+                room_key="room",
+                name="technology research notes",
+                kind="paper",
+            ),
+            ObjectSpec(key="raid", room_key="room", name="a raid incident", kind="incident"),
+            ObjectSpec(key="trade", room_key="room", name="a trader offer", kind="trade"),
+            ObjectSpec(
+                key="surgery",
+                room_key="room",
+                name="a limb operation work order",
+                kind="surgery",
+            ),
+            ObjectSpec(key="compost", room_key="room", name="a bag of compost", kind="item"),
+            ObjectSpec(key="tree", room_key="room", name="a young tree", kind="tree"),
+            ObjectSpec(
+                key="crop",
+                room_key="room",
+                name="a perennial crop with pest bugs and weeds",
+                kind="crop",
+            ),
+            ObjectSpec(key="keg", room_key="room", name="a keg machine", kind="machine"),
+            ObjectSpec(
+                key="shipping",
+                room_key="room",
+                name="a shipping bin",
+                kind="shipping",
+            ),
+            ObjectSpec(key="geode", room_key="room", name="a stone geode", kind="geode"),
+            ObjectSpec(key="ladder", room_key="room", name="a mine ladder", kind="ladder"),
+            ObjectSpec(key="mail", room_key="room", name="a letter in the mail", kind="mail"),
+            ObjectSpec(
+                key="quest",
+                room_key="room",
+                name="an order board quest",
+                kind="quest",
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="pawn",
+                name="Morgan",
+                room_key="room",
+                description="a captive worker with a backstory and routine",
+                traits=("crafting",),
+            )
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    room = actor.world.get_entity(result.rooms["room"])
+    assert room.has_component(StockpileComponent)
+    assert room.has_component(MineLevelComponent)
+    pawn = actor.world.get_entity(result.characters["pawn"])
+    assert pawn.has_component(CharacterProfileComponent)
+    assert pawn.has_component(PawnProfileComponent)
+    assert pawn.has_component(PrisonerComponent)
+    assert actor.world.get_entity(result.objects["wish_chair"]).has_component(HomeObjectComponent)
+    assert actor.world.get_entity(result.objects["wish_chair"]).has_component(WhimComponent)
+    assert actor.world.get_entity(result.objects["stack"]).has_component(ResourceStackComponent)
+    assert actor.world.get_entity(result.objects["forge"]).has_component(WorkstationComponent)
+    assert actor.world.get_entity(result.objects["research"]).has_component(
+        ResearchProjectComponent
+    )
+    assert actor.world.get_entity(result.objects["raid"]).has_component(ColonyIncidentComponent)
+    assert actor.world.get_entity(result.objects["trade"]).has_component(TradeOfferComponent)
+    assert actor.world.get_entity(result.objects["surgery"]).has_component(SurgeryBillComponent)
+    assert actor.world.get_entity(result.objects["surgery"]).has_component(JobBillComponent)
+    assert actor.world.get_entity(result.objects["compost"]).has_component(FertilizerComponent)
+    assert actor.world.get_entity(result.objects["tree"]).has_component(TreeComponent)
+    crop = actor.world.get_entity(result.objects["crop"])
+    assert crop.has_component(CropQualityComponent)
+    assert crop.has_component(RegrowableComponent)
+    assert crop.has_component(PestComponent)
+    assert crop.has_component(WeedComponent)
+    assert actor.world.get_entity(result.objects["keg"]).has_component(MachineComponent)
+    assert actor.world.get_entity(result.objects["shipping"]).has_component(ShippingBinComponent)
+    assert actor.world.get_entity(result.objects["geode"]).has_component(GeodeComponent)
+    assert actor.world.get_entity(result.objects["ladder"]).has_component(LadderComponent)
+    assert actor.world.get_entity(result.objects["mail"]).has_component(MailComponent)
+    assert actor.world.get_entity(result.objects["quest"]).has_component(FarmQuestComponent)
+
+
+async def test_builtin_worldgen_hooks_cover_cross_package_mention_branches():
+    from bunnyland.mechanics.barbariansim import (
+        ArmorComponent,
+        FortificationComponent,
+        ShelterComponent,
+        StaminaComponent,
+    )
+    from bunnyland.mechanics.daggersim import (
+        DungeonComponent,
+        DungeonRoomComponent,
+        InstitutionComponent,
+        ProceduralSiteComponent,
+        QuestTemplateComponent,
+        RumorComponent,
+        TravelHubComponent,
+    )
+    from bunnyland.mechanics.dinosim import (
+        DinosaurComponent,
+        EggComponent,
+        FertilityComponent,
+        FossilFragmentComponent,
+        SpeciesComponent,
+    )
+    from bunnyland.mechanics.dragonsim import (
+        FactionComponent,
+        FactionReputationComponent,
+        PointOfInterestComponent,
+        QuestComponent,
+    )
+    from bunnyland.mechanics.environment import FireComponent, FlammableComponent
+    from bunnyland.mechanics.nukesim import (
+        DecontaminationComponent,
+        JunkComponent,
+        LootTableComponent,
+        MutationThresholdComponent,
+        RadiationDoseComponent,
+        RadiationSourceComponent,
+        RadMedicineComponent,
+        RadProtectionComponent,
+        ScavengeSiteComponent,
+    )
+    from bunnyland.mechanics.voidsim import (
+        AirlockComponent,
+        DistressSignalComponent,
+        FuelComponent,
+        HabitatModuleComponent,
+        JumpDriveComponent,
+        LifeSupportComponent,
+        OxygenComponent,
+        PowerGridComponent,
+        PressurizedComponent,
+        SensorComponent,
+        ShipComponent,
+        StarSystemComponent,
+        StationComponent,
+    )
+
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    proposal = WorldProposal(
+        seed="cross-package",
+        rooms=[
+            RoomSpec(
+                key="hub",
+                title="Shelter Camp Guild Vault Station",
+                biome="vault",
+                description=(
+                    "a shelter camp guild dungeon crossroads bank ship station airlock "
+                    "reactor ruin cache"
+                ),
+                wants=("procedural-site", "quest", "star-system"),
+            )
+        ],
+        objects=[
+            ObjectSpec(
+                key="firewood",
+                room_key="hub",
+                name="burning wood fuel",
+                kind="fuel",
+                wants=("fire",),
+            ),
+            ObjectSpec(
+                key="barricade",
+                room_key="hub",
+                name="armor shield barricade wall",
+                kind="fortification",
+            ),
+            ObjectSpec(
+                key="shrine",
+                room_key="hub",
+                name="quest shrine landmark faction guild",
+                kind="shrine",
+                wants=("quest",),
+            ),
+            ObjectSpec(
+                key="rumor",
+                room_key="hub",
+                name="a rumor parchment",
+                kind="paper",
+                description="rumor of a hidden vault",
+            ),
+            ObjectSpec(
+                key="template",
+                room_key="hub",
+                name="quest template notice",
+                kind="paper",
+                wants=("quest-template",),
+            ),
+            ObjectSpec(
+                key="fossil_egg",
+                room_key="hub",
+                name="amber fossil egg",
+                kind="relic",
+            ),
+            ObjectSpec(
+                key="ship_parts",
+                room_key="hub",
+                name="jump drive fuel sensor distress signal",
+                kind="ship-system",
+            ),
+            ObjectSpec(
+                key="rad_kit",
+                room_key="hub",
+                name="junk reactor cache",
+                kind="rad-kit",
+                wants=("rad-protection", "decontamination", "rad-medicine", "junk"),
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="fighter",
+                name="Clever Fighter",
+                room_key="hub",
+                species="raptor",
+                description="a warrior fighter raptor",
+                wants=("radiation-dose", "mutation-threshold", "faction-reputation"),
+            )
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    room = actor.world.get_entity(result.rooms["hub"])
+    assert room.has_component(ShelterComponent)
+    assert room.has_component(ProceduralSiteComponent)
+    assert room.has_component(DungeonComponent)
+    assert room.has_component(DungeonRoomComponent)
+    assert room.has_component(TravelHubComponent)
+    assert room.has_component(InstitutionComponent)
+    assert room.has_component(QuestComponent)
+    assert room.has_component(ShipComponent)
+    assert room.has_component(PowerGridComponent)
+    assert room.has_component(StationComponent)
+    assert room.has_component(HabitatModuleComponent)
+    assert room.has_component(PressurizedComponent)
+    assert room.has_component(LifeSupportComponent)
+    assert room.has_component(OxygenComponent)
+    assert room.has_component(AirlockComponent)
+    assert room.has_component(StarSystemComponent)
+    assert room.has_component(RadiationSourceComponent)
+    assert room.has_component(ScavengeSiteComponent)
+    assert room.has_component(LootTableComponent)
+
+    assert actor.world.get_entity(result.objects["firewood"]).has_component(FlammableComponent)
+    assert actor.world.get_entity(result.objects["firewood"]).has_component(FireComponent)
+    assert actor.world.get_entity(result.objects["barricade"]).has_component(ArmorComponent)
+    assert actor.world.get_entity(result.objects["barricade"]).has_component(FortificationComponent)
+    shrine = actor.world.get_entity(result.objects["shrine"])
+    assert shrine.has_component(PointOfInterestComponent)
+    assert shrine.has_component(FactionComponent)
+    assert shrine.has_component(QuestComponent)
+    assert actor.world.get_entity(result.objects["rumor"]).has_component(RumorComponent)
+    assert actor.world.get_entity(result.objects["template"]).has_component(QuestTemplateComponent)
+    fossil = actor.world.get_entity(result.objects["fossil_egg"])
+    assert fossil.has_component(FossilFragmentComponent)
+    assert fossil.has_component(EggComponent)
+    ship_parts = actor.world.get_entity(result.objects["ship_parts"])
+    assert ship_parts.has_component(JumpDriveComponent)
+    assert ship_parts.has_component(FuelComponent)
+    assert ship_parts.has_component(SensorComponent)
+    assert ship_parts.has_component(DistressSignalComponent)
+    rad_kit = actor.world.get_entity(result.objects["rad_kit"])
+    assert rad_kit.has_component(RadProtectionComponent)
+    assert rad_kit.has_component(DecontaminationComponent)
+    assert rad_kit.has_component(RadMedicineComponent)
+    assert rad_kit.has_component(JunkComponent)
+    assert rad_kit.has_component(RadiationSourceComponent)
+    assert rad_kit.has_component(ScavengeSiteComponent)
+
+    fighter = actor.world.get_entity(result.characters["fighter"])
+    assert fighter.has_component(StaminaComponent)
+    assert fighter.has_component(DinosaurComponent)
+    assert fighter.has_component(SpeciesComponent)
+    assert fighter.has_component(FertilityComponent)
+    assert fighter.has_component(RadiationDoseComponent)
+    assert fighter.has_component(MutationThresholdComponent)
+    assert fighter.has_component(FactionReputationComponent)
 
 
 async def test_generated_world_is_playable_via_plugins():

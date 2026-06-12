@@ -1047,6 +1047,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("scavenge", ("site_id",), tool_name="scavenge"),
     _definition("scrap-item", ("item_id",), tool_name="scrap_item"),
     _definition("stabilize-mutation", ("mutation_id",), tool_name="stabilize_mutation"),
+    _definition("resolve-colony-incident", ("incident_id",), tool_name="resolve_colony_incident"),
     _definition("resolve-incident", ("incident_id",), tool_name="resolve_incident"),
 )
 

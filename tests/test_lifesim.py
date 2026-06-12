@@ -2773,3 +2773,240 @@ async def test_lifesim_profile_whims_home_objects_invites_and_aging_controls():
     fragments = lifesim_fragments(scenario.actor.world, character)
     assert "Your traits: bookish, tidy." in fragments
     assert "Natural aging is on." in fragments
+
+
+def test_lifesim_catalogue_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    other_room = scenario.actor.world.get_entity(scenario.room_b)
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="plain box", kind="prop")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+    unreachable_object = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far chair", kind="furniture"),
+            HomeObjectComponent(affordance="sit"),
+        ],
+    )
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unreachable_object.id)
+    broken_object = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="broken chair", kind="furniture"),
+            HomeObjectComponent(affordance="sit", condition=0.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), broken_object.id)
+    home_object = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="clean chair", kind="furniture"),
+            HomeObjectComponent(affordance="sit", cleanliness=0.2, condition=0.5),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), home_object.id)
+    guest_id = _co_parent(scenario)
+    no_component_whim = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="not whim", kind="prop")],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        HasWhim(), no_component_whim.id
+    )
+    completed_whim = spawn_entity(
+        scenario.actor.world,
+        [WhimComponent(want="done", completed_at_epoch=1)],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        HasWhim(), completed_whim.id
+    )
+    no_reward_whim = spawn_entity(
+        scenario.actor.world,
+        [WhimComponent(want="quiet", reward_xp=0)],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        HasWhim(), no_reward_whim.id
+    )
+
+    cases = [
+        (
+            UpdateProfileHandler(),
+            "update-profile",
+            {},
+            "invalid character id",
+            "not-an-id",
+        ),
+        (AddWhimHandler(), "add-whim", {}, "invalid character id", "not-an-id"),
+        (AddWhimHandler(), "add-whim", {}, "whim want is required", None),
+        (
+            AddWhimHandler(),
+            "add-whim",
+            {"want": "bad", "reward_xp": -1},
+            "reward xp must not be negative",
+            None,
+        ),
+        (
+            CompleteWhimHandler(),
+            "complete-whim",
+            {"whim_id": "not-an-id"},
+            "invalid character or whim id",
+            None,
+        ),
+        (
+            CompleteWhimHandler(),
+            "complete-whim",
+            {"whim_id": "entity_999"},
+            "whim does not exist",
+            None,
+        ),
+        (
+            CompleteWhimHandler(),
+            "complete-whim",
+            {"whim_id": str(home_object.id)},
+            "whim does not belong to you",
+            None,
+        ),
+        (
+            CompleteWhimHandler(),
+            "complete-whim",
+            {"whim_id": str(no_component_whim.id)},
+            "target is not a whim",
+            None,
+        ),
+        (
+            CompleteWhimHandler(),
+            "complete-whim",
+            {"whim_id": str(completed_whim.id)},
+            "whim already completed",
+            None,
+        ),
+        (
+            UseHomeObjectHandler(),
+            "use-home-object",
+            {"object_id": "not-an-id"},
+            "invalid character or object id",
+            None,
+        ),
+        (
+            UseHomeObjectHandler(),
+            "use-home-object",
+            {"object_id": "entity_999"},
+            "object does not exist",
+            None,
+        ),
+        (
+            UseHomeObjectHandler(),
+            "use-home-object",
+            {"object_id": str(unreachable_object.id)},
+            "object is not reachable",
+            None,
+        ),
+        (
+            UseHomeObjectHandler(),
+            "use-home-object",
+            {"object_id": str(wrong_kind.id)},
+            "target is not a home object",
+            None,
+        ),
+        (
+            UseHomeObjectHandler(),
+            "use-home-object",
+            {"object_id": str(broken_object.id)},
+            "home object is broken",
+            None,
+        ),
+        (
+            MaintainHomeObjectHandler(),
+            "maintain-home-object",
+            {"object_id": str(home_object.id), "action": "polish"},
+            "maintenance action is required",
+            None,
+        ),
+        (
+            MaintainHomeObjectHandler(),
+            "maintain-home-object",
+            {"object_id": "entity_999", "action": "clean"},
+            "object does not exist",
+            None,
+        ),
+        (
+            MaintainHomeObjectHandler(),
+            "maintain-home-object",
+            {"object_id": str(unreachable_object.id), "action": "clean"},
+            "object is not reachable",
+            None,
+        ),
+        (
+            MaintainHomeObjectHandler(),
+            "maintain-home-object",
+            {"object_id": str(wrong_kind.id), "action": "clean"},
+            "target is not a home object",
+            None,
+        ),
+        (
+            InviteOverHandler(),
+            "invite-over",
+            {"guest_id": "not-an-id"},
+            "invalid character or guest id",
+            None,
+        ),
+        (
+            InviteOverHandler(),
+            "invite-over",
+            {"guest_id": "entity_999"},
+            "guest does not exist",
+            None,
+        ),
+        (
+            InviteOverHandler(),
+            "invite-over",
+            {"guest_id": str(guest_id), "room_id": "entity_999"},
+            "invitation room does not exist",
+            None,
+        ),
+        (
+            InviteOverHandler(),
+            "invite-over",
+            {"guest_id": str(guest_id), "room_id": str(wrong_kind.id)},
+            "invitation target is not a room",
+            None,
+        ),
+        (
+            InviteOverHandler(),
+            "invite-over",
+            {"guest_id": str(guest_id), "room_id": str(scenario.room_b)},
+            "you cannot invite guests there",
+            None,
+        ),
+        (ConfigureAgingHandler(), "configure-aging", {}, "invalid character id", "not-an-id"),
+    ]
+    for handler, command_type, payload, reason, character_id in cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id=character_id, **payload),
+        )
+        assert result.ok is False
+        assert result.reason == reason
+
+    for action in ("clean", "repair", "decorate"):
+        result = MaintainHomeObjectHandler().execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "maintain-home-object",
+                object_id=str(home_object.id),
+                action=action,
+            ),
+        )
+        assert result.ok is True
+    result = CompleteWhimHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "complete-whim", whim_id=str(no_reward_whim.id)),
+    )
+    assert result.ok is True
+    assert len(result.events) == 1

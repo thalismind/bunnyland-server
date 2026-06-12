@@ -16,6 +16,7 @@ from bunnyland.core import (
     container_of,
     contents,
     parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
@@ -37,6 +38,7 @@ from bunnyland.mechanics.gardensim import (
     ClearDeadCropHandler,
     CollectAnimalProductHandler,
     CollectionComponent,
+    CollectionUpdatedEvent,
     CollectMachineOutputHandler,
     CompleteFarmQuestHandler,
     ContributeBundleHandler,
@@ -53,6 +55,7 @@ from bunnyland.mechanics.gardensim import (
     DailyFarmResetComponent,
     DeadCropClearedEvent,
     DiscoverLadderHandler,
+    DonateMuseumHandler,
     FarmAnimalComponent,
     FarmQuestComponent,
     FeedAnimalHandler,
@@ -88,7 +91,10 @@ from bunnyland.mechanics.gardensim import (
     MailClaimedEvent,
     MailComponent,
     MineHandler,
+    MineLevelComponent,
     MiningNodeComponent,
+    MuseumCollectionComponent,
+    MuseumDonatedEvent,
     OpenGeodeHandler,
     PestComponent,
     PetAnimalHandler,
@@ -157,6 +163,7 @@ def _install(actor):
     actor.register_handler(ClaimMailHandler())
     actor.register_handler(CompleteFarmQuestHandler())
     actor.register_handler(ShipItemsHandler())
+    actor.register_handler(DonateMuseumHandler())
     actor.register_handler(ClaimRewardHandler())
     actor.register_consequence(CropGrowthConsequence())
     actor.register_consequence(TreeGrowthConsequence())
@@ -2627,3 +2634,667 @@ async def test_gardensim_catalogue_crops_machines_animals_mines_and_collections(
     assert reward.get_component(RewardComponent).claimed is True
     fragments = gardensim_fragments(scenario.actor.world, character)
     assert "Collection entries: grape." in fragments
+
+
+async def test_gardensim_museum_donations_update_collections_and_reject_duplicates():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    museum = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="museum shelf", kind="museum"), MuseumCollectionComponent()],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), museum.id)
+    stack = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ruby", kind="resource"),
+            ResourceStackComponent(resource_type="ruby", quantity=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), stack.id)
+    donated: list[MuseumDonatedEvent] = []
+    collected: list[CollectionUpdatedEvent] = []
+    rejected_events: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(MuseumDonatedEvent, donated.append)
+    scenario.actor.bus.subscribe(CollectionUpdatedEvent, collected.append)
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejected_events.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "donate-museum", museum_id=str(museum.id), resource_type="ruby")
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "donate-museum", museum_id=str(museum.id), resource_type="ruby")
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert donated[0].resource_type == "ruby"
+    assert collected[0].entry == "ruby"
+    assert museum.get_component(MuseumCollectionComponent).donated == ("ruby",)
+    assert character.get_component(CollectionComponent).entries == ("ruby",)
+    assert rejected_events[-1].reason == "museum already has that donation"
+    fragments = gardensim_fragments(scenario.actor.world, character)
+    assert "Nearby museum collection: 1 donations." in fragments
+    assert "Collection entries: ruby." in fragments
+
+
+def test_gardensim_catalogue_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    other_room = scenario.actor.world.get_entity(scenario.room_b)
+    character = scenario.actor.world.get_entity(scenario.character)
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="plain crate", kind="prop")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+    no_crop_soil = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="empty bed", kind="soil"), SoilComponent()],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), no_crop_soil.id)
+    unreachable_crop = spawn_entity(
+        scenario.actor.world,
+        [CropComponent(crop_type="turnip", planted_at_epoch=0)],
+    )
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unreachable_crop.id)
+    crop_no_weeds = spawn_entity(
+        scenario.actor.world,
+        [CropComponent(crop_type="turnip", planted_at_epoch=0)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), crop_no_weeds.id)
+    crop_no_pests = spawn_entity(
+        scenario.actor.world,
+        [CropComponent(crop_type="turnip", planted_at_epoch=0)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), crop_no_pests.id)
+    unreachable_machine = spawn_entity(
+        scenario.actor.world,
+        [MachineComponent(machine_type="keg")],
+    )
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unreachable_machine.id)
+    idle_machine = spawn_entity(
+        scenario.actor.world,
+        [MachineComponent(machine_type="keg")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), idle_machine.id)
+    animal = spawn_entity(
+        scenario.actor.world,
+        [FarmAnimalComponent(species="cow")],
+    )
+    mate = spawn_entity(
+        scenario.actor.world,
+        [FarmAnimalComponent(species="cow"), AnimalBreedingComponent()],
+    )
+    goat = spawn_entity(
+        scenario.actor.world,
+        [FarmAnimalComponent(species="goat")],
+    )
+    distant_animal = spawn_entity(
+        scenario.actor.world,
+        [FarmAnimalComponent(species="cow")],
+    )
+    for entity in (animal, mate, goat):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_animal.id)
+    ladder = spawn_entity(
+        scenario.actor.world,
+        [LadderComponent(target_room_id=str(scenario.room_b))],
+    )
+    distant_ladder = spawn_entity(
+        scenario.actor.world,
+        [LadderComponent(target_room_id=str(scenario.room_b))],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), ladder.id)
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_ladder.id)
+    geode_in_room = spawn_entity(
+        scenario.actor.world,
+        [GeodeComponent(resource_type="amethyst")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), geode_in_room.id)
+    not_geode = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="inventory stone", kind="prop")],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), not_geode.id)
+    claimed_mail = spawn_entity(
+        scenario.actor.world,
+        [MailComponent(subject="done", claimed=True)],
+    )
+    distant_mail = spawn_entity(
+        scenario.actor.world,
+        [MailComponent(subject="far")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), claimed_mail.id)
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_mail.id)
+    completed_quest = spawn_entity(
+        scenario.actor.world,
+        [FarmQuestComponent(quest_id="done", requested={}, completed=True)],
+    )
+    hungry_quest = spawn_entity(
+        scenario.actor.world,
+        [FarmQuestComponent(quest_id="hungry", requested={"melon": 1})],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), completed_quest.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), hungry_quest.id)
+    shipping_bin = spawn_entity(
+        scenario.actor.world,
+        [ShippingBinComponent()],
+    )
+    distant_bin = spawn_entity(
+        scenario.actor.world,
+        [ShippingBinComponent()],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), shipping_bin.id)
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_bin.id)
+    museum = spawn_entity(
+        scenario.actor.world,
+        [MuseumCollectionComponent()],
+    )
+    distant_museum = spawn_entity(
+        scenario.actor.world,
+        [MuseumCollectionComponent()],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), museum.id)
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_museum.id)
+    claimed_reward = spawn_entity(
+        scenario.actor.world,
+        [RewardComponent(resource_type="coin", claimed=True)],
+    )
+    distant_reward = spawn_entity(
+        scenario.actor.world,
+        [RewardComponent(resource_type="coin")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), claimed_reward.id)
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_reward.id)
+
+    cases = [
+        (
+            InspectCropHandler(),
+            "inspect-crop",
+            {"soil_id": "not-an-id"},
+            "invalid character or soil id",
+        ),
+        (InspectCropHandler(), "inspect-crop", {"soil_id": "entity_999"}, "soil does not exist"),
+        (
+            InspectCropHandler(),
+            "inspect-crop",
+            {"soil_id": str(unreachable_crop.id)},
+            "soil is not reachable",
+        ),
+        (
+            InspectCropHandler(),
+            "inspect-crop",
+            {"soil_id": str(no_crop_soil.id)},
+            "soil has no crop",
+        ),
+        (WeedCropHandler(), "weed-crop", {"soil_id": "entity_999"}, "soil does not exist"),
+        (
+            WeedCropHandler(),
+            "weed-crop",
+            {"soil_id": str(unreachable_crop.id)},
+            "soil is not reachable",
+        ),
+        (
+            WeedCropHandler(),
+            "weed-crop",
+            {"soil_id": str(crop_no_weeds.id)},
+            "soil has no weeds",
+        ),
+        (TreatPestsHandler(), "treat-pests", {"soil_id": "entity_999"}, "soil does not exist"),
+        (
+            TreatPestsHandler(),
+            "treat-pests",
+            {"soil_id": str(unreachable_crop.id)},
+            "soil is not reachable",
+        ),
+        (
+            TreatPestsHandler(),
+            "treat-pests",
+            {"soil_id": str(crop_no_pests.id)},
+            "soil has no pests",
+        ),
+        (
+            CancelMachineHandler(),
+            "cancel-machine",
+            {"machine_id": "not-an-id"},
+            "invalid character or machine id",
+        ),
+        (
+            CancelMachineHandler(),
+            "cancel-machine",
+            {"machine_id": "entity_999"},
+            "machine does not exist",
+        ),
+        (
+            CancelMachineHandler(),
+            "cancel-machine",
+            {"machine_id": str(unreachable_machine.id)},
+            "machine is not reachable",
+        ),
+        (
+            CancelMachineHandler(),
+            "cancel-machine",
+            {"machine_id": str(idle_machine.id)},
+            "machine has no task",
+        ),
+        (
+            RepairMachineHandler(),
+            "repair-machine",
+            {"machine_id": "entity_999"},
+            "machine does not exist",
+        ),
+        (
+            RepairMachineHandler(),
+            "repair-machine",
+            {"machine_id": str(unreachable_machine.id)},
+            "machine is not reachable",
+        ),
+        (
+            RepairMachineHandler(),
+            "repair-machine",
+            {"machine_id": str(wrong_kind.id)},
+            "target is not a machine",
+        ),
+        (
+            BreedAnimalHandler(),
+            "breed-animal",
+            {"animal_id": "not-an-id", "mate_id": str(mate.id)},
+            "invalid character or animal id",
+        ),
+        (
+            BreedAnimalHandler(),
+            "breed-animal",
+            {"animal_id": str(animal.id), "mate_id": "entity_999"},
+            "animal or mate does not exist",
+        ),
+        (
+            BreedAnimalHandler(),
+            "breed-animal",
+            {"animal_id": str(animal.id), "mate_id": str(distant_animal.id)},
+            "animal or mate is not reachable",
+        ),
+        (
+            BreedAnimalHandler(),
+            "breed-animal",
+            {"animal_id": str(animal.id), "mate_id": str(wrong_kind.id)},
+            "targets are not farm animals",
+        ),
+        (
+            BreedAnimalHandler(),
+            "breed-animal",
+            {"animal_id": str(mate.id), "mate_id": str(animal.id)},
+            "animal is already bred",
+        ),
+        (
+            BreedAnimalHandler(),
+            "breed-animal",
+            {"animal_id": str(animal.id), "mate_id": str(goat.id)},
+            "animals are different species",
+        ),
+        (
+            DiscoverLadderHandler(),
+            "discover-ladder",
+            {"ladder_id": "not-an-id"},
+            "invalid character or ladder id",
+        ),
+        (
+            DiscoverLadderHandler(),
+            "discover-ladder",
+            {"ladder_id": "entity_999"},
+            "ladder does not exist",
+        ),
+        (
+            DiscoverLadderHandler(),
+            "discover-ladder",
+            {"ladder_id": str(distant_ladder.id)},
+            "ladder is not reachable",
+        ),
+        (
+            DiscoverLadderHandler(),
+            "discover-ladder",
+            {"ladder_id": str(wrong_kind.id)},
+            "target is not a ladder",
+        ),
+        (
+            OpenGeodeHandler(),
+            "open-geode",
+            {"geode_id": "not-an-id"},
+            "invalid character or geode id",
+        ),
+        (OpenGeodeHandler(), "open-geode", {"geode_id": "entity_999"}, "geode does not exist"),
+        (
+            OpenGeodeHandler(),
+            "open-geode",
+            {"geode_id": str(geode_in_room.id)},
+            "geode is not in inventory",
+        ),
+        (
+            OpenGeodeHandler(),
+            "open-geode",
+            {"geode_id": str(not_geode.id)},
+            "target is not a geode",
+        ),
+        (
+            ClaimMailHandler(),
+            "claim-mail",
+            {"mail_id": "not-an-id"},
+            "invalid character or mail id",
+        ),
+        (ClaimMailHandler(), "claim-mail", {"mail_id": "entity_999"}, "mail does not exist"),
+        (
+            ClaimMailHandler(),
+            "claim-mail",
+            {"mail_id": str(distant_mail.id)},
+            "mail is not reachable",
+        ),
+        (
+            ClaimMailHandler(),
+            "claim-mail",
+            {"mail_id": str(wrong_kind.id)},
+            "target is not mail",
+        ),
+        (
+            ClaimMailHandler(),
+            "claim-mail",
+            {"mail_id": str(claimed_mail.id)},
+            "mail already claimed",
+        ),
+        (
+            CompleteFarmQuestHandler(),
+            "complete-farm-quest",
+            {"quest_id": "not-an-id"},
+            "invalid character or quest id",
+        ),
+        (
+            CompleteFarmQuestHandler(),
+            "complete-farm-quest",
+            {"quest_id": "entity_999"},
+            "quest does not exist",
+        ),
+        (
+            CompleteFarmQuestHandler(),
+            "complete-farm-quest",
+            {"quest_id": str(wrong_kind.id)},
+            "target is not a farm quest",
+        ),
+        (
+            CompleteFarmQuestHandler(),
+            "complete-farm-quest",
+            {"quest_id": str(completed_quest.id)},
+            "quest already completed",
+        ),
+        (
+            CompleteFarmQuestHandler(),
+            "complete-farm-quest",
+            {"quest_id": str(hungry_quest.id)},
+            "missing quest items",
+        ),
+        (
+            ShipItemsHandler(),
+            "ship-items",
+            {"bin_id": "not-an-id", "resource_type": "melon"},
+            "invalid character or shipping bin id",
+        ),
+        (
+            ShipItemsHandler(),
+            "ship-items",
+            {"bin_id": str(shipping_bin.id)},
+            "resource type is required",
+        ),
+        (
+            ShipItemsHandler(),
+            "ship-items",
+            {"bin_id": str(shipping_bin.id), "resource_type": "melon", "quantity": 0},
+            "quantity and unit price are invalid",
+        ),
+        (
+            ShipItemsHandler(),
+            "ship-items",
+            {"bin_id": "entity_999", "resource_type": "melon"},
+            "shipping bin does not exist",
+        ),
+        (
+            ShipItemsHandler(),
+            "ship-items",
+            {"bin_id": str(distant_bin.id), "resource_type": "melon"},
+            "shipping bin is not reachable",
+        ),
+        (
+            ShipItemsHandler(),
+            "ship-items",
+            {"bin_id": str(wrong_kind.id), "resource_type": "melon"},
+            "target is not a shipping bin",
+        ),
+        (
+            ShipItemsHandler(),
+            "ship-items",
+            {"bin_id": str(shipping_bin.id), "resource_type": "melon"},
+            "missing shipped resource",
+        ),
+        (
+            DonateMuseumHandler(),
+            "donate-museum",
+            {"museum_id": "not-an-id", "resource_type": "ruby"},
+            "invalid character or museum id",
+        ),
+        (
+            DonateMuseumHandler(),
+            "donate-museum",
+            {"museum_id": str(museum.id)},
+            "resource type is required",
+        ),
+        (
+            DonateMuseumHandler(),
+            "donate-museum",
+            {"museum_id": "entity_999", "resource_type": "ruby"},
+            "museum does not exist",
+        ),
+        (
+            DonateMuseumHandler(),
+            "donate-museum",
+            {"museum_id": str(distant_museum.id), "resource_type": "ruby"},
+            "museum is not reachable",
+        ),
+        (
+            DonateMuseumHandler(),
+            "donate-museum",
+            {"museum_id": str(wrong_kind.id), "resource_type": "ruby"},
+            "target is not a museum collection",
+        ),
+        (
+            DonateMuseumHandler(),
+            "donate-museum",
+            {"museum_id": str(museum.id), "resource_type": "ruby"},
+            "missing donation resource",
+        ),
+        (
+            ClaimRewardHandler(),
+            "claim-reward",
+            {"reward_id": "not-an-id"},
+            "invalid character or reward id",
+        ),
+        (
+            ClaimRewardHandler(),
+            "claim-reward",
+            {"reward_id": "entity_999"},
+            "reward does not exist",
+        ),
+        (
+            ClaimRewardHandler(),
+            "claim-reward",
+            {"reward_id": str(distant_reward.id)},
+            "reward is not reachable",
+        ),
+        (
+            ClaimRewardHandler(),
+            "claim-reward",
+            {"reward_id": str(wrong_kind.id)},
+            "target is not a reward",
+        ),
+        (
+            ClaimRewardHandler(),
+            "claim-reward",
+            {"reward_id": str(claimed_reward.id)},
+            "reward already claimed",
+        ),
+    ]
+    for handler, command_type, payload, reason in cases:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_gardensim_fragments_cover_catalogue_state_variants():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    fixtures = [
+        [
+            IdentityComponent(name="dead bed", kind="soil"),
+            SoilComponent(),
+            CropComponent(crop_type="turnip", planted_at_epoch=0, dead=True),
+        ],
+        [
+            IdentityComponent(name="ready bed", kind="soil"),
+            SoilComponent(),
+            CropComponent(crop_type="berry", planted_at_epoch=0, ready=True),
+            PestComponent(),
+            WeedComponent(),
+        ],
+        [
+            IdentityComponent(name="tilled bed", kind="soil"),
+            SoilComponent(),
+            TilledComponent(tilled_at_epoch=0),
+        ],
+        [IdentityComponent(name="empty bed", kind="soil"), SoilComponent()],
+        [
+            IdentityComponent(name="dead tree", kind="tree"),
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0, dead=True),
+        ],
+        [
+            IdentityComponent(name="young tree", kind="tree"),
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=2),
+        ],
+        [
+            IdentityComponent(name="ready tree", kind="tree"),
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0, mature=True),
+        ],
+        [
+            IdentityComponent(name="sap tree", kind="tree"),
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0, mature=True),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0, collection_days=1),
+            HarvestableComponent(yield_item="sap", ready=True),
+        ],
+        [
+            IdentityComponent(name="tapped tree", kind="tree"),
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0, mature=True),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0, collection_days=1),
+        ],
+        [
+            IdentityComponent(name="broken keg", kind="machine"),
+            MachineComponent(machine_type="keg"),
+            MachineBreakdownComponent(),
+        ],
+        [
+            IdentityComponent(name="ready keg", kind="machine"),
+            MachineComponent(machine_type="keg"),
+            ProcessingTaskComponent(
+                recipe_id="juice", started_at_epoch=0, ready_at_epoch=0, ready=True
+            ),
+        ],
+        [
+            IdentityComponent(name="bred cow", kind="animal"),
+            FarmAnimalComponent(species="cow"),
+            AnimalProductComponent(product_type="milk", ready=True),
+            AnimalBreedingComponent(),
+        ],
+        [IdentityComponent(name="pond", kind="water"), FishingSpotComponent(fish_type="trout")],
+        [
+            IdentityComponent(name="ore", kind="rock"),
+            MiningNodeComponent(resource_type="copper", quantity=2),
+        ],
+        [IdentityComponent(name="mine", kind="mine"), MineLevelComponent(level=4)],
+        [
+            IdentityComponent(name="hidden ladder", kind="ladder"),
+            LadderComponent(target_room_id="next"),
+        ],
+        [
+            IdentityComponent(name="open ladder", kind="ladder"),
+            LadderComponent(target_room_id="next", discovered=True),
+        ],
+        [
+            IdentityComponent(name="geode", kind="geode"),
+            GeodeComponent(resource_type="opal", quantity=2),
+        ],
+        [
+            IdentityComponent(name="leek", kind="forage"),
+            ForageComponent(resource_type="leek", quantity=1),
+        ],
+        [
+            IdentityComponent(name="fair", kind="festival"),
+            FestivalComponent(name="Fair", season="spring"),
+        ],
+        [
+            IdentityComponent(name="open bundle", kind="bundle"),
+            BundleComponent(bundle_id="spring", requirements={}),
+        ],
+        [
+            IdentityComponent(name="done bundle", kind="bundle"),
+            BundleComponent(bundle_id="fish", requirements={}, completed=True),
+        ],
+        [IdentityComponent(name="letter", kind="mail"), MailComponent(subject="Hello")],
+        [
+            IdentityComponent(name="quest", kind="quest"),
+            FarmQuestComponent(quest_id="help", requested={}),
+        ],
+        [IdentityComponent(name="bin", kind="bin"), ShippingBinComponent(earnings=12)],
+        [
+            IdentityComponent(name="museum", kind="museum"),
+            MuseumCollectionComponent(donated=("opal",)),
+        ],
+        [
+            IdentityComponent(name="reward", kind="reward"),
+            RewardComponent(resource_type="seed", quantity=3),
+        ],
+    ]
+    for components in fixtures:
+        entity = spawn_entity(scenario.actor.world, components)
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    replace_component(character, CollectionComponent(entries=("opal", "leek")))
+
+    fragments = gardensim_fragments(scenario.actor.world, character)
+
+    assert "Nearby crop: turnip in dead bed (dead)." in fragments
+    assert "Nearby crop: berry in ready bed (ready, pests, weeds)." in fragments
+    assert "Nearby tilled soil: tilled bed." in fragments
+    assert "Nearby soil: empty bed." in fragments
+    assert "Nearby tree: oak in dead tree (dead)." in fragments
+    assert "Nearby tree: oak in young tree (growing)." in fragments
+    assert "Nearby tree: oak in ready tree (ready to tap)." in fragments
+    assert "Nearby tree: oak in sap tree (sap ready)." in fragments
+    assert "Nearby tree: oak in tapped tree (tapped)." in fragments
+    assert "Nearby machine: keg (broken)." in fragments
+    assert "Nearby machine: keg (ready)." in fragments
+    assert "Nearby animal: cow, mood 50, friendship 0, milk ready, bred." in fragments
+    assert "Nearby fishing spot: trout." in fragments
+    assert "Nearby mining node: copper x2." in fragments
+    assert "Mine level 4." in fragments
+    assert "Nearby ladder: hidden." in fragments
+    assert "Nearby ladder: discovered." in fragments
+    assert "Nearby geode: opal x2." in fragments
+    assert "Nearby forage: leek x1." in fragments
+    assert "Nearby festival: Fair (spring)." in fragments
+    assert "Nearby bundle: spring (open)." in fragments
+    assert "Nearby bundle: fish (complete)." in fragments
+    assert "Nearby mail: Hello." in fragments
+    assert "Nearby farm quest: help." in fragments
+    assert "Nearby shipping bin: 12 earnings recorded." in fragments
+    assert "Nearby museum collection: 1 donations." in fragments
+    assert "Nearby reward: seed x3." in fragments
+    assert "Collection entries: opal, leek." in fragments

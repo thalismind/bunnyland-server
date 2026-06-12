@@ -54,6 +54,8 @@ from bunnyland.mechanics.colonysim import (
     CaravanComponent,
     CaravanFormedEvent,
     ClaimOwnershipHandler,
+    ColonyIncidentComponent,
+    ColonyIncidentResolvedEvent,
     ColonySimComponent,
     ColonyWealthComponent,
     ColonyWealthConsequence,
@@ -68,8 +70,6 @@ from bunnyland.mechanics.colonysim import (
     GatherResourceHandler,
     HasBodyPart,
     HaulItemHandler,
-    IncidentComponent,
-    IncidentResolvedEvent,
     InfectionComponent,
     JobBillComponent,
     JobBillProgressedEvent,
@@ -87,6 +87,7 @@ from bunnyland.mechanics.colonysim import (
     PrisonerComponent,
     PrisonerPolicySetEvent,
     ProgressJobBillHandler,
+    ProstheticComponent,
     RecipeComponent,
     RecruitmentProgressedEvent,
     RecruitPrisonerHandler,
@@ -98,7 +99,7 @@ from bunnyland.mechanics.colonysim import (
     ResearchProjectHandler,
     ReservedBy,
     ReserveHandler,
-    ResolveIncidentHandler,
+    ResolveColonyIncidentHandler,
     ResourceNodeComponent,
     ResourceRegenSystem,
     ResourceStackComponent,
@@ -154,7 +155,7 @@ def _install(actor):
     actor.register_handler(SetPrisonerPolicyHandler())
     actor.register_handler(RecruitPrisonerHandler())
     actor.register_handler(ResearchProjectHandler())
-    actor.register_handler(ResolveIncidentHandler())
+    actor.register_handler(ResolveColonyIncidentHandler())
     actor.register_handler(CompleteTradeHandler())
     actor.register_handler(FormCaravanHandler())
     actor.register_handler(PerformSurgeryHandler())
@@ -2002,7 +2003,7 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
         scenario.actor.world,
         [
             IdentityComponent(name="mad hare", kind="incident"),
-            IncidentComponent(incident_type="raid", severity=2),
+            ColonyIncidentComponent(incident_type="raid", severity=2),
         ],
     )
     offer = spawn_entity(
@@ -2034,7 +2035,7 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
     recruitments: list[RecruitmentProgressedEvent] = []
     research: list[ResearchProgressedEvent] = []
     techs: list[TechUnlockedEvent] = []
-    incidents: list[IncidentResolvedEvent] = []
+    incidents: list[ColonyIncidentResolvedEvent] = []
     trades: list[TradeCompletedEvent] = []
     caravans: list[CaravanFormedEvent] = []
     surgeries: list[SurgeryPerformedEvent] = []
@@ -2044,7 +2045,7 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
     scenario.actor.bus.subscribe(RecruitmentProgressedEvent, recruitments.append)
     scenario.actor.bus.subscribe(ResearchProgressedEvent, research.append)
     scenario.actor.bus.subscribe(TechUnlockedEvent, techs.append)
-    scenario.actor.bus.subscribe(IncidentResolvedEvent, incidents.append)
+    scenario.actor.bus.subscribe(ColonyIncidentResolvedEvent, incidents.append)
     scenario.actor.bus.subscribe(TradeCompletedEvent, trades.append)
     scenario.actor.bus.subscribe(CaravanFormedEvent, caravans.append)
     scenario.actor.bus.subscribe(SurgeryPerformedEvent, surgeries.append)
@@ -2073,7 +2074,9 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
         _cmd(scenario, "research-project", project_id=str(project.id), work=2)
     )
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(_cmd(scenario, "resolve-incident", incident_id=str(incident.id)))
+    await scenario.actor.submit(
+        _cmd(scenario, "resolve-colony-incident", incident_id=str(incident.id))
+    )
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "complete-trade", offer_id=str(offer.id)))
     await scenario.actor.tick(HOUR)
@@ -2103,7 +2106,7 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
     assert project.get_component(TechUnlockComponent).tech_id == "battery"
     assert techs[0].tech_id == "battery"
     assert incidents[0].incident_type == "raid"
-    assert incident.get_component(IncidentComponent).resolved is True
+    assert incident.get_component(ColonyIncidentComponent).resolved is True
     assert trades[0].goodwill == 3.0
     relation = next(
         entity
@@ -2125,3 +2128,481 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
     assert surgery.get_component(SurgeryBillComponent).completed is True
     fragments = colonysim_fragments(scenario.actor.world, character)
     assert "Backstory: field medic." in fragments
+
+
+def test_colonysim_catalogue_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    other_room = scenario.actor.world.get_entity(scenario.room_b)
+    character = scenario.actor.world.get_entity(scenario.character)
+    wrong_kind = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="plain crate", kind="prop")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+    suspended_bill = spawn_entity(
+        scenario.actor.world,
+        [JobBillComponent(recipe_id="plank", work_required=5, suspended=True)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), suspended_bill.id)
+    complete_bill = spawn_entity(
+        scenario.actor.world,
+        [JobBillComponent(recipe_id="plank", work_required=5, work_done=5)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), complete_bill.id)
+    unreachable_bill = spawn_entity(
+        scenario.actor.world,
+        [JobBillComponent(recipe_id="plank", work_required=5)],
+    )
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unreachable_bill.id)
+    prisoner = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="prisoner", kind="character"),
+            PrisonerComponent(policy="hold"),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), prisoner.id)
+    distant_prisoner = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant prisoner", kind="character"),
+            PrisonerComponent(policy="recruit"),
+        ],
+    )
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_prisoner.id)
+    unlocked_project = spawn_entity(
+        scenario.actor.world,
+        [ResearchProjectComponent(project_id="done", work_required=1, unlocked=True)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unlocked_project.id)
+    resolved_incident = spawn_entity(
+        scenario.actor.world,
+        [ColonyIncidentComponent(incident_type="raid", resolved=True)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), resolved_incident.id)
+    trade_offer = spawn_entity(
+        scenario.actor.world,
+        [TradeOfferComponent(faction_id="traders", wants={"wood": 1})],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), trade_offer.id)
+    completed_surgery = spawn_entity(
+        scenario.actor.world,
+        [SurgeryBillComponent(part="arm", operation="repair", completed=True)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), completed_surgery.id)
+    surgery = spawn_entity(
+        scenario.actor.world,
+        [SurgeryBillComponent(part="arm", operation="repair", prosthetic_item_id="entity_999")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), surgery.id)
+    wrong_prosthetic = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="stick", kind="prop")],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), wrong_prosthetic.id)
+    surgery_with_wrong_prosthetic = spawn_entity(
+        scenario.actor.world,
+        [
+            SurgeryBillComponent(
+                part="arm",
+                operation="install-prosthetic",
+                prosthetic_item_id=str(wrong_prosthetic.id),
+            )
+        ],
+    )
+    room.add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), surgery_with_wrong_prosthetic.id
+    )
+
+    cases = [
+        (
+            UpdatePawnProfileHandler(),
+            "update-pawn-profile",
+            {"passions": ()},
+            "passions must be a mapping",
+            None,
+        ),
+        (
+            ProgressJobBillHandler(),
+            "progress-job-bill",
+            {"bill_id": "not-an-id"},
+            "invalid character or bill id",
+            None,
+        ),
+        (
+            ProgressJobBillHandler(),
+            "progress-job-bill",
+            {"bill_id": str(suspended_bill.id), "work": 0},
+            "work must be positive",
+            None,
+        ),
+        (
+            ProgressJobBillHandler(),
+            "progress-job-bill",
+            {"bill_id": "entity_999"},
+            "job bill does not exist",
+            None,
+        ),
+        (
+            ProgressJobBillHandler(),
+            "progress-job-bill",
+            {"bill_id": str(unreachable_bill.id)},
+            "job bill is not reachable",
+            None,
+        ),
+        (
+            ProgressJobBillHandler(),
+            "progress-job-bill",
+            {"bill_id": str(wrong_kind.id)},
+            "target is not a job bill",
+            None,
+        ),
+        (
+            ProgressJobBillHandler(),
+            "progress-job-bill",
+            {"bill_id": str(suspended_bill.id)},
+            "job bill is suspended",
+            None,
+        ),
+        (
+            ProgressJobBillHandler(),
+            "progress-job-bill",
+            {"bill_id": str(complete_bill.id)},
+            "job bill is already complete",
+            None,
+        ),
+        (
+            SetPrisonerPolicyHandler(),
+            "set-prisoner-policy",
+            {"prisoner_id": str(prisoner.id), "policy": "visit"},
+            "prisoner policy is required",
+            None,
+        ),
+        (
+            SetPrisonerPolicyHandler(),
+            "set-prisoner-policy",
+            {"prisoner_id": "entity_999", "policy": "hold"},
+            "prisoner does not exist",
+            None,
+        ),
+        (
+            SetPrisonerPolicyHandler(),
+            "set-prisoner-policy",
+            {"prisoner_id": str(wrong_kind.id), "policy": "hold"},
+            "target is not a prisoner",
+            None,
+        ),
+        (
+            RecruitPrisonerHandler(),
+            "recruit-prisoner",
+            {"prisoner_id": str(prisoner.id), "progress": 0},
+            "progress must be positive",
+            None,
+        ),
+        (
+            RecruitPrisonerHandler(),
+            "recruit-prisoner",
+            {"prisoner_id": "entity_999"},
+            "prisoner does not exist",
+            None,
+        ),
+        (
+            RecruitPrisonerHandler(),
+            "recruit-prisoner",
+            {"prisoner_id": str(distant_prisoner.id)},
+            "prisoner is not present",
+            None,
+        ),
+        (
+            RecruitPrisonerHandler(),
+            "recruit-prisoner",
+            {"prisoner_id": str(wrong_kind.id)},
+            "target is not a prisoner",
+            None,
+        ),
+        (
+            RecruitPrisonerHandler(),
+            "recruit-prisoner",
+            {"prisoner_id": str(prisoner.id)},
+            "prisoner is not set for recruitment",
+            None,
+        ),
+        (
+            ResearchProjectHandler(),
+            "research-project",
+            {"project_id": "not-an-id"},
+            "invalid character or research project id",
+            None,
+        ),
+        (
+            ResearchProjectHandler(),
+            "research-project",
+            {"project_id": str(unlocked_project.id), "work": 0},
+            "work must be positive",
+            None,
+        ),
+        (
+            ResearchProjectHandler(),
+            "research-project",
+            {"project_id": "entity_999"},
+            "research project does not exist",
+            None,
+        ),
+        (
+            ResearchProjectHandler(),
+            "research-project",
+            {"project_id": str(wrong_kind.id)},
+            "target is not a research project",
+            None,
+        ),
+        (
+            ResearchProjectHandler(),
+            "research-project",
+            {"project_id": str(unlocked_project.id)},
+            "research project is already unlocked",
+            None,
+        ),
+        (
+            ResolveColonyIncidentHandler(),
+            "resolve-colony-incident",
+            {"incident_id": "not-an-id"},
+            "invalid character or incident id",
+            None,
+        ),
+        (
+            ResolveColonyIncidentHandler(),
+            "resolve-colony-incident",
+            {"incident_id": "entity_999"},
+            "incident does not exist",
+            None,
+        ),
+        (
+            ResolveColonyIncidentHandler(),
+            "resolve-colony-incident",
+            {"incident_id": str(wrong_kind.id)},
+            "target is not an incident",
+            None,
+        ),
+        (
+            ResolveColonyIncidentHandler(),
+            "resolve-colony-incident",
+            {"incident_id": str(resolved_incident.id)},
+            "incident is already resolved",
+            None,
+        ),
+        (
+            CompleteTradeHandler(),
+            "complete-trade",
+            {"offer_id": "not-an-id"},
+            "invalid character or trade offer id",
+            None,
+        ),
+        (
+            CompleteTradeHandler(),
+            "complete-trade",
+            {"offer_id": "entity_999"},
+            "trade offer does not exist",
+            None,
+        ),
+        (
+            CompleteTradeHandler(),
+            "complete-trade",
+            {"offer_id": str(wrong_kind.id)},
+            "target is not a trade offer",
+            None,
+        ),
+        (
+            CompleteTradeHandler(),
+            "complete-trade",
+            {"offer_id": str(trade_offer.id)},
+            "missing trade goods",
+            None,
+        ),
+        (
+            FormCaravanHandler(),
+            "form-caravan",
+            {},
+            "destination is required",
+            None,
+        ),
+        (
+            FormCaravanHandler(),
+            "form-caravan",
+            {"destination": "town", "cargo": ()},
+            "cargo must be a mapping",
+            None,
+        ),
+        (
+            FormCaravanHandler(),
+            "form-caravan",
+            {"destination": "town", "cargo": {"wood": -1}},
+            "cargo quantities must not be negative",
+            None,
+        ),
+        (
+            FormCaravanHandler(),
+            "form-caravan",
+            {"destination": "town", "cargo": {"wood": 1}},
+            "missing caravan cargo",
+            None,
+        ),
+        (
+            PerformSurgeryHandler(),
+            "perform-surgery",
+            {"patient_id": "not-an-id", "surgery_id": str(surgery.id)},
+            "invalid doctor, patient, or surgery id",
+            None,
+        ),
+        (
+            PerformSurgeryHandler(),
+            "perform-surgery",
+            {"patient_id": str(scenario.character), "surgery_id": "entity_999"},
+            "patient or surgery does not exist",
+            None,
+        ),
+        (
+            PerformSurgeryHandler(),
+            "perform-surgery",
+            {"patient_id": str(distant_prisoner.id), "surgery_id": str(surgery.id)},
+            "patient is not reachable",
+            None,
+        ),
+        (
+            PerformSurgeryHandler(),
+            "perform-surgery",
+            {"patient_id": str(scenario.character), "surgery_id": str(wrong_kind.id)},
+            "target is not a surgery bill",
+            None,
+        ),
+        (
+            PerformSurgeryHandler(),
+            "perform-surgery",
+            {"patient_id": str(scenario.character), "surgery_id": str(completed_surgery.id)},
+            "surgery is already complete",
+            None,
+        ),
+        (
+            PerformSurgeryHandler(),
+            "perform-surgery",
+            {"patient_id": str(scenario.character), "surgery_id": str(surgery.id)},
+            "prosthetic does not exist",
+            None,
+        ),
+        (
+            PerformSurgeryHandler(),
+            "perform-surgery",
+            {
+                "patient_id": str(scenario.character),
+                "surgery_id": str(surgery_with_wrong_prosthetic.id),
+            },
+            "target prosthetic is not usable",
+            None,
+        ),
+    ]
+    for handler, command_type, payload, reason, character_id in cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id=character_id, **payload),
+        )
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_colonysim_fragments_cover_catalogue_state_variants():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    replace_component(character, WorkPriorityComponent(priorities={"doctor": 1}))
+    replace_component(character, PawnProfileComponent(expectations="moderate"))
+    replace_component(character, AllowedAreaComponent(room_ids=(str(scenario.room_a),)))
+    replace_component(
+        character,
+        PrisonerComponent(recruitment_progress=2, recruitment_difficulty=5),
+    )
+    replace_component(character, BedRestComponent(started_at_epoch=0))
+    replace_component(character, InfectionComponent(severity=0.3, immunity=0.2))
+    replace_component(character, MentalStateComponent(state="sad", reason="rain"))
+    part = spawn_entity(
+        scenario.actor.world,
+        [BodyPartHealthComponent(part="left paw", health=1.0, prosthetic="wooden paw")],
+    )
+    character.add_relationship(HasBodyPart(), part.id)
+    missing_part = spawn_entity(scenario.actor.world, [])
+    character.add_relationship(HasBodyPart(), missing_part.id)
+    fixtures = [
+        [JobComponent(job_type="haul", priority=1, completed=True)],
+        [JobBillComponent(recipe_id="plank", work_required=5, work_done=1)],
+        [ResearchProjectComponent(project_id="battery", work_required=5, unlocked=True)],
+        [ColonyIncidentComponent(incident_type="raid", resolved=True)],
+        [TradeOfferComponent(faction_id="traders", gives={"medicine": 1}, wants={"wood": 2})],
+        [SurgeryBillComponent(part="left paw", operation="install-prosthetic", completed=True)],
+        [CaravanComponent(destination="town", returned=True)],
+        [ColonySimComponent(), ColonyWealthComponent(wealth=12, expectations="low")],
+    ]
+    for components in fixtures:
+        entity = spawn_entity(scenario.actor.world, components)
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    fragments = colonysim_fragments(scenario.actor.world, character)
+
+    assert "Work priorities: doctor:1." in fragments
+    assert "Pawn expectations: moderate." in fragments
+    assert f"Allowed work area rooms: {scenario.room_a}." in fragments
+    assert "Prisoner policy: hold, recruitment 2.0/5.0." in fragments
+    assert "You are on medical bed rest." in fragments
+    assert "Infection: severity 0.30, immunity 0.20." in fragments
+    assert "Mental state: sad (rain)." in fragments
+    assert "Nearby job bill: plank 1.0/5.0 work." in fragments
+    assert "Research project: battery (unlocked)." in fragments
+    assert "Trade offer from traders: gives 1 medicine; wants 2 wood." in fragments
+    assert "Body part left paw: health 1.0, prosthetic wooden paw." in fragments
+    assert "Colony wealth is 12; expectations are low." in fragments
+    assert not any("Colony incident: raid" in line for line in fragments)
+    assert not any("Surgery bill: install-prosthetic" in line for line in fragments)
+    assert not any("Caravan bound for town" in line for line in fragments)
+
+
+def test_colonysim_surgery_can_install_reachable_prosthetic_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    prosthetic = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="wooden paw", kind="prosthetic"),
+            ProstheticComponent(part="wooden paw"),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), prosthetic.id)
+    surgery = spawn_entity(
+        scenario.actor.world,
+        [
+            SurgeryBillComponent(
+                part="left paw",
+                operation="install-prosthetic",
+                prosthetic_item_id=str(prosthetic.id),
+            )
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), surgery.id)
+
+    result = PerformSurgeryHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "perform-surgery",
+            patient_id=str(scenario.character),
+            surgery_id=str(surgery.id),
+        ),
+    )
+
+    assert result.ok is True
+    body_part_id = character.get_relationships(HasBodyPart)[0][1]
+    body_part = scenario.actor.world.get_entity(body_part_id)
+    assert body_part.get_component(BodyPartHealthComponent).prosthetic == "wooden paw"
+    assert surgery.get_component(SurgeryBillComponent).completed is True
