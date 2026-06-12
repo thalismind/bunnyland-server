@@ -14,15 +14,90 @@ from typing import Any
 from ..commands import SubmittedCommand
 from ..components import (
     ButtonComponent,
+    ContainerComponent,
+    DescriptionComponent,
     DoorComponent,
+    IdentityComponent,
     KeyComponent,
     LockableComponent,
     ReadableComponent,
+    RoomComponent,
     WritableComponent,
 )
-from ..ecs import parse_entity_id, reachable_ids, replace_component
-from ..events import ItemUsedEvent, PhysicalWriteEvent
+from ..ecs import container_of, parse_entity_id, reachable_ids, replace_component
+from ..edges import Contains
+from ..events import (
+    ContainerClosedEvent,
+    ContainerOpenedEvent,
+    DoorClosedEvent,
+    DoorOpenedEvent,
+    EntityInspectedEvent,
+    EntityLockedEvent,
+    EntityUnlockedEvent,
+    EventVisibility,
+    ItemUsedEvent,
+    PhysicalWriteEvent,
+    RoomLookedEvent,
+)
 from .base import HandlerContext, HandlerResult, ok, rejected
+
+
+def _reachable_target(ctx: HandlerContext, command: SubmittedCommand, key: str = "target_id"):
+    payload: Mapping[str, Any] = command.payload
+    character_id = parse_entity_id(command.character_id)
+    target_id = parse_entity_id(payload.get(key))
+    if character_id is None or target_id is None:
+        return None, None, None, rejected("invalid character or target id")
+    if not ctx.world.has_entity(target_id):
+        return None, None, None, rejected("target does not exist")
+    character = ctx.entity(character_id)
+    if target_id not in reachable_ids(ctx.world, character):
+        return None, None, None, rejected("target is not reachable")
+    return character, target_id, ctx.entity(target_id), None
+
+
+def _entity_label(entity) -> tuple[str, str | None]:
+    if entity.has_component(IdentityComponent):
+        identity = entity.get_component(IdentityComponent)
+        return identity.name, identity.kind
+    if entity.has_component(RoomComponent):
+        return entity.get_component(RoomComponent).title, "room"
+    return str(entity.id), None
+
+
+def _description_text(entity) -> str:
+    if not entity.has_component(DescriptionComponent):
+        return ""
+    description = entity.get_component(DescriptionComponent)
+    return description.long or description.short or description.appearance
+
+
+def _lock_state(entity) -> bool:
+    if entity.has_component(LockableComponent) and entity.get_component(LockableComponent).locked:
+        return True
+    if entity.has_component(ContainerComponent) and entity.get_component(ContainerComponent).locked:
+        return True
+    return False
+
+
+def _matching_key(ctx: HandlerContext, command: SubmittedCommand, lock: LockableComponent):
+    if lock.key_name is None:
+        return None, None
+    tool_id = parse_entity_id(command.payload.get("tool_id"))
+    if tool_id is None:
+        return None, "matching key is required"
+    character_id = parse_entity_id(command.character_id)
+    if character_id is None:
+        return None, "invalid character or target id"
+    if tool_id not in reachable_ids(ctx.world, ctx.entity(character_id)):
+        return None, "tool is not reachable"
+    tool = ctx.entity(tool_id)
+    if (
+        not tool.has_component(KeyComponent)
+        or tool.get_component(KeyComponent).key_name != lock.key_name
+    ):
+        return None, "matching key is required"
+    return tool_id, None
 
 
 class UseHandler:
@@ -90,6 +165,223 @@ class UseHandler:
         )
 
 
+class LookHandler:
+    command_type = "look"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        room_id = container_of(character)
+        if room_id is None:
+            return rejected("character is not in a room")
+        room = ctx.entity(room_id)
+        title, _kind = _entity_label(room)
+        visible = []
+        for _edge, child_id in room.get_relationships(Contains):
+            if child_id == character_id:
+                continue
+            child = ctx.entity(child_id)
+            visible.append(_entity_label(child)[0])
+        summary = title if not visible else f"{title}: {', '.join(sorted(visible))}"
+        return ok(
+            RoomLookedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=command.character_id,
+                    room_id=str(room_id),
+                    target_ids=(str(room_id),),
+                    room_title=title,
+                    summary=summary,
+                )
+            )
+        )
+
+
+class InspectHandler:
+    command_type = "inspect"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        _character, target_id, target, error = _reachable_target(ctx, command)
+        if error is not None:
+            return error
+        name, kind = _entity_label(target)
+        readable = (
+            target.get_component(ReadableComponent)
+            if target.has_component(ReadableComponent)
+            else None
+        )
+        states: list[str] = []
+        if target.has_component(ContainerComponent):
+            container = target.get_component(ContainerComponent)
+            states.append("open" if container.open else "closed")
+            if container.locked:
+                states.append("locked")
+        if target.has_component(DoorComponent):
+            states.append("open" if target.get_component(DoorComponent).open else "closed")
+        if (
+            target.has_component(LockableComponent)
+            and target.get_component(LockableComponent).locked
+        ):
+            states.append("locked")
+        return ok(
+            EntityInspectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=command.character_id,
+                    target_ids=(str(target_id),),
+                    entity_id=str(target_id),
+                    name=name,
+                    kind=kind,
+                    description=_description_text(target),
+                    text=readable.text if readable else "",
+                    state=", ".join(states),
+                )
+            )
+        )
+
+
+class OpenHandler:
+    command_type = "open"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        _character, target_id, target, error = _reachable_target(ctx, command)
+        if error is not None:
+            return error
+        if _lock_state(target):
+            return rejected("it is locked")
+        if target.has_component(ContainerComponent):
+            container = target.get_component(ContainerComponent)
+            if container.open:
+                return rejected("it is already open")
+            replace_component(target, replace(container, open=True))
+            event_type = ContainerOpenedEvent
+        elif target.has_component(DoorComponent):
+            door = target.get_component(DoorComponent)
+            if door.open:
+                return rejected("it is already open")
+            replace_component(target, replace(door, open=True))
+            event_type = DoorOpenedEvent
+        else:
+            return rejected("target is not openable")
+        return ok(
+            event_type(
+                **ctx.event_base(
+                    actor_id=command.character_id,
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                )
+            )
+        )
+
+
+class CloseHandler:
+    command_type = "close"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        _character, target_id, target, error = _reachable_target(ctx, command)
+        if error is not None:
+            return error
+        if target.has_component(ContainerComponent):
+            container = target.get_component(ContainerComponent)
+            if not container.open:
+                return rejected("it is already closed")
+            replace_component(target, replace(container, open=False))
+            event_type = ContainerClosedEvent
+        elif target.has_component(DoorComponent):
+            door = target.get_component(DoorComponent)
+            if not door.open:
+                return rejected("it is already closed")
+            replace_component(target, replace(door, open=False))
+            event_type = DoorClosedEvent
+        else:
+            return rejected("target is not closeable")
+        return ok(
+            event_type(
+                **ctx.event_base(
+                    actor_id=command.character_id,
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                )
+            )
+        )
+
+
+class UnlockHandler:
+    command_type = "unlock"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        _character, target_id, target, error = _reachable_target(ctx, command)
+        if error is not None:
+            return error
+        tool_id = None
+        if target.has_component(LockableComponent):
+            lock = target.get_component(LockableComponent)
+            if not lock.locked:
+                return rejected("it is already unlocked")
+            tool_id, reason = _matching_key(ctx, command, lock)
+            if reason is not None:
+                return rejected(reason)
+            replace_component(target, replace(lock, locked=False))
+        elif target.has_component(ContainerComponent):
+            container = target.get_component(ContainerComponent)
+            if not container.locked:
+                return rejected("it is already unlocked")
+        else:
+            return rejected("target is not lockable")
+        if target.has_component(ContainerComponent):
+            container = target.get_component(ContainerComponent)
+            replace_component(target, replace(container, locked=False))
+        return ok(
+            EntityUnlockedEvent(
+                **ctx.event_base(
+                    actor_id=command.character_id,
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    tool_id=str(tool_id) if tool_id is not None else None,
+                )
+            )
+        )
+
+
+class LockHandler:
+    command_type = "lock"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        _character, target_id, target, error = _reachable_target(ctx, command)
+        if error is not None:
+            return error
+        tool_id = None
+        if target.has_component(LockableComponent):
+            lock = target.get_component(LockableComponent)
+            if lock.locked:
+                return rejected("it is already locked")
+            tool_id, reason = _matching_key(ctx, command, lock)
+            if reason is not None:
+                return rejected(reason)
+            replace_component(target, replace(lock, locked=True))
+        elif target.has_component(ContainerComponent):
+            container = target.get_component(ContainerComponent)
+            if container.locked:
+                return rejected("it is already locked")
+        else:
+            return rejected("target is not lockable")
+        if target.has_component(ContainerComponent):
+            container = target.get_component(ContainerComponent)
+            replace_component(target, replace(container, locked=True))
+        return ok(
+            EntityLockedEvent(
+                **ctx.event_base(
+                    actor_id=command.character_id,
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    tool_id=str(tool_id) if tool_id is not None else None,
+                )
+            )
+        )
+
+
 class WriteHandler:
     command_type = "write"
 
@@ -141,4 +433,13 @@ class WriteHandler:
         )
 
 
-__all__ = ["UseHandler", "WriteHandler"]
+__all__ = [
+    "CloseHandler",
+    "InspectHandler",
+    "LockHandler",
+    "LookHandler",
+    "OpenHandler",
+    "UnlockHandler",
+    "UseHandler",
+    "WriteHandler",
+]

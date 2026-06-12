@@ -14,10 +14,24 @@ from typing import Any
 from relics import EntityId
 
 from ..commands import SubmittedCommand
-from ..components import ContainerComponent, InventoryComponent, PortableComponent
+from ..components import (
+    ContainerComponent,
+    HoldableComponent,
+    InventoryComponent,
+    PortableComponent,
+    WearableComponent,
+)
 from ..ecs import container_of, contents, parse_entity_id
 from ..edges import ContainmentMode, Contains, Holding, Wearing
-from ..events import ItemDroppedEvent, ItemPutEvent, ItemTakenEvent
+from ..events import (
+    ItemDroppedEvent,
+    ItemHeldEvent,
+    ItemPutEvent,
+    ItemRemovedEvent,
+    ItemTakenEvent,
+    ItemUnheldEvent,
+    ItemWornEvent,
+)
 from .base import HandlerContext, HandlerResult, ok, rejected
 
 
@@ -169,4 +183,140 @@ class PutHandler:
         return ok(event)
 
 
-__all__ = ["PutHandler", "TakeHandler"]
+class DropHandler(PutHandler):
+    """Drop an inventory item into the current room."""
+
+    command_type = "drop"
+
+
+def _inventory_item(ctx: HandlerContext, command: SubmittedCommand):
+    payload: Mapping[str, Any] = command.payload
+    character_id = parse_entity_id(command.character_id)
+    item_id = parse_entity_id(payload.get("item_id"))
+    if character_id is None or item_id is None:
+        return None, None, rejected("invalid character or item id")
+    if not ctx.world.has_entity(item_id):
+        return None, None, rejected("item does not exist")
+    character = ctx.entity(character_id)
+    if container_of(ctx.entity(item_id)) != character_id:
+        return None, None, rejected("item is not in inventory")
+    return character, ctx.entity(item_id), None
+
+
+class HoldHandler:
+    command_type = "hold"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character, item, error = _inventory_item(ctx, command)
+        if error is not None:
+            return error
+        if not item.has_component(HoldableComponent):
+            return rejected("item cannot be held")
+        holdable = item.get_component(HoldableComponent)
+        if character.has_relationship(Holding, item.id):
+            return rejected("already holding item")
+        character.add_relationship(Holding(slot=holdable.slot), item.id)
+        return ok(
+            ItemHeldEvent(
+                **ctx.event_base(
+                    actor_id=command.character_id,
+                    room_id=str(container_of(character)),
+                    target_ids=(str(item.id),),
+                    item_id=str(item.id),
+                    slot=holdable.slot,
+                )
+            )
+        )
+
+
+class UnholdHandler:
+    command_type = "unhold"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character, item, error = _inventory_item(ctx, command)
+        if error is not None:
+            return error
+        held = [
+            edge
+            for edge, target_id in character.get_relationships(Holding)
+            if target_id == item.id
+        ]
+        if not held:
+            return rejected("item is not held")
+        character.remove_relationship(Holding, item.id)
+        return ok(
+            ItemUnheldEvent(
+                **ctx.event_base(
+                    actor_id=command.character_id,
+                    room_id=str(container_of(character)),
+                    target_ids=(str(item.id),),
+                    item_id=str(item.id),
+                    slot=held[0].slot,
+                )
+            )
+        )
+
+
+class WearHandler:
+    command_type = "wear"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character, item, error = _inventory_item(ctx, command)
+        if error is not None:
+            return error
+        if not item.has_component(WearableComponent):
+            return rejected("item cannot be worn")
+        wearable = item.get_component(WearableComponent)
+        if character.has_relationship(Wearing, item.id):
+            return rejected("already wearing item")
+        character.add_relationship(Wearing(slot=wearable.slot), item.id)
+        return ok(
+            ItemWornEvent(
+                **ctx.event_base(
+                    actor_id=command.character_id,
+                    room_id=str(container_of(character)),
+                    target_ids=(str(item.id),),
+                    item_id=str(item.id),
+                    slot=wearable.slot,
+                )
+            )
+        )
+
+
+class RemoveHandler:
+    command_type = "remove"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character, item, error = _inventory_item(ctx, command)
+        if error is not None:
+            return error
+        worn = [
+            edge
+            for edge, target_id in character.get_relationships(Wearing)
+            if target_id == item.id
+        ]
+        if not worn:
+            return rejected("item is not worn")
+        character.remove_relationship(Wearing, item.id)
+        return ok(
+            ItemRemovedEvent(
+                **ctx.event_base(
+                    actor_id=command.character_id,
+                    room_id=str(container_of(character)),
+                    target_ids=(str(item.id),),
+                    item_id=str(item.id),
+                    slot=worn[0].slot,
+                )
+            )
+        )
+
+
+__all__ = [
+    "DropHandler",
+    "HoldHandler",
+    "PutHandler",
+    "RemoveHandler",
+    "TakeHandler",
+    "UnholdHandler",
+    "WearHandler",
+]

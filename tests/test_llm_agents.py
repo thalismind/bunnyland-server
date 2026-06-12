@@ -103,12 +103,12 @@ def test_tool_schemas_cover_every_verb():
     } <= names
 
 
-def test_command_from_tool_call_renames_drop_to_put():
+def test_command_from_tool_call_keeps_drop_as_public_command():
     call = ToolCall(name="drop", arguments={"item_id": "item_1"})
     command = command_from_tool_call(
         call, character_id="char_1", controller_id="ctrl_1", controller_generation=0
     )
-    assert command.command_type == "put"
+    assert command.command_type == "drop"
     assert command.lane is Lane.WORLD
     assert command.cost == CommandCost(action=1)
     assert command.payload == {"item_id": "item_1"}

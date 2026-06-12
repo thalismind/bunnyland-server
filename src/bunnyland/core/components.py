@@ -346,6 +346,16 @@ class PortableComponent(Component):
 
 
 @dataclass(frozen=True)
+class HoldableComponent(Component):
+    slot: str = "hand"
+
+
+@dataclass(frozen=True)
+class WearableComponent(Component):
+    slot: str = "body"
+
+
+@dataclass(frozen=True)
 class ContainerComponent(Component):
     allow_add: bool = True
     allow_remove: bool = True
@@ -496,6 +506,7 @@ __all__ = [
     "GenerationIntentComponent",
     "HearingComponent",
     "HealthComponent",
+    "HoldableComponent",
     "IdentityComponent",
     "InitiativeComponent",
     "InventoryComponent",
@@ -522,4 +533,5 @@ __all__ = [
     "WorldClockComponent",
     "WritableComponent",
     "WeightComponent",
+    "WearableComponent",
 ]

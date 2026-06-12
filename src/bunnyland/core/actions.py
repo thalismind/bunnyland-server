@@ -302,6 +302,20 @@ def _definition(
 DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     # Core verbs.
     _definition(
+        "look",
+        tool_name="look",
+        cost=_FREE,
+        patterns=(ActionPattern("look", {}), ActionPattern("look around", {})),
+        examples=("look",),
+    ),
+    _definition(
+        "inspect",
+        ("target_id",),
+        tool_name="inspect",
+        patterns=("inspect {target_id}", "look at {target_id}", "examine {target_id}"),
+        examples=("inspect woven basket",),
+    ),
+    _definition(
         "move",
         ("direction", "exit_id"),
         tool_name="move",
@@ -352,12 +366,52 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
     ),
     _definition(
-        "put",
+        "drop",
         ("item_id",),
         tool_name="drop",
         patterns=("drop {item_id}", "put {item_id}"),
         examples=("drop brass key",),
     ),
+    _definition(
+        "open",
+        ("target_id",),
+        tool_name="open",
+        patterns=("open {target_id}",),
+        examples=("open woven basket",),
+    ),
+    _definition(
+        "close",
+        ("target_id",),
+        tool_name="close",
+        patterns=("close {target_id}",),
+    ),
+    _definition(
+        "lock",
+        ("target_id", "tool_id"),
+        tool_name="lock",
+        patterns=("lock {target_id} with {tool_id}", "lock {target_id}"),
+    ),
+    _definition(
+        "unlock",
+        ("target_id", "tool_id"),
+        tool_name="unlock",
+        patterns=("unlock {target_id} with {tool_id}", "unlock {target_id}"),
+        examples=("unlock burrow door with brass key",),
+    ),
+    _definition(
+        "hold",
+        ("item_id",),
+        tool_name="hold",
+        patterns=("hold {item_id}", "equip {item_id}"),
+    ),
+    _definition(
+        "unhold",
+        ("item_id",),
+        tool_name="unhold",
+        patterns=("unhold {item_id}", "unequip {item_id}"),
+    ),
+    _definition("wear", ("item_id",), tool_name="wear", patterns=("wear {item_id}",)),
+    _definition("remove", ("item_id",), tool_name="remove", patterns=("remove {item_id}",)),
     _definition(
         "use",
         ("target_id", "tool_id"),

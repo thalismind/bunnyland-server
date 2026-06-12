@@ -10,13 +10,20 @@ from bunnyland.core import (
     ContainerComponent,
     ContainmentMode,
     Contains,
+    DropHandler,
+    HoldableComponent,
+    HoldHandler,
     Holding,
     IdentityComponent,
     InventoryComponent,
     Lane,
     PortableComponent,
     PutHandler,
+    RemoveHandler,
     TakeHandler,
+    UnholdHandler,
+    WearableComponent,
+    WearHandler,
     Wearing,
     build_submitted_command,
     container_of,
@@ -32,7 +39,12 @@ def setup_inventory_scenario():
     scenario = build_scenario()
     actor = scenario.actor
     actor.register_handler(TakeHandler())
+    actor.register_handler(DropHandler())
     actor.register_handler(PutHandler())
+    actor.register_handler(HoldHandler())
+    actor.register_handler(UnholdHandler())
+    actor.register_handler(WearHandler())
+    actor.register_handler(RemoveHandler())
     return scenario
 
 
@@ -74,6 +86,18 @@ def put_cmd(scenario, item_id, target=None):
     )
 
 
+def item_cmd(scenario, command_type, item_id):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"item_id": str(item_id)},
+    )
+
+
 def handler_context(scenario):
     return HandlerContext(scenario.actor.world, scenario.actor.epoch)
 
@@ -106,6 +130,13 @@ def execute_put(scenario, item_id, target=None, *, character_id=None, raw_payloa
             payload=raw_payload if raw_payload is not None else command.payload,
         )
     return PutHandler().execute(handler_context(scenario), command)
+
+
+def execute_item_handler(handler, scenario, item_id):
+    return handler.execute(
+        handler_context(scenario),
+        item_cmd(scenario, handler.command_type, item_id),
+    )
 
 
 async def test_take_moves_item_into_inventory():
@@ -143,14 +174,121 @@ async def test_drop_returns_item_to_room():
     scenario = setup_inventory_scenario()
     item = place_item(scenario, scenario.room_a)
 
-    # take, then drop (put with no target)
+    # take, then drop
     await scenario.actor.submit(take_cmd(scenario, item))
     await scenario.actor.tick(HOUR)
     assert container_of(scenario.actor.world.get_entity(item)) == scenario.character
 
-    await scenario.actor.submit(put_cmd(scenario, item))
+    await scenario.actor.submit(item_cmd(scenario, "drop", item))
     await scenario.actor.tick(HOUR)
     assert container_of(scenario.actor.world.get_entity(item)) == scenario.room_a
+
+
+async def test_hold_unhold_wear_and_remove_inventory_overlays():
+    scenario = setup_inventory_scenario()
+    tool = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="garden hoe", kind="tool"),
+            PortableComponent(),
+            HoldableComponent(slot="hand"),
+        ],
+    )
+    hat = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="straw hat", kind="clothing"),
+            PortableComponent(),
+            WearableComponent(slot="head"),
+        ],
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), tool.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), hat.id)
+
+    await scenario.actor.submit(item_cmd(scenario, "hold", tool.id))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(item_cmd(scenario, "wear", hat.id))
+    await scenario.actor.tick(HOUR)
+    assert character.has_relationship(Holding, tool.id)
+    assert character.has_relationship(Wearing, hat.id)
+
+    await scenario.actor.submit(item_cmd(scenario, "unhold", tool.id))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(item_cmd(scenario, "remove", hat.id))
+    await scenario.actor.tick(HOUR)
+    assert not character.has_relationship(Holding, tool.id)
+    assert not character.has_relationship(Wearing, hat.id)
+
+
+def test_equipment_handlers_reject_bad_state_directly():
+    scenario = setup_inventory_scenario()
+    plain = place_item(scenario, scenario.room_a, name="plain rock")
+    character = scenario.actor.world.get_entity(scenario.character)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.remove_relationship(Contains, plain)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), plain)
+
+    assert execute_item_handler(HoldHandler(), scenario, plain).reason == "item cannot be held"
+    assert execute_item_handler(WearHandler(), scenario, plain).reason == "item cannot be worn"
+    assert execute_item_handler(UnholdHandler(), scenario, plain).reason == "item is not held"
+    assert execute_item_handler(RemoveHandler(), scenario, plain).reason == "item is not worn"
+
+
+def test_equipment_handlers_reject_invalid_missing_and_unheld_items_directly():
+    scenario = setup_inventory_scenario()
+    item = place_item(scenario, scenario.room_a, name="floor tool")
+
+    invalid = build_submitted_command(
+        character_id="not-an-id",
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="hold",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"item_id": str(item)},
+    )
+    assert HoldHandler().execute(handler_context(scenario), invalid).reason == (
+        "invalid character or item id"
+    )
+    assert execute_item_handler(HoldHandler(), scenario, "entity_999").reason == (
+        "item does not exist"
+    )
+    assert execute_item_handler(HoldHandler(), scenario, item).reason == (
+        "item is not in inventory"
+    )
+
+
+def test_equipment_handlers_reject_duplicate_hold_and_wear_directly():
+    scenario = setup_inventory_scenario()
+    tool = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="garden hoe", kind="tool"),
+            PortableComponent(),
+            HoldableComponent(slot="hand"),
+        ],
+    )
+    hat = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="straw hat", kind="clothing"),
+            PortableComponent(),
+            WearableComponent(slot="head"),
+        ],
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), tool.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), hat.id)
+
+    assert execute_item_handler(HoldHandler(), scenario, tool.id).ok is True
+    assert execute_item_handler(HoldHandler(), scenario, tool.id).reason == (
+        "already holding item"
+    )
+    assert execute_item_handler(WearHandler(), scenario, hat.id).ok is True
+    assert execute_item_handler(WearHandler(), scenario, hat.id).reason == (
+        "already wearing item"
+    )
 
 
 async def test_put_into_container_in_room():

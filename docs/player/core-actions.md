@@ -19,6 +19,12 @@ direction when an exit is listed:
 !look
 ```
 
+Inspect a specific reachable object for details:
+
+```text
+!inspect woven basket
+```
+
 ## Carry and place items
 
 Take portable objects from the room or an open reachable container:
@@ -35,6 +41,15 @@ Put carried items into an open container, or drop them into the current room:
 !drop smooth pebble
 ```
 
+Hold tools and wear clothing from your inventory when an item supports it:
+
+```text
+!hold garden hoe
+!unhold garden hoe
+!wear straw hat
+!remove straw hat
+```
+
 ## Use and write
 
 Use reachable mechanisms and objects:
@@ -45,6 +60,14 @@ Use reachable mechanisms and objects:
 ```
 
 The first command can unlock a matching lock. The second can open or close the door.
+You can also address those affordances explicitly:
+
+```text
+!unlock burrow door with brass key
+!open burrow door
+!close burrow door
+!lock burrow door with brass key
+```
 
 Write on reachable writable objects:
 

@@ -8,18 +8,43 @@ surface and mechanics so disabling one removes its components/systems/verbs.
 
 from __future__ import annotations
 
-from ..core.components import AdminComponent
+from ..core.components import AdminComponent, HoldableComponent, WearableComponent
 from ..core.controllers import MCPControllerComponent
+from ..core.events import (
+    ContainerClosedEvent,
+    ContainerOpenedEvent,
+    DoorClosedEvent,
+    DoorOpenedEvent,
+    EntityInspectedEvent,
+    EntityLockedEvent,
+    EntityUnlockedEvent,
+    ItemHeldEvent,
+    ItemRemovedEvent,
+    ItemUnheldEvent,
+    ItemWornEvent,
+    RoomLookedEvent,
+)
 from ..core.handlers import (
+    CloseHandler,
+    DropHandler,
+    HoldHandler,
+    InspectHandler,
+    LockHandler,
+    LookHandler,
     MoveHandler,
+    OpenHandler,
     PutHandler,
+    RemoveHandler,
     SayHandler,
     SleepHandler,
     TakeHandler,
     TellHandler,
+    UnholdHandler,
+    UnlockHandler,
     UseHandler,
     WaitHandler,
     WakeHandler,
+    WearHandler,
     WriteHandler,
 )
 from ..mechanics.affect import AffectAggregation, AffectReactor
@@ -1120,12 +1145,23 @@ def core_verbs_plugin() -> Plugin:
     return Plugin(
         id=CORE_VERBS,
         name="Core Verbs",
-        ecs=EcsContribution(components=(AdminComponent,)),
+        ecs=EcsContribution(components=(AdminComponent, HoldableComponent, WearableComponent)),
         commands=CommandContribution(
             action_handlers=(
+                LookHandler,
+                InspectHandler,
                 MoveHandler,
                 TakeHandler,
+                DropHandler,
                 PutHandler,
+                OpenHandler,
+                CloseHandler,
+                LockHandler,
+                UnlockHandler,
+                HoldHandler,
+                UnholdHandler,
+                WearHandler,
+                RemoveHandler,
                 UseHandler,
                 WriteHandler,
                 SleepHandler,
@@ -1133,7 +1169,21 @@ def core_verbs_plugin() -> Plugin:
                 WaitHandler,
                 SayHandler,
                 TellHandler,
-            )
+            ),
+            typed_events=(
+                RoomLookedEvent,
+                EntityInspectedEvent,
+                ContainerOpenedEvent,
+                ContainerClosedEvent,
+                DoorOpenedEvent,
+                DoorClosedEvent,
+                EntityLockedEvent,
+                EntityUnlockedEvent,
+                ItemHeldEvent,
+                ItemUnheldEvent,
+                ItemWornEvent,
+                ItemRemovedEvent,
+            ),
         ),
     )
 

@@ -524,6 +524,38 @@ async def test_disabled_plugin_leaves_its_verbs_unhandled():
 def test_catalogue_parity_plugins_register_new_public_surfaces():
     plugins = {plugin.id: plugin for plugin in bunnyland_plugins()}
 
+    core = plugins[CORE_VERBS]
+    assert {"HoldableComponent", "WearableComponent"} <= {
+        component.__name__ for component in core.ecs.components
+    }
+    assert {
+        "look",
+        "inspect",
+        "drop",
+        "open",
+        "close",
+        "lock",
+        "unlock",
+        "hold",
+        "unhold",
+        "wear",
+        "remove",
+    } <= {handler.command_type for handler in core.commands.action_handlers}
+    assert {
+        "RoomLookedEvent",
+        "EntityInspectedEvent",
+        "ContainerOpenedEvent",
+        "ContainerClosedEvent",
+        "DoorOpenedEvent",
+        "DoorClosedEvent",
+        "EntityLockedEvent",
+        "EntityUnlockedEvent",
+        "ItemHeldEvent",
+        "ItemUnheldEvent",
+        "ItemWornEvent",
+        "ItemRemovedEvent",
+    } <= {event.__name__ for event in core.commands.typed_events}
+
     lifesim = plugins[LIFESIM]
     assert {
         "CharacterProfileComponent",

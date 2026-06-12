@@ -318,6 +318,20 @@ class ActorMovedEvent(DomainEvent):
     direction: str | None = None
 
 
+class RoomLookedEvent(DomainEvent):
+    room_title: str
+    summary: str
+
+
+class EntityInspectedEvent(DomainEvent):
+    entity_id: str
+    name: str
+    kind: str | None = None
+    description: str = ""
+    text: str = ""
+    state: str = ""
+
+
 # --------------------------------------------------------------------------------------
 # Inventory / object events (spec 18.3)
 # --------------------------------------------------------------------------------------
@@ -338,9 +352,55 @@ class ItemDroppedEvent(DomainEvent):
     room_id_dropped: str
 
 
+class ItemHeldEvent(DomainEvent):
+    item_id: str
+    slot: str
+
+
+class ItemUnheldEvent(DomainEvent):
+    item_id: str
+    slot: str
+
+
+class ItemWornEvent(DomainEvent):
+    item_id: str
+    slot: str
+
+
+class ItemRemovedEvent(DomainEvent):
+    item_id: str
+    slot: str
+
+
 class ItemUsedEvent(DomainEvent):
     item_id: str
     affordance: str
+    tool_id: str | None = None
+
+
+class ContainerOpenedEvent(DomainEvent):
+    target_id: str
+
+
+class ContainerClosedEvent(DomainEvent):
+    target_id: str
+
+
+class DoorOpenedEvent(DomainEvent):
+    target_id: str
+
+
+class DoorClosedEvent(DomainEvent):
+    target_id: str
+
+
+class EntityLockedEvent(DomainEvent):
+    target_id: str
+    tool_id: str | None = None
+
+
+class EntityUnlockedEvent(DomainEvent):
+    target_id: str
     tool_id: str | None = None
 
 
@@ -541,10 +601,17 @@ __all__ = [
     "CommandQueuedEvent",
     "CommandRejectedEvent",
     "CommandSubmittedEvent",
+    "ContainerClosedEvent",
+    "ContainerOpenedEvent",
     "ControllerChangedEvent",
     "DomainEvent",
+    "DoorClosedEvent",
+    "DoorOpenedEvent",
     "EncumbranceChangedEvent",
+    "EntityInspectedEvent",
+    "EntityLockedEvent",
     "EntitySeenEvent",
+    "EntityUnlockedEvent",
     "EventBus",
     "EventVisibility",
     "FortificationBuiltEvent",
@@ -553,9 +620,13 @@ __all__ = [
     "InjuryAddedEvent",
     "ItemDroppedEvent",
     "ItemCraftedEvent",
+    "ItemHeldEvent",
+    "ItemRemovedEvent",
     "ItemPutEvent",
     "ItemTakenEvent",
+    "ItemUnheldEvent",
     "ItemUsedEvent",
+    "ItemWornEvent",
     "JobAssignedEvent",
     "JobCompletedEvent",
     "ItemForbiddenEvent",
@@ -580,6 +651,7 @@ __all__ = [
     "PhysicalWriteEvent",
     "ReflectionCreatedEvent",
     "RoomGeneratedEvent",
+    "RoomLookedEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",
     "WorldPauseStatusChangedEvent",

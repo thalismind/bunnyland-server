@@ -9,16 +9,21 @@ import pytest
 from bunnyland.core import (
     ButtonComponent,
     CharacterComponent,
+    CloseHandler,
     ContainerComponent,
     ContainmentMode,
     Contains,
     DoorComponent,
+    DropHandler,
     ExitTo,
     HealthComponent,
     IdentityComponent,
+    InspectHandler,
     KeyComponent,
     LockableComponent,
+    LockHandler,
     MemoryProfileComponent,
+    OpenHandler,
     PortableComponent,
     PutHandler,
     ReadableComponent,
@@ -28,6 +33,7 @@ from bunnyland.core import (
     SleepingComponent,
     TakeHandler,
     TellHandler,
+    UnlockHandler,
     UseHandler,
     WaitHandler,
     WakeHandler,
@@ -263,7 +269,13 @@ class _DeterministicMemoryStore(InMemoryStore):
 def _install_core_actions_playtest(actor) -> None:
     for handler in (
         TakeHandler(),
+        DropHandler(),
         PutHandler(),
+        InspectHandler(),
+        OpenHandler(),
+        CloseHandler(),
+        LockHandler(),
+        UnlockHandler(),
         UseHandler(),
         SayHandler(),
         TellHandler(),
@@ -1321,8 +1333,8 @@ async def test_discord_playtest_core_actions_loop(scenario):
     hazel_bond = bond_between(scenario.actor.world, scenario.character, hazel_id)
     pebble = scenario.actor.world.get_entity(pebble_id)
     assert rejected == []
-    assert result.ticks == 15
-    assert len(result.inputs) == 15
+    assert result.ticks == 22
+    assert len(result.inputs) == 22
     assert taken and put and dropped
     assert container_of(pebble) == scenario.room_a
     assert put[0].to_container_id == str(basket_id)
