@@ -13,8 +13,21 @@ from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.commands import SubmittedCommand
-from ..core.components import DeadComponent, IdentityComponent
-from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
+from ..core.components import (
+    CharacterComponent,
+    DeadComponent,
+    DownedComponent,
+    IdentityComponent,
+    PortableComponent,
+    SleepingComponent,
+)
+from ..core.ecs import (
+    container_of,
+    contents,
+    parse_entity_id,
+    reachable_ids,
+    replace_component,
+)
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
@@ -131,6 +144,21 @@ class KnowsWord(Edge):
     learned_at_epoch: int = 0
 
 
+@dataclass(frozen=True)
+class StealthComponent(Component):
+    """Whether a character is currently sneaking (unseen by witnesses)."""
+
+    sneaking: bool = False
+    since_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class WantedComponent(Component):
+    """Outstanding bounties keyed by faction id (catalogue 6.5)."""
+
+    amounts: dict[str, int]
+
+
 class LocationDiscoveredEvent(DomainEvent):
     location_id: str
     location_type: str
@@ -186,6 +214,31 @@ class WordOfPowerLearnedEvent(DomainEvent):
 class WordOfPowerSpokenEvent(DomainEvent):
     word_id: str
     word_name: str
+
+
+class StealthChangedEvent(DomainEvent):
+    character_id: str
+    sneaking: bool
+
+
+class TheftCommittedEvent(DomainEvent):
+    thief_id: str
+    item_id: str
+    victim_id: str
+
+
+class CrimeWitnessedEvent(DomainEvent):
+    criminal_id: str
+    faction_id: str
+    faction_name: str
+    bounty: int
+    witness_ids: tuple[str, ...] = ()
+
+
+class BountyPaidEvent(DomainEvent):
+    character_id: str
+    faction_id: str
+    amount: int
 
 
 def _room_id(world: World, character_id: EntityId) -> str | None:
@@ -665,6 +718,192 @@ class SpeakWordOfPowerHandler:
         )
 
 
+DEFAULT_BOUNTY = 10
+
+
+def _is_sneaking(character: Entity) -> bool:
+    return (
+        character.has_component(StealthComponent)
+        and character.get_component(StealthComponent).sneaking
+    )
+
+
+def _awake_witnesses(world: World, room_id: EntityId, thief_id: EntityId) -> list[EntityId]:
+    """Awake, conscious characters sharing the room who could see a crime."""
+    witnesses: list[EntityId] = []
+    for entity_id in contents(world.get_entity(room_id)):
+        if entity_id == thief_id:
+            continue
+        entity = world.get_entity(entity_id)
+        if not entity.has_component(CharacterComponent):
+            continue
+        if (
+            entity.has_component(SleepingComponent)
+            or entity.has_component(DownedComponent)
+            or entity.has_component(DeadComponent)
+        ):
+            continue
+        witnesses.append(entity_id)
+    return witnesses
+
+
+class SneakHandler:
+    command_type = "sneak"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        sneaking = not _is_sneaking(character)
+        if character.has_component(StealthComponent):
+            replace_component(
+                character,
+                replace(
+                    character.get_component(StealthComponent),
+                    sneaking=sneaking,
+                    since_epoch=ctx.epoch,
+                ),
+            )
+        else:
+            character.add_component(StealthComponent(sneaking=sneaking, since_epoch=ctx.epoch))
+        return ok(
+            StealthChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                    sneaking=sneaking,
+                )
+            )
+        )
+
+
+class StealHandler:
+    command_type = "steal"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        thief_id = parse_entity_id(command.character_id)
+        victim_id = parse_entity_id(command.payload.get("target_id"))
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if thief_id is None or victim_id is None or item_id is None:
+            return rejected("invalid thief, target, or item id")
+        if not ctx.world.has_entity(victim_id) or not ctx.world.has_entity(item_id):
+            return rejected("target or item does not exist")
+        thief = ctx.entity(thief_id)
+        victim = ctx.entity(victim_id)
+        item = ctx.entity(item_id)
+        room_id = container_of(thief)
+        if room_id is None or container_of(victim) != room_id:
+            return rejected("target is not present")
+        if container_of(item) != victim_id:
+            return rejected("item is not carried by the target")
+        if (
+            not item.has_component(PortableComponent)
+            or not item.get_component(PortableComponent).can_pick_up
+        ):
+            return rejected("item cannot be taken")
+
+        victim.remove_relationship(Contains, item_id)
+        thief.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+        events: list[DomainEvent] = [
+            TheftCommittedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(thief_id),
+                    room_id=str(room_id),
+                    target_ids=(str(victim_id), str(item_id)),
+                    thief_id=str(thief_id),
+                    item_id=str(item_id),
+                    victim_id=str(victim_id),
+                )
+            )
+        ]
+        events.extend(self._witness_bounties(ctx, thief, thief_id, room_id))
+        return ok(*events)
+
+    def _witness_bounties(
+        self, ctx: HandlerContext, thief: Entity, thief_id: EntityId, room_id: EntityId
+    ) -> list[DomainEvent]:
+        if _is_sneaking(thief):
+            return []
+        faction_witnesses: dict[EntityId, list[str]] = {}
+        for witness_id in _awake_witnesses(ctx.world, room_id, thief_id):
+            for _edge, faction_id in ctx.world.get_entity(witness_id).get_relationships(MemberOf):
+                faction_witnesses.setdefault(faction_id, []).append(str(witness_id))
+        if not faction_witnesses:
+            return []
+
+        amounts = (
+            dict(thief.get_component(WantedComponent).amounts)
+            if thief.has_component(WantedComponent)
+            else {}
+        )
+        events: list[DomainEvent] = []
+        for faction_id, witness_ids in faction_witnesses.items():
+            key = str(faction_id)
+            amounts[key] = amounts.get(key, 0) + DEFAULT_BOUNTY
+            faction = ctx.world.get_entity(faction_id)
+            faction_name = (
+                faction.get_component(FactionComponent).name
+                if faction.has_component(FactionComponent)
+                else _name(faction)
+            )
+            events.append(
+                CrimeWitnessedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(thief_id),
+                        room_id=str(room_id),
+                        target_ids=tuple(witness_ids),
+                        criminal_id=str(thief_id),
+                        faction_id=key,
+                        faction_name=faction_name,
+                        bounty=amounts[key],
+                        witness_ids=tuple(witness_ids),
+                    )
+                )
+            )
+        if thief.has_component(WantedComponent):
+            replace_component(thief, WantedComponent(amounts=amounts))
+        else:
+            thief.add_component(WantedComponent(amounts=amounts))
+        return events
+
+
+class PayBountyHandler:
+    command_type = "pay-bounty"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        faction_id = parse_entity_id(command.payload.get("faction_id"))
+        if character_id is None or faction_id is None:
+            return rejected("invalid character or faction id")
+        character = ctx.entity(character_id)
+        if not character.has_component(WantedComponent):
+            return rejected("you have no bounties")
+        amounts = dict(character.get_component(WantedComponent).amounts)
+        key = str(faction_id)
+        if key not in amounts:
+            return rejected("you have no bounty with that faction")
+        paid = amounts.pop(key)
+        replace_component(character, WantedComponent(amounts=amounts))
+        return ok(
+            BountyPaidEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(key,),
+                    character_id=str(character_id),
+                    faction_id=key,
+                    amount=paid,
+                )
+            )
+        )
+
+
 def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     for edge, faction_id in character.get_relationships(MemberOf):
@@ -699,6 +938,18 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         if word.has_component(WordOfPowerComponent):
             lines.append(f"Word of power known: {word.get_component(WordOfPowerComponent).name}.")
 
+    if _is_sneaking(character):
+        lines.append("You are sneaking.")
+    if character.has_component(WantedComponent):
+        for faction_key, amount in character.get_component(WantedComponent).amounts.items():
+            faction_name = faction_key
+            parsed = parse_entity_id(faction_key)
+            if parsed is not None and world.has_entity(parsed):
+                faction = world.get_entity(parsed)
+                if faction.has_component(FactionComponent):
+                    faction_name = faction.get_component(FactionComponent).name
+            lines.append(f"Bounty of {amount} with {faction_name}.")
+
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
         if entity.has_component(PointOfInterestComponent):
@@ -712,7 +963,10 @@ __all__ = [
     "AbsorbGreatSoulHandler",
     "AcceptQuestHandler",
     "AncientBeastComponent",
+    "WantedComponent",
+    "BountyPaidEvent",
     "CompleteObjectiveHandler",
+    "CrimeWitnessedEvent",
     "DiscoverLocationHandler",
     "DiscoveryComponent",
     "FactionComponent",
@@ -728,6 +982,7 @@ __all__ = [
     "LeaveFactionHandler",
     "LocationDiscoveredEvent",
     "MemberOf",
+    "PayBountyHandler",
     "PerkComponent",
     "PerkUnlockedEvent",
     "PointOfInterestComponent",
@@ -738,7 +993,12 @@ __all__ = [
     "QuestObjectiveComponent",
     "QuestRewardComponent",
     "QuestStageComponent",
+    "SneakHandler",
     "SpeakWordOfPowerHandler",
+    "StealHandler",
+    "StealthChangedEvent",
+    "StealthComponent",
+    "TheftCommittedEvent",
     "UnlockPerkHandler",
     "WordOfPowerComponent",
     "WordOfPowerLearnedEvent",

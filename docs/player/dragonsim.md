@@ -92,6 +92,32 @@ Then speak a word you have learned:
 
 Your absorbed great souls and known words show up in your character context.
 
+## Stealth, theft, and bounties
+
+Slip into stealth so witnesses cannot see your next move (toggle it off with the same
+command):
+
+```text
+!sneak
+```
+
+Steal an item another character is carrying in your room:
+
+```text
+!steal ruby ring from Mara
+```
+
+If you are not sneaking and a faction member sees the theft, you pick up a bounty with
+that faction. Pay off a bounty to clear it:
+
+```text
+!pay-bounty faction_id="Moss Wardens"
+```
+
+Whether you are sneaking and any outstanding bounties show up in your character context.
+When barbarian-sim is also enabled, the same world gives you its combat verbs to back up
+a life of crime.
+
 ## Core loop
 
 A simple adventure loop:
@@ -102,4 +128,7 @@ A simple adventure loop:
 !complete-objective objective_id="lost ring objective"
 !join-faction faction_id="Moss Wardens" rank=scout
 !leave-faction Moss Wardens
+!sneak
+!steal ruby ring from Mara
+!pay-bounty faction_id="Moss Wardens"
 ```

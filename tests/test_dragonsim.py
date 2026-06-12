@@ -5,6 +5,7 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    CharacterComponent,
     CommandCost,
     ContainmentMode,
     Contains,
@@ -22,7 +23,9 @@ from bunnyland.mechanics.dragonsim import (
     AbsorbGreatSoulHandler,
     AcceptQuestHandler,
     AncientBeastComponent,
+    BountyPaidEvent,
     CompleteObjectiveHandler,
+    CrimeWitnessedEvent,
     DiscoverLocationHandler,
     DiscoveryComponent,
     FactionComponent,
@@ -37,6 +40,7 @@ from bunnyland.mechanics.dragonsim import (
     LeaveFactionHandler,
     LocationDiscoveredEvent,
     MemberOf,
+    PayBountyHandler,
     PerkComponent,
     PerkUnlockedEvent,
     PointOfInterestComponent,
@@ -46,8 +50,14 @@ from bunnyland.mechanics.dragonsim import (
     QuestObjectiveCompletedEvent,
     QuestObjectiveComponent,
     QuestRewardComponent,
+    SneakHandler,
     SpeakWordOfPowerHandler,
+    StealHandler,
+    StealthChangedEvent,
+    StealthComponent,
+    TheftCommittedEvent,
     UnlockPerkHandler,
+    WantedComponent,
     WordOfPowerComponent,
     WordOfPowerLearnedEvent,
     WordOfPowerSpokenEvent,
@@ -68,6 +78,9 @@ def _install(actor):
     actor.register_handler(SpeakWordOfPowerHandler())
     actor.register_handler(JoinFactionHandler())
     actor.register_handler(LeaveFactionHandler())
+    actor.register_handler(SneakHandler())
+    actor.register_handler(StealHandler())
+    actor.register_handler(PayBountyHandler())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -799,3 +812,228 @@ def test_soul_and_word_handlers_reject_invalid_directly():
     assert absorb.execute(
         ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))
     ).reason == "its great soul is already claimed"
+
+
+def _victim_with_item(scenario, *, faction_id=None, room=None, name="Mara"):
+    world = scenario.actor.world
+    room = room if room is not None else scenario.room_a
+    victim = spawn_entity(
+        world,
+        [IdentityComponent(name=name, kind="character"), CharacterComponent(species="bunny")],
+    )
+    world.get_entity(room).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), victim.id
+    )
+    if faction_id is not None:
+        victim.add_relationship(MemberOf(rank="member"), faction_id)
+    item = spawn_entity(
+        world,
+        [IdentityComponent(name="ruby ring", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    victim.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    return victim.id, item.id
+
+
+async def test_sneak_toggles_stealth_state():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    changes: list[StealthChangedEvent] = []
+    scenario.actor.bus.subscribe(StealthChangedEvent, changes.append)
+
+    await scenario.actor.submit(_cmd(scenario, "sneak"))
+    await scenario.actor.tick(HOUR)
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(StealthComponent).sneaking is True
+
+    await scenario.actor.submit(_cmd(scenario, "sneak"))
+    await scenario.actor.tick(HOUR)
+    assert character.get_component(StealthComponent).sneaking is False
+    assert [event.sneaking for event in changes] == [True, False]
+
+
+async def test_witnessed_theft_takes_item_and_raises_faction_bounty():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    faction = _faction(scenario)
+    victim, item = _victim_with_item(scenario, faction_id=faction)
+    thefts: list[TheftCommittedEvent] = []
+    crimes: list[CrimeWitnessedEvent] = []
+    scenario.actor.bus.subscribe(TheftCommittedEvent, thefts.append)
+    scenario.actor.bus.subscribe(CrimeWitnessedEvent, crimes.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "steal", target_id=str(victim), item_id=str(item))
+    )
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    assert container_of(world.get_entity(item)) == scenario.character
+    assert thefts and thefts[0].victim_id == str(victim)
+    assert crimes and crimes[0].faction_id == str(faction)
+    bounty = world.get_entity(scenario.character).get_component(WantedComponent)
+    assert bounty.amounts[str(faction)] == 10
+
+
+async def test_sneaking_thief_is_not_witnessed():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    faction = _faction(scenario)
+    victim, item = _victim_with_item(scenario, faction_id=faction)
+    crimes: list[CrimeWitnessedEvent] = []
+    scenario.actor.bus.subscribe(CrimeWitnessedEvent, crimes.append)
+
+    await scenario.actor.submit(_cmd(scenario, "sneak"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "steal", target_id=str(victim), item_id=str(item))
+    )
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    assert container_of(world.get_entity(item)) == scenario.character
+    assert not crimes
+    assert not world.get_entity(scenario.character).has_component(WantedComponent)
+
+
+async def test_pay_bounty_clears_a_faction_bounty():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    faction = _faction(scenario)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        WantedComponent(amounts={str(faction): 30})
+    )
+    paid: list[BountyPaidEvent] = []
+    scenario.actor.bus.subscribe(BountyPaidEvent, paid.append)
+
+    await scenario.actor.submit(_cmd(scenario, "pay-bounty", faction_id=str(faction)))
+    await scenario.actor.tick(HOUR)
+
+    bounty = scenario.actor.world.get_entity(scenario.character).get_component(WantedComponent)
+    assert str(faction) not in bounty.amounts
+    assert paid and paid[0].amount == 30
+
+
+def test_crime_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    faction = _faction(scenario)
+    victim, item = _victim_with_item(scenario, faction_id=faction)
+    stuck = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="anvil", kind="item"), PortableComponent(can_pick_up=False)],
+    )
+    scenario.actor.world.get_entity(victim).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), stuck.id
+    )
+
+    cases = [
+        (StealHandler(), _handler_cmd(scenario, "steal", character_id="x"), "invalid thief"),
+        (
+            StealHandler(),
+            _handler_cmd(scenario, "steal", target_id="ghost_1", item_id=str(item)),
+            "does not exist",
+        ),
+        (
+            StealHandler(),
+            _handler_cmd(scenario, "steal", target_id=str(victim), item_id=str(stuck.id)),
+            "cannot be taken",
+        ),
+        (
+            PayBountyHandler(),
+            _handler_cmd(scenario, "pay-bounty", faction_id="x"),
+            "invalid character",
+        ),
+        (
+            PayBountyHandler(),
+            _handler_cmd(scenario, "pay-bounty", faction_id=str(faction)),
+            "no bounties",
+        ),
+    ]
+    for handler, command, expected in cases:
+        result = handler.execute(ctx, command)
+        assert not result.ok, expected
+        assert expected in result.reason, (expected, result.reason)
+
+
+def test_dragonsim_fragments_show_sneaking_and_bounty():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    faction = _faction(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(StealthComponent(sneaking=True))
+    character.add_component(WantedComponent(amounts={str(faction): 25}))
+
+    lines = dragonsim_fragments(scenario.actor.world, character)
+    assert any("sneaking" in line for line in lines)
+    assert any("Bounty of 25" in line and "Moss Wardens" in line for line in lines)
+
+
+async def test_theft_without_faction_witnesses_raises_no_bounty():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    victim, item = _victim_with_item(scenario)  # victim belongs to no faction
+    crimes: list[CrimeWitnessedEvent] = []
+    scenario.actor.bus.subscribe(CrimeWitnessedEvent, crimes.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "steal", target_id=str(victim), item_id=str(item))
+    )
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    assert container_of(world.get_entity(item)) == scenario.character
+    assert not crimes
+    assert not world.get_entity(scenario.character).has_component(WantedComponent)
+
+
+def test_steal_and_sneak_reject_more_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    faction = _faction(scenario)
+    far_victim, far_item = _victim_with_item(scenario, room=scenario.room_b, name="Bryn")
+    near_victim, _near_item = _victim_with_item(scenario, faction_id=faction)
+    loose = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="loose coin", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), loose.id
+    )
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        WantedComponent(amounts={str(faction): 10})
+    )
+
+    cases = [
+        (SneakHandler(), _handler_cmd(scenario, "sneak", character_id="x"), "invalid character"),
+        (
+            StealHandler(),
+            _handler_cmd(scenario, "steal", target_id=str(far_victim), item_id=str(far_item)),
+            "not present",
+        ),
+        (
+            StealHandler(),
+            _handler_cmd(scenario, "steal", target_id=str(near_victim), item_id=str(loose.id)),
+            "not carried",
+        ),
+        (
+            PayBountyHandler(),
+            _handler_cmd(scenario, "pay-bounty", faction_id="other_77"),
+            "no bounty with that faction",
+        ),
+    ]
+    for handler, command, expected in cases:
+        result = handler.execute(ctx, command)
+        assert not result.ok, expected
+        assert expected in result.reason, (expected, result.reason)
+
+
+def test_fragments_show_bounty_for_unknown_faction_key():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(WantedComponent(amounts={"lost_77": 5}))
+
+    lines = dragonsim_fragments(scenario.actor.world, character)
+    assert any("Bounty of 5 with lost_77" in line for line in lines)

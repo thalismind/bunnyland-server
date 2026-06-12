@@ -943,6 +943,14 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="speak_word_of_power",
         patterns=("speak word {word_id}",),
     ),
+    _definition("sneak", tool_name="sneak", patterns=(ActionPattern("sneak", {}),)),
+    _definition(
+        "steal",
+        ("target_id", "item_id"),
+        tool_name="steal",
+        patterns=("steal {item_id} from {target_id:word}",),
+    ),
+    _definition("pay-bounty", ("faction_id",), tool_name="pay_bounty", patterns=("pay bounty {faction_id}",)),
     _definition(
         "attack",
         ("target_id", "weapon_id", "lethal", "body_part", "stamina_cost", "durability_cost"),
