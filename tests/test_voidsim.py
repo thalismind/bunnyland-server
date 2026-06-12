@@ -22,6 +22,7 @@ from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.barbariansim import CorruptionComponent, CorruptionGainedEvent
 from bunnyland.mechanics.colonysim import TechUnlockComponent
 from bunnyland.mechanics.voidsim import (
+    AcceptContractHandler,
     AirlockComponent,
     AirlockCycledEvent,
     AnswerDistressSignalHandler,
@@ -29,11 +30,18 @@ from bunnyland.mechanics.voidsim import (
     AstrogationComponent,
     BlueprintComponent,
     BulkheadComponent,
+    CargoComponent,
+    CargoDeliveredEvent,
+    CargoLoadedEvent,
     ChaosInfluenceAppliedEvent,
     ChaosInfluenceComponent,
     ChaosInfluenceConsequence,
     ChaosMutationPressureComponent,
     ChaosWardComponent,
+    ClaimSalvageHandler,
+    ContractAcceptedEvent,
+    ContractCompletedEvent,
+    ContractComponent,
     CoursePlottedEvent,
     CrewDutyChangedEvent,
     CrewDutyConsequence,
@@ -42,6 +50,7 @@ from bunnyland.mechanics.voidsim import (
     CrewShiftRelievedEvent,
     CyberneticMutationPressureComponent,
     CycleAirlockHandler,
+    DeliverCargoHandler,
     DistressSignalComponent,
     DockedTo,
     DockHandler,
@@ -70,6 +79,7 @@ from bunnyland.mechanics.voidsim import (
     LifeSupportComponent,
     LifeSupportConsequence,
     LifeSupportFailedEvent,
+    LoadCargoHandler,
     ModuleEvacuatedEvent,
     NavigationHazardEncounteredEvent,
     NavigationRouteComponent,
@@ -91,6 +101,8 @@ from bunnyland.mechanics.voidsim import (
     ReroutePowerHandler,
     ScanHandler,
     SealBulkheadHandler,
+    SalvageClaimComponent,
+    SalvageClaimedEvent,
     SensorComponent,
     ShipComponent,
     ShipSystemComponent,
@@ -133,6 +145,10 @@ def _install(actor):
     actor.register_handler(RelieveCrewShiftHandler())
     actor.register_handler(FabricateHandler())
     actor.register_handler(InstallUpgradeHandler())
+    actor.register_handler(AcceptContractHandler())
+    actor.register_handler(LoadCargoHandler())
+    actor.register_handler(DeliverCargoHandler())
+    actor.register_handler(ClaimSalvageHandler())
     actor.register_consequence(LifeSupportConsequence())
     actor.register_consequence(JumpTravelConsequence())
     actor.register_consequence(ChaosInfluenceConsequence())
@@ -2166,6 +2182,133 @@ async def test_install_upgrade_boosts_matching_ship_system():
     assert installed and installed[0].integrity == 70.0
 
 
+def _cargo_contract(scenario):
+    contract = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="med freight contract", kind="contract"),
+            ContractComponent(
+                contract_type="cargo",
+                destination_id=str(scenario.room_b),
+                reward=75,
+            ),
+        ],
+    )
+    cargo = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="medical freight", kind="cargo"),
+            CargoComponent(cargo_type="medicine", destination_id=str(scenario.room_b)),
+        ],
+    )
+    ship = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="Burrow Runner", kind="ship"), ShipComponent(name="Burrow Runner")],
+    )
+    contract_entity = scenario.actor.world.get_entity(contract)
+    contract_entity.remove_component(ContractComponent)
+    contract_entity.add_component(
+        ContractComponent(
+            contract_type="cargo",
+            destination_id=str(scenario.room_b),
+            reward=75,
+            cargo_id=str(cargo),
+        )
+    )
+    return contract, cargo, ship
+
+
+async def test_cargo_contract_loads_and_delivers_cargo():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract, cargo, ship = _cargo_contract(scenario)
+    accepted: list[ContractAcceptedEvent] = []
+    loaded: list[CargoLoadedEvent] = []
+    delivered: list[CargoDeliveredEvent] = []
+    completed: list[ContractCompletedEvent] = []
+    scenario.actor.bus.subscribe(ContractAcceptedEvent, accepted.append)
+    scenario.actor.bus.subscribe(CargoLoadedEvent, loaded.append)
+    scenario.actor.bus.subscribe(CargoDeliveredEvent, delivered.append)
+    scenario.actor.bus.subscribe(ContractCompletedEvent, completed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "accept-contract", contract_id=str(contract)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "load-cargo",
+            contract_id=str(contract),
+            cargo_id=str(cargo),
+            ship_id=str(ship),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    assert accepted and accepted[0].contract_type == "cargo"
+    assert container_of(world.get_entity(contract)) == scenario.character
+    assert container_of(world.get_entity(cargo)) == ship
+    assert loaded and loaded[0].ship_id == str(ship)
+
+    world.get_entity(scenario.room_a).remove_relationship(Contains, ship)
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), ship
+    )
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "deliver-cargo",
+            contract_id=str(contract),
+            cargo_id=str(cargo),
+            ship_id=str(ship),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert container_of(world.get_entity(cargo)) == scenario.room_b
+    assert world.get_entity(cargo).get_component(CargoComponent).delivered is True
+    assert world.get_entity(contract).get_component(ContractComponent).status == "completed"
+    assert delivered and delivered[0].destination_id == str(scenario.room_b)
+    assert completed and completed[0].reward == 75
+
+
+async def test_claim_salvage_requires_accepted_rights_and_marks_claim():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    claim = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="derelict hulk rights", kind="salvage"),
+            SalvageClaimComponent(site_id=str(scenario.room_b)),
+        ],
+    )
+    contract = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="derelict salvage writ", kind="contract"),
+            ContractComponent(
+                contract_type="salvage",
+                destination_id=str(scenario.room_b),
+                salvage_claim_id=str(claim),
+            ),
+        ],
+    )
+    claimed: list[SalvageClaimedEvent] = []
+    scenario.actor.bus.subscribe(SalvageClaimedEvent, claimed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "accept-contract", contract_id=str(contract)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "claim-salvage", claim_id=str(claim), contract_id=str(contract))
+    )
+    await scenario.actor.tick(HOUR)
+
+    claim_state = scenario.actor.world.get_entity(claim).get_component(SalvageClaimComponent)
+    assert claim_state.claimed is True
+    assert claim_state.claimed_by == str(scenario.character)
+    assert claimed and claimed[0].contract_id == str(contract)
+
+
 def test_fabrication_handlers_reject_bad_state_directly():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -2280,6 +2423,27 @@ def test_voidsim_fragments_show_fabricator_blueprint_and_upgrade():
             ShipUpgradeComponent(system_type="shields"),
         ],
     )
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="survey charter", kind="contract"),
+            ContractComponent(contract_type="survey", reward=40),
+        ],
+    )
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="ore crates", kind="cargo"),
+            CargoComponent(cargo_type="ore"),
+        ],
+    )
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="wreck claim", kind="salvage"),
+            SalvageClaimComponent(site_id=str(scenario.room_b)),
+        ],
+    )
 
     world = scenario.actor.world
     lines = voidsim_fragments(world, world.get_entity(scenario.character))
@@ -2288,6 +2452,9 @@ def test_voidsim_fragments_show_fabricator_blueprint_and_upgrade():
         "Blueprint shield booster" in line and "needs tech shield-tech" in line for line in lines
     )
     assert any("Upgrade part ready for shields" in line for line in lines)
+    assert any("Available survey contract" in line for line in lines)
+    assert any("Cargo waiting: ore crates" in line for line in lines)
+    assert any("Salvage claim available: wreck claim" in line for line in lines)
 
 
 async def test_fabricate_without_required_tech_succeeds():

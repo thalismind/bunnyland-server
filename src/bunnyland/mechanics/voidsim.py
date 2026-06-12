@@ -195,6 +195,36 @@ class ShipUpgradeComponent(Component):
     installed: bool = False
 
 
+# --- 8.7 Contracts, salvage, cargo, and frontier economy ------------------------------
+
+
+@dataclass(frozen=True)
+class ContractComponent(Component):
+    contract_type: str = "cargo"
+    destination_id: str = ""
+    reward: int = 0
+    status: str = "offered"  # offered | active | completed
+    accepted_by: str | None = None
+    cargo_id: str | None = None
+    salvage_claim_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CargoComponent(Component):
+    cargo_type: str = "freight"
+    destination_id: str = ""
+    loaded_on: str | None = None
+    delivered: bool = False
+
+
+@dataclass(frozen=True)
+class SalvageClaimComponent(Component):
+    site_id: str
+    rights_contract_id: str | None = None
+    claimed_by: str | None = None
+    claimed: bool = False
+
+
 # --- 8.2 Space travel, orbits, and navigation -----------------------------------------
 
 
@@ -311,6 +341,34 @@ class UpgradeInstalledEvent(DomainEvent):
     system_id: str
     system_type: str
     integrity: float
+
+
+class ContractAcceptedEvent(DomainEvent):
+    contract_id: str
+    contract_type: str
+
+
+class ContractCompletedEvent(DomainEvent):
+    contract_id: str
+    reward: int = 0
+
+
+class CargoLoadedEvent(DomainEvent):
+    cargo_id: str
+    ship_id: str
+    contract_id: str | None = None
+
+
+class CargoDeliveredEvent(DomainEvent):
+    cargo_id: str
+    destination_id: str
+    contract_id: str | None = None
+
+
+class SalvageClaimedEvent(DomainEvent):
+    claim_id: str
+    site_id: str
+    contract_id: str | None = None
 
 
 class DockingCompletedEvent(DomainEvent):
@@ -703,6 +761,230 @@ class InstallUpgradeHandler:
                     system_id=str(system.id),
                     system_type=system_state.system_type,
                     integrity=integrity,
+                )
+            )
+        )
+
+
+def _move_entity(world: World, entity_id: EntityId, destination_id: EntityId) -> None:
+    origin_id = container_of(world.get_entity(entity_id))
+    if origin_id is not None and world.has_entity(origin_id):
+        world.get_entity(origin_id).remove_relationship(Contains, entity_id)
+    world.get_entity(destination_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), entity_id
+    )
+
+
+class AcceptContractHandler:
+    command_type = "accept-contract"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        contract, error = _reachable_component(
+            ctx, character_id, command.payload.get("contract_id"), ContractComponent
+        )
+        if contract is None:
+            return rejected(error if error else "target is not a contract")
+        component = contract.get_component(ContractComponent)
+        if component.status != "offered":
+            return rejected("contract is not available")
+        origin_id = container_of(contract)
+        if origin_id is not None and ctx.world.has_entity(origin_id):
+            ctx.world.get_entity(origin_id).remove_relationship(Contains, contract.id)
+        ctx.entity(character_id).add_relationship(
+            Contains(mode=ContainmentMode.INVENTORY), contract.id
+        )
+        replace_component(
+            contract,
+            replace(component, status="active", accepted_by=str(character_id)),
+        )
+        return ok(
+            ContractAcceptedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(contract.id),),
+                    contract_id=str(contract.id),
+                    contract_type=component.contract_type,
+                )
+            )
+        )
+
+
+def _active_contract_for(
+    entity: Entity, character_id: EntityId, expected_type: str | None = None
+) -> ContractComponent | None:
+    if not entity.has_component(ContractComponent):
+        return None
+    contract = entity.get_component(ContractComponent)
+    if contract.status != "active" or contract.accepted_by != str(character_id):
+        return None
+    if expected_type is not None and contract.contract_type != expected_type:
+        return None
+    return contract
+
+
+class LoadCargoHandler:
+    command_type = "load-cargo"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        contract_entity, error = _reachable_component(
+            ctx, character_id, command.payload.get("contract_id"), ContractComponent
+        )
+        if contract_entity is None:
+            return rejected(error if error else "target is not a contract")
+        contract = _active_contract_for(contract_entity, character_id, "cargo")
+        if contract is None:
+            return rejected("cargo contract is not active")
+        cargo_entity, error = _reachable_component(
+            ctx, character_id, command.payload.get("cargo_id"), CargoComponent
+        )
+        if cargo_entity is None:
+            return rejected(error if error else "target is not cargo")
+        ship, error = _reachable_component(
+            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+        )
+        if ship is None:
+            return rejected(error if error else "target is not a ship")
+        if contract.cargo_id is not None and contract.cargo_id != str(cargo_entity.id):
+            return rejected("cargo does not match contract")
+        cargo = cargo_entity.get_component(CargoComponent)
+        if cargo.delivered:
+            return rejected("cargo is already delivered")
+        if cargo.loaded_on is not None:
+            return rejected("cargo is already loaded")
+
+        _move_entity(ctx.world, cargo_entity.id, ship.id)
+        replace_component(cargo_entity, replace(cargo, loaded_on=str(ship.id)))
+        return ok(
+            CargoLoadedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(cargo_entity.id), str(ship.id), str(contract_entity.id)),
+                    cargo_id=str(cargo_entity.id),
+                    ship_id=str(ship.id),
+                    contract_id=str(contract_entity.id),
+                )
+            )
+        )
+
+
+class DeliverCargoHandler:
+    command_type = "deliver-cargo"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        contract_entity, error = _reachable_component(
+            ctx, character_id, command.payload.get("contract_id"), ContractComponent
+        )
+        if contract_entity is None:
+            return rejected(error if error else "target is not a contract")
+        contract = _active_contract_for(contract_entity, character_id, "cargo")
+        if contract is None:
+            return rejected("cargo contract is not active")
+        cargo_id = parse_entity_id(command.payload.get("cargo_id"))
+        ship_id = parse_entity_id(command.payload.get("ship_id"))
+        if cargo_id is None or ship_id is None:
+            return rejected("invalid cargo or ship id")
+        if not ctx.world.has_entity(cargo_id) or not ctx.world.has_entity(ship_id):
+            return rejected("cargo or ship does not exist")
+        cargo_entity = ctx.entity(cargo_id)
+        ship = ctx.entity(ship_id)
+        if not cargo_entity.has_component(CargoComponent):
+            return rejected("target is not cargo")
+        if not ship.has_component(ShipComponent):
+            return rejected("target is not a ship")
+        cargo = cargo_entity.get_component(CargoComponent)
+        if cargo.loaded_on != str(ship.id):
+            return rejected("cargo is not loaded on that ship")
+        destination_key = contract.destination_id or cargo.destination_id
+        destination_id = parse_entity_id(destination_key)
+        if destination_id is None or not ctx.world.has_entity(destination_id):
+            return rejected("destination does not exist")
+        if container_of(ship) != destination_id:
+            return rejected("ship is not at the destination")
+
+        _move_entity(ctx.world, cargo_entity.id, destination_id)
+        replace_component(cargo_entity, replace(cargo, loaded_on=None, delivered=True))
+        replace_component(contract_entity, replace(contract, status="completed"))
+        return ok(
+            CargoDeliveredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(destination_id),
+                    target_ids=(str(cargo_entity.id), str(contract_entity.id)),
+                    cargo_id=str(cargo_entity.id),
+                    destination_id=str(destination_id),
+                    contract_id=str(contract_entity.id),
+                )
+            ),
+            ContractCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(destination_id),
+                    target_ids=(str(contract_entity.id),),
+                    contract_id=str(contract_entity.id),
+                    reward=contract.reward,
+                )
+            ),
+        )
+
+
+class ClaimSalvageHandler:
+    command_type = "claim-salvage"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        claim, error = _reachable_component(
+            ctx, character_id, command.payload.get("claim_id"), SalvageClaimComponent
+        )
+        if claim is None:
+            return rejected(error if error else "target is not a salvage claim")
+        component = claim.get_component(SalvageClaimComponent)
+        if component.claimed:
+            return rejected("salvage is already claimed")
+        contract_id = parse_entity_id(command.payload.get("contract_id"))
+        if component.rights_contract_id is not None:
+            contract_id = parse_entity_id(component.rights_contract_id)
+        if contract_id is not None:
+            if not ctx.world.has_entity(contract_id):
+                return rejected("salvage contract does not exist")
+            contract_entity = ctx.entity(contract_id)
+            contract = _active_contract_for(contract_entity, character_id, "salvage")
+            if contract is None and (
+                not contract_entity.has_component(ContractComponent)
+                or contract_entity.get_component(ContractComponent).accepted_by
+                != str(character_id)
+            ):
+                return rejected("salvage rights are not held")
+        replace_component(
+            claim,
+            replace(component, claimed=True, claimed_by=str(character_id)),
+        )
+        return ok(
+            SalvageClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(claim.id),),
+                    claim_id=str(claim.id),
+                    site_id=component.site_id,
+                    contract_id=str(contract_id) if contract_id is not None else None,
                 )
             )
         )
@@ -1651,6 +1933,30 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
             upgrade = entity.get_component(ShipUpgradeComponent)
             if not upgrade.installed:
                 lines.append(f"Upgrade part ready for {upgrade.system_type} system.")
+        if entity.has_component(ContractComponent):
+            contract = entity.get_component(ContractComponent)
+            if contract.status == "offered":
+                lines.append(
+                    f"Available {contract.contract_type} contract: {_name(entity)} "
+                    f"for {contract.reward} credits."
+                )
+            elif contract.accepted_by == str(character.id):
+                lines.append(
+                    f"{contract.contract_type.title()} contract {_name(entity)}: "
+                    f"{contract.status}."
+                )
+        if entity.has_component(CargoComponent):
+            cargo = entity.get_component(CargoComponent)
+            if cargo.delivered:
+                lines.append(f"Cargo delivered: {_name(entity)}.")
+            elif cargo.loaded_on is not None:
+                lines.append(f"Cargo loaded on {cargo.loaded_on}: {_name(entity)}.")
+            else:
+                lines.append(f"Cargo waiting: {_name(entity)} ({cargo.cargo_type}).")
+        if entity.has_component(SalvageClaimComponent):
+            claim = entity.get_component(SalvageClaimComponent)
+            if not claim.claimed:
+                lines.append(f"Salvage claim available: {_name(entity)}.")
         if entity.has_component(AirlockComponent):
             airlock = entity.get_component(AirlockComponent)
             lines.append(f"Airlock {_name(entity)}: {airlock.state}.")
@@ -1739,11 +2045,19 @@ __all__ = [
     "AstrogationComponent",
     "BlueprintComponent",
     "BulkheadComponent",
+    "AcceptContractHandler",
+    "CargoComponent",
+    "CargoDeliveredEvent",
+    "CargoLoadedEvent",
     "ChaosInfluenceAppliedEvent",
     "ChaosInfluenceComponent",
     "ChaosInfluenceConsequence",
     "ChaosMutationPressureComponent",
     "ChaosWardComponent",
+    "ClaimSalvageHandler",
+    "ContractAcceptedEvent",
+    "ContractCompletedEvent",
+    "ContractComponent",
     "CoursePlottedEvent",
     "CrewDutyChangedEvent",
     "CrewDutyConsequence",
@@ -1751,6 +2065,7 @@ __all__ = [
     "CrewShiftAssignedEvent",
     "CrewShiftRelievedEvent",
     "CycleAirlockHandler",
+    "DeliverCargoHandler",
     "DistressSignalComponent",
     "DutyShiftComponent",
     "DockHandler",
@@ -1779,6 +2094,7 @@ __all__ = [
     "LifeSupportComponent",
     "LifeSupportConsequence",
     "LifeSupportFailedEvent",
+    "LoadCargoHandler",
     "ModuleEvacuatedEvent",
     "CyberneticMutationPressureComponent",
     "NavigationHazardEncounteredEvent",
@@ -1802,6 +2118,8 @@ __all__ = [
     "ScanHandler",
     "SealBulkheadHandler",
     "SensorComponent",
+    "SalvageClaimComponent",
+    "SalvageClaimedEvent",
     "ShipComponent",
     "ShipSystemComponent",
     "ShipSystemDamagedEvent",

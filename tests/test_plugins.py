@@ -592,14 +592,34 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     assert LIFESIM in dragon.dependencies.requires
 
     void = plugins[VOIDSIM]
-    assert {"DutyShiftComponent", "CrewDutyStatusComponent"} <= {
+    assert {
+        "DutyShiftComponent",
+        "CrewDutyStatusComponent",
+        "ContractComponent",
+        "CargoComponent",
+        "SalvageClaimComponent",
+    } <= {
         component.__name__ for component in void.ecs.components
     }
     assert "WorksShift" in {edge.__name__ for edge in void.ecs.edges}
-    assert {"assign-crew-shift", "relieve-crew-shift"} <= {
+    assert {
+        "assign-crew-shift",
+        "relieve-crew-shift",
+        "accept-contract",
+        "load-cargo",
+        "deliver-cargo",
+        "claim-salvage",
+    } <= {
         handler.command_type for handler in void.commands.action_handlers
     }
-    assert {"CrewShiftAssignedEvent", "CrewDutyChangedEvent"} <= {
+    assert {
+        "CrewShiftAssignedEvent",
+        "CrewDutyChangedEvent",
+        "ContractAcceptedEvent",
+        "CargoLoadedEvent",
+        "CargoDeliveredEvent",
+        "SalvageClaimedEvent",
+    } <= {
         event.__name__ for event in void.commands.typed_events
     }
 
