@@ -12,6 +12,7 @@ from bunnyland.core import (
     Lane,
     build_submitted_command,
     container_of,
+    parse_entity_id,
     replace_component,
     spawn_entity,
 )
@@ -19,12 +20,14 @@ from bunnyland.core.components import CharacterComponent
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.barbariansim import CorruptionComponent, CorruptionGainedEvent
+from bunnyland.mechanics.colonysim import TechUnlockComponent
 from bunnyland.mechanics.voidsim import (
     AirlockComponent,
     AirlockCycledEvent,
     AnswerDistressSignalHandler,
     AssignCrewShiftHandler,
     AstrogationComponent,
+    BlueprintComponent,
     BulkheadComponent,
     ChaosInfluenceAppliedEvent,
     ChaosInfluenceComponent,
@@ -46,10 +49,14 @@ from bunnyland.mechanics.voidsim import (
     DutyShiftComponent,
     EnterOrbitHandler,
     EvacuateModuleHandler,
+    FabricateHandler,
+    FabricatorComponent,
     FuelChangedEvent,
     FuelComponent,
     HabitatModuleComponent,
     InspectShipSystemHandler,
+    InstallUpgradeHandler,
+    ItemFabricatedEvent,
     JumpCompletedEvent,
     JumpDriveComponent,
     JumpHandler,
@@ -89,10 +96,12 @@ from bunnyland.mechanics.voidsim import (
     ShipSystemComponent,
     ShipSystemDamagedEvent,
     ShipSystemRepairedEvent,
+    ShipUpgradeComponent,
     SignalDetectedEvent,
     StarSystemComponent,
     StationComponent,
     UndockHandler,
+    UpgradeInstalledEvent,
     WorksShift,
     install_voidsim,
     voidsim_fragments,
@@ -122,6 +131,8 @@ def _install(actor):
     actor.register_handler(LaunchHandler())
     actor.register_handler(AssignCrewShiftHandler())
     actor.register_handler(RelieveCrewShiftHandler())
+    actor.register_handler(FabricateHandler())
+    actor.register_handler(InstallUpgradeHandler())
     actor.register_consequence(LifeSupportConsequence())
     actor.register_consequence(JumpTravelConsequence())
     actor.register_consequence(ChaosInfluenceConsequence())
@@ -2062,3 +2073,234 @@ def test_crew_shift_handlers_reject_invalid_directly():
         ).reason
         == "already assigned to this shift"
     )
+
+
+def _fabricator(scenario):
+    return _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="nanoforge", kind="module"), FabricatorComponent(online=True)],
+    )
+
+
+def _blueprint(scenario, *, required_tech="", system_type="shields"):
+    return _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="shield booster", kind="blueprint"),
+            BlueprintComponent(
+                name="shield booster",
+                system_type=system_type,
+                required_tech=required_tech,
+                integrity_bonus=30.0,
+            ),
+        ],
+    )
+
+
+def _unlock_tech(scenario, tech_id):
+    return _spawn_in_room_a(
+        scenario, [TechUnlockComponent(tech_id=tech_id, unlocked_at_epoch=0)]
+    )
+
+
+async def test_fabricate_requires_unlocked_tech_then_yields_an_upgrade_part():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    fabricator = _fabricator(scenario)
+    blueprint = _blueprint(scenario, required_tech="shield-tech")
+    rejects: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+
+    # Without the research, fabrication is refused.
+    await scenario.actor.submit(
+        _cmd(scenario, "fabricate", fabricator_id=str(fabricator), blueprint_id=str(blueprint))
+    )
+    await scenario.actor.tick(HOUR)
+    assert any("technology" in event.reason for event in rejects)
+
+    # After colony-sim research unlocks the tech, fabrication succeeds.
+    _unlock_tech(scenario, "shield-tech")
+    fabricated: list[ItemFabricatedEvent] = []
+    scenario.actor.bus.subscribe(ItemFabricatedEvent, fabricated.append)
+    await scenario.actor.submit(
+        _cmd(scenario, "fabricate", fabricator_id=str(fabricator), blueprint_id=str(blueprint))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert fabricated and fabricated[0].system_type == "shields"
+    part_id = parse_entity_id(fabricated[0].item_id)
+    part = scenario.actor.world.get_entity(part_id)
+    assert part.get_component(ShipUpgradeComponent).system_type == "shields"
+    assert container_of(part) == scenario.character
+
+
+async def test_install_upgrade_boosts_matching_ship_system():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    system = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="shield emitter", kind="system"),
+            ShipSystemComponent(system_type="shields", integrity=40.0, online=False),
+        ],
+    )
+    upgrade = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="shield booster", kind="upgrade"),
+            ShipUpgradeComponent(system_type="shields", integrity_bonus=30.0),
+        ],
+    )
+    installed: list[UpgradeInstalledEvent] = []
+    scenario.actor.bus.subscribe(UpgradeInstalledEvent, installed.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "install-upgrade", upgrade_id=str(upgrade), system_id=str(system))
+    )
+    await scenario.actor.tick(HOUR)
+
+    system_state = scenario.actor.world.get_entity(system).get_component(ShipSystemComponent)
+    assert system_state.integrity == 70.0
+    assert system_state.online is True
+    assert scenario.actor.world.get_entity(upgrade).get_component(ShipUpgradeComponent).installed
+    assert installed and installed[0].integrity == 70.0
+
+
+def test_fabrication_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    offline = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="dead forge", kind="module"), FabricatorComponent(online=False)],
+    )
+    blueprint = _blueprint(scenario)
+    system = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="reactor", kind="system"),
+            ShipSystemComponent(system_type="reactor"),
+        ],
+    )
+    wrong_upgrade = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="shield booster", kind="upgrade"),
+            ShipUpgradeComponent(system_type="shields"),
+        ],
+    )
+    installed_upgrade = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="spent part", kind="upgrade"),
+            ShipUpgradeComponent(system_type="reactor", installed=True),
+        ],
+    )
+
+    online_forge = _fabricator(scenario)
+    cases = [
+        (
+            FabricateHandler(),
+            _handler_cmd(scenario, "fabricate", character_id="x"),
+            "invalid character",
+        ),
+        (
+            FabricateHandler(),
+            _handler_cmd(
+                scenario, "fabricate", fabricator_id=str(system), blueprint_id=str(blueprint)
+            ),
+            "wrong kind",
+        ),
+        (
+            FabricateHandler(),
+            _handler_cmd(
+                scenario, "fabricate", fabricator_id=str(online_forge), blueprint_id=str(system)
+            ),
+            "wrong kind",
+        ),
+        (
+            FabricateHandler(),
+            _handler_cmd(
+                scenario, "fabricate", fabricator_id=str(offline), blueprint_id=str(blueprint)
+            ),
+            "offline",
+        ),
+        (
+            InstallUpgradeHandler(),
+            _handler_cmd(scenario, "install-upgrade", character_id="x"),
+            "invalid character",
+        ),
+        (
+            InstallUpgradeHandler(),
+            _handler_cmd(
+                scenario, "install-upgrade", upgrade_id=str(system), system_id=str(system)
+            ),
+            "wrong kind",
+        ),
+        (
+            InstallUpgradeHandler(),
+            _handler_cmd(
+                scenario, "install-upgrade", upgrade_id=str(wrong_upgrade), system_id=str(blueprint)
+            ),
+            "wrong kind",
+        ),
+        (
+            InstallUpgradeHandler(),
+            _handler_cmd(
+                scenario,
+                "install-upgrade",
+                upgrade_id=str(installed_upgrade),
+                system_id=str(system),
+            ),
+            "already installed",
+        ),
+        (
+            InstallUpgradeHandler(),
+            _handler_cmd(
+                scenario, "install-upgrade", upgrade_id=str(wrong_upgrade), system_id=str(system)
+            ),
+            "does not fit",
+        ),
+    ]
+    for handler, command, expected in cases:
+        result = handler.execute(ctx, command)
+        assert not result.ok, expected
+        assert expected in result.reason, (expected, result.reason)
+
+
+def test_voidsim_fragments_show_fabricator_blueprint_and_upgrade():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _fabricator(scenario)
+    _blueprint(scenario, required_tech="shield-tech")
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="shield booster", kind="upgrade"),
+            ShipUpgradeComponent(system_type="shields"),
+        ],
+    )
+
+    world = scenario.actor.world
+    lines = voidsim_fragments(world, world.get_entity(scenario.character))
+    assert any("Fabricator" in line for line in lines)
+    assert any(
+        "Blueprint shield booster" in line and "needs tech shield-tech" in line for line in lines
+    )
+    assert any("Upgrade part ready for shields" in line for line in lines)
+
+
+async def test_fabricate_without_required_tech_succeeds():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    fabricator = _fabricator(scenario)
+    blueprint = _blueprint(scenario, required_tech="")  # no research needed
+    fabricated: list[ItemFabricatedEvent] = []
+    scenario.actor.bus.subscribe(ItemFabricatedEvent, fabricated.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "fabricate", fabricator_id=str(fabricator), blueprint_id=str(blueprint))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert fabricated and fabricated[0].name == "shield booster"

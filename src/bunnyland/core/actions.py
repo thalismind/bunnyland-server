@@ -950,7 +950,12 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="steal",
         patterns=("steal {item_id} from {target_id:word}",),
     ),
-    _definition("pay-bounty", ("faction_id",), tool_name="pay_bounty", patterns=("pay bounty {faction_id}",)),
+    _definition(
+        "pay-bounty",
+        ("faction_id",),
+        tool_name="pay_bounty",
+        patterns=("pay bounty {faction_id}",),
+    ),
     _definition(
         "attack",
         ("target_id", "weapon_id", "lethal", "body_part", "stamina_cost", "durability_cost"),
@@ -1053,6 +1058,8 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("repair-system", ("system_id",), tool_name="repair_system"),
     _definition("reroute-power", ("grid_id", "system_id", "amount"), tool_name="reroute_power"),
     _definition("inspect-ship-system", ("system_id",), tool_name="inspect_ship_system"),
+    _definition("fabricate", ("fabricator_id", "blueprint_id"), tool_name="fabricate"),
+    _definition("install-upgrade", ("upgrade_id", "system_id"), tool_name="install_upgrade"),
     _definition("dock", ("ship_id", "station_id", "port"), tool_name="dock"),
     _definition("undock", ("ship_id", "station_id"), tool_name="undock"),
     _definition("evacuate-module", ("module_id", "destination_id"), tool_name="evacuate_module"),

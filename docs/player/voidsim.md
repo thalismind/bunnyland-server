@@ -53,6 +53,28 @@ Inspect a system:
 
 Ship systems track integrity and online state. Power grids track available power.
 
+## Research, fabrication, and upgrades
+
+Blueprints describe ship-system upgrades you can build at a fabricator. A blueprint may be
+gated behind a colony-sim research project: research the technology first (see the
+colony-sim guide's `research-project`), then fabricate the part. Fabricate from a
+reachable fabricator and blueprint:
+
+```text
+!fabricate fabricator_id=nanoforge blueprint_id="shield booster"
+```
+
+The fabricated part lands in your inventory. Install it on a matching ship system to raise
+its integrity and bring it back online:
+
+```text
+!install-upgrade upgrade_id="shield booster" system_id="shield emitter"
+```
+
+A blueprint whose technology has not been researched is refused, and an upgrade only fits
+a system of its own type. Reachable fabricators, blueprints, and ready upgrade parts show
+up in your character context.
+
 ## Evacuation
 
 Move characters out of a module:

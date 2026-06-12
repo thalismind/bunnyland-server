@@ -30,11 +30,13 @@ from ..core.ecs import (
     parse_entity_id,
     reachable_ids,
     replace_component,
+    spawn_entity,
 )
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .barbariansim import CorruptionComponent, CorruptionGainedEvent
+from .colonysim import TechUnlockComponent
 
 SECONDS_PER_HOUR = 60 * 60
 SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
@@ -160,6 +162,39 @@ class CyberneticMutationPressureComponent(Component):
     last_updated_epoch: int = 0
 
 
+# --- 8.4 Technology, fabrication, and upgrades ----------------------------------------
+
+
+@dataclass(frozen=True)
+class FabricatorComponent(Component):
+    """A module that can fabricate parts from blueprints."""
+
+    online: bool = True
+
+
+@dataclass(frozen=True)
+class BlueprintComponent(Component):
+    """A fabricable ship-system upgrade, gated on a colony-sim tech unlock.
+
+    ``required_tech`` matches a ``TechUnlockComponent.tech_id`` produced by colony-sim
+    research; an empty value means the blueprint needs no research.
+    """
+
+    name: str
+    system_type: str
+    required_tech: str = ""
+    integrity_bonus: float = 25.0
+
+
+@dataclass(frozen=True)
+class ShipUpgradeComponent(Component):
+    """A fabricated part that upgrades a matching ship system when installed."""
+
+    system_type: str
+    integrity_bonus: float = 25.0
+    installed: bool = False
+
+
 # --- 8.2 Space travel, orbits, and navigation -----------------------------------------
 
 
@@ -261,6 +296,21 @@ class ShipSystemDamagedEvent(DomainEvent):
 class ShipSystemRepairedEvent(DomainEvent):
     system_id: str
     system_type: str
+
+
+class ItemFabricatedEvent(DomainEvent):
+    fabricator_id: str
+    blueprint_id: str
+    item_id: str
+    name: str
+    system_type: str
+
+
+class UpgradeInstalledEvent(DomainEvent):
+    upgrade_id: str
+    system_id: str
+    system_type: str
+    integrity: float
 
 
 class DockingCompletedEvent(DomainEvent):
@@ -550,6 +600,112 @@ class InspectShipSystemHandler:
         if system is None:
             return rejected(error if error else "target is not a ship system")
         return ok()
+
+
+def _tech_unlocked(world: World, tech_id: str) -> bool:
+    """Whether colony-sim research has unlocked ``tech_id`` anywhere in the world."""
+    if not tech_id:
+        return True
+    for entity in world.query().with_all([TechUnlockComponent]).execute_entities():
+        if entity.get_component(TechUnlockComponent).tech_id == tech_id:
+            return True
+    return False
+
+
+class FabricateHandler:
+    command_type = "fabricate"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        fabricator, error = _reachable_component(
+            ctx, character_id, command.payload.get("fabricator_id"), FabricatorComponent
+        )
+        if fabricator is None:
+            return rejected(error if error else "target is not a fabricator")
+        if not fabricator.get_component(FabricatorComponent).online:
+            return rejected("fabricator is offline")
+        blueprint_entity, error = _reachable_component(
+            ctx, character_id, command.payload.get("blueprint_id"), BlueprintComponent
+        )
+        if blueprint_entity is None:
+            return rejected(error if error else "target is not a blueprint")
+        blueprint = blueprint_entity.get_component(BlueprintComponent)
+        if not _tech_unlocked(ctx.world, blueprint.required_tech):
+            return rejected("required technology has not been researched")
+
+        part = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=blueprint.name, kind="upgrade"),
+                ShipUpgradeComponent(
+                    system_type=blueprint.system_type,
+                    integrity_bonus=blueprint.integrity_bonus,
+                ),
+            ],
+        )
+        ctx.entity(character_id).add_relationship(
+            Contains(mode=ContainmentMode.INVENTORY), part.id
+        )
+        return ok(
+            ItemFabricatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(fabricator.id), str(blueprint_entity.id), str(part.id)),
+                    fabricator_id=str(fabricator.id),
+                    blueprint_id=str(blueprint_entity.id),
+                    item_id=str(part.id),
+                    name=blueprint.name,
+                    system_type=blueprint.system_type,
+                )
+            )
+        )
+
+
+class InstallUpgradeHandler:
+    command_type = "install-upgrade"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        upgrade_entity, error = _reachable_component(
+            ctx, character_id, command.payload.get("upgrade_id"), ShipUpgradeComponent
+        )
+        if upgrade_entity is None:
+            return rejected(error if error else "target is not an upgrade")
+        upgrade = upgrade_entity.get_component(ShipUpgradeComponent)
+        if upgrade.installed:
+            return rejected("upgrade is already installed")
+        system, error = _reachable_component(
+            ctx, character_id, command.payload.get("system_id"), ShipSystemComponent
+        )
+        if system is None:
+            return rejected(error if error else "target is not a ship system")
+        system_state = system.get_component(ShipSystemComponent)
+        if upgrade.system_type and upgrade.system_type != system_state.system_type:
+            return rejected("upgrade does not fit this system")
+
+        integrity = system_state.integrity + upgrade.integrity_bonus
+        replace_component(system, replace(system_state, integrity=integrity, online=True))
+        replace_component(upgrade_entity, replace(upgrade, installed=True))
+        return ok(
+            UpgradeInstalledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(upgrade_entity.id), str(system.id)),
+                    upgrade_id=str(upgrade_entity.id),
+                    system_id=str(system.id),
+                    system_type=system_state.system_type,
+                    integrity=integrity,
+                )
+            )
+        )
 
 
 class DockHandler:
@@ -1483,6 +1639,18 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(
                 f"Ship system {system.system_type}: {system.integrity:.0f}% ({status})."
             )
+        if entity.has_component(FabricatorComponent):
+            online = entity.get_component(FabricatorComponent).online
+            lines.append(f"Fabricator {_name(entity)}: {'online' if online else 'offline'}.")
+        if entity.has_component(BlueprintComponent):
+            blueprint = entity.get_component(BlueprintComponent)
+            ready = _tech_unlocked(world, blueprint.required_tech)
+            gate = "ready" if ready else f"needs tech {blueprint.required_tech}"
+            lines.append(f"Blueprint {blueprint.name} ({blueprint.system_type}): {gate}.")
+        if entity.has_component(ShipUpgradeComponent):
+            upgrade = entity.get_component(ShipUpgradeComponent)
+            if not upgrade.installed:
+                lines.append(f"Upgrade part ready for {upgrade.system_type} system.")
         if entity.has_component(AirlockComponent):
             airlock = entity.get_component(AirlockComponent)
             lines.append(f"Airlock {_name(entity)}: {airlock.state}.")
@@ -1569,6 +1737,7 @@ __all__ = [
     "AnswerDistressSignalHandler",
     "AssignCrewShiftHandler",
     "AstrogationComponent",
+    "BlueprintComponent",
     "BulkheadComponent",
     "ChaosInfluenceAppliedEvent",
     "ChaosInfluenceComponent",
@@ -1589,10 +1758,14 @@ __all__ = [
     "DockingCompletedEvent",
     "EnterOrbitHandler",
     "EvacuateModuleHandler",
+    "FabricateHandler",
+    "FabricatorComponent",
     "FuelChangedEvent",
     "FuelComponent",
     "HabitatModuleComponent",
     "InspectShipSystemHandler",
+    "InstallUpgradeHandler",
+    "ItemFabricatedEvent",
     "JumpCompletedEvent",
     "JumpDriveComponent",
     "JumpHandler",
@@ -1633,10 +1806,12 @@ __all__ = [
     "ShipSystemComponent",
     "ShipSystemDamagedEvent",
     "ShipSystemRepairedEvent",
+    "ShipUpgradeComponent",
     "SignalDetectedEvent",
     "StarSystemComponent",
     "StationComponent",
     "UndockHandler",
+    "UpgradeInstalledEvent",
     "WorksShift",
     "install_voidsim",
     "voidsim_fragments",
