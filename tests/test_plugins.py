@@ -585,6 +585,17 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         event.__name__ for event in void.commands.typed_events
     }
 
+    nuke = plugins[NUKESIM]
+    assert {"OldWorldTechComponent", "TechLeadComponent"} <= {
+        component.__name__ for component in nuke.ecs.components
+    }
+    assert {"identify-tech", "restore-tech"} <= {
+        handler.command_type for handler in nuke.commands.action_handlers
+    }
+    assert {"OldWorldTechIdentifiedEvent", "OldWorldTechRestoredEvent"} <= {
+        event.__name__ for event in nuke.commands.typed_events
+    }
+
 
 def test_ecs_systems_can_be_instances_or_classes():
     # apply should accept a system instance as well as a class.

@@ -867,6 +867,122 @@ class StabilizeMutationHandler:
         )
 
 
+# --- Old-world tech recovery (catalogue 9.5) ------------------------------------------
+
+
+@dataclass(frozen=True)
+class OldWorldTechComponent(Component):
+    """A pre-war device that can be identified and then restored to working order."""
+
+    tech_name: str
+    identified: bool = False
+    functional: bool = False
+    restore_scrap: int = 3
+
+
+@dataclass(frozen=True)
+class TechLeadComponent(Component):
+    """A salvage lead pointing toward a piece of old-world tech."""
+
+    target_tech: str
+    location_hint: str = ""
+
+
+class OldWorldTechIdentifiedEvent(DomainEvent):
+    item_id: str
+    tech_name: str
+
+
+class OldWorldTechRestoredEvent(DomainEvent):
+    item_id: str
+    tech_name: str
+    scrap_spent: int
+
+
+class IdentifyTechHandler:
+    command_type = "identify-tech"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        item, error = _reachable_component(
+            ctx, character_id, command.payload.get("tech_id"), OldWorldTechComponent
+        )
+        if item is None:
+            return rejected(error if error else "target is not old-world tech")
+        tech = item.get_component(OldWorldTechComponent)
+        if tech.identified:
+            return rejected("tech is already identified")
+        replace_component(item, replace(tech, identified=True))
+        return ok(
+            OldWorldTechIdentifiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item.id),),
+                    item_id=str(item.id),
+                    tech_name=tech.tech_name,
+                )
+            )
+        )
+
+
+class RestoreTechHandler:
+    command_type = "restore-tech"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        item, error = _reachable_component(
+            ctx, character_id, command.payload.get("tech_id"), OldWorldTechComponent
+        )
+        if item is None:
+            return rejected(error if error else "target is not old-world tech")
+        tech = item.get_component(OldWorldTechComponent)
+        if not tech.identified:
+            return rejected("identify the tech first")
+        if tech.functional:
+            return rejected("tech is already functional")
+
+        character = ctx.entity(character_id)
+        stack_entity = _resource_stack_in_inventory(character, ctx.world, "scrap")
+        have = (
+            stack_entity.get_component(ResourceStackComponent).quantity
+            if stack_entity is not None
+            else 0
+        )
+        if have < tech.restore_scrap:
+            return rejected("not enough scrap to restore")
+
+        stack = stack_entity.get_component(ResourceStackComponent)
+        remaining = stack.quantity - tech.restore_scrap
+        if remaining > 0:
+            replace_component(stack_entity, replace(stack, quantity=remaining))
+            replace_component(
+                stack_entity,
+                IdentityComponent(name=_stack_name("scrap", remaining), kind="resource"),
+            )
+        else:
+            _remove_from_container(ctx.world, stack_entity.id)
+        replace_component(item, replace(tech, functional=True))
+        return ok(
+            OldWorldTechRestoredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item.id),),
+                    item_id=str(item.id),
+                    tech_name=tech.tech_name,
+                    scrap_spent=tech.restore_scrap,
+                )
+            )
+        )
+
+
 def nukesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     if character.has_component(RadiationDoseComponent):
@@ -902,6 +1018,20 @@ def nukesim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(f"Rad medicine available: {_name(entity)}.")
         if entity.has_component(JunkComponent):
             lines.append(f"Scrappable junk: {_name(entity)}.")
+        if entity.has_component(OldWorldTechComponent):
+            tech = entity.get_component(OldWorldTechComponent)
+            label = tech.tech_name if tech.identified else "unknown device"
+            if tech.functional:
+                state = "functional"
+            elif tech.identified:
+                state = f"identified, needs {tech.restore_scrap} scrap to restore"
+            else:
+                state = "unidentified"
+            lines.append(f"Old-world tech {_name(entity)}: {label} ({state}).")
+        if entity.has_component(TechLeadComponent):
+            lead = entity.get_component(TechLeadComponent)
+            hint = f" near {lead.location_hint}" if lead.location_hint else ""
+            lines.append(f"Tech lead: {lead.target_tech}{hint}.")
     return sorted(lines)
 
 
@@ -915,10 +1045,14 @@ __all__ = [
     "DecontaminationAppliedEvent",
     "DecontaminationComponent",
     "HazardTriggeredEvent",
+    "IdentifyTechHandler",
     "ItemScrappedEvent",
     "JunkComponent",
     "LootFoundEvent",
     "LootTableComponent",
+    "OldWorldTechComponent",
+    "OldWorldTechIdentifiedEvent",
+    "OldWorldTechRestoredEvent",
     "MutationComponent",
     "MutationManifestedEvent",
     "MutationPressureChangedEvent",
@@ -937,6 +1071,7 @@ __all__ = [
     "RadiationSicknessComponent",
     "RadiationSourceComponent",
     "RadiationSourceSealedEvent",
+    "RestoreTechHandler",
     "ScanRadiationHandler",
     "ScavengeHandler",
     "ScavengeSiteComponent",
@@ -944,6 +1079,7 @@ __all__ = [
     "SealRadiationSourceHandler",
     "SiteScavengedEvent",
     "StabilizeMutationHandler",
+    "TechLeadComponent",
     "UseRadMedicineHandler",
     "install_nukesim",
     "nukesim_fragments",

@@ -72,6 +72,26 @@ Scrap junk for parts:
 Scrapped output uses the same `ResourceStackComponent` as colony-sim, so recipes can use
 resources found in the wasteland.
 
+## Old-world tech
+
+The wasteland is littered with ruined pre-war devices. Scavengers can recover them in two
+steps. First identify what a device actually is:
+
+```text
+!identify-tech tech_id="dusty crate"
+```
+
+Once identified, restore it to working order using scrap you have on hand (each device lists
+how much scrap it needs):
+
+```text
+!restore-tech tech_id="dusty crate"
+```
+
+Restoring consumes scrap from your inventory and marks the device functional. Notes and
+rumors can also point you toward specific old-world tech as salvage leads, which show up in
+your character context.
+
 ## Example loop
 
 ```text

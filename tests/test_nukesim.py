@@ -23,12 +23,16 @@ from bunnyland.mechanics.nukesim import (
     DecontaminateHandler,
     DecontaminationAppliedEvent,
     DecontaminationComponent,
+    IdentifyTechHandler,
     ItemScrappedEvent,
     JunkComponent,
     LootFoundEvent,
     LootTableComponent,
     MutationComponent,
     MutationManifestedEvent,
+    OldWorldTechComponent,
+    OldWorldTechIdentifiedEvent,
+    OldWorldTechRestoredEvent,
     RadiationDoseComponent,
     RadiationExposureEvent,
     RadiationScannedEvent,
@@ -37,12 +41,14 @@ from bunnyland.mechanics.nukesim import (
     RadiationSourceSealedEvent,
     RadMedicineComponent,
     RadProtectionComponent,
+    RestoreTechHandler,
     ScanRadiationHandler,
     ScavengeHandler,
     ScavengeSiteComponent,
     ScrapItemHandler,
     SealRadiationSourceHandler,
     StabilizeMutationHandler,
+    TechLeadComponent,
     UseRadMedicineHandler,
     install_nukesim,
     nukesim_fragments,
@@ -60,6 +66,8 @@ def _install(actor):
     actor.register_handler(ScavengeHandler())
     actor.register_handler(ScrapItemHandler())
     actor.register_handler(StabilizeMutationHandler())
+    actor.register_handler(IdentifyTechHandler())
+    actor.register_handler(RestoreTechHandler())
     install_nukesim(actor)
 
 
@@ -670,3 +678,119 @@ def test_nukesim_handlers_reject_spent_empty_and_invalid_states_directly():
     )
     assert result.ok is False
     assert result.reason == "mutation is already stable"
+
+
+def _scrap(scenario, quantity):
+    return _inventory_entity(
+        scenario,
+        f"scrap ({quantity})",
+        "resource",
+        [ResourceStackComponent(resource_type="scrap", quantity=quantity)],
+    )
+
+
+async def test_identify_then_restore_old_world_tech_consumes_scrap():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    tech = _room_entity(
+        scenario,
+        "dusty crate",
+        "item",
+        [OldWorldTechComponent(tech_name="water purifier", restore_scrap=2)],
+    )
+    scrap = _scrap(scenario, 3)
+    identified: list[OldWorldTechIdentifiedEvent] = []
+    restored: list[OldWorldTechRestoredEvent] = []
+    scenario.actor.bus.subscribe(OldWorldTechIdentifiedEvent, identified.append)
+    scenario.actor.bus.subscribe(OldWorldTechRestoredEvent, restored.append)
+
+    await scenario.actor.submit(_cmd(scenario, "identify-tech", tech_id=str(tech)))
+    await scenario.actor.tick(HOUR)
+    assert identified[0].tech_name == "water purifier"
+    assert scenario.actor.world.get_entity(tech).get_component(OldWorldTechComponent).identified
+
+    await scenario.actor.submit(_cmd(scenario, "restore-tech", tech_id=str(tech)))
+    await scenario.actor.tick(HOUR)
+
+    tech_state = scenario.actor.world.get_entity(tech).get_component(OldWorldTechComponent)
+    assert tech_state.functional is True
+    assert restored[0].scrap_spent == 2
+    scrap_left = scenario.actor.world.get_entity(scrap).get_component(ResourceStackComponent)
+    assert scrap_left.quantity == 1
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    fragments = nukesim_fragments(scenario.actor.world, character)
+    assert any("water purifier (functional)" in line for line in fragments)
+
+
+def test_old_world_tech_handlers_reject_invalid_and_cover_edges_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    not_tech = _room_entity(scenario, "rock", "prop", [])
+    tech = _room_entity(
+        scenario,
+        "sealed locker",
+        "item",
+        [OldWorldTechComponent(tech_name="laser rifle", restore_scrap=2)],
+    )
+
+    identify = IdentifyTechHandler()
+    restore = RestoreTechHandler()
+
+    # Invalid / wrong-kind / not-yet-identified paths.
+    assert identify.execute(
+        ctx, _handler_cmd(scenario, "identify-tech", character_id="x", tech_id="y")
+    ).reason == "invalid character id"
+    assert identify.execute(
+        ctx, _handler_cmd(scenario, "identify-tech", tech_id=str(not_tech))
+    ).reason == "target is the wrong kind"
+    assert restore.execute(
+        ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))
+    ).reason == "identify the tech first"
+
+    # Identify it; a second identify is rejected.
+    assert identify.execute(ctx, _handler_cmd(scenario, "identify-tech", tech_id=str(tech))).ok
+    assert identify.execute(
+        ctx, _handler_cmd(scenario, "identify-tech", tech_id=str(tech))
+    ).reason == "tech is already identified"
+
+    # Restore needs enough scrap.
+    assert restore.execute(
+        ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))
+    ).reason == "not enough scrap to restore"
+
+    # Exactly enough scrap restores it and consumes the whole stack.
+    _scrap(scenario, 2)
+    assert restore.execute(ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))).ok
+    character = scenario.actor.world.get_entity(scenario.character)
+    remaining_scrap = [
+        item_id
+        for _edge, item_id in character.get_relationships(Contains)
+        if scenario.actor.world.get_entity(item_id).has_component(ResourceStackComponent)
+    ]
+    assert remaining_scrap == []
+    assert restore.execute(
+        ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))
+    ).reason == "tech is already functional"
+
+
+def test_nukesim_fragments_show_unidentified_tech_and_leads():
+    scenario = build_scenario()
+    _room_entity(
+        scenario,
+        "scorched case",
+        "item",
+        [OldWorldTechComponent(tech_name="targeting computer")],
+    )
+    _room_entity(
+        scenario,
+        "scrawled note",
+        "item",
+        [TechLeadComponent(target_tech="fusion core", location_hint="the old reactor")],
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    fragments = nukesim_fragments(scenario.actor.world, character)
+    assert any("unknown device (unidentified)" in line for line in fragments)
+    assert any("Tech lead: fusion core near the old reactor" in line for line in fragments)
