@@ -972,6 +972,10 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="pickpocket",
         patterns=("pickpocket {target_id:word} {item_id}",),
     ),
+    _definition("subdue", ("target_id", "task"), tool_name="subdue"),
+    _definition("recruit-follower", ("target_id",), tool_name="recruit_follower"),
+    _definition("command-follower", ("target_id", "orders"), tool_name="command_follower"),
+    _definition("release-thrall", ("target_id",), tool_name="release_thrall"),
     # Dagger sim.
     _definition("expand-site", ("site_id", "generator_id", "trigger"), tool_name="expand_site"),
     _definition("ask-rumor", ("rumor_id",), tool_name="ask_rumor"),

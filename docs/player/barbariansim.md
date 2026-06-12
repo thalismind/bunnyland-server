@@ -101,6 +101,36 @@ Some worlds also track corruption:
 !cleanse-corruption
 ```
 
+## Thralls and followers
+
+Once a foe is defeated (downed in combat), you can subdue them into a thrall — a bound
+worker who serves you:
+
+```text
+!subdue target_id=Ash task=haul
+```
+
+You can also recruit a willing, conscious character in the same room as a follower:
+
+```text
+!recruit-follower target_id=Ash
+```
+
+Give a thrall a new task or a follower new orders:
+
+```text
+!command-follower target_id=Ash orders="guard the burrow"
+```
+
+Release a thrall or dismiss a follower when you no longer need them:
+
+```text
+!release-thrall target_id=Ash
+```
+
+Your prompt lists the thralls and followers you command and what each is set to do, and
+tells a bound character that they serve a leader.
+
 ## Pickpocketing
 
 If pickpocketing is enabled, steal a reachable item from another character:

@@ -151,6 +151,29 @@ class FortificationComponent(Component):
     durability: float = 10.0
 
 
+@dataclass(frozen=True)
+class ThrallComponent(Component):
+    """A subdued captive bound to a master as a worker (catalogue 4.5).
+
+    One master per thrall, so the master is a singleton field; a master's several
+    thralls are several entities each carrying this component (spec ECS modeling).
+    """
+
+    master_id: str
+    task: str = "labor"
+    loyalty: float = 0.0
+    bound_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class FollowerComponent(Component):
+    """A willing companion who follows a master's orders (catalogue 4.5)."""
+
+    master_id: str
+    orders: str = "follow"
+    since_epoch: int = 0
+
+
 class StaminaChangedEvent(DomainEvent):
     current: float
     maximum: float
@@ -220,6 +243,28 @@ class ItemRepairedEvent(DomainEvent):
     item_id: str
     durability: float
     maximum: float
+
+
+class ThrallTakenEvent(DomainEvent):
+    master_id: str
+    thrall_id: str
+    task: str
+
+
+class FollowerRecruitedEvent(DomainEvent):
+    master_id: str
+    follower_id: str
+
+
+class FollowerOrderChangedEvent(DomainEvent):
+    master_id: str
+    subordinate_id: str
+    orders: str
+
+
+class ThrallReleasedEvent(DomainEvent):
+    master_id: str
+    subordinate_id: str
 
 
 def _barbarian_event_base(epoch: int, **kwargs) -> dict:
@@ -1060,6 +1105,167 @@ class PickpocketHandler:
         )
 
 
+def _master_of(entity) -> str | None:
+    """Return the master id recorded on a thrall/follower, or None."""
+    if entity.has_component(ThrallComponent):
+        return entity.get_component(ThrallComponent).master_id
+    if entity.has_component(FollowerComponent):
+        return entity.get_component(FollowerComponent).master_id
+    return None
+
+
+class SubdueHandler:
+    command_type = "subdue"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None or target_id is None:
+            return rejected("invalid captor or target id")
+        if actor_id == target_id:
+            return rejected("cannot subdue yourself")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        target = ctx.entity(target_id)
+        if not target.has_component(CharacterComponent):
+            return rejected("target cannot be bound")
+        if target.has_component(DeadComponent):
+            return rejected("target is dead")
+        if not target.has_component(DownedComponent):
+            return rejected("target must be defeated first")
+        if target.has_component(ThrallComponent) or target.has_component(FollowerComponent):
+            return rejected("target already serves a master")
+        if not _same_room(ctx.world, actor_id, target_id):
+            return rejected("target is not present")
+
+        task = str(command.payload.get("task", "labor")).strip() or "labor"
+        target.add_component(
+            ThrallComponent(master_id=str(actor_id), task=task, bound_at_epoch=ctx.epoch)
+        )
+        return ok(
+            ThrallTakenEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(ctx.entity(actor_id))),
+                    target_ids=(str(target_id),),
+                    master_id=str(actor_id),
+                    thrall_id=str(target_id),
+                    task=task,
+                )
+            )
+        )
+
+
+class RecruitFollowerHandler:
+    command_type = "recruit-follower"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None or target_id is None:
+            return rejected("invalid leader or target id")
+        if actor_id == target_id:
+            return rejected("cannot recruit yourself")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        target = ctx.entity(target_id)
+        if not target.has_component(CharacterComponent):
+            return rejected("target cannot be recruited")
+        if target.has_component(DeadComponent) or target.has_component(DownedComponent):
+            return rejected("target cannot be recruited in this state")
+        if target.has_component(ThrallComponent) or target.has_component(FollowerComponent):
+            return rejected("target already serves a master")
+        if not _same_room(ctx.world, actor_id, target_id):
+            return rejected("target is not present")
+
+        target.add_component(
+            FollowerComponent(master_id=str(actor_id), since_epoch=ctx.epoch)
+        )
+        return ok(
+            FollowerRecruitedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(ctx.entity(actor_id))),
+                    target_ids=(str(target_id),),
+                    master_id=str(actor_id),
+                    follower_id=str(target_id),
+                )
+            )
+        )
+
+
+class CommandFollowerHandler:
+    command_type = "command-follower"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        orders = str(command.payload.get("orders", "")).strip()
+        if actor_id is None or target_id is None:
+            return rejected("invalid master or subordinate id")
+        if not orders:
+            return rejected("orders must not be empty")
+        if not ctx.world.has_entity(target_id):
+            return rejected("subordinate does not exist")
+        target = ctx.entity(target_id)
+        if _master_of(target) != str(actor_id):
+            return rejected("you do not command this character")
+
+        if target.has_component(FollowerComponent):
+            replace_component(
+                target, replace(target.get_component(FollowerComponent), orders=orders)
+            )
+        else:
+            replace_component(
+                target, replace(target.get_component(ThrallComponent), task=orders)
+            )
+        return ok(
+            FollowerOrderChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(target_id),),
+                    master_id=str(actor_id),
+                    subordinate_id=str(target_id),
+                    orders=orders,
+                )
+            )
+        )
+
+
+class ReleaseThrallHandler:
+    command_type = "release-thrall"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if actor_id is None or target_id is None:
+            return rejected("invalid master or subordinate id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("subordinate does not exist")
+        target = ctx.entity(target_id)
+        if _master_of(target) != str(actor_id):
+            return rejected("you do not command this character")
+
+        if target.has_component(ThrallComponent):
+            target.remove_component(ThrallComponent)
+        else:
+            target.remove_component(FollowerComponent)
+        return ok(
+            ThrallReleasedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    target_ids=(str(target_id),),
+                    master_id=str(actor_id),
+                    subordinate_id=str(target_id),
+                )
+            )
+        )
+
+
 @dataclass(frozen=True)
 class RaiderSpawnSpec:
     name: str
@@ -1195,8 +1401,23 @@ def barbariansim_fragments(world: World, character) -> list[str]:
         lines.append("You are defending yourself.")
     if character.has_component(ArmorComponent):
         lines.append(f"Your armor rating is {character.get_component(ArmorComponent).rating}.")
+    if character.has_component(ThrallComponent):
+        task = character.get_component(ThrallComponent).task
+        lines.append(f"You are bound as a thrall (task: {task}).")
+    if character.has_component(FollowerComponent):
+        orders = character.get_component(FollowerComponent).orders
+        lines.append(f"You follow a leader (orders: {orders}).")
+    character_id = str(character.id)
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
+        if _master_of(entity) == character_id:
+            name = entity.get_component(IdentityComponent).name
+            if entity.has_component(ThrallComponent):
+                task = entity.get_component(ThrallComponent).task
+                lines.append(f"Your thrall {name} is set to {task}.")
+            else:
+                orders = entity.get_component(FollowerComponent).orders
+                lines.append(f"Your follower {name} is ordered to {orders}.")
         if entity.has_component(WeaponComponent):
             weapon = entity.get_component(WeaponComponent)
             durability = ""
@@ -1239,9 +1460,13 @@ __all__ = [
     "CorruptionGainedEvent",
     "DefendHandler",
     "DefendingComponent",
+    "CommandFollowerHandler",
     "DurabilityComponent",
     "ExposureChangedEvent",
     "ExposureDamageEvent",
+    "FollowerComponent",
+    "FollowerOrderChangedEvent",
+    "FollowerRecruitedEvent",
     "FortificationComponent",
     "FortifyHandler",
     "FrostbiteStartedEvent",
@@ -1257,15 +1482,21 @@ __all__ = [
     "PoisonTreatedEvent",
     "RaidHandler",
     "RaiderSpawnSpec",
+    "RecruitFollowerHandler",
+    "ReleaseThrallHandler",
     "RepairItemHandler",
     "ShelterComponent",
     "SparHandler",
+    "SubdueHandler",
     "StaminaChangedEvent",
     "StaminaComponent",
     "StaminaRegenSystem",
     "TemperatureExposureComponent",
     "TemperatureExposureConsequence",
     "TemperatureResistanceComponent",
+    "ThrallComponent",
+    "ThrallReleasedEvent",
+    "ThrallTakenEvent",
     "TreatPoisonHandler",
     "WeaponComponent",
     "barbariansim_fragments",

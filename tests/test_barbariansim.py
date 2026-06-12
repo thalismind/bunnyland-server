@@ -11,6 +11,7 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    DeadComponent,
     DownedComponent,
     GenerationIntentComponent,
     HandlerContext,
@@ -42,6 +43,7 @@ from bunnyland.mechanics.barbariansim import (
     ChallengeHandler,
     CharacterPoisonedEvent,
     CleanseCorruptionHandler,
+    CommandFollowerHandler,
     CorruptionCleansedEvent,
     CorruptionComponent,
     CorruptionGainedEvent,
@@ -49,6 +51,9 @@ from bunnyland.mechanics.barbariansim import (
     DefendingComponent,
     DurabilityComponent,
     ExposureDamageEvent,
+    FollowerComponent,
+    FollowerOrderChangedEvent,
+    FollowerRecruitedEvent,
     FortificationComponent,
     FortifyHandler,
     GainCorruptionHandler,
@@ -63,13 +68,19 @@ from bunnyland.mechanics.barbariansim import (
     PoisonTreatedEvent,
     RaiderSpawnSpec,
     RaidHandler,
+    RecruitFollowerHandler,
+    ReleaseThrallHandler,
     RepairItemHandler,
     ShelterComponent,
     SparHandler,
     StaminaChangedEvent,
     StaminaComponent,
+    SubdueHandler,
     TemperatureExposureComponent,
     TemperatureResistanceComponent,
+    ThrallComponent,
+    ThrallReleasedEvent,
+    ThrallTakenEvent,
     TreatPoisonHandler,
     WeaponComponent,
     barbariansim_fragments,
@@ -105,6 +116,10 @@ def _install(actor, *, enabled=frozenset({BoundaryTag.PVP})):
     actor.register_handler(GainCorruptionHandler())
     actor.register_handler(CleanseCorruptionHandler())
     actor.register_handler(PickpocketHandler())
+    actor.register_handler(SubdueHandler())
+    actor.register_handler(RecruitFollowerHandler())
+    actor.register_handler(CommandFollowerHandler())
+    actor.register_handler(ReleaseThrallHandler())
 
 
 def _target(scenario, *, health=20.0, armor=0.0):
@@ -1107,3 +1122,193 @@ async def test_storyteller_selects_barbarian_raid_only_when_colonysim_and_barbar
     assert "warlord" in ranks
     assert ranks.count("raider") > ranks.count("warlord")
     assert {container_of(raider) for raider in raiders} == {scenario.room_a}
+
+
+def _downed_target(scenario, **kwargs):
+    target = _target(scenario, **kwargs)
+    scenario.actor.world.get_entity(target).add_component(
+        DownedComponent(downed_at_epoch=0, cause="combat")
+    )
+    return target
+
+
+async def test_subdue_binds_a_defeated_target_as_a_thrall():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _downed_target(scenario)
+    taken: list[ThrallTakenEvent] = []
+    scenario.actor.bus.subscribe(ThrallTakenEvent, taken.append)
+
+    await scenario.actor.submit(_cmd(scenario, "subdue", target_id=str(target), task="haul"))
+    await scenario.actor.tick(HOUR)
+
+    thrall = scenario.actor.world.get_entity(target).get_component(ThrallComponent)
+    assert thrall.master_id == str(scenario.character)
+    assert thrall.task == "haul"
+    assert taken and taken[0].thrall_id == str(target)
+
+
+def test_subdue_requires_a_defeated_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    standing = _target(scenario)
+
+    result = SubdueHandler().execute(ctx, _handler_cmd(scenario, "subdue", target_id=str(standing)))
+
+    assert not result.ok
+    assert "defeated" in result.reason
+    assert not scenario.actor.world.get_entity(standing).has_component(ThrallComponent)
+
+
+async def test_recruit_follower_then_command_and_release():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    target = _target(scenario)
+    recruited: list[FollowerRecruitedEvent] = []
+    ordered: list[FollowerOrderChangedEvent] = []
+    released: list[ThrallReleasedEvent] = []
+    scenario.actor.bus.subscribe(FollowerRecruitedEvent, recruited.append)
+    scenario.actor.bus.subscribe(FollowerOrderChangedEvent, ordered.append)
+    scenario.actor.bus.subscribe(ThrallReleasedEvent, released.append)
+
+    await scenario.actor.submit(_cmd(scenario, "recruit-follower", target_id=str(target)))
+    await scenario.actor.tick(HOUR)
+    follower = scenario.actor.world.get_entity(target).get_component(FollowerComponent)
+    assert follower.master_id == str(scenario.character)
+    assert recruited
+
+    await scenario.actor.submit(
+        _cmd(scenario, "command-follower", target_id=str(target), orders="guard the burrow")
+    )
+    await scenario.actor.tick(HOUR)
+    assert (
+        scenario.actor.world.get_entity(target).get_component(FollowerComponent).orders
+        == "guard the burrow"
+    )
+    assert ordered and ordered[0].orders == "guard the burrow"
+
+    await scenario.actor.submit(_cmd(scenario, "release-thrall", target_id=str(target)))
+    await scenario.actor.tick(HOUR)
+    assert not scenario.actor.world.get_entity(target).has_component(FollowerComponent)
+    assert released
+
+
+def test_command_follower_rejects_non_master():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = _target(scenario)
+    scenario.actor.world.get_entity(target).add_component(
+        FollowerComponent(master_id="some-other-master")
+    )
+
+    result = CommandFollowerHandler().execute(
+        ctx, _handler_cmd(scenario, "command-follower", target_id=str(target), orders="follow")
+    )
+
+    assert not result.ok
+    assert "command" in result.reason
+
+
+async def test_fragments_describe_thrall_and_follower_state():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    thrall = _downed_target(scenario)
+    await scenario.actor.submit(_cmd(scenario, "subdue", target_id=str(thrall), task="haul"))
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    master = world.get_entity(scenario.character)
+    master_lines = barbariansim_fragments(world, master)
+    assert any("thrall" in line and "haul" in line for line in master_lines)
+
+    thrall_lines = barbariansim_fragments(world, world.get_entity(thrall))
+    assert any("bound as a thrall" in line for line in thrall_lines)
+
+
+def test_thrall_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    standing = _target(scenario)
+    downed = _downed_target(scenario)
+    dead_downed = _downed_target(scenario)
+    world.get_entity(dead_downed).add_component(DeadComponent(died_at_epoch=0, cause="test"))
+    bound = _downed_target(scenario)
+    world.get_entity(bound).add_component(ThrallComponent(master_id="someone-else"))
+    served = _target(scenario)
+    world.get_entity(served).add_component(FollowerComponent(master_id="someone-else"))
+    distant = _downed_target(scenario)
+    # move the distant captive into room_b so it is not present
+    world.get_entity(scenario.room_a).remove_relationship(Contains, distant)
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant
+    )
+    rock = spawn_entity(world, [IdentityComponent(name="rock", kind="item")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), rock.id
+    )
+
+    me = str(scenario.character)
+
+    def case(handler, expected, **payload):
+        return handler, expected, payload
+
+    cases = [
+        case(SubdueHandler(), "invalid captor", character_id="x"),
+        case(SubdueHandler(), "cannot subdue yourself", target_id=me),
+        case(SubdueHandler(), "does not exist", target_id="ghost_999999"),
+        case(SubdueHandler(), "cannot be bound", target_id=str(rock.id)),
+        case(SubdueHandler(), "is dead", target_id=str(dead_downed)),
+        case(SubdueHandler(), "already serves", target_id=str(bound)),
+        case(SubdueHandler(), "not present", target_id=str(distant)),
+        case(RecruitFollowerHandler(), "invalid leader", character_id="x"),
+        case(RecruitFollowerHandler(), "cannot recruit yourself", target_id=me),
+        case(RecruitFollowerHandler(), "cannot be recruited", target_id=str(rock.id)),
+        case(RecruitFollowerHandler(), "cannot be recruited in this state", target_id=str(downed)),
+        case(RecruitFollowerHandler(), "already serves", target_id=str(served)),
+        case(CommandFollowerHandler(), "invalid master", character_id="x"),
+        case(CommandFollowerHandler(), "orders must not be empty", target_id=str(standing)),
+        case(CommandFollowerHandler(), "does not exist", target_id="ghost_999999", orders="go"),
+        case(ReleaseThrallHandler(), "invalid master", character_id="x"),
+        case(ReleaseThrallHandler(), "does not exist", target_id="ghost_999999"),
+        case(ReleaseThrallHandler(), "do not command", target_id=str(bound)),
+    ]
+    for handler, expected, payload in cases:
+        result = handler.execute(ctx, _handler_cmd(scenario, handler.command_type, **payload))
+        assert not result.ok, expected
+        assert expected in result.reason, (expected, result.reason)
+
+
+async def test_thrall_task_can_be_reassigned_and_released():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    thrall = _downed_target(scenario)
+    await scenario.actor.submit(_cmd(scenario, "subdue", target_id=str(thrall)))
+    await scenario.actor.tick(HOUR)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "command-follower", target_id=str(thrall), orders="cook")
+    )
+    await scenario.actor.tick(HOUR)
+    assert scenario.actor.world.get_entity(thrall).get_component(ThrallComponent).task == "cook"
+
+    await scenario.actor.submit(_cmd(scenario, "release-thrall", target_id=str(thrall)))
+    await scenario.actor.tick(HOUR)
+    assert not scenario.actor.world.get_entity(thrall).has_component(ThrallComponent)
+
+
+async def test_fragments_list_a_recruited_follower_for_the_master():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    follower = _target(scenario)
+    await scenario.actor.submit(_cmd(scenario, "recruit-follower", target_id=str(follower)))
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    master_lines = barbariansim_fragments(world, world.get_entity(scenario.character))
+    assert any("follower" in line and "follow" in line for line in master_lines)
+    follower_lines = barbariansim_fragments(world, world.get_entity(follower))
+    assert any("follow a leader" in line for line in follower_lines)
