@@ -26,6 +26,7 @@ from bunnyland.mechanics.consumables import (
 from bunnyland.mechanics.eat_drink import DrinkHandler, EatHandler, _consume_one_use
 from bunnyland.mechanics.meter import Meter
 from bunnyland.mechanics.needs import (
+    BatheHandler,
     ComfortNeedComponent,
     FatigueComponent,
     FunNeedComponent,
@@ -188,6 +189,53 @@ async def test_daily_need_recovery_verbs_use_reachable_affordances_and_prompt_fr
     assert char.get_component(PrivacyNeedComponent).meter.value == pytest.approx(30.0)
     assert char.get_component(SafetyNeedComponent).meter.value == pytest.approx(30.0)
     assert any("company" in line for line in need_fragments(scenario.actor.world, char))
+
+
+def test_daily_need_recovery_handler_rejects_invalid_missing_and_unreachable_targets():
+    scenario = build_scenario()
+    ctx = handler_context(scenario)
+    char = scenario.actor.world.get_entity(scenario.character)
+    distant_basin = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant basin", kind="fixture"),
+            NeedAffordanceComponent(recoveries={"hygiene": 10.0}),
+        ],
+    )
+
+    invalid_command = build_submitted_command(
+        character_id="not-an-id",
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="bathe",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={},
+    )
+    assert BatheHandler().execute(ctx, invalid_command).reason == "invalid character id"
+    assert BatheHandler().execute(ctx, verb(scenario, "bathe")).reason == (
+        "character has no hygiene need"
+    )
+
+    char.add_component(HygieneComponent(meter=Meter(value=40.0)))
+    result = BatheHandler().execute(
+        ctx,
+        verb(scenario, "bathe", target_id=str(distant_basin.id)),
+    )
+    assert result.ok is False
+    assert result.reason == "target is not reachable"
+
+
+def test_need_fragments_include_hunger_and_thirst_pressure():
+    scenario = build_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+    char.add_component(HungerComponent(meter=Meter(value=95.0)))
+    char.add_component(ThirstComponent(meter=Meter(value=95.0)))
+
+    fragments = need_fragments(scenario.actor.world, char)
+
+    assert any("starving" in line.lower() for line in fragments)
+    assert any("dehydrated" in line.lower() for line in fragments)
 
 
 async def test_suspended_character_does_not_get_hungry():

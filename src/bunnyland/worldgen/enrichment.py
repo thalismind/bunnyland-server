@@ -20,10 +20,18 @@ from ..mechanics.barbariansim import (
     WeaponComponent,
 )
 from ..mechanics.colonysim import (
+    BodyPartHealthComponent,
+    IncidentComponent,
+    JobBillComponent,
     JobComponent,
+    PawnProfileComponent,
+    PrisonerComponent,
+    ResearchProjectComponent,
     ResourceNodeComponent,
     ResourceStackComponent,
     StockpileComponent,
+    SurgeryBillComponent,
+    TradeOfferComponent,
     WorkstationComponent,
 )
 from ..mechanics.daggersim import (
@@ -52,11 +60,27 @@ from ..mechanics.dragonsim import (
 )
 from ..mechanics.environment import FireComponent, FlammableComponent
 from ..mechanics.gardensim import (
+    CropQualityComponent,
+    FarmQuestComponent,
     FertilizerComponent,
+    GeodeComponent,
     GreenhouseComponent,
+    LadderComponent,
+    MachineComponent,
+    MailComponent,
+    MineLevelComponent,
+    PestComponent,
+    RegrowableComponent,
     SeedComponent,
+    ShippingBinComponent,
     SoilComponent,
     TreeComponent,
+    WeedComponent,
+)
+from ..mechanics.lifesim import (
+    CharacterProfileComponent,
+    HomeObjectComponent,
+    WhimComponent,
 )
 from ..mechanics.nukesim import (
     DecontaminationComponent,
@@ -178,10 +202,45 @@ class EnvironmentWorldgenHook:
             replace_component(entity, FireComponent(last_updated_epoch=event.world_epoch))
 
 
+class LifeWorldgenHook:
+    def subscribe(self, actor: WorldActor) -> None:
+        self.actor = actor
+        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
+        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
+
+    def _on_character(self, event: CharacterGeneratedEvent) -> None:
+        entity = _entity(self.actor, event)
+        if entity is None:
+            return
+        if _wants(event, "profile", "character-profile") or _mentions(
+            event, "routine", "interest", "hobby", "backstory"
+        ):
+            replace_component(
+                entity,
+                CharacterProfileComponent(
+                    traits=tuple(event.generation.tags),
+                    interests=tuple(event.generation.wants),
+                    preferred_routine="generated routine" if _mentions(event, "routine") else "",
+                ),
+            )
+
+    def _on_object(self, event: ObjectGeneratedEvent) -> None:
+        entity = _entity(self.actor, event)
+        if entity is None:
+            return
+        if _wants(event, "whim") or _mentions(event, "whim", "wish"):
+            replace_component(entity, WhimComponent(want=_name(entity, "generated whim")))
+        if _wants(event, "home-object") or _mentions(
+            event, "chair", "bed", "stove", "sofa", "decor", "home"
+        ):
+            replace_component(entity, HomeObjectComponent(affordance="comfort", decor_score=1.0))
+
+
 class ColonyWorldgenHook:
     def subscribe(self, actor: WorldActor) -> None:
         self.actor = actor
         actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
+        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
         actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
 
     def _on_room(self, event: RoomGeneratedEvent) -> None:
@@ -190,6 +249,21 @@ class ColonyWorldgenHook:
             return
         if _wants(event, "stockpile") or _mentions(event, "stockpile", "warehouse"):
             replace_component(entity, StockpileComponent(capacity=40))
+
+    def _on_character(self, event: CharacterGeneratedEvent) -> None:
+        entity = _entity(self.actor, event)
+        if entity is None:
+            return
+        if _wants(event, "pawn-profile") or _mentions(event, "backstory", "passion"):
+            replace_component(
+                entity,
+                PawnProfileComponent(
+                    backstory=event.generation.description,
+                    passions={tag: 1 for tag in event.generation.tags},
+                ),
+            )
+        if _wants(event, "prisoner", "captive") or _mentions(event, "prisoner", "captive"):
+            replace_component(entity, PrisonerComponent(policy="hold"))
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
@@ -212,6 +286,24 @@ class ColonyWorldgenHook:
             replace_component(entity, WorkstationComponent(station_type=resource_type))
         if _wants(event, "job"):
             replace_component(entity, JobComponent(job_type=resource_type, priority=1))
+        if _wants(event, "job-bill") or _mentions(event, "bill", "work order"):
+            replace_component(entity, JobBillComponent(recipe_id=resource_type, work_required=5.0))
+        if _wants(event, "research") or _mentions(event, "research", "technology"):
+            replace_component(
+                entity,
+                ResearchProjectComponent(project_id=resource_type, work_required=10.0),
+            )
+        if _wants(event, "incident") or _mentions(event, "incident", "raid", "blight"):
+            replace_component(entity, IncidentComponent(incident_type=resource_type))
+        if _wants(event, "trade-offer") or _mentions(event, "trade", "trader"):
+            replace_component(
+                entity,
+                TradeOfferComponent(faction_id="generated-faction", gives={resource_type: 1}),
+            )
+        if _wants(event, "surgery") or _mentions(event, "surgery", "operation"):
+            replace_component(entity, SurgeryBillComponent(part="torso", operation=resource_type))
+        if _wants(event, "body-part") or _mentions(event, "body part", "limb"):
+            replace_component(entity, BodyPartHealthComponent(part=resource_type))
 
 
 class GardenWorldgenHook:
@@ -228,6 +320,8 @@ class GardenWorldgenHook:
             replace_component(entity, SoilComponent(quality=1.2))
         if _wants(event, "greenhouse") or _mentions(event, "greenhouse"):
             replace_component(entity, GreenhouseComponent())
+        if _wants(event, "mine-level") or _mentions(event, "mine", "cavern"):
+            replace_component(entity, MineLevelComponent(level=1))
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
@@ -249,6 +343,30 @@ class GardenWorldgenHook:
                     planted_at_epoch=event.world_epoch,
                     maturity_days=7.0,
                 ),
+            )
+        if _wants(event, "crop-quality") or _mentions(event, "crop", "sprout"):
+            replace_component(entity, CropQualityComponent(quality=1.1))
+        if _wants(event, "regrowable") or _mentions(event, "regrow", "perennial"):
+            replace_component(entity, RegrowableComponent(regrow_days=2.0))
+        if _wants(event, "pest") or _mentions(event, "pest", "bugs"):
+            replace_component(entity, PestComponent(severity=0.5))
+        if _wants(event, "weed") or _mentions(event, "weed", "weeds"):
+            replace_component(entity, WeedComponent(density=0.5))
+        if _wants(event, "machine") or _mentions(event, "machine", "preserves", "keg"):
+            replace_component(entity, MachineComponent(machine_type=_resource_type(event)))
+        if _wants(event, "shipping-bin") or _mentions(event, "shipping bin", "shipping crate"):
+            replace_component(entity, ShippingBinComponent())
+        if _wants(event, "geode") or _mentions(event, "geode"):
+            replace_component(entity, GeodeComponent(resource_type=_resource_type(event)))
+        if _wants(event, "ladder") or _mentions(event, "ladder"):
+            replace_component(entity, LadderComponent(target_room_id=event.entity_id))
+        if _wants(event, "mail") or _mentions(event, "mail", "letter"):
+            replace_component(entity, MailComponent(subject=_name(entity, "generated mail")))
+        if _wants(event, "farm-quest") or _mentions(event, "quest", "order board"):
+            resource_type = _resource_type(event)
+            replace_component(
+                entity,
+                FarmQuestComponent(quest_id=resource_type, requested={resource_type: 1}),
             )
 
 
@@ -497,6 +615,7 @@ __all__ = [
     "DragonWorldgenHook",
     "EnvironmentWorldgenHook",
     "GardenWorldgenHook",
+    "LifeWorldgenHook",
     "NukeWorldgenHook",
     "VoidWorldgenHook",
 ]

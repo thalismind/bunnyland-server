@@ -16,9 +16,16 @@ from bunnyland.core.components import (
 )
 from bunnyland.mechanics.barbariansim import WeaponComponent
 from bunnyland.mechanics.colonysim import (
+    IncidentComponent,
+    JobBillComponent,
+    PawnProfileComponent,
+    PrisonerComponent,
     RecipeComponent,
+    ResearchProjectComponent,
     ResourceNodeComponent,
     StockpileComponent,
+    SurgeryBillComponent,
+    TradeOfferComponent,
     WorkstationComponent,
 )
 from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
@@ -43,11 +50,28 @@ from bunnyland.mechanics.dragonsim import QuestComponent
 from bunnyland.mechanics.environment import CalendarComponent
 from bunnyland.mechanics.gardensim import (
     CropComponent,
+    CropQualityComponent,
+    FarmQuestComponent,
+    GeodeComponent,
     HarvestableComponent,
+    LadderComponent,
+    MachineComponent,
+    MailComponent,
+    MineLevelComponent,
+    MuseumCollectionComponent,
+    PestComponent,
+    RegrowableComponent,
+    ShippingBinComponent,
     TreeComponent,
     TreeTapComponent,
+    WeedComponent,
 )
-from bunnyland.mechanics.lifesim import CareerComponent
+from bunnyland.mechanics.lifesim import (
+    CareerComponent,
+    CharacterProfileComponent,
+    HomeObjectComponent,
+    WhimComponent,
+)
 from bunnyland.mechanics.needs import HungerComponent
 from bunnyland.mechanics.nukesim import RadiationSourceComponent
 from bunnyland.mechanics.voidsim import HabitatModuleComponent, ShipComponent
@@ -169,6 +193,42 @@ async def test_colonysim_demo_includes_stockpile_storage():
     await COLONYSIM_DEMO.generate(actor, "colonysim-demo", GenOptions())
 
     assert _has(actor, StockpileComponent)
+    assert _has(actor, PawnProfileComponent)
+    assert _has(actor, PrisonerComponent)
+    assert _has(actor, JobBillComponent)
+    assert _has(actor, ResearchProjectComponent)
+    assert _has(actor, TradeOfferComponent)
+    assert _has(actor, IncidentComponent)
+    assert _has(actor, SurgeryBillComponent)
+
+
+async def test_lifesim_demo_includes_profile_whim_and_home_objects():
+    actor = WorldActor()
+
+    await LIFESIM_DEMO.generate(actor, "lifesim-demo", GenOptions())
+
+    assert _has(actor, CharacterProfileComponent)
+    assert _has(actor, WhimComponent)
+    assert _has(actor, HomeObjectComponent)
+
+
+async def test_gardensim_demo_includes_catalogue_farm_surfaces():
+    actor = WorldActor()
+
+    await GARDENSIM_DEMO.generate(actor, "gardensim-demo", GenOptions())
+
+    assert _has(actor, CropQualityComponent)
+    assert _has(actor, RegrowableComponent)
+    assert _has(actor, PestComponent)
+    assert _has(actor, WeedComponent)
+    assert _has(actor, MachineComponent)
+    assert _has(actor, ShippingBinComponent)
+    assert _has(actor, MineLevelComponent)
+    assert _has(actor, LadderComponent)
+    assert _has(actor, GeodeComponent)
+    assert _has(actor, MailComponent)
+    assert _has(actor, FarmQuestComponent)
+    assert _has(actor, MuseumCollectionComponent)
 
 
 async def test_maple_farm_demo_is_a_functional_canadian_sugarbush():

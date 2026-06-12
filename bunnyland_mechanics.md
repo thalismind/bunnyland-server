@@ -7,21 +7,28 @@ The peaceful starter pack now has playable v1 coverage for the core catalogue lo
 - `lifesim`: hunger, thirst, fatigue, hygiene, comfort, fun, social contact, privacy,
   safety, eat/drink, self-care verbs, sleep fatigue recovery, social recovery through
   speech, affect, homes, claims, careers, business, bills, skills, routines,
-  relationships, family, pregnancy, birth, adoption, aging stages, and natural-death
-  policy.
+  character profiles, whims, home object use/maintenance, invitations, relationships,
+  family, pregnancy, birth, adoption, aging stages, and player-facing natural-aging
+  policy controls.
 - `colonysim`: resources, resource stacks, stockpiles, filters, hauling, reservations,
   ownership, jobs, work priorities, allowed areas, workstation recipes, baking through the
   shared recipe engine, entity outputs for edible/drinkable products, room quality,
-  colony wealth/expectations, wound tending, medicine uses, rescue to medical bed, bed
-  rest, infection progress, and mental breaks/inspirations.
+  colony wealth/expectations, pawn profiles, passions/backstories, job bills, prisoners
+  and recruitment, research/tech unlocks, incidents, trade offers, caravans, diplomacy,
+  body-part health, surgery/prosthetics, wound tending, medicine uses, rescue to medical
+  bed, bed rest, infection progress, and mental breaks/inspirations.
 - `gardensim`: soil, tilling, planting, watering, fertilizer, growth, seasonal withering,
-  greenhouse exceptions, edible/resource harvests, tree tapping and sap, processing
-  machines, farm animals, feeding, petting, animal products, fishing, mining, foraging,
-  gifts/friendship, festivals, bundles, and daily farm reset.
+  greenhouse exceptions, crop quality, regrowth, pests, weeding, inspection,
+  edible/resource harvests, tree tapping and sap, processing machines with cancel/repair
+  and breakdown state, farm animals, feeding, petting, breeding, animal products, fishing,
+  mining, mine levels, ladders, geodes, foraging, gifts/friendship, mail, quests,
+  festivals, bundles, shipping, collections, museum donation, rewards, and daily farm
+  reset.
 
-The remaining catalogue text is still broader than v1. Treat unimplemented headings below
-as backlog unless a component, handler, consequence/system, event, prompt fragment, and
-test exists in `src/bunnyland/mechanics/` and `tests/`.
+The remaining catalogue text is still broader than v1 outside these implemented peaceful
+starter-pack surfaces. Treat unimplemented headings below as backlog unless a component,
+handler, consequence/system, event, prompt fragment, and test exists in
+`src/bunnyland/mechanics/` and `tests/`.
 
 The design target is not to clone any one game. The target is to extract the loops that make those games sticky: needs, relationships, work, scarcity, seasons, growth, danger, exploration, memory, and the joy of small systems colliding.
 

@@ -42,13 +42,18 @@ def _augment(actor, entity_id, *components):
 
 async def lifesim_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
     del options
+    from ..core.components import IdentityComponent
     from ..mechanics.lifesim import (
         AspirationComponent,
         CareerComponent,
+        CharacterProfileComponent,
+        HasWhim,
+        HomeObjectComponent,
         HouseholdFundsComponent,
         PartnerOf,
         RelationshipStatus,
         SkillSetComponent,
+        WhimComponent,
     )
 
     proposal = WorldProposal(
@@ -85,11 +90,30 @@ async def lifesim_example(actor, seed: str, options: GenOptions) -> Instantiated
                  SkillSetComponent(levels={"gardening": 3, "cooking": 1}),
                  AspirationComponent(name="Master Gardener",
                                      milestones=("ten harvests", "a prize bloom")),
-                 HouseholdFundsComponent(balance=140))
+                 HouseholdFundsComponent(balance=140),
+                 CharacterProfileComponent(
+                     traits=("warm", "ambitious"),
+                     interests=("gardening", "cooking"),
+                     preferred_routine="morning garden care",
+                 ))
         _augment(actor, hazel,
                  CareerComponent(title="baker", level=1, hourly_pay=11),
                  SkillSetComponent(levels={"baking": 2}),
                  AspirationComponent(name="Village Baker", milestones=("open a stall",)))
+        whim = _add(actor, world.rooms["cottage"], [
+            IdentityComponent(name="Juniper's garden whim", kind="whim"),
+            WhimComponent(want="water the cottage herbs", reward_xp=4.0),
+        ])
+        actor.world.get_entity(juniper).add_relationship(HasWhim(), whim.id)
+        _add(actor, world.rooms["cottage"], [
+            IdentityComponent(name="a cozy reading chair", kind="home-object"),
+            HomeObjectComponent(
+                affordance="comfort",
+                cleanliness=0.85,
+                condition=0.9,
+                decor_score=1.5,
+            ),
+        ])
         # A married couple: partner edges both ways plus a shared relationship status.
         actor.world.get_entity(juniper).add_relationship(PartnerOf(since_epoch=0), hazel)
         actor.world.get_entity(hazel).add_relationship(PartnerOf(since_epoch=0), juniper)
@@ -110,10 +134,22 @@ async def gardensim_example(actor, seed: str, options: GenOptions) -> Instantiat
     from ..mechanics.gardensim import (
         CropComponent,
         CropGrowthComponent,
+        CropQualityComponent,
+        FarmQuestComponent,
+        GeodeComponent,
         HarvestableComponent,
+        LadderComponent,
+        MachineComponent,
+        MailComponent,
+        MineLevelComponent,
+        MuseumCollectionComponent,
+        PestComponent,
+        RegrowableComponent,
         SeedComponent,
+        ShippingBinComponent,
         SoilComponent,
         TilledComponent,
+        WeedComponent,
     )
 
     proposal = WorldProposal(
@@ -148,12 +184,55 @@ async def gardensim_example(actor, seed: str, options: GenOptions) -> Instantiat
             CropComponent(crop_type="carrot", planted_at_epoch=0, stage=1),
             CropGrowthComponent(progress_days=1.5, required_days=4.0, last_updated_epoch=0),
             HarvestableComponent(yield_item="carrot", quantity=3),
+            CropQualityComponent(quality=1.2),
+            RegrowableComponent(regrow_days=2.0),
+            PestComponent(severity=0.25),
+            WeedComponent(density=0.2),
         ])
         _add(actor, field, [
             IdentityComponent(name="a packet of turnip seeds", kind="item"),
             PortableComponent(can_pick_up=True),
             SeedComponent(crop_type="turnip", growth_days=5.0, yield_item="turnip",
                           yield_quantity=2),
+        ])
+        _add(actor, field, [
+            IdentityComponent(name="a small preserves machine", kind="machine"),
+            MachineComponent(machine_type="preserves", quality=0.9),
+        ])
+        _add(actor, field, [
+            IdentityComponent(name="a farm shipping crate", kind="shipping-bin"),
+            ShippingBinComponent(),
+        ])
+        _add(actor, field, [
+            IdentityComponent(name="a geode from the lower mine", kind="geode"),
+            PortableComponent(can_pick_up=True),
+            GeodeComponent(resource_type="amethyst", quantity=1),
+        ])
+        _add(actor, field, [
+            IdentityComponent(name="a ladder down to mine level two", kind="ladder"),
+            LadderComponent(target_room_id=str(field)),
+        ])
+        _augment(actor, field, MineLevelComponent(level=1))
+        _add(actor, world.rooms["farmhouse"], [
+            IdentityComponent(name="farm mail: welcome gift", kind="mail"),
+            MailComponent(
+                subject="Welcome gift",
+                reward_resource="parsnip seed",
+                reward_quantity=3,
+            ),
+        ])
+        _add(actor, world.rooms["farmhouse"], [
+            IdentityComponent(name="community board order", kind="quest"),
+            FarmQuestComponent(
+                quest_id="first-harvest",
+                requested={"carrot": 2},
+                reward_resource="coin",
+                reward_quantity=25,
+            ),
+        ])
+        _add(actor, world.rooms["farmhouse"], [
+            IdentityComponent(name="farm museum shelf", kind="museum"),
+            MuseumCollectionComponent(),
         ])
     return world
 
@@ -283,12 +362,21 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
     del options
     from ..core.components import IdentityComponent, PortableComponent
     from ..mechanics.colonysim import (
+        BodyPartHealthComponent,
+        HasBodyPart,
+        IncidentComponent,
+        JobBillComponent,
         JobComponent,
+        PawnProfileComponent,
+        PrisonerComponent,
         RecipeComponent,
+        ResearchProjectComponent,
         ResourceNodeComponent,
         ResourceStackComponent,
         StockpileComponent,
         StorageFilterComponent,
+        SurgeryBillComponent,
+        TradeOfferComponent,
         WorkstationComponent,
     )
 
@@ -314,6 +402,19 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
 
     async with actor._lock:
         camp, store = world.rooms["camp"], world.rooms["store"]
+        rowan, fern = world.characters["rowan"], world.characters["fern"]
+        _augment(actor, rowan,
+                 PawnProfileComponent(
+                     backstory="field builder",
+                     passions={"construction": 2, "plants": 1},
+                     expectations="modest",
+                 ))
+        _augment(actor, fern, PrisonerComponent(recruitment_difficulty=8.0, policy="recruit"))
+        left_arm = spawn_entity(actor.world, [
+            IdentityComponent(name="Rowan's left arm", kind="body-part"),
+            BodyPartHealthComponent(part="left arm", health=0.65),
+        ])
+        actor.world.get_entity(rowan).add_relationship(HasBodyPart(), left_arm.id)
         _add(actor, camp, [
             IdentityComponent(name="a berry bush", kind="resource-node"),
             ResourceNodeComponent(resource_type="berries", current=20, maximum=20,
@@ -341,6 +442,28 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
         _add(actor, store, [
             IdentityComponent(name="hauling job", kind="job"),
             JobComponent(job_type="haul", priority=3),
+            JobBillComponent(recipe_id="plank", work_required=6.0, work_done=2.0),
+        ])
+        _add(actor, camp, [
+            IdentityComponent(name="treehouse research notes", kind="research"),
+            ResearchProjectComponent(project_id="treehouse", work_required=20.0, work_done=5.0),
+        ])
+        _add(actor, camp, [
+            IdentityComponent(name="wandering trader offer", kind="trade-offer"),
+            TradeOfferComponent(
+                faction_id="pine-traders",
+                gives={"medicine": 1},
+                wants={"wood": 4},
+                goodwill_delta=1.0,
+            ),
+        ])
+        _add(actor, camp, [
+            IdentityComponent(name="minor crop blight incident", kind="incident"),
+            IncidentComponent(incident_type="crop blight", severity=1),
+        ])
+        _add(actor, camp, [
+            IdentityComponent(name="install splint surgery", kind="surgery"),
+            SurgeryBillComponent(part="left arm", operation="splint", work_required=4.0),
         ])
     return world
 

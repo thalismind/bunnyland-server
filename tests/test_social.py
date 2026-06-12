@@ -15,9 +15,11 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
+from bunnyland.core.events import EventVisibility, SpeechToldEvent
 from bunnyland.mechanics.meter import Meter
 from bunnyland.mechanics.needs import SocialNeedComponent
 from bunnyland.mechanics.social import (
+    RelationshipReactor,
     SocialBond,
     adjust_bond,
     bond_between,
@@ -137,6 +139,69 @@ def test_relationship_fragment_describes_strong_bonds():
 
     adjust_bond(world, scenario.character, hazel, {"fear": 0.6})  # fear dominates
     assert any("fear Hazel" in line for line in relationship_fragments(world, juniper))
+
+
+def test_relationship_fragments_cover_negative_and_familiar_bonds():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    juniper = world.get_entity(scenario.character)
+    rival = spawn_entity(
+        world,
+        [IdentityComponent(name="Rival", kind="character"), CharacterComponent()],
+    )
+    acquaintance = spawn_entity(
+        world,
+        [IdentityComponent(name="Acquaintance", kind="character"), CharacterComponent()],
+    )
+    mystery = spawn_entity(world, [CharacterComponent()])
+
+    adjust_bond(world, scenario.character, rival.id, {"resentment": 0.4})
+    adjust_bond(world, scenario.character, acquaintance.id, {"familiarity": 0.4})
+    adjust_bond(world, scenario.character, mystery.id, {"affinity": -0.4})
+
+    fragments = relationship_fragments(world, juniper)
+
+    assert any("resent Rival" in line for line in fragments)
+    assert any("know Acquaintance" in line for line in fragments)
+    assert any("dislike someone" in line for line in fragments)
+
+
+def test_relationship_reactor_handles_tell_events_and_ignores_invalid_targets():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    speaker = world.get_entity(scenario.character)
+    listener = world.get_entity(hazel)
+    speaker.add_component(SocialNeedComponent(meter=Meter(value=40.0)))
+    listener.add_component(SocialNeedComponent(meter=Meter(value=40.0)))
+    reactor = RelationshipReactor(world)
+
+    reactor._on_speech(
+        SpeechToldEvent(
+            event_id="missing-speaker",
+            world_epoch=0,
+            created_at="2026-01-01T00:00:00Z",
+            visibility=EventVisibility.PRIVATE,
+            actor_id="entity_999",
+            target_ids=(str(hazel),),
+            text="hello",
+        )
+    )
+    reactor._on_speech(
+        SpeechToldEvent(
+            event_id="tell",
+            world_epoch=1,
+            created_at="2026-01-01T00:00:00Z",
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(scenario.character),
+            target_ids=("not-an-id", str(scenario.character), str(hazel)),
+            text="hello",
+            final_interpretation="apology",
+        )
+    )
+
+    assert speaker.get_component(SocialNeedComponent).meter.value < 40.0
+    assert listener.get_component(SocialNeedComponent).meter.value < 40.0
+    assert bond_between(world, scenario.character, hazel).familiarity > 0
 
 
 def test_no_fragment_for_a_faint_bond():

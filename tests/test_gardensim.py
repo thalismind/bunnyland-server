@@ -24,21 +24,37 @@ from bunnyland.mechanics.colonysim import ResourceStackComponent
 from bunnyland.mechanics.consumables import FoodComponent
 from bunnyland.mechanics.environment import CalendarComponent
 from bunnyland.mechanics.gardensim import (
+    AnimalBornEvent,
+    AnimalBreedingComponent,
     AnimalProductCollectedEvent,
     AnimalProductComponent,
+    AnimalProductConsequence,
+    BreedAnimalHandler,
     BundleComponent,
+    CancelMachineHandler,
+    ClaimMailHandler,
+    ClaimRewardHandler,
     ClearDeadCropHandler,
     CollectAnimalProductHandler,
+    CollectionComponent,
     CollectMachineOutputHandler,
+    CompleteFarmQuestHandler,
     ContributeBundleHandler,
     CropComponent,
     CropGrewEvent,
     CropGrowthComponent,
     CropGrowthConsequence,
     CropHarvestedEvent,
+    CropInspectedEvent,
+    CropInspectionComponent,
+    CropQualityComponent,
     CropReadyEvent,
+    CropWeededEvent,
+    DailyFarmResetComponent,
     DeadCropClearedEvent,
+    DiscoverLadderHandler,
     FarmAnimalComponent,
+    FarmQuestComponent,
     FeedAnimalHandler,
     FertilizeHandler,
     FertilizerComponent,
@@ -49,36 +65,60 @@ from bunnyland.mechanics.gardensim import (
     ForageComponent,
     ForageHandler,
     FriendshipComponent,
+    GeodeComponent,
+    GeodeOpenedEvent,
     GiftPreferenceComponent,
     GiveGiftHandler,
     GreenhouseComponent,
     HarvestableComponent,
     HarvestCropHandler,
     HarvestSapHandler,
+    InspectCropHandler,
+    ItemsShippedEvent,
     JoinFestivalHandler,
+    LadderComponent,
+    LadderDiscoveredEvent,
+    MachineBreakdownComponent,
+    MachineBrokeDownEvent,
     MachineComponent,
     MachineOutputCollectedEvent,
+    MachineProcessingCancelledEvent,
+    MachineProcessingReadyEvent,
+    MachineRepairedEvent,
+    MailClaimedEvent,
+    MailComponent,
     MineHandler,
     MiningNodeComponent,
+    OpenGeodeHandler,
+    PestComponent,
     PetAnimalHandler,
     PlantHandler,
     ProcessingRecipeComponent,
     ProcessingTaskComponent,
+    RegrowableComponent,
+    RepairMachineHandler,
+    RewardComponent,
     SapHarvestedEvent,
     SapReadyEvent,
     SeedComponent,
+    ShipItemsHandler,
+    ShippingBinComponent,
     SoilComponent,
     SoilTilledEvent,
     StartMachineHandler,
     TapTreeHandler,
     TilledComponent,
     TillHandler,
+    TreatPestsHandler,
     TreeComponent,
     TreeGrowthConsequence,
     TreeMaturedEvent,
     TreeTapComponent,
     TreeTappedEvent,
     WaterCropHandler,
+    WateredComponent,
+    WeedComponent,
+    WeedCropHandler,
     gardensim_fragments,
 )
 
@@ -91,31 +131,47 @@ def _install(actor):
     actor.register_handler(PlantHandler())
     actor.register_handler(WaterCropHandler())
     actor.register_handler(FertilizeHandler())
+    actor.register_handler(InspectCropHandler())
+    actor.register_handler(WeedCropHandler())
+    actor.register_handler(TreatPestsHandler())
     actor.register_handler(HarvestCropHandler())
     actor.register_handler(ClearDeadCropHandler())
     actor.register_handler(TapTreeHandler())
     actor.register_handler(HarvestSapHandler())
     actor.register_handler(StartMachineHandler())
     actor.register_handler(CollectMachineOutputHandler())
+    actor.register_handler(CancelMachineHandler())
+    actor.register_handler(RepairMachineHandler())
     actor.register_handler(FeedAnimalHandler())
     actor.register_handler(PetAnimalHandler())
+    actor.register_handler(BreedAnimalHandler())
     actor.register_handler(CollectAnimalProductHandler())
     actor.register_handler(FishHandler())
     actor.register_handler(MineHandler())
+    actor.register_handler(DiscoverLadderHandler())
+    actor.register_handler(OpenGeodeHandler())
     actor.register_handler(ForageHandler())
     actor.register_handler(GiveGiftHandler())
     actor.register_handler(JoinFestivalHandler())
     actor.register_handler(ContributeBundleHandler())
+    actor.register_handler(ClaimMailHandler())
+    actor.register_handler(CompleteFarmQuestHandler())
+    actor.register_handler(ShipItemsHandler())
+    actor.register_handler(ClaimRewardHandler())
     actor.register_consequence(CropGrowthConsequence())
     actor.register_consequence(TreeGrowthConsequence())
     from bunnyland.mechanics.gardensim import (
+        AnimalBirthConsequence,
         AnimalProductConsequence,
         DailyFarmResetConsequence,
+        MachineBreakdownConsequence,
         MachineProcessingConsequence,
     )
 
     actor.register_consequence(MachineProcessingConsequence())
+    actor.register_consequence(MachineBreakdownConsequence())
     actor.register_consequence(AnimalProductConsequence())
+    actor.register_consequence(AnimalBirthConsequence())
     actor.register_consequence(DailyFarmResetConsequence())
 
 
@@ -527,6 +583,146 @@ async def test_crop_withers_out_of_season():
     assert soil_entity.get_component(CropComponent).dead is True
 
 
+def test_growth_consequences_skip_not_ready_edge_states():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    clock = list(world.query().with_all([WorldClockComponent]).execute_entities())[0]
+    clock.add_component(CalendarComponent(season="winter"))
+    dead_crop = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="dead crop", kind="soil"),
+            CropComponent(crop_type="turnip", planted_at_epoch=0, dead=True),
+            CropGrowthComponent(progress_days=0.0, required_days=1.0, last_updated_epoch=0),
+        ],
+    )
+    ready_crop = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="ready crop", kind="soil"),
+            CropComponent(crop_type="turnip", planted_at_epoch=0, ready=True),
+            CropGrowthComponent(progress_days=1.0, required_days=1.0, last_updated_epoch=0),
+        ],
+    )
+    unwatered_crop = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="unwatered crop", kind="soil"),
+            CropComponent(crop_type="winter root", planted_at_epoch=0, seasons=("winter",)),
+            CropGrowthComponent(progress_days=0.0, required_days=1.0, last_updated_epoch=DAY),
+        ],
+    )
+    dry_wither_crop = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="dry summer crop", kind="soil"),
+            CropComponent(crop_type="melon", planted_at_epoch=0, seasons=("summer",)),
+            CropGrowthComponent(progress_days=0.0, required_days=1.0, last_updated_epoch=0),
+        ],
+    )
+    slow_crop = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="slow crop", kind="soil"),
+            CropComponent(crop_type="winter root", planted_at_epoch=0, seasons=("winter",)),
+            CropGrowthComponent(progress_days=0.0, required_days=10.0, last_updated_epoch=0),
+            WateredComponent(watered_at_epoch=0, expires_at_epoch=2 * DAY),
+        ],
+    )
+    for entity in (dead_crop, ready_crop, unwatered_crop, dry_wither_crop, slow_crop):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    crop_events = CropGrowthConsequence().process(world, DAY)
+
+    assert crop_events
+    assert unwatered_crop.get_component(CropGrowthComponent).last_updated_epoch == DAY
+    assert dry_wither_crop.get_component(CropComponent).dead is True
+    assert slow_crop.get_component(CropComponent).ready is False
+    assert slow_crop.has_component(WateredComponent)
+
+    dead_tree = spawn_entity(
+        world,
+        [TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=1.0, dead=True)],
+    )
+    young_tree = spawn_entity(
+        world,
+        [TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=10.0)],
+    )
+    untapped_tree = spawn_entity(
+        world,
+        [TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0.0, mature=True)],
+    )
+    bucketless_tree = spawn_entity(
+        world,
+        [
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0.0, mature=True),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0),
+        ],
+    )
+    ready_bucket_tree = spawn_entity(
+        world,
+        [
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0.0, mature=True),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0),
+            HarvestableComponent(yield_item="sap", ready=True),
+        ],
+    )
+    early_tree = spawn_entity(
+        world,
+        [
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0.0, mature=True),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=DAY),
+            HarvestableComponent(yield_item="sap", ready=False),
+        ],
+    )
+    for entity in (
+        dead_tree,
+        young_tree,
+        untapped_tree,
+        bucketless_tree,
+        ready_bucket_tree,
+        early_tree,
+    ):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    assert TreeGrowthConsequence().process(world, DAY) == []
+
+    no_product = spawn_entity(world, [FarmAnimalComponent(species="chicken")])
+    ready_product = spawn_entity(
+        world,
+        [
+            FarmAnimalComponent(species="chicken", age_days=3.0, adult_age_days=3.0),
+            AnimalProductComponent(product_type="egg", ready=True),
+        ],
+    )
+    sick_animal = spawn_entity(
+        world,
+        [
+            FarmAnimalComponent(species="chicken", age_days=3.0, adult_age_days=3.0, sick=True),
+            AnimalProductComponent(product_type="egg"),
+        ],
+    )
+    young_animal = spawn_entity(
+        world,
+        [
+            FarmAnimalComponent(species="chicken", age_days=1.0, adult_age_days=3.0),
+            AnimalProductComponent(product_type="egg"),
+        ],
+    )
+    cooldown_animal = spawn_entity(
+        world,
+        [
+            FarmAnimalComponent(species="chicken", age_days=3.0, adult_age_days=3.0),
+            AnimalProductComponent(product_type="egg", last_produced_epoch=DAY),
+        ],
+    )
+    for entity in (no_product, ready_product, sick_animal, young_animal, cooldown_animal):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    assert AnimalProductConsequence().process(world, DAY) == []
+
+
 async def test_fishing_mining_foraging_gifts_festivals_and_bundles():
     scenario = build_scenario(action_current=10.0)
     _install(scenario.actor)
@@ -735,6 +931,17 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), dead_soil.id)
+    dead_soil_full = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="messy dead crop bed", kind="soil"),
+            CropComponent(crop_type="turnip", planted_at_epoch=0, dead=True),
+            CropGrowthComponent(progress_days=1.0, required_days=1.0, last_updated_epoch=0),
+            HarvestableComponent(yield_item="turnip", quantity=1, ready=False),
+            WateredComponent(watered_at_epoch=0, expires_at_epoch=DAY),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), dead_soil_full.id)
     young_tree = spawn_entity(
         scenario.actor.world,
         [
@@ -771,6 +978,20 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), tapped_tree.id)
+    bucketless_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="bucketless maple", kind="tree"),
+            TreeComponent(
+                tree_type="sugar maple",
+                planted_at_epoch=0,
+                maturity_days=0.0,
+                mature=True,
+            ),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bucketless_tree.id)
     dead_tree = spawn_entity(
         scenario.actor.world,
         [
@@ -917,6 +1138,21 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         ),
         (
             WaterCropHandler(),
+            _handler_cmd(
+                scenario,
+                "water-crop",
+                character_id="not-an-id",
+                soil_id=str(soil.id),
+            ),
+            "invalid character or soil id",
+        ),
+        (
+            WaterCropHandler(),
+            _handler_cmd(scenario, "water-crop", soil_id="entity_999"),
+            "soil does not exist",
+        ),
+        (
+            WaterCropHandler(),
             _handler_cmd(scenario, "water-crop", soil_id=str(distant_soil.id)),
             "soil is not reachable",
         ),
@@ -924,6 +1160,27 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
             WaterCropHandler(),
             _handler_cmd(scenario, "water-crop", soil_id=str(wrong_kind.id)),
             "target is not soil",
+        ),
+        (
+            FertilizeHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize",
+                character_id="not-an-id",
+                soil_id=str(soil.id),
+                fertilizer_id=str(fertilizer),
+            ),
+            "invalid character, soil, or fertilizer id",
+        ),
+        (
+            FertilizeHandler(),
+            _handler_cmd(
+                scenario,
+                "fertilize",
+                soil_id="entity_999",
+                fertilizer_id=str(fertilizer),
+            ),
+            "soil or fertilizer does not exist",
         ),
         (
             FertilizeHandler(),
@@ -964,6 +1221,21 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
                 fertilizer_id=str(wrong_kind.id),
             ),
             "target fertilizer is not usable",
+        ),
+        (
+            HarvestCropHandler(),
+            _handler_cmd(
+                scenario,
+                "harvest-crop",
+                character_id="not-an-id",
+                soil_id=str(soil.id),
+            ),
+            "invalid character or soil id",
+        ),
+        (
+            HarvestCropHandler(),
+            _handler_cmd(scenario, "harvest-crop", soil_id="entity_999"),
+            "soil does not exist",
         ),
         (
             HarvestCropHandler(),
@@ -1078,6 +1350,11 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         ),
         (
             HarvestSapHandler(),
+            _handler_cmd(scenario, "harvest-sap", tree_id=str(bucketless_tree.id)),
+            "tree has no sap bucket",
+        ),
+        (
+            HarvestSapHandler(),
             _handler_cmd(scenario, "harvest-sap", tree_id=str(tapped_tree.id)),
             "sap is not ready",
         ),
@@ -1087,6 +1364,873 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         result = handler.execute(ctx, command)
         assert result.ok is False
         assert result.reason == reason
+
+    water_result = WaterCropHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "water-crop", soil_id=str(soil.id)),
+    )
+    assert water_result.ok is True
+    assert soil.get_component(WateredComponent).expires_at_epoch == DAY
+
+    simple_clear = ClearDeadCropHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "clear-dead-crop", soil_id=str(dead_soil.id)),
+    )
+    assert simple_clear.ok is True
+    assert not dead_soil.has_component(CropComponent)
+    assert not dead_soil.has_component(HarvestableComponent)
+
+    result = ClearDeadCropHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "clear-dead-crop", soil_id=str(dead_soil_full.id)),
+    )
+    assert result.ok is True
+    assert not dead_soil_full.has_component(CropComponent)
+    assert not dead_soil_full.has_component(CropGrowthComponent)
+    assert not dead_soil_full.has_component(HarvestableComponent)
+    assert not dead_soil_full.has_component(WateredComponent)
+
+
+def test_farm_loop_handlers_reject_invalid_and_unavailable_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    clock = list(scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities())[0]
+    clock.add_component(CalendarComponent(season="winter"))
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    wrong_kind = spawn_entity(scenario.actor.world, [IdentityComponent(name="crate", kind="prop")])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+    machine = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="keg", kind="machine"), MachineComponent(machine_type="keg")],
+    )
+    busy_machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="busy keg", kind="machine"),
+            MachineComponent(machine_type="keg", busy=True),
+        ],
+    )
+    animal = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="hen", kind="animal"), FarmAnimalComponent(species="chicken")],
+    )
+    product_animal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="young hen", kind="animal"),
+            FarmAnimalComponent(species="chicken"),
+            AnimalProductComponent(product_type="egg", ready=False),
+        ],
+    )
+    petted_animal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="petted hen", kind="animal"),
+            FarmAnimalComponent(species="chicken", last_petted_epoch=0),
+        ],
+    )
+    ready_animal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ready hen", kind="animal"),
+            FarmAnimalComponent(species="chicken"),
+            AnimalProductComponent(product_type="egg", ready=True),
+        ],
+    )
+    spot = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="spring pond", kind="water"),
+            FishingSpotComponent(fish_type="trout", season="spring"),
+        ],
+    )
+    baited_spot = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="bait pond", kind="water"),
+            FishingSpotComponent(fish_type="catfish", required_bait="bait"),
+        ],
+    )
+    node = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="ore", kind="ore"), MiningNodeComponent(resource_type="ore")],
+    )
+    forage = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="berry", kind="forage"),
+            ForageComponent(resource_type="berry", seasons=("spring",)),
+        ],
+    )
+    target = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Robin", kind="character"), GiftPreferenceComponent()],
+    )
+    gift = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="stone x1", kind="resource"),
+            ResourceStackComponent(resource_type="stone", quantity=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    festival = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Flower Dance", kind="festival"),
+            FestivalComponent(name="Flower Dance", season="spring"),
+        ],
+    )
+    bundle = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Pantry", kind="bundle"),
+            BundleComponent(bundle_id="pantry", requirements={"turnip": 2}),
+        ],
+    )
+    complete_bundle = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Done Bundle", kind="bundle"),
+            BundleComponent(bundle_id="done", requirements={"turnip": 1}, completed=True),
+        ],
+    )
+    partial_bundle = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Quality Crops", kind="bundle"),
+            BundleComponent(bundle_id="quality", requirements={"stone": 2}),
+        ],
+    )
+    for entity in (
+        machine,
+        busy_machine,
+        animal,
+        product_animal,
+        petted_animal,
+        ready_animal,
+        spot,
+        baited_spot,
+        node,
+        forage,
+        target,
+        festival,
+        bundle,
+        complete_bundle,
+        partial_bundle,
+    ):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    spawn_entity(
+        scenario.actor.world,
+        [
+            ProcessingRecipeComponent(
+                recipe_id="juice",
+                machine_type="keg",
+                inputs={"fruit": 1},
+                outputs={"juice": 1},
+                duration_seconds=HOUR,
+            )
+        ],
+    )
+    ready_machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ready keg", kind="machine"),
+            MachineComponent(machine_type="keg", busy=True),
+            ProcessingTaskComponent(
+                recipe_id="missing",
+                started_at_epoch=0,
+                ready_at_epoch=0,
+                ready=True,
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), ready_machine.id)
+    pending_machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="pending keg", kind="machine"),
+            MachineComponent(machine_type="keg", busy=True),
+            ProcessingTaskComponent(
+                recipe_id="juice",
+                started_at_epoch=0,
+                ready_at_epoch=HOUR,
+                ready=False,
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), pending_machine.id)
+    distant_machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="distant keg", kind="machine"),
+            MachineComponent(machine_type="keg"),
+        ],
+    )
+    distant_animal = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far hen", kind="animal"), FarmAnimalComponent(species="chicken")],
+    )
+    distant_spot = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far pond", kind="water"), FishingSpotComponent(fish_type="bass")],
+    )
+    distant_node = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far ore", kind="ore"), MiningNodeComponent(resource_type="ore")],
+    )
+    distant_forage = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far berry", kind="forage"),
+            ForageComponent(resource_type="berry"),
+        ],
+    )
+    distant_target = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Far Robin", kind="character")],
+    )
+    distant_festival = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Far Fair", kind="festival"),
+            FestivalComponent(name="Far Fair", season="winter"),
+        ],
+    )
+    distant_bundle = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Far Bundle", kind="bundle"),
+            BundleComponent(bundle_id="far", requirements={"stone": 1}),
+        ],
+    )
+    assert container_of(scenario.actor.world.get_entity(distant_machine.id)) is None
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), gift.id)
+    assert gift.id in contents(character)
+
+    cases = [
+        (
+            StartMachineHandler(),
+            _handler_cmd(scenario, "start-machine", character_id="bad", machine_id=str(machine.id)),
+            "invalid character or machine id",
+        ),
+        (
+            StartMachineHandler(),
+            _handler_cmd(scenario, "start-machine", machine_id=str(machine.id), recipe_id=" "),
+            "missing recipe id",
+        ),
+        (
+            StartMachineHandler(),
+            _handler_cmd(scenario, "start-machine", machine_id="entity_999", recipe_id="juice"),
+            "machine does not exist",
+        ),
+        (
+            StartMachineHandler(),
+            _handler_cmd(
+                scenario,
+                "start-machine",
+                machine_id=str(distant_machine.id),
+                recipe_id="juice",
+            ),
+            "machine is not reachable",
+        ),
+        (
+            StartMachineHandler(),
+            _handler_cmd(
+                scenario,
+                "start-machine",
+                machine_id=str(wrong_kind.id),
+                recipe_id="juice",
+            ),
+            "target is not a machine",
+        ),
+        (
+            StartMachineHandler(),
+            _handler_cmd(
+                scenario,
+                "start-machine",
+                machine_id=str(busy_machine.id),
+                recipe_id="juice",
+            ),
+            "machine is busy",
+        ),
+        (
+            StartMachineHandler(),
+            _handler_cmd(
+                scenario,
+                "start-machine",
+                machine_id=str(machine.id),
+                recipe_id="missing",
+            ),
+            "processing recipe does not exist",
+        ),
+        (
+            StartMachineHandler(),
+            _handler_cmd(scenario, "start-machine", machine_id=str(machine.id), recipe_id="juice"),
+            "missing processing inputs",
+        ),
+        (
+            CollectMachineOutputHandler(),
+            _handler_cmd(scenario, "collect-machine-output", character_id="bad",
+                         machine_id=str(machine.id)),
+            "invalid character or machine id",
+        ),
+        (
+            CollectMachineOutputHandler(),
+            _handler_cmd(scenario, "collect-machine-output", machine_id="entity_999"),
+            "machine does not exist",
+        ),
+        (
+            CollectMachineOutputHandler(),
+            _handler_cmd(
+                scenario,
+                "collect-machine-output",
+                machine_id=str(distant_machine.id),
+            ),
+            "machine is not reachable",
+        ),
+        (
+            CollectMachineOutputHandler(),
+            _handler_cmd(scenario, "collect-machine-output", machine_id=str(machine.id)),
+            "machine has no output",
+        ),
+        (
+            CollectMachineOutputHandler(),
+            _handler_cmd(scenario, "collect-machine-output", machine_id=str(pending_machine.id)),
+            "machine output is not ready",
+        ),
+        (
+            CollectMachineOutputHandler(),
+            _handler_cmd(
+                scenario,
+                "collect-machine-output",
+                machine_id=str(busy_machine.id),
+            ),
+            "machine has no output",
+        ),
+        (
+            CollectMachineOutputHandler(),
+            _handler_cmd(scenario, "collect-machine-output", machine_id=str(ready_machine.id)),
+            "processing recipe does not exist",
+        ),
+        (
+            FeedAnimalHandler(),
+            _handler_cmd(scenario, "feed-animal", character_id="bad", animal_id=str(animal.id)),
+            "invalid character or animal id",
+        ),
+        (
+            FeedAnimalHandler(),
+            _handler_cmd(scenario, "feed-animal", animal_id="entity_999"),
+            "animal does not exist",
+        ),
+        (
+            FeedAnimalHandler(),
+            _handler_cmd(scenario, "feed-animal", animal_id=str(distant_animal.id)),
+            "animal is not reachable",
+        ),
+        (
+            FeedAnimalHandler(),
+            _handler_cmd(scenario, "feed-animal", animal_id=str(animal.id)),
+            "missing animal feed",
+        ),
+        (
+            FeedAnimalHandler(),
+            _handler_cmd(scenario, "feed-animal", animal_id=str(wrong_kind.id)),
+            "target is not a farm animal",
+        ),
+        (
+            PetAnimalHandler(),
+            _handler_cmd(scenario, "pet-animal", character_id="bad", animal_id=str(animal.id)),
+            "invalid character or animal id",
+        ),
+        (
+            PetAnimalHandler(),
+            _handler_cmd(scenario, "pet-animal", animal_id="entity_999"),
+            "animal does not exist",
+        ),
+        (
+            PetAnimalHandler(),
+            _handler_cmd(scenario, "pet-animal", animal_id=str(distant_animal.id)),
+            "animal is not reachable",
+        ),
+        (
+            PetAnimalHandler(),
+            _handler_cmd(scenario, "pet-animal", animal_id=str(wrong_kind.id)),
+            "target is not a farm animal",
+        ),
+        (
+            PetAnimalHandler(),
+            _handler_cmd(scenario, "pet-animal", animal_id=str(petted_animal.id)),
+            "animal already petted today",
+        ),
+        (
+            CollectAnimalProductHandler(),
+            _handler_cmd(
+                scenario,
+                "collect-animal-product",
+                character_id="bad",
+                animal_id=str(ready_animal.id),
+            ),
+            "invalid character or animal id",
+        ),
+        (
+            CollectAnimalProductHandler(),
+            _handler_cmd(scenario, "collect-animal-product", animal_id="entity_999"),
+            "animal does not exist",
+        ),
+        (
+            CollectAnimalProductHandler(),
+            _handler_cmd(
+                scenario,
+                "collect-animal-product",
+                animal_id=str(distant_animal.id),
+            ),
+            "animal is not reachable",
+        ),
+        (
+            CollectAnimalProductHandler(),
+            _handler_cmd(scenario, "collect-animal-product", animal_id=str(animal.id)),
+            "animal has no product",
+        ),
+        (
+            CollectAnimalProductHandler(),
+            _handler_cmd(scenario, "collect-animal-product", animal_id=str(wrong_kind.id)),
+            "animal has no product",
+        ),
+        (
+            CollectAnimalProductHandler(),
+            _handler_cmd(scenario, "collect-animal-product", animal_id=str(product_animal.id)),
+            "animal product is not ready",
+        ),
+        (
+            FishHandler(),
+            _handler_cmd(scenario, "fish", character_id="bad", spot_id=str(spot.id)),
+            "invalid character or fishing spot id",
+        ),
+        (
+            FishHandler(),
+            _handler_cmd(scenario, "fish", spot_id="entity_999"),
+            "fishing spot does not exist",
+        ),
+        (
+            FishHandler(),
+            _handler_cmd(scenario, "fish", spot_id=str(distant_spot.id)),
+            "fishing spot is not reachable",
+        ),
+        (
+            FishHandler(),
+            _handler_cmd(scenario, "fish", spot_id=str(spot.id)),
+            "fish is not available this season",
+        ),
+        (
+            FishHandler(),
+            _handler_cmd(scenario, "fish", spot_id=str(baited_spot.id)),
+            "missing bait",
+        ),
+        (
+            FishHandler(),
+            _handler_cmd(scenario, "fish", spot_id=str(wrong_kind.id)),
+            "target is not a fishing spot",
+        ),
+        (
+            MineHandler(),
+            _handler_cmd(scenario, "mine", character_id="bad", node_id=str(node.id)),
+            "invalid character or mining node id",
+        ),
+        (
+            MineHandler(),
+            _handler_cmd(scenario, "mine", node_id="entity_999"),
+            "mining node does not exist",
+        ),
+        (
+            MineHandler(),
+            _handler_cmd(scenario, "mine", node_id=str(distant_node.id)),
+            "mining node is not reachable",
+        ),
+        (
+            MineHandler(),
+            _handler_cmd(scenario, "mine", node_id=str(wrong_kind.id)),
+            "target is not a mining node",
+        ),
+        (
+            ForageHandler(),
+            _handler_cmd(scenario, "forage", character_id="bad", forage_id=str(forage.id)),
+            "invalid character or forage id",
+        ),
+        (
+            ForageHandler(),
+            _handler_cmd(scenario, "forage", forage_id="entity_999"),
+            "forage does not exist",
+        ),
+        (
+            ForageHandler(),
+            _handler_cmd(scenario, "forage", forage_id=str(distant_forage.id)),
+            "forage is not reachable",
+        ),
+        (
+            ForageHandler(),
+            _handler_cmd(scenario, "forage", forage_id=str(forage.id)),
+            "forage is not available this season",
+        ),
+        (
+            ForageHandler(),
+            _handler_cmd(scenario, "forage", forage_id=str(wrong_kind.id)),
+            "target is not forage",
+        ),
+        (
+            GiveGiftHandler(),
+            _handler_cmd(
+                scenario,
+                "give-gift",
+                character_id="bad",
+                target_id=str(target.id),
+                item_id=str(gift.id),
+            ),
+            "invalid character, target, or item id",
+        ),
+        (
+            GiveGiftHandler(),
+            _handler_cmd(scenario, "give-gift", target_id="entity_999", item_id=str(gift.id)),
+            "target or item does not exist",
+        ),
+        (
+            GiveGiftHandler(),
+            _handler_cmd(
+                scenario,
+                "give-gift",
+                target_id=str(distant_target.id),
+                item_id=str(gift.id),
+            ),
+            "target is not reachable",
+        ),
+        (
+            GiveGiftHandler(),
+            _handler_cmd(
+                scenario,
+                "give-gift",
+                target_id=str(target.id),
+                item_id=str(wrong_kind.id),
+            ),
+            "gift is not in inventory",
+        ),
+        (
+            JoinFestivalHandler(),
+            _handler_cmd(
+                scenario,
+                "join-festival",
+                character_id="bad",
+                festival_id=str(festival.id),
+            ),
+            "invalid character or festival id",
+        ),
+        (
+            JoinFestivalHandler(),
+            _handler_cmd(scenario, "join-festival", festival_id="entity_999"),
+            "festival does not exist",
+        ),
+        (
+            JoinFestivalHandler(),
+            _handler_cmd(scenario, "join-festival", festival_id=str(distant_festival.id)),
+            "festival is not reachable",
+        ),
+        (
+            JoinFestivalHandler(),
+            _handler_cmd(scenario, "join-festival", festival_id=str(wrong_kind.id)),
+            "target is not a festival",
+        ),
+        (
+            JoinFestivalHandler(),
+            _handler_cmd(scenario, "join-festival", festival_id=str(festival.id)),
+            "festival is not active this season",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(
+                scenario,
+                "contribute-bundle",
+                character_id="bad",
+                bundle_id=str(bundle.id),
+                resource_type="turnip",
+            ),
+            "invalid character or bundle id",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(scenario, "contribute-bundle", bundle_id=str(bundle.id)),
+            "missing resource type",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(
+                scenario,
+                "contribute-bundle",
+                bundle_id=str(bundle.id),
+                resource_type="turnip",
+                quantity=0,
+            ),
+            "quantity must be positive",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(
+                scenario,
+                "contribute-bundle",
+                bundle_id="entity_999",
+                resource_type="turnip",
+            ),
+            "bundle does not exist",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(
+                scenario,
+                "contribute-bundle",
+                bundle_id=str(distant_bundle.id),
+                resource_type="stone",
+            ),
+            "bundle is not reachable",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(
+                scenario,
+                "contribute-bundle",
+                bundle_id=str(wrong_kind.id),
+                resource_type="stone",
+            ),
+            "target is not a bundle",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(
+                scenario,
+                "contribute-bundle",
+                bundle_id=str(complete_bundle.id),
+                resource_type="turnip",
+            ),
+            "bundle is already complete",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(
+                scenario,
+                "contribute-bundle",
+                bundle_id=str(bundle.id),
+                resource_type="turnip",
+                quantity=3,
+            ),
+            "bundle does not need that contribution",
+        ),
+        (
+            ContributeBundleHandler(),
+            _handler_cmd(
+                scenario,
+                "contribute-bundle",
+                bundle_id=str(bundle.id),
+                resource_type="turnip",
+                quantity=1,
+            ),
+            "missing bundle resource",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    result = ContributeBundleHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "contribute-bundle",
+            bundle_id=str(partial_bundle.id),
+            resource_type="stone",
+            quantity=1,
+        ),
+    )
+    assert result.ok is True
+    assert partial_bundle.get_component(BundleComponent).completed is False
+
+
+async def test_farm_consequences_and_metadata_outputs_cover_state_edges():
+    scenario = build_scenario(action_current=10.0)
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    grape = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="grape x1", kind="resource"),
+            ResourceStackComponent(resource_type="grape", quantity=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), grape.id)
+    machine = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="keg", kind="machine"), MachineComponent(machine_type="keg")],
+    )
+    recipe = spawn_entity(
+        scenario.actor.world,
+        [
+            ProcessingRecipeComponent(
+                recipe_id="wine",
+                machine_type="keg",
+                inputs={"grape": 1},
+                outputs={"wine": 1, "raisins": 1},
+                duration_seconds=HOUR,
+                output_entities={
+                    "wine": {
+                        "display_name": "aged wine",
+                        "hydration": 1.0,
+                        "purity": 0.9,
+                        "uses": 2,
+                    },
+                    "raisins": {
+                        "display_name": "raisins",
+                        "nutrition": 2.0,
+                        "satiety": 8.0,
+                        "uses": 1,
+                    },
+                },
+            )
+        ],
+    )
+    animal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="hen", kind="animal"),
+            FarmAnimalComponent(
+                species="chicken",
+                age_days=3.0,
+                adult_age_days=3.0,
+                last_petted_epoch=0,
+            ),
+            AnimalProductComponent(product_type="egg", interval_seconds=HOUR),
+        ],
+    )
+    reset = spawn_entity(scenario.actor.world, [DailyFarmResetComponent(last_reset_epoch=0)])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), machine.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), animal.id)
+    ready_events: list[MachineProcessingReadyEvent] = []
+    scenario.actor.bus.subscribe(MachineProcessingReadyEvent, ready_events.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "start-machine", machine_id=str(machine.id), recipe_id="wine")
+    )
+    await scenario.actor.tick(0.0)
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "collect-machine-output", machine_id=str(machine.id))
+    )
+    await scenario.actor.tick(DAY)
+
+    assert recipe.has_component(ProcessingRecipeComponent)
+    assert ready_events[0].recipe_id == "wine"
+    output_id = next(
+        item_id
+        for item_id in contents(character)
+        if scenario.actor.world.get_entity(item_id).has_component(ResourceStackComponent)
+        and scenario.actor.world.get_entity(item_id)
+        .get_component(ResourceStackComponent)
+        .resource_type
+        == "wine"
+    )
+    wine = scenario.actor.world.get_entity(output_id)
+    from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent
+
+    assert wine.get_component(IdentityComponent).name == "aged wine"
+    assert wine.get_component(DrinkableComponent).hydration == 1.0
+    assert wine.get_component(ConsumableComponent).current_uses == 2
+    raisins_id = next(
+        item_id
+        for item_id in contents(character)
+        if scenario.actor.world.get_entity(item_id).has_component(ResourceStackComponent)
+        and scenario.actor.world.get_entity(item_id)
+        .get_component(ResourceStackComponent)
+        .resource_type
+        == "raisins"
+    )
+    raisins = scenario.actor.world.get_entity(raisins_id)
+    assert raisins.get_component(FoodComponent).satiety == 8.0
+    assert animal.get_component(AnimalProductComponent).ready is True
+    assert animal.get_component(FarmAnimalComponent).last_petted_epoch is None
+    assert reset.get_component(DailyFarmResetComponent).last_reset_epoch == scenario.actor.epoch
+
+
+def test_gift_preferences_apply_loved_disliked_and_plain_item_deltas():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    character = scenario.actor.world.get_entity(scenario.character)
+    loved_target = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Loved Target", kind="character"),
+            GiftPreferenceComponent(loves=("diamond",)),
+        ],
+    )
+    disliked_target = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Disliked Target", kind="character"),
+            GiftPreferenceComponent(dislikes=("trash",)),
+            FriendshipComponent(points=-95.0),
+        ],
+    )
+    plain_target = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Plain Target", kind="character")],
+    )
+    diamond = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="diamond x1", kind="resource"),
+            ResourceStackComponent(resource_type="diamond", quantity=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    trash = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="trash x1", kind="resource"),
+            ResourceStackComponent(resource_type="trash", quantity=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    shell = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="shell", kind="gift"), PortableComponent(can_pick_up=True)],
+    )
+    for entity in (loved_target, disliked_target, plain_target):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    for item in (diamond, trash, shell):
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+
+    for target, item in (
+        (loved_target, diamond),
+        (disliked_target, trash),
+        (plain_target, shell),
+    ):
+        result = GiveGiftHandler().execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "give-gift",
+                target_id=str(target.id),
+                item_id=str(item.id),
+            ),
+        )
+        assert result.ok is True
+
+    assert loved_target.get_component(FriendshipComponent).points == 20.0
+    assert disliked_target.get_component(FriendshipComponent).points == -100.0
+    assert plain_target.get_component(FriendshipComponent).points == 5.0
+    assert container_of(shell) == plain_target.id
 
 
 def test_gardensim_fragments_show_nearby_crop_state():
@@ -1103,3 +2247,383 @@ def test_gardensim_fragments_show_nearby_crop_state():
 
     assert any("Nearby crop: turnip" in line for line in fragments)
     assert any("Nearby tree: sugar maple in sugar maple (sap ready)." in line for line in fragments)
+
+
+def test_gardensim_fragments_show_farm_loop_affordances():
+    scenario = build_scenario()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    tilled = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="tilled bed", kind="soil"),
+            SoilComponent(),
+            TilledComponent(tilled_at_epoch=0),
+        ],
+    )
+    ready_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="oak", kind="tree"),
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0, mature=True),
+        ],
+    )
+    growing_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="sapling", kind="tree"),
+            TreeComponent(tree_type="maple", planted_at_epoch=0, maturity_days=10, mature=False),
+        ],
+    )
+    tapped_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="tapped oak", kind="tree"),
+            TreeComponent(tree_type="oak", planted_at_epoch=0, maturity_days=0, mature=True),
+            TreeTapComponent(tapped_at_epoch=0, last_collected_epoch=0),
+            HarvestableComponent(yield_item="sap", ready=False),
+        ],
+    )
+    dead_tree = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="dead oak", kind="tree"),
+            TreeComponent(
+                tree_type="oak",
+                planted_at_epoch=0,
+                maturity_days=0,
+                mature=True,
+                dead=True,
+            ),
+        ],
+    )
+    idle_machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="keg", kind="machine"),
+            MachineComponent(machine_type="keg"),
+        ],
+    )
+    ready_machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="jar", kind="machine"),
+            MachineComponent(machine_type="preserves jar"),
+            ProcessingTaskComponent(
+                recipe_id="jam",
+                started_at_epoch=0,
+                ready_at_epoch=0,
+                ready=True,
+            ),
+        ],
+    )
+    machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="loom", kind="machine"),
+            MachineComponent(machine_type="loom", busy=True),
+            ProcessingTaskComponent(
+                recipe_id="cloth",
+                started_at_epoch=0,
+                ready_at_epoch=HOUR,
+                ready=False,
+            ),
+        ],
+    )
+    animal = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="cow", kind="animal"),
+            FarmAnimalComponent(species="cow", mood=80.0, friendship=25.0),
+            AnimalProductComponent(product_type="milk", ready=True),
+        ],
+    )
+    spot = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="lake", kind="water"), FishingSpotComponent(fish_type="bass")],
+    )
+    node = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="rock", kind="ore"), MiningNodeComponent(resource_type="stone")],
+    )
+    forage = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="mushroom", kind="forage"),
+            ForageComponent(resource_type="mushroom"),
+        ],
+    )
+    festival = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Luau", kind="festival"),
+            FestivalComponent(name="Luau", season="summer"),
+        ],
+    )
+    bundle = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Fish Tank", kind="bundle"),
+            BundleComponent(bundle_id="fish_tank", requirements={"bass": 1}),
+        ],
+    )
+    complete_bundle = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Done Tank", kind="bundle"),
+            BundleComponent(bundle_id="done_tank", requirements={"bass": 1}, completed=True),
+        ],
+    )
+    for entity in (
+        tilled,
+        ready_tree,
+        growing_tree,
+        tapped_tree,
+        dead_tree,
+        idle_machine,
+        ready_machine,
+        machine,
+        animal,
+        spot,
+        node,
+        forage,
+        festival,
+        bundle,
+        complete_bundle,
+    ):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    fragments = gardensim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+
+    expected = (
+        "Nearby tilled soil: tilled bed.",
+        "Nearby tree: oak in oak (ready to tap).",
+        "Nearby tree: maple in sapling (growing).",
+        "Nearby tree: oak in tapped oak (tapped).",
+        "Nearby tree: oak in dead oak (dead).",
+        "Nearby machine: keg (idle).",
+        "Nearby machine: preserves jar (ready).",
+        "Nearby machine: loom (processing cloth).",
+        "Nearby animal: cow, mood 80, friendship 25, milk ready.",
+        "Nearby fishing spot: bass.",
+        "Nearby mining node: stone x1.",
+        "Nearby forage: mushroom x1.",
+        "Nearby festival: Luau (summer).",
+        "Nearby bundle: fish_tank (open).",
+        "Nearby bundle: done_tank (complete).",
+    )
+    for line in expected:
+        assert line in fragments
+
+
+async def test_gardensim_catalogue_crops_machines_animals_mines_and_collections():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    soil = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="berry patch", kind="soil"),
+            SoilComponent(),
+            TilledComponent(tilled_at_epoch=0),
+            CropComponent(crop_type="berry", planted_at_epoch=0, stage=3, ready=True),
+            CropGrowthComponent(progress_days=1.0, required_days=1.0, last_updated_epoch=0),
+            HarvestableComponent(yield_item="berry", quantity=2, ready=True),
+            CropQualityComponent(quality=1.5),
+            RegrowableComponent(regrow_days=1.0),
+            PestComponent(),
+            WeedComponent(),
+        ],
+    )
+    task_machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="busy keg", kind="machine"),
+            MachineComponent(machine_type="keg", busy=True),
+            ProcessingTaskComponent(recipe_id="juice", started_at_epoch=0, ready_at_epoch=DAY),
+        ],
+    )
+    broken_machine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="old loom", kind="machine"),
+            MachineComponent(machine_type="loom", quality=0.1),
+        ],
+    )
+    cow = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="cow", kind="animal"), FarmAnimalComponent(species="cow")],
+    )
+    mate = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="mate cow", kind="animal"), FarmAnimalComponent(species="cow")],
+    )
+    ladder = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ladder", kind="mine"),
+            LadderComponent(target_room_id=str(scenario.room_b)),
+        ],
+    )
+    geode = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="geode", kind="geode"),
+            GeodeComponent(resource_type="amethyst", quantity=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    shipping_bin = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="shipping bin", kind="shipping"), ShippingBinComponent()],
+    )
+    quest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="melon request", kind="quest"),
+            FarmQuestComponent(
+                quest_id="melon-request",
+                requested={"melon": 1},
+                reward_resource="coin",
+                reward_quantity=5,
+            ),
+        ],
+    )
+    mail = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="mayor mail", kind="mail"),
+            MailComponent(subject="Thanks", reward_resource="coin", reward_quantity=1),
+        ],
+    )
+    reward = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="museum reward", kind="reward"),
+            RewardComponent(resource_type="star token", quantity=1),
+        ],
+    )
+    for entity in (
+        soil,
+        task_machine,
+        broken_machine,
+        cow,
+        mate,
+        ladder,
+        shipping_bin,
+        quest,
+        mail,
+        reward,
+    ):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), geode.id)
+    for resource_type in ("grape", "melon"):
+        stack = spawn_entity(
+            scenario.actor.world,
+            [
+                IdentityComponent(name=resource_type, kind="resource"),
+                ResourceStackComponent(resource_type=resource_type, quantity=1),
+                PortableComponent(can_pick_up=True),
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), stack.id)
+
+    inspected: list[CropInspectedEvent] = []
+    weeded: list[CropWeededEvent] = []
+    harvested: list[CropHarvestedEvent] = []
+    cancelled: list[MachineProcessingCancelledEvent] = []
+    broke_down: list[MachineBrokeDownEvent] = []
+    repaired: list[MachineRepairedEvent] = []
+    born: list[AnimalBornEvent] = []
+    ladders: list[LadderDiscoveredEvent] = []
+    geodes: list[GeodeOpenedEvent] = []
+    shipped: list[ItemsShippedEvent] = []
+    mail_claimed: list[MailClaimedEvent] = []
+    scenario.actor.bus.subscribe(CropInspectedEvent, inspected.append)
+    scenario.actor.bus.subscribe(CropWeededEvent, weeded.append)
+    scenario.actor.bus.subscribe(CropHarvestedEvent, harvested.append)
+    scenario.actor.bus.subscribe(MachineProcessingCancelledEvent, cancelled.append)
+    scenario.actor.bus.subscribe(MachineBrokeDownEvent, broke_down.append)
+    scenario.actor.bus.subscribe(MachineRepairedEvent, repaired.append)
+    scenario.actor.bus.subscribe(AnimalBornEvent, born.append)
+    scenario.actor.bus.subscribe(LadderDiscoveredEvent, ladders.append)
+    scenario.actor.bus.subscribe(GeodeOpenedEvent, geodes.append)
+    scenario.actor.bus.subscribe(ItemsShippedEvent, shipped.append)
+    scenario.actor.bus.subscribe(MailClaimedEvent, mail_claimed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "inspect-crop", soil_id=str(soil.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "weed-crop", soil_id=str(soil.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "treat-pests", soil_id=str(soil.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "harvest-crop", soil_id=str(soil.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "cancel-machine", machine_id=str(task_machine.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "repair-machine", machine_id=str(broken_machine.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "breed-animal",
+            animal_id=str(cow.id),
+            mate_id=str(mate.id),
+            gestation_seconds=0,
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "discover-ladder", ladder_id=str(ladder.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "open-geode", geode_id=str(geode.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "ship-items",
+            bin_id=str(shipping_bin.id),
+            resource_type="grape",
+            quantity=1,
+            unit_price=3,
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "claim-mail", mail_id=str(mail.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "claim-reward", reward_id=str(reward.id)))
+    await scenario.actor.tick(HOUR)
+
+    assert inspected[0].notes == "berry stage 3, pests present, weeds present"
+    assert weeded[0].soil_id == str(soil.id)
+    assert harvested[0].quantity == 4
+    assert soil.has_component(CropComponent)
+    assert soil.get_component(RegrowableComponent).regrowth_count == 1
+    assert not soil.has_component(PestComponent)
+    assert not soil.has_component(WeedComponent)
+    assert soil.get_component(CropInspectionComponent).notes.startswith("berry")
+    assert cancelled[0].recipe_id == "juice"
+    assert not task_machine.has_component(ProcessingTaskComponent)
+    assert broke_down[0].machine_id == str(broken_machine.id)
+    assert repaired[0].machine_id == str(broken_machine.id)
+    assert not broken_machine.has_component(MachineBreakdownComponent)
+    assert not cow.has_component(AnimalBreedingComponent)
+    assert born[0].animal_id == str(cow.id)
+    assert ladders[0].target_room_id == str(scenario.room_b)
+    assert ladder.get_component(LadderComponent).discovered is True
+    assert geodes[0].resource_type == "amethyst"
+    assert not scenario.actor.world.has_entity(geode.id)
+    assert shipped[0].earnings == 3
+    assert shipping_bin.get_component(ShippingBinComponent).shipped == {"grape": 1}
+    assert character.get_component(CollectionComponent).entries == ("grape",)
+    assert quest.get_component(FarmQuestComponent).completed is True
+    assert mail_claimed[0].subject == "Thanks"
+    assert mail.get_component(MailComponent).claimed is True
+    assert reward.get_component(RewardComponent).claimed is True
+    fragments = gardensim_fragments(scenario.actor.world, character)
+    assert "Collection entries: grape." in fragments

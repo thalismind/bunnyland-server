@@ -202,6 +202,29 @@ class SkillSetComponent(Component):
 
 
 @dataclass(frozen=True)
+class CharacterProfileComponent(Component):
+    traits: tuple[str, ...] = ()
+    interests: tuple[str, ...] = ()
+    preferred_routine: str = ""
+
+
+@dataclass(frozen=True)
+class WhimComponent(Component):
+    want: str
+    reward_xp: float = 5.0
+    completed_at_epoch: int | None = None
+
+
+@dataclass(frozen=True)
+class HomeObjectComponent(Component):
+    affordance: str
+    cleanliness: float = 1.0
+    condition: float = 1.0
+    decor_score: float = 0.0
+    upgrade_level: int = 0
+
+
+@dataclass(frozen=True)
 class ReproductiveComponent(Component):
     can_be_pregnant: bool = False
     can_cause_pregnancy: bool = False
@@ -240,6 +263,11 @@ class HasBill(Edge):
 
 @dataclass(frozen=True)
 class OwnsBusiness(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class HasWhim(Edge):
     pass
 
 
@@ -409,6 +437,47 @@ class MentorshipCompletedEvent(DomainEvent):
     xp: float
 
 
+class ProfileUpdatedEvent(DomainEvent):
+    traits: tuple[str, ...]
+    interests: tuple[str, ...]
+
+
+class WhimAddedEvent(DomainEvent):
+    whim_id: str
+    want: str
+
+
+class WhimCompletedEvent(DomainEvent):
+    whim_id: str
+    want: str
+
+
+class HomeObjectUsedEvent(DomainEvent):
+    object_id: str
+    affordance: str
+
+
+class HomeObjectMaintainedEvent(DomainEvent):
+    object_id: str
+    action: str
+    cleanliness: float
+    condition: float
+    decor_score: float
+    upgrade_level: int
+
+
+class InvitationSentEvent(DomainEvent):
+    guest_id: str
+    room_id_invited: str
+
+
+class LifesimAgingPolicyChangedEvent(DomainEvent):
+    natural_aging: bool
+    adult_age_seconds: int
+    elder_age_seconds: int
+    natural_death_age_seconds: int
+
+
 def _skill_threshold(level: int) -> float:
     return 100.0 * (level + 1)
 
@@ -491,6 +560,42 @@ def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]
     return ids
 
 
+def _parse_text_tuple(raw: object) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, (list, tuple, set)):
+        values = raw
+    else:
+        values = (raw,)
+    return tuple(sorted({str(value).strip() for value in values if str(value).strip()}))
+
+
+def _optional_bool(raw: object) -> bool | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return raw
+    text = str(raw).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _optional_int(raw: object) -> int | None:
+    if raw is None:
+        return None
+    return int(raw)
+
+
+class _ActorView:
+    def __init__(self, world: World) -> None:
+        self.world = world
+
+
 def romance_classifier(command: SubmittedCommand):
     if command.command_type in {"start-partnership", "end-partnership"}:
         return BoundaryTag.ROMANCE, _participant_ids(command, "target_id")
@@ -514,6 +619,10 @@ def pregnancy_classifier(command: SubmittedCommand):
 def _event_room(world: World, entity_id: EntityId) -> str | None:
     room_id = container_of(world.get_entity(entity_id))
     return str(room_id) if room_id is not None else None
+
+
+def _room_id(world: World, entity_id: EntityId) -> str | None:
+    return _event_room(world, entity_id)
 
 
 def _same_room(world: World, left_id: EntityId, right_id: EntityId) -> bool:
@@ -880,6 +989,263 @@ class MentorSkillHandler:
             )
         )
         return ok(*events)
+
+
+class UpdateProfileHandler:
+    command_type = "update-profile"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        traits = _parse_text_tuple(command.payload.get("traits"))
+        interests = _parse_text_tuple(command.payload.get("interests"))
+        preferred_routine = str(command.payload.get("preferred_routine", "")).strip()
+        replace_component(
+            ctx.entity(actor_id),
+            CharacterProfileComponent(
+                traits=traits,
+                interests=interests,
+                preferred_routine=preferred_routine,
+            ),
+        )
+        return ok(
+            ProfileUpdatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    traits=traits,
+                    interests=interests,
+                )
+            )
+        )
+
+
+class AddWhimHandler:
+    command_type = "add-whim"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        want = str(command.payload.get("want", "")).strip()
+        if not want:
+            return rejected("whim want is required")
+        reward_xp = float(command.payload.get("reward_xp", 5.0))
+        if reward_xp < 0:
+            return rejected("reward xp must not be negative")
+        whim = spawn_entity(ctx.world, [WhimComponent(want=want, reward_xp=reward_xp)])
+        ctx.entity(actor_id).add_relationship(HasWhim(), whim.id)
+        return ok(
+            WhimAddedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(whim.id),),
+                    whim_id=str(whim.id),
+                    want=want,
+                )
+            )
+        )
+
+
+class CompleteWhimHandler:
+    command_type = "complete-whim"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        whim_id = parse_entity_id(command.payload.get("whim_id"))
+        if actor_id is None or whim_id is None:
+            return rejected("invalid character or whim id")
+        if not ctx.world.has_entity(whim_id):
+            return rejected("whim does not exist")
+        actor = ctx.entity(actor_id)
+        if not actor.has_relationship(HasWhim, whim_id):
+            return rejected("whim does not belong to you")
+        whim_entity = ctx.entity(whim_id)
+        if not whim_entity.has_component(WhimComponent):
+            return rejected("target is not a whim")
+        whim = whim_entity.get_component(WhimComponent)
+        if whim.completed_at_epoch is not None:
+            return rejected("whim already completed")
+        replace_component(whim_entity, replace(whim, completed_at_epoch=ctx.epoch))
+        events = [
+            WhimCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    target_ids=(str(whim_id),),
+                    whim_id=str(whim_id),
+                    want=whim.want,
+                )
+            )
+        ]
+        if whim.reward_xp > 0:
+            events.extend(
+                _add_skill_xp(
+                    ctx,
+                    actor,
+                    skill="life",
+                    amount=whim.reward_xp,
+                    actor_id=str(actor_id),
+                )
+            )
+        return ok(*events)
+
+
+class UseHomeObjectHandler:
+    command_type = "use-home-object"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        object_id = parse_entity_id(command.payload.get("object_id"))
+        if actor_id is None or object_id is None:
+            return rejected("invalid character or object id")
+        if not ctx.world.has_entity(object_id):
+            return rejected("object does not exist")
+        actor = ctx.entity(actor_id)
+        if object_id not in reachable_ids(ctx.world, actor):
+            return rejected("object is not reachable")
+        home_object = ctx.entity(object_id)
+        if not home_object.has_component(HomeObjectComponent):
+            return rejected("target is not a home object")
+        component = home_object.get_component(HomeObjectComponent)
+        if component.condition <= 0:
+            return rejected("home object is broken")
+        replace_component(
+            home_object,
+            replace(component, cleanliness=max(0.0, component.cleanliness - 0.1)),
+        )
+        return ok(
+            HomeObjectUsedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=_room_id(ctx.world, actor_id),
+                    target_ids=(str(object_id),),
+                    object_id=str(object_id),
+                    affordance=component.affordance,
+                )
+            )
+        )
+
+
+class MaintainHomeObjectHandler:
+    command_type = "maintain-home-object"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        object_id = parse_entity_id(command.payload.get("object_id"))
+        action = str(command.payload.get("action", "")).strip().lower()
+        if actor_id is None or object_id is None:
+            return rejected("invalid character or object id")
+        if action not in {"clean", "repair", "upgrade", "decorate"}:
+            return rejected("maintenance action is required")
+        if not ctx.world.has_entity(object_id):
+            return rejected("object does not exist")
+        actor = ctx.entity(actor_id)
+        if object_id not in reachable_ids(ctx.world, actor):
+            return rejected("object is not reachable")
+        home_object = ctx.entity(object_id)
+        if not home_object.has_component(HomeObjectComponent):
+            return rejected("target is not a home object")
+        component = home_object.get_component(HomeObjectComponent)
+        updates: dict[str, object] = {}
+        if action == "clean":
+            updates["cleanliness"] = 1.0
+        elif action == "repair":
+            updates["condition"] = 1.0
+        elif action == "upgrade":
+            updates["upgrade_level"] = component.upgrade_level + 1
+            updates["condition"] = min(1.0, component.condition + 0.25)
+        else:
+            updates["decor_score"] = component.decor_score + 1.0
+        updated = replace(component, **updates)
+        replace_component(home_object, updated)
+        return ok(
+            HomeObjectMaintainedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=_room_id(ctx.world, actor_id),
+                    target_ids=(str(object_id),),
+                    object_id=str(object_id),
+                    action=action,
+                    cleanliness=updated.cleanliness,
+                    condition=updated.condition,
+                    decor_score=updated.decor_score,
+                    upgrade_level=updated.upgrade_level,
+                )
+            )
+        )
+
+
+class InviteOverHandler:
+    command_type = "invite-over"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        guest_id = parse_entity_id(command.payload.get("guest_id"))
+        room_id = parse_entity_id(command.payload.get("room_id"))
+        if actor_id is None or guest_id is None:
+            return rejected("invalid character or guest id")
+        if not ctx.world.has_entity(guest_id):
+            return rejected("guest does not exist")
+        if room_id is None:
+            room_id = container_of(ctx.entity(actor_id))
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("invitation room does not exist")
+        room = ctx.entity(room_id)
+        if not room.has_component(RoomComponent):
+            return rejected("invitation target is not a room")
+        if not (
+            _owns_or_claims_room(actor_id, room)
+            or container_of(ctx.entity(actor_id)) == room_id
+        ):
+            return rejected("you cannot invite guests there")
+        return ok(
+            InvitationSentEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(actor_id),
+                    room_id=str(room_id),
+                    target_ids=(str(guest_id), str(room_id)),
+                    guest_id=str(guest_id),
+                    room_id_invited=str(room_id),
+                )
+            )
+        )
+
+
+class ConfigureAgingHandler:
+    command_type = "configure-aging"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        policy = configure_lifesim_aging(
+            _ActorView(ctx.world),
+            natural_aging=_optional_bool(command.payload.get("natural_aging")),
+            adult_age_seconds=_optional_int(command.payload.get("adult_age_seconds")),
+            elder_age_seconds=_optional_int(command.payload.get("elder_age_seconds")),
+            natural_death_age_seconds=_optional_int(
+                command.payload.get("natural_death_age_seconds")
+            ),
+            natural_death_checks=_optional_int(command.payload.get("natural_death_checks")),
+        )
+        return ok(
+            LifesimAgingPolicyChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.SYSTEM,
+                    actor_id=str(actor_id),
+                    natural_aging=policy.natural_aging,
+                    adult_age_seconds=policy.adult_age_seconds,
+                    elder_age_seconds=policy.elder_age_seconds,
+                    natural_death_age_seconds=policy.natural_death_age_seconds,
+                )
+            )
+        )
 
 
 class FindJobHandler:
@@ -2047,6 +2413,14 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     if character.has_component(LifeStageComponent):
         lines.append(f"Your life stage is {character.get_component(LifeStageComponent).stage}.")
+    if character.has_component(CharacterProfileComponent):
+        profile = character.get_component(CharacterProfileComponent)
+        if profile.traits:
+            lines.append("Your traits: " + ", ".join(profile.traits) + ".")
+        if profile.interests:
+            lines.append("Your interests: " + ", ".join(profile.interests) + ".")
+        if profile.preferred_routine:
+            lines.append(f"Your preferred routine is {profile.preferred_routine}.")
     if character.has_component(AspirationComponent):
         aspiration = character.get_component(AspirationComponent)
         if aspiration.completed:
@@ -2098,6 +2472,15 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         lines.append("Rooms you claim: " + ", ".join(sorted(claimed_rooms)) + ".")
     if character.has_component(WellRestedComponent):
         lines.append("You are well-rested after sleeping in your own home.")
+    for _edge, whim_id in character.get_relationships(HasWhim):
+        if not world.has_entity(whim_id):
+            continue
+        whim_entity = world.get_entity(whim_id)
+        if not whim_entity.has_component(WhimComponent):
+            continue
+        whim = whim_entity.get_component(WhimComponent)
+        if whim.completed_at_epoch is None:
+            lines.append(f"Current whim: {whim.want}.")
     for _edge, routine_id in character.get_relationships(HasRoutine):
         if not world.has_entity(routine_id):
             continue
@@ -2176,6 +2559,21 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
             parents.append(name)
     if parents:
         lines.append("Your parents: " + ", ".join(sorted(parents)) + ".")
+    for entity_id in reachable_ids(world, character):
+        entity = world.get_entity(entity_id)
+        if entity.has_component(HomeObjectComponent):
+            home_object = entity.get_component(HomeObjectComponent)
+            name = (
+                entity.get_component(IdentityComponent).name
+                if entity.has_component(IdentityComponent)
+                else "home object"
+            )
+            lines.append(
+                f"Nearby home object: {name} offers {home_object.affordance}, "
+                f"condition {home_object.condition:.1f}, clean {home_object.cleanliness:.1f}."
+            )
+    policy = _lifesim_aging_policy(world)
+    lines.append("Natural aging is on." if policy.natural_aging else "Natural aging is off.")
     return sorted(lines)
 
 
@@ -2205,11 +2603,15 @@ __all__ = [
     "BuyItemHandler",
     "CareerComponent",
     "CareerStartedEvent",
+    "CharacterProfileComponent",
     "ChargeRentHandler",
     "ChooseAspirationHandler",
     "ClaimHomeHandler",
     "ClaimRoomHandler",
+    "AddWhimHandler",
+    "CompleteWhimHandler",
     "CompleteMilestoneHandler",
+    "ConfigureAgingHandler",
     "CustomerComponent",
     "EndPartnershipHandler",
     "FindJobHandler",
@@ -2217,12 +2619,18 @@ __all__ = [
     "GossipSpreadEvent",
     "HasBill",
     "HasRoutine",
+    "HasWhim",
     "HomeClaimedEvent",
     "HomeComponent",
+    "HomeObjectComponent",
+    "HomeObjectMaintainedEvent",
+    "HomeObjectUsedEvent",
     "HomeRestComponent",
     "HouseholdComponent",
     "HouseholdFundsComponent",
     "HouseholdJoinedEvent",
+    "InvitationSentEvent",
+    "InviteOverHandler",
     "JoinHouseholdHandler",
     "JobScheduleComponent",
     "JealousOf",
@@ -2230,6 +2638,7 @@ __all__ = [
     "AgeComponent",
     "AgingConsequence",
     "LifeStageComponent",
+    "LifesimAgingPolicyChangedEvent",
     "LifesimAgingPolicyComponent",
     "MentorSkillHandler",
     "MentorshipCompletedEvent",
@@ -2274,7 +2683,13 @@ __all__ = [
     "WagePaidEvent",
     "WellRestedComponent",
     "WellRestedEvent",
+    "WhimAddedEvent",
+    "WhimCompletedEvent",
+    "WhimComponent",
     "WorkShiftCompletedEvent",
+    "MaintainHomeObjectHandler",
+    "ProfileUpdatedEvent",
+    "UpdateProfileHandler",
     "WitnessRomanceHandler",
     "adult_classifier",
     "children_of",

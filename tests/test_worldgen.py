@@ -505,12 +505,43 @@ async def test_plugin_worldgen_hook_can_enrich_generated_entities():
 
 async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
     from bunnyland.mechanics.barbariansim import StaminaComponent, WeaponComponent
-    from bunnyland.mechanics.colonysim import ResourceNodeComponent, StockpileComponent
+    from bunnyland.mechanics.colonysim import (
+        BodyPartHealthComponent,
+        IncidentComponent,
+        JobBillComponent,
+        PawnProfileComponent,
+        PrisonerComponent,
+        ResearchProjectComponent,
+        ResourceNodeComponent,
+        StockpileComponent,
+        SurgeryBillComponent,
+        TradeOfferComponent,
+    )
     from bunnyland.mechanics.daggersim import DungeonComponent
     from bunnyland.mechanics.dinosim import DinosaurComponent, EnclosureComponent
     from bunnyland.mechanics.dragonsim import FactionReputationComponent, PointOfInterestComponent
     from bunnyland.mechanics.environment import FlammableComponent
-    from bunnyland.mechanics.gardensim import GreenhouseComponent, SeedComponent, SoilComponent
+    from bunnyland.mechanics.gardensim import (
+        CropQualityComponent,
+        FarmQuestComponent,
+        GeodeComponent,
+        GreenhouseComponent,
+        LadderComponent,
+        MachineComponent,
+        MailComponent,
+        MineLevelComponent,
+        PestComponent,
+        RegrowableComponent,
+        SeedComponent,
+        ShippingBinComponent,
+        SoilComponent,
+        WeedComponent,
+    )
+    from bunnyland.mechanics.lifesim import (
+        CharacterProfileComponent,
+        HomeObjectComponent,
+        WhimComponent,
+    )
     from bunnyland.mechanics.nukesim import MutationThresholdComponent, RadiationSourceComponent
     from bunnyland.mechanics.voidsim import (
         HabitatModuleComponent,
@@ -539,6 +570,7 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
                         "point-of-interest",
                         "dungeon",
                         "enclosure",
+                        "mine-level",
                         "radiation-source",
                     ),
                     needs=("flammable",),
@@ -574,6 +606,97 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
                 kind="drive",
                 wants=("ship-system",),
             ),
+            ObjectSpec(
+                key="chair",
+                room_key="garden_ship",
+                name="a cozy home chair",
+                kind="furniture",
+                wants=("home-object", "whim"),
+            ),
+            ObjectSpec(
+                key="work_order",
+                room_key="garden_ship",
+                name="a work order bill",
+                kind="job",
+                wants=("job-bill",),
+            ),
+            ObjectSpec(
+                key="research",
+                room_key="garden_ship",
+                name="hydroponic research notes",
+                kind="research",
+                wants=("research",),
+            ),
+            ObjectSpec(
+                key="incident",
+                room_key="garden_ship",
+                name="minor blight incident",
+                kind="incident",
+                wants=("incident",),
+            ),
+            ObjectSpec(
+                key="trade",
+                room_key="garden_ship",
+                name="a trader's offer",
+                kind="trade",
+                wants=("trade-offer",),
+            ),
+            ObjectSpec(
+                key="surgery",
+                room_key="garden_ship",
+                name="a limb surgery order",
+                kind="surgery",
+                wants=("surgery", "body-part"),
+            ),
+            ObjectSpec(
+                key="crop",
+                room_key="garden_ship",
+                name="a perennial crop",
+                kind="crop",
+                wants=("crop-quality", "regrowable", "pest", "weed"),
+            ),
+            ObjectSpec(
+                key="machine",
+                room_key="garden_ship",
+                name="a preserves machine",
+                kind="machine",
+                wants=("machine",),
+            ),
+            ObjectSpec(
+                key="shipping",
+                room_key="garden_ship",
+                name="a shipping crate",
+                kind="shipping-bin",
+                wants=("shipping-bin",),
+            ),
+            ObjectSpec(
+                key="geode",
+                room_key="garden_ship",
+                name="a metal geode",
+                kind="geode",
+                wants=("geode",),
+            ),
+            ObjectSpec(
+                key="ladder",
+                room_key="garden_ship",
+                name="a ladder down",
+                kind="ladder",
+                wants=("ladder",),
+            ),
+            ObjectSpec(
+                key="mail",
+                room_key="garden_ship",
+                name="a welcome letter",
+                kind="mail",
+                wants=("mail",),
+            ),
+            ObjectSpec(
+                key="quest",
+                room_key="garden_ship",
+                name="an order board quest",
+                kind="quest",
+                wants=("farm-quest",),
+            ),
         ],
         characters=[
             CharacterSpec(
@@ -582,6 +705,9 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
                 room_key="garden_ship",
                 species="raptor",
                 wants=(
+                    "profile",
+                    "pawn-profile",
+                    "prisoner",
                     "dinosaur",
                     "stamina",
                     "mutation-threshold",
@@ -596,6 +722,7 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
     room = actor.world.get_entity(result.rooms["garden_ship"])
     assert room.has_component(SoilComponent)
     assert room.has_component(GreenhouseComponent)
+    assert room.has_component(MineLevelComponent)
     assert room.has_component(StockpileComponent)
     assert room.has_component(ShipComponent)
     assert room.has_component(HabitatModuleComponent)
@@ -609,8 +736,31 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
     assert actor.world.get_entity(result.objects["seeds"]).has_component(SeedComponent)
     assert actor.world.get_entity(result.objects["blade"]).has_component(WeaponComponent)
     assert actor.world.get_entity(result.objects["drive"]).has_component(ShipSystemComponent)
+    assert actor.world.get_entity(result.objects["chair"]).has_component(HomeObjectComponent)
+    assert actor.world.get_entity(result.objects["chair"]).has_component(WhimComponent)
+    assert actor.world.get_entity(result.objects["work_order"]).has_component(JobBillComponent)
+    assert actor.world.get_entity(result.objects["research"]).has_component(
+        ResearchProjectComponent
+    )
+    assert actor.world.get_entity(result.objects["incident"]).has_component(IncidentComponent)
+    assert actor.world.get_entity(result.objects["trade"]).has_component(TradeOfferComponent)
+    assert actor.world.get_entity(result.objects["surgery"]).has_component(SurgeryBillComponent)
+    assert actor.world.get_entity(result.objects["surgery"]).has_component(BodyPartHealthComponent)
+    assert actor.world.get_entity(result.objects["crop"]).has_component(CropQualityComponent)
+    assert actor.world.get_entity(result.objects["crop"]).has_component(RegrowableComponent)
+    assert actor.world.get_entity(result.objects["crop"]).has_component(PestComponent)
+    assert actor.world.get_entity(result.objects["crop"]).has_component(WeedComponent)
+    assert actor.world.get_entity(result.objects["machine"]).has_component(MachineComponent)
+    assert actor.world.get_entity(result.objects["shipping"]).has_component(ShippingBinComponent)
+    assert actor.world.get_entity(result.objects["geode"]).has_component(GeodeComponent)
+    assert actor.world.get_entity(result.objects["ladder"]).has_component(LadderComponent)
+    assert actor.world.get_entity(result.objects["mail"]).has_component(MailComponent)
+    assert actor.world.get_entity(result.objects["quest"]).has_component(FarmQuestComponent)
 
     raptor = actor.world.get_entity(result.characters["raptor"])
+    assert raptor.has_component(CharacterProfileComponent)
+    assert raptor.has_component(PawnProfileComponent)
+    assert raptor.has_component(PrisonerComponent)
     assert raptor.has_component(DinosaurComponent)
     assert raptor.has_component(StaminaComponent)
     assert raptor.has_component(MutationThresholdComponent)

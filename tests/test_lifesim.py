@@ -37,6 +37,7 @@ from bunnyland.core.events import (
 )
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.lifesim import (
+    AddWhimHandler,
     AdoptChildHandler,
     AgeComponent,
     AgingConsequence,
@@ -51,11 +52,14 @@ from bunnyland.mechanics.lifesim import (
     BusinessSaleEvent,
     BuyItemHandler,
     CareerComponent,
+    CharacterProfileComponent,
     ChargeRentHandler,
     ChooseAspirationHandler,
     ClaimHomeHandler,
     ClaimRoomHandler,
     CompleteMilestoneHandler,
+    CompleteWhimHandler,
+    ConfigureAgingHandler,
     CustomerComponent,
     EndPartnershipHandler,
     FindJobHandler,
@@ -63,17 +67,25 @@ from bunnyland.mechanics.lifesim import (
     GoToWorkHandler,
     HasBill,
     HasRoutine,
+    HasWhim,
     HomeComponent,
+    HomeObjectComponent,
+    HomeObjectMaintainedEvent,
+    HomeObjectUsedEvent,
     HomeRestComponent,
     HouseholdComponent,
     HouseholdFundsComponent,
     HouseholdJoinedEvent,
+    InvitationSentEvent,
+    InviteOverHandler,
     JealousOf,
     JealousyTriggeredEvent,
     JobScheduleComponent,
     JoinHouseholdHandler,
+    LifesimAgingPolicyChangedEvent,
     LifesimAgingPolicyComponent,
     LifeStageComponent,
+    MaintainHomeObjectHandler,
     MentorshipCompletedEvent,
     MentorSkillHandler,
     MilestoneCompletedEvent,
@@ -85,6 +97,7 @@ from bunnyland.mechanics.lifesim import (
     PayWageHandler,
     PracticeSkillHandler,
     PregnancyComponent,
+    ProfileUpdatedEvent,
     PromoteBusinessHandler,
     PromotionEarnedEvent,
     QuitJobHandler,
@@ -108,9 +121,14 @@ from bunnyland.mechanics.lifesim import (
     StartPregnancyHandler,
     StudySkillHandler,
     TaxAssessedEvent,
+    UpdateProfileHandler,
+    UseHomeObjectHandler,
     WagePaidEvent,
     WellRestedComponent,
     WellRestedEvent,
+    WhimAddedEvent,
+    WhimCompletedEvent,
+    WhimComponent,
     WitnessRomanceHandler,
     WorkShiftCompletedEvent,
     _first_business,
@@ -147,6 +165,13 @@ def _install(actor):
     actor.register_handler(PracticeSkillHandler())
     actor.register_handler(StudySkillHandler())
     actor.register_handler(MentorSkillHandler())
+    actor.register_handler(UpdateProfileHandler())
+    actor.register_handler(AddWhimHandler())
+    actor.register_handler(CompleteWhimHandler())
+    actor.register_handler(UseHomeObjectHandler())
+    actor.register_handler(MaintainHomeObjectHandler())
+    actor.register_handler(InviteOverHandler())
+    actor.register_handler(ConfigureAgingHandler())
     actor.register_handler(FindJobHandler())
     actor.register_handler(GoToWorkHandler())
     actor.register_handler(QuitJobHandler())
@@ -2657,3 +2682,94 @@ def test_kinship_queries_return_parent_child_partner_and_sibling_labels():
     assert kinship_label(scenario.actor.world, child, sibling) == "sibling"
     assert kinship_label(scenario.actor.world, child, child) == "self"
     assert kinship_label(scenario.actor.world, scenario.character, scenario.room_a) is None
+
+
+async def test_lifesim_profile_whims_home_objects_invites_and_aging_controls():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    guest_id = _co_parent(scenario)
+    home_object = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="reading chair", kind="furniture"),
+            HomeObjectComponent(affordance="reading", cleanliness=0.4, condition=0.5),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), home_object.id
+    )
+
+    profile_events: list[ProfileUpdatedEvent] = []
+    whim_added: list[WhimAddedEvent] = []
+    whim_done: list[WhimCompletedEvent] = []
+    used: list[HomeObjectUsedEvent] = []
+    maintained: list[HomeObjectMaintainedEvent] = []
+    invited: list[InvitationSentEvent] = []
+    aging: list[LifesimAgingPolicyChangedEvent] = []
+    scenario.actor.bus.subscribe(ProfileUpdatedEvent, profile_events.append)
+    scenario.actor.bus.subscribe(WhimAddedEvent, whim_added.append)
+    scenario.actor.bus.subscribe(WhimCompletedEvent, whim_done.append)
+    scenario.actor.bus.subscribe(HomeObjectUsedEvent, used.append)
+    scenario.actor.bus.subscribe(HomeObjectMaintainedEvent, maintained.append)
+    scenario.actor.bus.subscribe(InvitationSentEvent, invited.append)
+    scenario.actor.bus.subscribe(LifesimAgingPolicyChangedEvent, aging.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "update-profile",
+            traits=("bookish", "tidy"),
+            interests=("reading",),
+            preferred_routine="morning tea",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "add-whim", want="read a book", reward_xp=7))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "complete-whim", whim_id=whim_added[0].whim_id)
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "use-home-object", object_id=str(home_object.id))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "maintain-home-object",
+            object_id=str(home_object.id),
+            action="upgrade",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "invite-over",
+            guest_id=str(guest_id),
+            room_id=str(scenario.room_a),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "configure-aging", natural_aging=True))
+    await scenario.actor.tick(HOUR)
+
+    assert character.get_component(CharacterProfileComponent).traits == ("bookish", "tidy")
+    whim_id = parse_entity_id(whim_added[0].whim_id)
+    assert character.has_relationship(HasWhim, whim_id)
+    assert scenario.actor.world.get_entity(whim_id).get_component(
+        WhimComponent
+    ).completed_at_epoch
+    home_state = home_object.get_component(HomeObjectComponent)
+    assert home_state.upgrade_level == 1
+    assert home_state.condition == 0.75
+    assert used[0].affordance == "reading"
+    assert maintained[0].action == "upgrade"
+    assert whim_done[0].want == "read a book"
+    assert invited[0].guest_id == str(guest_id)
+    assert aging[0].natural_aging is True
+    fragments = lifesim_fragments(scenario.actor.world, character)
+    assert "Your traits: bookish, tidy." in fragments
+    assert "Natural aging is on." in fragments

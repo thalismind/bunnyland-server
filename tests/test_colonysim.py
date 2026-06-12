@@ -7,6 +7,7 @@ from conftest import build_scenario
 from bunnyland.core import (
     AffectComponent,
     AffectVector,
+    BleedingComponent,
     CharacterComponent,
     CommandCost,
     ContainmentMode,
@@ -49,17 +50,29 @@ from bunnyland.mechanics.colonysim import (
     AssignJobHandler,
     BakeHandler,
     BedRestComponent,
+    BodyPartHealthComponent,
+    CaravanComponent,
+    CaravanFormedEvent,
     ClaimOwnershipHandler,
     ColonySimComponent,
     ColonyWealthComponent,
     ColonyWealthConsequence,
     CompleteJobHandler,
+    CompleteTradeHandler,
     CraftHandler,
     CreateStockpileHandler,
+    FactionRelationComponent,
     ForbiddenComponent,
     ForbidItemHandler,
+    FormCaravanHandler,
     GatherResourceHandler,
+    HasBodyPart,
     HaulItemHandler,
+    IncidentComponent,
+    IncidentResolvedEvent,
+    InfectionComponent,
+    JobBillComponent,
+    JobBillProgressedEvent,
     JobComponent,
     MedicalBedComponent,
     MedicalRecoveryConsequence,
@@ -68,12 +81,24 @@ from bunnyland.mechanics.colonysim import (
     MentalStateConsequence,
     MergeStackHandler,
     Owns,
+    PawnProfileComponent,
+    PawnProfileUpdatedEvent,
+    PerformSurgeryHandler,
+    PrisonerComponent,
+    PrisonerPolicySetEvent,
+    ProgressJobBillHandler,
     RecipeComponent,
+    RecruitmentProgressedEvent,
+    RecruitPrisonerHandler,
     ReleaseOwnershipHandler,
     ReleaseReservationHandler,
     RescueToBedHandler,
+    ResearchProgressedEvent,
+    ResearchProjectComponent,
+    ResearchProjectHandler,
     ReservedBy,
     ReserveHandler,
+    ResolveIncidentHandler,
     ResourceNodeComponent,
     ResourceRegenSystem,
     ResourceStackComponent,
@@ -82,17 +107,25 @@ from bunnyland.mechanics.colonysim import (
     RoomRoleComponent,
     RoomStatComponent,
     SetAllowedAreaHandler,
+    SetPrisonerPolicyHandler,
     SetStorageFilterHandler,
     SetWorkPriorityHandler,
     SplitStackHandler,
     StockpileComponent,
     StorageFilterComponent,
+    SurgeryBillComponent,
+    SurgeryPerformedEvent,
+    TechUnlockComponent,
+    TechUnlockedEvent,
     TendWoundHandler,
+    TradeCompletedEvent,
+    TradeOfferComponent,
+    UpdatePawnProfileHandler,
     WorkPriorityComponent,
     WorkstationComponent,
     colonysim_fragments,
 )
-from bunnyland.mechanics.consumables import FoodComponent
+from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from bunnyland.mechanics.meter import Meter
 from bunnyland.mechanics.needs import FunNeedComponent
 
@@ -116,6 +149,15 @@ def _install(actor):
     actor.register_handler(BakeHandler())
     actor.register_handler(SetWorkPriorityHandler())
     actor.register_handler(SetAllowedAreaHandler())
+    actor.register_handler(UpdatePawnProfileHandler())
+    actor.register_handler(ProgressJobBillHandler())
+    actor.register_handler(SetPrisonerPolicyHandler())
+    actor.register_handler(RecruitPrisonerHandler())
+    actor.register_handler(ResearchProjectHandler())
+    actor.register_handler(ResolveIncidentHandler())
+    actor.register_handler(CompleteTradeHandler())
+    actor.register_handler(FormCaravanHandler())
+    actor.register_handler(PerformSurgeryHandler())
     actor.register_handler(TendWoundHandler())
     actor.register_handler(RescueToBedHandler())
     actor.register_handler(AssignJobHandler())
@@ -1095,6 +1137,44 @@ async def test_bake_recipe_creates_edible_output_entity():
     assert container_of(output) == scenario.character
 
 
+async def test_craft_recipe_metadata_can_create_drinkable_nonportable_output():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _stack(scenario, "water", 1)
+    spawn_entity(
+        scenario.actor.world,
+        [
+            RecipeComponent(
+                recipe_id="tea",
+                inputs={"water": 1},
+                outputs={"tea": 1},
+                output_entities={
+                    "tea": {
+                        "display_name": "camp tea",
+                        "entity_kind": "drink",
+                        "portable": False,
+                        "hydration": 12.0,
+                        "purity": 0.95,
+                        "uses": 0,
+                    }
+                },
+            )
+        ],
+    )
+    crafted: list[ItemCraftedEvent] = []
+    scenario.actor.bus.subscribe(ItemCraftedEvent, crafted.append)
+
+    await scenario.actor.submit(_cmd(scenario, "craft", recipe_id="tea"))
+    await scenario.actor.tick(HOUR)
+
+    output = scenario.actor.world.get_entity(parse_entity_id(crafted[0].output_ids[0]))
+    assert output.get_component(IdentityComponent).name == "camp tea"
+    assert output.get_component(ResourceStackComponent).resource_type == "tea"
+    assert output.get_component(DrinkableComponent).hydration == 12.0
+    assert not output.has_component(PortableComponent)
+    assert not output.has_component(ConsumableComponent)
+
+
 async def test_work_priorities_allowed_areas_room_quality_and_wealth_fragments():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -1199,6 +1279,396 @@ async def test_mental_break_and_inspiration_trigger_from_needs_and_affect():
     await scenario.actor.tick(0.0)
 
     assert character.get_component(MentalStateComponent).state == "inspired"
+
+
+def test_colony_work_medical_handlers_reject_invalid_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    character = scenario.actor.world.get_entity(scenario.character)
+    patient = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Patient", kind="character"),
+            CharacterComponent(),
+            DownedComponent(downed_at_epoch=0, cause="injury"),
+        ],
+    )
+    healthy_patient = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Healthy", kind="character"), CharacterComponent()],
+    )
+    injury = spawn_entity(
+        scenario.actor.world,
+        [InjuryComponent(body_part="arm", severity=3.0)],
+    )
+    wrong_kind = spawn_entity(scenario.actor.world, [IdentityComponent(name="crate", kind="prop")])
+    bed = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="clinic bed", kind="bed"), MedicalBedComponent()],
+    )
+    medicine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="medicine", kind="medicine"),
+            MedicineComponent(quality=0.5, uses=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    non_room = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="zone marker", kind="zone")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), patient.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), healthy_patient.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bed.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), non_room.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), medicine.id)
+    patient.add_relationship(HasInjury(), injury.id)
+    non_injury = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="bruise note", kind="note")],
+    )
+    patient.add_relationship(HasInjury(), non_injury.id)
+    distant_medicine = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far medicine", kind="medicine"), MedicineComponent()],
+    )
+    distant_patient = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Far Patient", kind="character"), CharacterComponent()],
+    )
+    distant_bed = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far bed", kind="bed"), MedicalBedComponent()],
+    )
+    assert container_of(distant_patient) is None
+    assert container_of(distant_bed) is None
+
+    cases = [
+        (
+            SetWorkPriorityHandler(),
+            _handler_cmd(scenario, "set-work-priority", character_id="bad", work_type="doctor"),
+            "invalid character id",
+        ),
+        (
+            SetWorkPriorityHandler(),
+            _handler_cmd(scenario, "set-work-priority", work_type=" ", priority=1),
+            "missing work type",
+        ),
+        (
+            SetWorkPriorityHandler(),
+            _handler_cmd(scenario, "set-work-priority", work_type="doctor", priority=5),
+            "priority must be between 0 and 4",
+        ),
+        (
+            SetAllowedAreaHandler(),
+            _handler_cmd(scenario, "set-allowed-area", character_id="bad"),
+            "invalid character id",
+        ),
+        (
+            SetAllowedAreaHandler(),
+            _handler_cmd(scenario, "set-allowed-area", room_ids=("entity_999",)),
+            "room does not exist",
+        ),
+        (
+            SetAllowedAreaHandler(),
+            _handler_cmd(scenario, "set-allowed-area", room_ids=(str(non_room.id),)),
+            "target is not a room",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                character_id="bad",
+                patient_id=str(patient.id),
+                injury_id=str(injury.id),
+            ),
+            "invalid doctor, patient, or injury id",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                patient_id="entity_999",
+                injury_id=str(injury.id),
+            ),
+            "patient or injury does not exist",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                patient_id=str(distant_patient.id),
+                injury_id=str(injury.id),
+            ),
+            "patient is not reachable",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                patient_id=str(healthy_patient.id),
+                injury_id=str(injury.id),
+            ),
+            "injury does not belong to patient",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                patient_id=str(patient.id),
+                injury_id=str(wrong_kind.id),
+            ),
+            "injury does not belong to patient",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                patient_id=str(patient.id),
+                injury_id=str(non_injury.id),
+            ),
+            "target is not an injury",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                patient_id=str(patient.id),
+                injury_id=str(injury.id),
+                medicine_id="entity_999",
+            ),
+            "medicine does not exist",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                patient_id=str(patient.id),
+                injury_id=str(injury.id),
+                medicine_id=str(distant_medicine.id),
+            ),
+            "medicine is not reachable",
+        ),
+        (
+            TendWoundHandler(),
+            _handler_cmd(
+                scenario,
+                "tend-wound",
+                patient_id=str(patient.id),
+                injury_id=str(injury.id),
+                medicine_id=str(wrong_kind.id),
+            ),
+            "target is not medicine",
+        ),
+        (
+            RescueToBedHandler(),
+            _handler_cmd(
+                scenario,
+                "rescue-to-bed",
+                character_id="bad",
+                patient_id=str(patient.id),
+                bed_id=str(bed.id),
+            ),
+            "invalid rescuer, patient, or bed id",
+        ),
+        (
+            RescueToBedHandler(),
+            _handler_cmd(
+                scenario,
+                "rescue-to-bed",
+                patient_id="entity_999",
+                bed_id=str(bed.id),
+            ),
+            "patient or bed does not exist",
+        ),
+        (
+            RescueToBedHandler(),
+            _handler_cmd(
+                scenario,
+                "rescue-to-bed",
+                patient_id=str(distant_patient.id),
+                bed_id=str(bed.id),
+            ),
+            "patient is not reachable",
+        ),
+        (
+            RescueToBedHandler(),
+            _handler_cmd(
+                scenario,
+                "rescue-to-bed",
+                patient_id=str(patient.id),
+                bed_id=str(distant_bed.id),
+            ),
+            "bed is not reachable",
+        ),
+        (
+            RescueToBedHandler(),
+            _handler_cmd(
+                scenario,
+                "rescue-to-bed",
+                patient_id=str(wrong_kind.id),
+                bed_id=str(bed.id),
+            ),
+            "patient is not a character",
+        ),
+        (
+            RescueToBedHandler(),
+            _handler_cmd(
+                scenario,
+                "rescue-to-bed",
+                patient_id=str(healthy_patient.id),
+                bed_id=str(bed.id),
+            ),
+            "patient does not need rescue",
+        ),
+        (
+            RescueToBedHandler(),
+            _handler_cmd(
+                scenario,
+                "rescue-to-bed",
+                patient_id=str(patient.id),
+                bed_id=str(wrong_kind.id),
+            ),
+            "target is not a medical bed",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+async def test_colony_quality_medicine_infection_and_state_expiry_edges():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(RoomRoleComponent(role="clinic"))
+    room.add_component(RoomStatComponent(beauty=1.0, cleanliness=2.0, comfort=3.0, wealth=50.0))
+    art = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="sculpture", kind="decor"),
+            RoomStatComponent(beauty=4.0, wealth=250.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), art.id)
+    patient = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            HealthComponent(current=90.0, maximum=100.0),
+            BleedingComponent(rate=3.0, last_updated_epoch=0),
+            BedRestComponent(started_at_epoch=0, bed_id="entity_999"),
+            InfectionComponent(severity=0.4, immunity=0.1, last_updated_epoch=0),
+            MentalStateComponent(
+                state="inspired",
+                reason="old high mood",
+                expires_at_epoch=HOUR,
+            ),
+        ],
+    )
+    injury = spawn_entity(
+        scenario.actor.world,
+        [InjuryComponent(body_part="arm", severity=4.0, pain=10.0, bleeding_rate=6.0)],
+    )
+    medicine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="industrial medicine", kind="medicine"),
+            MedicineComponent(quality=0.5, uses=2),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), patient.id)
+    patient.add_relationship(HasInjury(), injury.id)
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), medicine.id
+    )
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "tend-wound",
+            patient_id=str(patient.id),
+            injury_id=str(injury.id),
+            medicine_id=str(medicine.id),
+        )
+    )
+    await scenario.actor.tick(2 * HOUR)
+
+    quality = room.get_component(RoomQualityComponent)
+    marker = next(scenario.actor.world.query().with_all([ColonySimComponent]).execute_entities())
+    wealth = marker.get_component(ColonyWealthComponent)
+    medicine_component = medicine.get_component(MedicineComponent)
+    assert quality.role == "clinic"
+    assert quality.beauty == 5.0
+    assert quality.impressiveness == 13.0
+    assert wealth.expectations == "high"
+    assert medicine_component.uses == 1
+    assert injury.get_component(InjuryComponent).pain == 5.0
+    assert patient.get_component(BleedingComponent).rate == 0.0
+    assert patient.get_component(HealthComponent).current > 90.0
+    infection = patient.get_component(InfectionComponent)
+    assert infection.immunity > 0.1
+    assert patient.get_component(MentalStateComponent).state == "stable"
+
+
+def test_tend_self_without_medicine_and_orphan_medicine_use_edges():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    injury = spawn_entity(
+        scenario.actor.world,
+        [InjuryComponent(body_part="hand", severity=1.0, pain=2.0, bleeding_rate=1.0)],
+    )
+    character.add_relationship(HasInjury(), injury.id)
+
+    result = TendWoundHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "tend-wound",
+            patient_id=str(scenario.character),
+            injury_id=str(injury.id),
+        ),
+    )
+    assert result.ok is True
+    assert injury.get_component(InjuryComponent).treated is True
+
+    medicine = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="orphan medicine", kind="medicine"), MedicineComponent(uses=1)],
+    )
+    colonysim._consume_medicine_use(ctx, medicine.id)
+    assert not scenario.actor.world.has_entity(medicine.id)
+
+
+async def test_work_priority_zero_removes_priority():
+    scenario = build_scenario()
+    _install(scenario.actor)
+
+    await scenario.actor.submit(_cmd(scenario, "set-work-priority", work_type="cook", priority=2))
+    await scenario.actor.tick(0.0)
+    await scenario.actor.submit(_cmd(scenario, "set-work-priority", work_type="cook", priority=0))
+    await scenario.actor.tick(0.0)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(WorkPriorityComponent).priorities == {}
 
 
 async def test_craft_consumes_partial_stack_and_merges_output_stack():
@@ -1410,3 +1880,248 @@ def test_colonysim_fragments_show_nearby_resources_and_recipes():
     assert any("snack recipe" in line for line in fragments)
     assert any("Nearby job: haul priority 2" in line for line in fragments)
     assert any("You own berries patch" in line for line in fragments)
+
+
+def test_colonysim_fragments_show_health_room_and_work_context():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(WorkPriorityComponent(priorities={"doctor": 1}))
+    character.add_component(AllowedAreaComponent(room_ids=(str(scenario.room_a),)))
+    character.add_component(BedRestComponent(started_at_epoch=0, bed_id="entity_999"))
+    character.add_component(InfectionComponent(severity=0.35, immunity=0.45))
+    character.add_component(MentalStateComponent(state="mental_break", reason="low fun"))
+    marker = spawn_entity(
+        scenario.actor.world,
+        [ColonySimComponent(), ColonyWealthComponent(wealth=250.0, expectations="high")],
+    )
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(RoomQualityComponent(role="barracks", impressiveness=8.5))
+    bed = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="clinic bed", kind="bed"), MedicalBedComponent()],
+    )
+    medicine = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="glitter medicine", kind="medicine"),
+            MedicineComponent(quality=0.9, uses=2),
+        ],
+    )
+    station = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="stove", kind="workstation"),
+            WorkstationComponent(station_type="stove"),
+        ],
+    )
+    forbidden = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="forbidden wood", kind="resource"),
+            ResourceStackComponent(resource_type="wood", quantity=1),
+            ForbiddenComponent(),
+        ],
+    )
+    assigned_job = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="cook job", kind="job"),
+            JobComponent(job_type="cook", priority=3, assigned=True),
+        ],
+    )
+    completed_job = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="done job", kind="job"),
+            JobComponent(job_type="haul", priority=1, completed=True),
+        ],
+    )
+    for entity in (bed, medicine, station, forbidden, assigned_job, completed_job, marker):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    fragments = colonysim_fragments(scenario.actor.world, character)
+
+    expected = (
+        "Work priorities: doctor:1.",
+        f"Allowed work area rooms: {scenario.room_a}.",
+        "You are on medical bed rest.",
+        "Infection: severity 0.35, immunity 0.45.",
+        "Mental state: mental_break (low fun).",
+        "Colony wealth is 250; expectations are high.",
+        "Room quality: barracks, impressiveness 8.5.",
+        "Nearby medical bed is available.",
+        "Nearby medicine: quality 0.90, uses 2.",
+        "Nearby workstation: stove.",
+        "forbidden wood is forbidden for hauling.",
+        "Nearby job: cook priority 3 (assigned).",
+    )
+    for line in expected:
+        assert line in fragments
+
+    character.remove_component(WorkPriorityComponent)
+    character.remove_component(AllowedAreaComponent)
+    character.remove_component(MentalStateComponent)
+    character.add_component(WorkPriorityComponent())
+    character.add_component(AllowedAreaComponent())
+    character.add_component(MentalStateComponent())
+    sparse_fragments = colonysim_fragments(scenario.actor.world, character)
+    assert "Nearby job: haul priority 1 (available)." not in sparse_fragments
+    assert not any(line.startswith("Work priorities:") for line in sparse_fragments)
+    assert not any(line.startswith("Allowed work area rooms:") for line in sparse_fragments)
+    assert not any(line.startswith("Mental state:") for line in sparse_fragments)
+
+
+async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_surgery():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    prisoner = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Pip", kind="character"),
+            CharacterComponent(),
+            PrisonerComponent(recruitment_difficulty=3.0),
+        ],
+    )
+    bill = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="stone blocks bill", kind="job"),
+            JobComponent(job_type="craft", priority=2),
+            JobBillComponent(recipe_id="stone-blocks", work_required=2.0),
+        ],
+    )
+    project = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="battery research", kind="research"),
+            ResearchProjectComponent(project_id="battery", work_required=2.0),
+        ],
+    )
+    incident = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="mad hare", kind="incident"),
+            IncidentComponent(incident_type="raid", severity=2),
+        ],
+    )
+    offer = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="hill clan trade", kind="trade"),
+            TradeOfferComponent(
+                faction_id="hill-clan",
+                wants={"wood": 1},
+                gives={"medicine": 2},
+                goodwill_delta=3.0,
+            ),
+        ],
+    )
+    surgery = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="left paw surgery", kind="surgery"),
+            SurgeryBillComponent(part="left paw", operation="amputate"),
+        ],
+    )
+    for entity in (prisoner, bill, project, incident, offer, surgery):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    _stack(scenario, "wood", 3)
+
+    profiles: list[PawnProfileUpdatedEvent] = []
+    bills: list[JobBillProgressedEvent] = []
+    policies: list[PrisonerPolicySetEvent] = []
+    recruitments: list[RecruitmentProgressedEvent] = []
+    research: list[ResearchProgressedEvent] = []
+    techs: list[TechUnlockedEvent] = []
+    incidents: list[IncidentResolvedEvent] = []
+    trades: list[TradeCompletedEvent] = []
+    caravans: list[CaravanFormedEvent] = []
+    surgeries: list[SurgeryPerformedEvent] = []
+    scenario.actor.bus.subscribe(PawnProfileUpdatedEvent, profiles.append)
+    scenario.actor.bus.subscribe(JobBillProgressedEvent, bills.append)
+    scenario.actor.bus.subscribe(PrisonerPolicySetEvent, policies.append)
+    scenario.actor.bus.subscribe(RecruitmentProgressedEvent, recruitments.append)
+    scenario.actor.bus.subscribe(ResearchProgressedEvent, research.append)
+    scenario.actor.bus.subscribe(TechUnlockedEvent, techs.append)
+    scenario.actor.bus.subscribe(IncidentResolvedEvent, incidents.append)
+    scenario.actor.bus.subscribe(TradeCompletedEvent, trades.append)
+    scenario.actor.bus.subscribe(CaravanFormedEvent, caravans.append)
+    scenario.actor.bus.subscribe(SurgeryPerformedEvent, surgeries.append)
+
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "update-pawn-profile",
+            backstory="field medic",
+            passions={"doctor": 2},
+            expectations="moderate",
+        )
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "progress-job-bill", bill_id=str(bill.id), work=2))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "set-prisoner-policy", prisoner_id=str(prisoner.id), policy="recruit")
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "recruit-prisoner", prisoner_id=str(prisoner.id), progress=3)
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "research-project", project_id=str(project.id), work=2)
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "resolve-incident", incident_id=str(incident.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "complete-trade", offer_id=str(offer.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "form-caravan", destination="hill market", cargo={"wood": 1})
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(
+            scenario,
+            "perform-surgery",
+            patient_id=str(scenario.character),
+            surgery_id=str(surgery.id),
+        )
+    )
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert profiles[0].expectations == "moderate"
+    assert character.get_component(PawnProfileComponent).passions == {"doctor": 2}
+    assert bills[0].completed is True
+    assert bill.get_component(JobComponent).completed is True
+    assert policies[0].policy == "recruit"
+    assert recruitments[0].recruited is True
+    assert not prisoner.has_component(PrisonerComponent)
+    assert research[0].unlocked is True
+    assert project.get_component(TechUnlockComponent).tech_id == "battery"
+    assert techs[0].tech_id == "battery"
+    assert incidents[0].incident_type == "raid"
+    assert incident.get_component(IncidentComponent).resolved is True
+    assert trades[0].goodwill == 3.0
+    relation = next(
+        entity
+        for entity in scenario.actor.world.query()
+        .with_all([FactionRelationComponent])
+        .execute_entities()
+        if entity.get_component(FactionRelationComponent).faction_id == "hill-clan"
+    )
+    assert relation.get_component(FactionRelationComponent).goodwill == 3.0
+    caravan_id = parse_entity_id(caravans[0].caravan_id)
+    assert scenario.actor.world.get_entity(caravan_id).get_component(
+        CaravanComponent
+    ).destination == "hill market"
+    assert surgeries[0].part == "left paw"
+    body_part_id = character.get_relationships(HasBodyPart)[0][1]
+    assert scenario.actor.world.get_entity(body_part_id).get_component(
+        BodyPartHealthComponent
+    ).missing is True
+    assert surgery.get_component(SurgeryBillComponent).completed is True
+    fragments = colonysim_fragments(scenario.actor.world, character)
+    assert "Backstory: field medic." in fragments

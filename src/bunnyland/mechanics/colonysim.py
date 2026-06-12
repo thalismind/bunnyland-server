@@ -124,6 +124,14 @@ class JobComponent(Component):
 
 
 @dataclass(frozen=True)
+class JobBillComponent(Component):
+    recipe_id: str
+    work_required: float
+    work_done: float = 0.0
+    suspended: bool = False
+
+
+@dataclass(frozen=True)
 class WorkPriorityComponent(Component):
     priorities: dict[str, int] = field(default_factory=dict)
 
@@ -132,6 +140,13 @@ class WorkPriorityComponent(Component):
 class WorkCapabilityComponent(Component):
     disabled_work: tuple[str, ...] = ()
     skill_levels: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PawnProfileComponent(Component):
+    backstory: str = ""
+    passions: dict[str, int] = field(default_factory=dict)
+    expectations: str = "low"
 
 
 @dataclass(frozen=True)
@@ -170,6 +185,58 @@ class ColonyWealthComponent(Component):
 
 
 @dataclass(frozen=True)
+class PrisonerComponent(Component):
+    prisoner: bool = True
+    recruitment_difficulty: float = 10.0
+    recruitment_progress: float = 0.0
+    policy: str = "hold"
+
+
+@dataclass(frozen=True)
+class ResearchProjectComponent(Component):
+    project_id: str
+    work_required: float
+    work_done: float = 0.0
+    unlocked: bool = False
+
+
+@dataclass(frozen=True)
+class TechUnlockComponent(Component):
+    tech_id: str
+    unlocked_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class IncidentComponent(Component):
+    incident_type: str
+    severity: int = 1
+    resolved: bool = False
+
+
+@dataclass(frozen=True)
+class FactionRelationComponent(Component):
+    faction_id: str
+    goodwill: float = 0.0
+
+
+@dataclass(frozen=True)
+class TradeOfferComponent(Component):
+    faction_id: str
+    gives: dict[str, int] = field(default_factory=dict)
+    wants: dict[str, int] = field(default_factory=dict)
+    goodwill_delta: float = 0.0
+
+
+@dataclass(frozen=True)
+class CaravanComponent(Component):
+    destination: str
+    member_ids: tuple[str, ...] = ()
+    cargo: dict[str, int] = field(default_factory=dict)
+    departed_at_epoch: int = 0
+    returned: bool = False
+
+
+@dataclass(frozen=True)
 class MedicineComponent(Component):
     quality: float = 1.0
     uses: int = 1
@@ -194,6 +261,29 @@ class InfectionComponent(Component):
 
 
 @dataclass(frozen=True)
+class BodyPartHealthComponent(Component):
+    part: str
+    health: float = 1.0
+    missing: bool = False
+    prosthetic: str | None = None
+
+
+@dataclass(frozen=True)
+class SurgeryBillComponent(Component):
+    part: str
+    operation: str
+    prosthetic_item_id: str | None = None
+    work_required: float = 10.0
+    completed: bool = False
+
+
+@dataclass(frozen=True)
+class ProstheticComponent(Component):
+    part: str
+    quality: float = 1.0
+
+
+@dataclass(frozen=True)
 class MentalStateComponent(Component):
     state: str = "stable"
     reason: str = ""
@@ -213,6 +303,11 @@ class AssignedTo(Edge):
 @dataclass(frozen=True)
 class Owns(Edge):
     since_epoch: int
+
+
+@dataclass(frozen=True)
+class HasBodyPart(Edge):
+    pass
 
 
 class WorkPrioritySetEvent(DomainEvent):
@@ -255,6 +350,62 @@ class InfectionChangedEvent(DomainEvent):
 class MentalStateChangedEvent(DomainEvent):
     state: str
     reason: str
+
+
+class PawnProfileUpdatedEvent(DomainEvent):
+    backstory: str
+    expectations: str
+
+
+class JobBillProgressedEvent(DomainEvent):
+    bill_id: str
+    work_done: float
+    completed: bool
+
+
+class PrisonerPolicySetEvent(DomainEvent):
+    prisoner_id: str
+    policy: str
+
+
+class RecruitmentProgressedEvent(DomainEvent):
+    prisoner_id: str
+    progress: float
+    recruited: bool
+
+
+class ResearchProgressedEvent(DomainEvent):
+    project_id: str
+    work_done: float
+    unlocked: bool
+
+
+class TechUnlockedEvent(DomainEvent):
+    project_id: str
+    tech_id: str
+
+
+class IncidentResolvedEvent(DomainEvent):
+    incident_id: str
+    incident_type: str
+
+
+class TradeCompletedEvent(DomainEvent):
+    offer_id: str
+    faction_id: str
+    goodwill: float
+
+
+class CaravanFormedEvent(DomainEvent):
+    caravan_id: str
+    destination: str
+
+
+class SurgeryPerformedEvent(DomainEvent):
+    patient_id: str
+    surgery_id: str
+    part: str
+    operation: str
 
 
 class ResourceRegenSystem(System):
@@ -561,6 +712,12 @@ def _room_id(world: World, character_id: EntityId) -> str | None:
     return str(raw) if raw is not None else None
 
 
+def _same_room_or_self(world: World, left_id: EntityId, right_id: EntityId) -> bool:
+    return left_id == right_id or container_of(world.get_entity(left_id)) == container_of(
+        world.get_entity(right_id)
+    )
+
+
 def _resource_name(resource_type: str, quantity: int) -> str:
     return f"{resource_type} x{quantity}"
 
@@ -685,6 +842,27 @@ def _find_recipe(world: World, recipe_id: str) -> tuple[EntityId, RecipeComponen
         recipe = entity.get_component(RecipeComponent)
         if recipe.recipe_id == recipe_id:
             return entity.id, recipe
+    return None
+
+
+def _faction_relation(world: World, faction_id: str) -> Entity:
+    for entity in world.query().with_all([FactionRelationComponent]).execute_entities():
+        relation = entity.get_component(FactionRelationComponent)
+        if relation.faction_id == faction_id:
+            return entity
+    return spawn_entity(world, [FactionRelationComponent(faction_id=faction_id)])
+
+
+def _body_part_entity(world: World, patient: Entity, part_name: str) -> Entity | None:
+    for _edge, part_id in patient.get_relationships(HasBodyPart):
+        if not world.has_entity(part_id):
+            continue
+        body_part = world.get_entity(part_id)
+        if (
+            body_part.has_component(BodyPartHealthComponent)
+            and body_part.get_component(BodyPartHealthComponent).part == part_name
+        ):
+            return body_part
     return None
 
 
@@ -1456,6 +1634,403 @@ class CompleteJobHandler:
         )
 
 
+class UpdatePawnProfileHandler:
+    command_type = "update-pawn-profile"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        raw_passions = command.payload.get("passions", {})
+        if not isinstance(raw_passions, dict):
+            return rejected("passions must be a mapping")
+        passions = {str(key): int(value) for key, value in raw_passions.items()}
+        backstory = str(command.payload.get("backstory", "")).strip()
+        expectations = str(command.payload.get("expectations", "low")).strip() or "low"
+        replace_component(
+            ctx.entity(character_id),
+            PawnProfileComponent(
+                backstory=backstory,
+                passions=passions,
+                expectations=expectations,
+            ),
+        )
+        return ok(
+            PawnProfileUpdatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    backstory=backstory,
+                    expectations=expectations,
+                )
+            )
+        )
+
+
+class ProgressJobBillHandler:
+    command_type = "progress-job-bill"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        bill_id = parse_entity_id(command.payload.get("bill_id"))
+        work = float(command.payload.get("work", 1.0))
+        if character_id is None or bill_id is None:
+            return rejected("invalid character or bill id")
+        if work <= 0:
+            return rejected("work must be positive")
+        if not ctx.world.has_entity(bill_id):
+            return rejected("job bill does not exist")
+        character = ctx.entity(character_id)
+        if bill_id not in reachable_ids(ctx.world, character):
+            return rejected("job bill is not reachable")
+        bill_entity = ctx.entity(bill_id)
+        if not bill_entity.has_component(JobBillComponent):
+            return rejected("target is not a job bill")
+        bill = bill_entity.get_component(JobBillComponent)
+        if bill.suspended:
+            return rejected("job bill is suspended")
+        if bill.work_done >= bill.work_required:
+            return rejected("job bill is already complete")
+        done = min(bill.work_required, bill.work_done + work)
+        completed = done >= bill.work_required
+        replace_component(bill_entity, replace(bill, work_done=done))
+        if completed and bill_entity.has_component(JobComponent):
+            job = bill_entity.get_component(JobComponent)
+            replace_component(bill_entity, replace(job, completed=True, assigned=False))
+        return ok(
+            JobBillProgressedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(bill_id),),
+                    bill_id=str(bill_id),
+                    work_done=done,
+                    completed=completed,
+                )
+            )
+        )
+
+
+class SetPrisonerPolicyHandler:
+    command_type = "set-prisoner-policy"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        prisoner_id = parse_entity_id(command.payload.get("prisoner_id"))
+        policy = str(command.payload.get("policy", "")).strip().lower()
+        if character_id is None or prisoner_id is None:
+            return rejected("invalid character or prisoner id")
+        if policy not in {"hold", "recruit", "release"}:
+            return rejected("prisoner policy is required")
+        if not ctx.world.has_entity(prisoner_id):
+            return rejected("prisoner does not exist")
+        prisoner = ctx.entity(prisoner_id)
+        if not prisoner.has_component(PrisonerComponent):
+            return rejected("target is not a prisoner")
+        component = prisoner.get_component(PrisonerComponent)
+        replace_component(prisoner, replace(component, policy=policy))
+        return ok(
+            PrisonerPolicySetEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    target_ids=(str(prisoner_id),),
+                    prisoner_id=str(prisoner_id),
+                    policy=policy,
+                )
+            )
+        )
+
+
+class RecruitPrisonerHandler:
+    command_type = "recruit-prisoner"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        prisoner_id = parse_entity_id(command.payload.get("prisoner_id"))
+        progress = float(command.payload.get("progress", 1.0))
+        if character_id is None or prisoner_id is None:
+            return rejected("invalid character or prisoner id")
+        if progress <= 0:
+            return rejected("progress must be positive")
+        if not ctx.world.has_entity(prisoner_id):
+            return rejected("prisoner does not exist")
+        if not _same_room_or_self(ctx.world, character_id, prisoner_id):
+            return rejected("prisoner is not present")
+        prisoner = ctx.entity(prisoner_id)
+        if not prisoner.has_component(PrisonerComponent):
+            return rejected("target is not a prisoner")
+        component = prisoner.get_component(PrisonerComponent)
+        if component.policy != "recruit":
+            return rejected("prisoner is not set for recruitment")
+        total = component.recruitment_progress + progress
+        recruited = total >= component.recruitment_difficulty
+        if recruited:
+            prisoner.remove_component(PrisonerComponent)
+        else:
+            replace_component(prisoner, replace(component, recruitment_progress=total))
+        return ok(
+            RecruitmentProgressedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(prisoner_id),),
+                    prisoner_id=str(prisoner_id),
+                    progress=total,
+                    recruited=recruited,
+                )
+            )
+        )
+
+
+class ResearchProjectHandler:
+    command_type = "research-project"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        project_id = parse_entity_id(command.payload.get("project_id"))
+        work = float(command.payload.get("work", 1.0))
+        if character_id is None or project_id is None:
+            return rejected("invalid character or research project id")
+        if work <= 0:
+            return rejected("work must be positive")
+        if not ctx.world.has_entity(project_id):
+            return rejected("research project does not exist")
+        project_entity = ctx.entity(project_id)
+        if not project_entity.has_component(ResearchProjectComponent):
+            return rejected("target is not a research project")
+        project = project_entity.get_component(ResearchProjectComponent)
+        if project.unlocked:
+            return rejected("research project is already unlocked")
+        done = min(project.work_required, project.work_done + work)
+        unlocked = done >= project.work_required
+        replace_component(project_entity, replace(project, work_done=done, unlocked=unlocked))
+        events: list[DomainEvent] = [
+            ResearchProgressedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    target_ids=(str(project_id),),
+                    project_id=project.project_id,
+                    work_done=done,
+                    unlocked=unlocked,
+                )
+            )
+        ]
+        if unlocked:
+            replace_component(
+                project_entity,
+                TechUnlockComponent(tech_id=project.project_id, unlocked_at_epoch=ctx.epoch),
+            )
+            events.append(
+                TechUnlockedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.SYSTEM,
+                        actor_id=str(character_id),
+                        target_ids=(str(project_id),),
+                        project_id=project.project_id,
+                        tech_id=project.project_id,
+                    )
+                )
+            )
+        return ok(*events)
+
+
+class ResolveIncidentHandler:
+    command_type = "resolve-incident"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        incident_id = parse_entity_id(command.payload.get("incident_id"))
+        if character_id is None or incident_id is None:
+            return rejected("invalid character or incident id")
+        if not ctx.world.has_entity(incident_id):
+            return rejected("incident does not exist")
+        incident_entity = ctx.entity(incident_id)
+        if not incident_entity.has_component(IncidentComponent):
+            return rejected("target is not an incident")
+        incident = incident_entity.get_component(IncidentComponent)
+        if incident.resolved:
+            return rejected("incident is already resolved")
+        replace_component(incident_entity, replace(incident, resolved=True))
+        return ok(
+            IncidentResolvedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.SYSTEM,
+                    actor_id=str(character_id),
+                    target_ids=(str(incident_id),),
+                    incident_id=str(incident_id),
+                    incident_type=incident.incident_type,
+                )
+            )
+        )
+
+
+class CompleteTradeHandler:
+    command_type = "complete-trade"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        offer_id = parse_entity_id(command.payload.get("offer_id"))
+        if character_id is None or offer_id is None:
+            return rejected("invalid character or trade offer id")
+        if not ctx.world.has_entity(offer_id):
+            return rejected("trade offer does not exist")
+        character = ctx.entity(character_id)
+        offer_entity = ctx.entity(offer_id)
+        if not offer_entity.has_component(TradeOfferComponent):
+            return rejected("target is not a trade offer")
+        offer = offer_entity.get_component(TradeOfferComponent)
+        for resource_type, quantity in offer.wants.items():
+            stack = _stack_in_inventory(character, ctx.world, resource_type)
+            if stack is None or stack.get_component(ResourceStackComponent).quantity < quantity:
+                return rejected("missing trade goods")
+        for resource_type, quantity in offer.wants.items():
+            _consume_resource_stack(character, ctx.world, resource_type, quantity)
+        for resource_type, quantity in offer.gives.items():
+            _add_resource_stack(character, ctx.world, resource_type, quantity)
+        relation = _faction_relation(ctx.world, offer.faction_id)
+        goodwill = relation.get_component(FactionRelationComponent).goodwill + offer.goodwill_delta
+        replace_component(
+            relation,
+            FactionRelationComponent(faction_id=offer.faction_id, goodwill=goodwill),
+        )
+        return ok(
+            TradeCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(offer_id),),
+                    offer_id=str(offer_id),
+                    faction_id=offer.faction_id,
+                    goodwill=goodwill,
+                )
+            )
+        )
+
+
+class FormCaravanHandler:
+    command_type = "form-caravan"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        destination = str(command.payload.get("destination", "")).strip()
+        if not destination:
+            return rejected("destination is required")
+        raw_cargo = command.payload.get("cargo", {})
+        if not isinstance(raw_cargo, dict):
+            return rejected("cargo must be a mapping")
+        character = ctx.entity(character_id)
+        cargo = {str(key): int(value) for key, value in raw_cargo.items()}
+        for resource_type, quantity in cargo.items():
+            if quantity < 0:
+                return rejected("cargo quantities must not be negative")
+            stack = _stack_in_inventory(character, ctx.world, resource_type)
+            if quantity and (
+                stack is None or stack.get_component(ResourceStackComponent).quantity < quantity
+            ):
+                return rejected("missing caravan cargo")
+        for resource_type, quantity in cargo.items():
+            if quantity:
+                _consume_resource_stack(character, ctx.world, resource_type, quantity)
+        member_ids = tuple(
+            sorted({str(character_id), *_parse_types(command.payload.get("member_ids"))})
+        )
+        caravan = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=f"caravan to {destination}", kind="caravan"),
+                CaravanComponent(
+                    destination=destination,
+                    member_ids=member_ids,
+                    cargo=cargo,
+                    departed_at_epoch=ctx.epoch,
+                ),
+            ],
+        )
+        return ok(
+            CaravanFormedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.SYSTEM,
+                    actor_id=str(character_id),
+                    target_ids=(str(caravan.id),),
+                    caravan_id=str(caravan.id),
+                    destination=destination,
+                )
+            )
+        )
+
+
+class PerformSurgeryHandler:
+    command_type = "perform-surgery"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        doctor_id = parse_entity_id(command.character_id)
+        patient_id = parse_entity_id(command.payload.get("patient_id"))
+        surgery_id = parse_entity_id(command.payload.get("surgery_id"))
+        if doctor_id is None or patient_id is None or surgery_id is None:
+            return rejected("invalid doctor, patient, or surgery id")
+        if not ctx.world.has_entity(patient_id) or not ctx.world.has_entity(surgery_id):
+            return rejected("patient or surgery does not exist")
+        doctor = ctx.entity(doctor_id)
+        if patient_id not in reachable_ids(ctx.world, doctor) and patient_id != doctor_id:
+            return rejected("patient is not reachable")
+        surgery_entity = ctx.entity(surgery_id)
+        if not surgery_entity.has_component(SurgeryBillComponent):
+            return rejected("target is not a surgery bill")
+        surgery = surgery_entity.get_component(SurgeryBillComponent)
+        if surgery.completed:
+            return rejected("surgery is already complete")
+        patient = ctx.entity(patient_id)
+        body_part = _body_part_entity(ctx.world, patient, surgery.part)
+        prosthetic_name = None
+        prosthetic_id = parse_entity_id(surgery.prosthetic_item_id)
+        if prosthetic_id is not None:
+            if not ctx.world.has_entity(prosthetic_id):
+                return rejected("prosthetic does not exist")
+            prosthetic = ctx.entity(prosthetic_id)
+            if not prosthetic.has_component(ProstheticComponent):
+                return rejected("target prosthetic is not usable")
+            prosthetic_name = prosthetic.get_component(ProstheticComponent).part
+            _move_entity(ctx.world, prosthetic_id, patient_id)
+        if body_part is None:
+            body_part = spawn_entity(
+                ctx.world,
+                [
+                    IdentityComponent(name=surgery.part, kind="body-part"),
+                    BodyPartHealthComponent(part=surgery.part),
+                ],
+            )
+            patient.add_relationship(HasBodyPart(), body_part.id)
+        part = body_part.get_component(BodyPartHealthComponent)
+        if surgery.operation == "amputate":
+            updated_part = replace(part, health=0.0, missing=True, prosthetic=None)
+        elif surgery.operation == "install-prosthetic":
+            updated_part = replace(part, health=1.0, missing=False, prosthetic=prosthetic_name)
+        else:
+            updated_part = replace(part, health=1.0, missing=False)
+        replace_component(body_part, updated_part)
+        replace_component(surgery_entity, replace(surgery, completed=True))
+        return ok(
+            SurgeryPerformedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(doctor_id),
+                    target_ids=(str(patient_id), str(surgery_id), str(body_part.id)),
+                    patient_id=str(patient_id),
+                    surgery_id=str(surgery_id),
+                    part=surgery.part,
+                    operation=surgery.operation,
+                )
+            )
+        )
+
+
 class ClaimOwnershipHandler:
     command_type = "claim-ownership"
 
@@ -1535,10 +2110,24 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
         if priorities:
             parts = [f"{work}:{priority}" for work, priority in sorted(priorities.items())]
             lines.append("Work priorities: " + ", ".join(parts) + ".")
+    if character.has_component(PawnProfileComponent):
+        profile = character.get_component(PawnProfileComponent)
+        if profile.backstory:
+            lines.append(f"Backstory: {profile.backstory}.")
+        if profile.passions:
+            parts = [f"{work}:{level}" for work, level in sorted(profile.passions.items())]
+            lines.append("Passions: " + ", ".join(parts) + ".")
+        lines.append(f"Pawn expectations: {profile.expectations}.")
     if character.has_component(AllowedAreaComponent):
         allowed = character.get_component(AllowedAreaComponent).room_ids
         if allowed:
             lines.append("Allowed work area rooms: " + ", ".join(sorted(allowed)) + ".")
+    if character.has_component(PrisonerComponent):
+        prisoner = character.get_component(PrisonerComponent)
+        lines.append(
+            f"Prisoner policy: {prisoner.policy}, recruitment "
+            f"{prisoner.recruitment_progress:.1f}/{prisoner.recruitment_difficulty:.1f}."
+        )
     if character.has_component(BedRestComponent):
         lines.append("You are on medical bed rest.")
     if character.has_component(InfectionComponent):
@@ -1605,6 +2194,39 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
                 lines.append(
                     f"Nearby job: {job.job_type} priority {job.priority} ({status})."
                 )
+        if entity.has_component(JobBillComponent):
+            bill = entity.get_component(JobBillComponent)
+            lines.append(
+                f"Nearby job bill: {bill.recipe_id} "
+                f"{bill.work_done:.1f}/{bill.work_required:.1f} work."
+            )
+        if entity.has_component(ResearchProjectComponent):
+            project = entity.get_component(ResearchProjectComponent)
+            state = (
+                "unlocked"
+                if project.unlocked
+                else f"{project.work_done:.1f}/{project.work_required:.1f}"
+            )
+            lines.append(f"Research project: {project.project_id} ({state}).")
+        if entity.has_component(IncidentComponent):
+            incident = entity.get_component(IncidentComponent)
+            if not incident.resolved:
+                lines.append(
+                    f"Colony incident: {incident.incident_type} severity {incident.severity}."
+                )
+        if entity.has_component(TradeOfferComponent):
+            offer = entity.get_component(TradeOfferComponent)
+            gives = ", ".join(f"{qty} {kind}" for kind, qty in sorted(offer.gives.items()))
+            wants = ", ".join(f"{qty} {kind}" for kind, qty in sorted(offer.wants.items()))
+            lines.append(f"Trade offer from {offer.faction_id}: gives {gives}; wants {wants}.")
+        if entity.has_component(SurgeryBillComponent):
+            surgery = entity.get_component(SurgeryBillComponent)
+            if not surgery.completed:
+                lines.append(f"Surgery bill: {surgery.operation} {surgery.part}.")
+        if entity.has_component(CaravanComponent):
+            caravan = entity.get_component(CaravanComponent)
+            if not caravan.returned:
+                lines.append(f"Caravan bound for {caravan.destination}.")
         if character.has_relationship(Owns, entity_id) and entity_id != character.id:
             name = (
                 entity.get_component(IdentityComponent).name
@@ -1612,6 +2234,16 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
                 else "something"
             )
             lines.append(f"You own {name}.")
+    for _edge, part_id in character.get_relationships(HasBodyPart):
+        if not world.has_entity(part_id):
+            continue
+        part_entity = world.get_entity(part_id)
+        if part_entity.has_component(BodyPartHealthComponent):
+            part = part_entity.get_component(BodyPartHealthComponent)
+            state = "missing" if part.missing else f"health {part.health:.1f}"
+            if part.prosthetic:
+                state += f", prosthetic {part.prosthetic}"
+            lines.append(f"Body part {part.part}: {state}.")
     return sorted(lines)
 
 
@@ -1623,6 +2255,9 @@ __all__ = [
     "AssignJobHandler",
     "BakeHandler",
     "BedRestComponent",
+    "BodyPartHealthComponent",
+    "CaravanComponent",
+    "CaravanFormedEvent",
     "CharacterRescuedEvent",
     "ClaimOwnershipHandler",
     "ColonySimComponent",
@@ -1630,16 +2265,24 @@ __all__ = [
     "ColonyWealthConsequence",
     "ColonyWealthUpdatedEvent",
     "CompleteJobHandler",
+    "CompleteTradeHandler",
     "CreateStockpileHandler",
     "CraftHandler",
+    "FactionRelationComponent",
+    "FormCaravanHandler",
     "ForbiddenComponent",
     "ForbidItemHandler",
     "GatherResourceHandler",
+    "HasBodyPart",
     "HaulItemHandler",
     "HaulableComponent",
     "InfectionChangedEvent",
     "InfectionComponent",
+    "IncidentComponent",
+    "IncidentResolvedEvent",
     "JobComponent",
+    "JobBillComponent",
+    "JobBillProgressedEvent",
     "MedicalBedComponent",
     "MedicalRecoveryConsequence",
     "MedicineComponent",
@@ -1648,9 +2291,21 @@ __all__ = [
     "MentalStateConsequence",
     "MergeStackHandler",
     "Owns",
+    "PawnProfileComponent",
+    "PawnProfileUpdatedEvent",
+    "PerformSurgeryHandler",
+    "PrisonerComponent",
+    "PrisonerPolicySetEvent",
+    "ProgressJobBillHandler",
+    "ProstheticComponent",
     "RecipeComponent",
+    "RecruitPrisonerHandler",
+    "RecruitmentProgressedEvent",
     "ReleaseOwnershipHandler",
     "ReleaseReservationHandler",
+    "ResearchProgressedEvent",
+    "ResearchProjectComponent",
+    "ResearchProjectHandler",
     "ReserveHandler",
     "ReservedBy",
     "RescueToBedHandler",
@@ -1663,12 +2318,20 @@ __all__ = [
     "RoomRoleComponent",
     "RoomStatComponent",
     "SetAllowedAreaHandler",
+    "SetPrisonerPolicyHandler",
     "SetStorageFilterHandler",
     "SetWorkPriorityHandler",
     "SplitStackHandler",
     "StockpileComponent",
     "StorageFilterComponent",
+    "SurgeryBillComponent",
+    "SurgeryPerformedEvent",
     "TendWoundHandler",
+    "TechUnlockComponent",
+    "TechUnlockedEvent",
+    "TradeCompletedEvent",
+    "TradeOfferComponent",
+    "UpdatePawnProfileHandler",
     "WorkCapabilityComponent",
     "WorkPriorityComponent",
     "WorkPrioritySetEvent",

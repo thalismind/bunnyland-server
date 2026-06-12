@@ -468,6 +468,91 @@ async def test_disabled_plugin_leaves_its_verbs_unhandled():
     assert any("no handler for take-note" in r.reason for r in rejects)
 
 
+def test_catalogue_parity_plugins_register_new_public_surfaces():
+    plugins = {plugin.id: plugin for plugin in bunnyland_plugins()}
+
+    lifesim = plugins[LIFESIM]
+    assert {
+        "CharacterProfileComponent",
+        "WhimComponent",
+        "HomeObjectComponent",
+    } <= {component.__name__ for component in lifesim.ecs.components}
+    assert "HasWhim" in {edge.__name__ for edge in lifesim.ecs.edges}
+    assert {
+        "update-profile",
+        "add-whim",
+        "complete-whim",
+        "use-home-object",
+        "maintain-home-object",
+        "invite-over",
+        "configure-aging",
+    } <= {handler.command_type for handler in lifesim.commands.action_handlers}
+    assert {
+        "ProfileUpdatedEvent",
+        "WhimAddedEvent",
+        "HomeObjectMaintainedEvent",
+        "LifesimAgingPolicyChangedEvent",
+    } <= {event.__name__ for event in lifesim.commands.typed_events}
+
+    colony = plugins[COLONYSIM]
+    assert {
+        "PawnProfileComponent",
+        "JobBillComponent",
+        "PrisonerComponent",
+        "ResearchProjectComponent",
+        "TradeOfferComponent",
+        "SurgeryBillComponent",
+    } <= {component.__name__ for component in colony.ecs.components}
+    assert "HasBodyPart" in {edge.__name__ for edge in colony.ecs.edges}
+    assert {
+        "update-pawn-profile",
+        "progress-job-bill",
+        "set-prisoner-policy",
+        "recruit-prisoner",
+        "research-project",
+        "complete-trade",
+        "perform-surgery",
+    } <= {handler.command_type for handler in colony.commands.action_handlers}
+    assert {
+        "PawnProfileUpdatedEvent",
+        "JobBillProgressedEvent",
+        "RecruitmentProgressedEvent",
+        "TechUnlockedEvent",
+        "SurgeryPerformedEvent",
+    } <= {event.__name__ for event in colony.commands.typed_events}
+
+    garden = plugins[GARDENSIM]
+    assert {
+        "CropQualityComponent",
+        "RegrowableComponent",
+        "PestComponent",
+        "MachineBreakdownComponent",
+        "AnimalBreedingComponent",
+        "GeodeComponent",
+        "ShippingBinComponent",
+        "CollectionComponent",
+    } <= {component.__name__ for component in garden.ecs.components}
+    assert {
+        "inspect-crop",
+        "weed-crop",
+        "treat-pests",
+        "cancel-machine",
+        "repair-machine",
+        "breed-animal",
+        "open-geode",
+        "ship-items",
+        "claim-reward",
+    } <= {handler.command_type for handler in garden.commands.action_handlers}
+    assert {
+        "CropInspectedEvent",
+        "MachineProcessingCancelledEvent",
+        "AnimalBornEvent",
+        "GeodeOpenedEvent",
+        "ItemsShippedEvent",
+        "CollectionUpdatedEvent",
+    } <= {event.__name__ for event in garden.commands.typed_events}
+
+
 def test_ecs_systems_can_be_instances_or_classes():
     # apply should accept a system instance as well as a class.
     from bunnyland.mechanics.needs import HungerSystem
