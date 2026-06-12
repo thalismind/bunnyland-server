@@ -3,6 +3,8 @@
 Void-sim adds ships, stations, habitat modules, airlocks, bulkheads, life support, power
 grids, docking, fuel, sensors, distress signals, orbit, landing, launch, plotted courses,
 contracts, cargo, salvage, resource-backed fabrication, crew watches, and jumps.
+It also covers first contact, translation, quarantine, diplomacy, and alien artifact
+study.
 
 In Discord, prefix these commands with `!`.
 
@@ -149,6 +151,41 @@ Plot a course and jump:
 
 Jumps consume fuel and complete after their route duration. The ship arrives at the plotted
 destination when the jump completes.
+
+## Alien contact and quarantine
+
+Initiate contact with a reachable contact record:
+
+```text
+!initiate-contact contact_id="first contact ping"
+```
+
+Work a translation matrix until it is complete:
+
+```text
+!attempt-translation matrix_id="choir lexicon" progress=25
+```
+
+Quarantine a reachable sample or organism when contamination is possible:
+
+```text
+!quarantine-sample target_id="glowing spore" reason="unknown spores"
+```
+
+Negotiate a diplomatic mission:
+
+```text
+!negotiate-alien mission_id="choir envoy" standing_delta=2
+```
+
+Study a reachable alien artifact:
+
+```text
+!study-alien-artifact artifact_id="glass knot"
+```
+
+Contact, translation, quarantine, diplomacy, and unstudied artifacts appear in your
+character context when they are nearby.
 
 ## Contracts, cargo, and salvage
 

@@ -710,6 +710,12 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "ContractComponent",
         "CargoComponent",
         "SalvageClaimComponent",
+        "AlienSpeciesComponent",
+        "FirstContactComponent",
+        "TranslationMatrixComponent",
+        "QuarantineComponent",
+        "DiplomaticMissionComponent",
+        "AlienArtifactComponent",
     } <= {
         component.__name__ for component in void.ecs.components
     }
@@ -721,6 +727,11 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "load-cargo",
         "deliver-cargo",
         "claim-salvage",
+        "initiate-contact",
+        "attempt-translation",
+        "quarantine-sample",
+        "negotiate-alien",
+        "study-alien-artifact",
     } <= {
         handler.command_type for handler in void.commands.action_handlers
     }
@@ -731,6 +742,11 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "CargoLoadedEvent",
         "CargoDeliveredEvent",
         "SalvageClaimedEvent",
+        "FirstContactEvent",
+        "TranslationProgressedEvent",
+        "QuarantineStartedEvent",
+        "DiplomacyChangedEvent",
+        "AlienArtifactStudiedEvent",
     } <= {
         event.__name__ for event in void.commands.typed_events
     }

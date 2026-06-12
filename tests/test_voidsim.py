@@ -25,9 +25,13 @@ from bunnyland.mechanics.voidsim import (
     AcceptContractHandler,
     AirlockComponent,
     AirlockCycledEvent,
+    AlienArtifactComponent,
+    AlienArtifactStudiedEvent,
+    AlienSpeciesComponent,
     AnswerDistressSignalHandler,
     AssignCrewShiftHandler,
     AstrogationComponent,
+    AttemptTranslationHandler,
     BlueprintComponent,
     BulkheadComponent,
     CargoComponent,
@@ -51,6 +55,8 @@ from bunnyland.mechanics.voidsim import (
     CyberneticMutationPressureComponent,
     CycleAirlockHandler,
     DeliverCargoHandler,
+    DiplomacyChangedEvent,
+    DiplomaticMissionComponent,
     DistressSignalComponent,
     DockedTo,
     DockHandler,
@@ -60,9 +66,12 @@ from bunnyland.mechanics.voidsim import (
     EvacuateModuleHandler,
     FabricateHandler,
     FabricatorComponent,
+    FirstContactComponent,
+    FirstContactEvent,
     FuelChangedEvent,
     FuelComponent,
     HabitatModuleComponent,
+    InitiateContactHandler,
     InspectShipSystemHandler,
     InstallUpgradeHandler,
     ItemFabricatedEvent,
@@ -83,6 +92,7 @@ from bunnyland.mechanics.voidsim import (
     ModuleEvacuatedEvent,
     NavigationHazardEncounteredEvent,
     NavigationRouteComponent,
+    NegotiateAlienHandler,
     OpenAirlockHandler,
     OrbitalBodyComponent,
     OrbitComponent,
@@ -93,16 +103,19 @@ from bunnyland.mechanics.voidsim import (
     PowerReroutedEvent,
     PressureChangedEvent,
     PressurizedComponent,
+    QuarantineComponent,
+    QuarantineSampleHandler,
+    QuarantineStartedEvent,
     RadiationMutationPressureComponent,
     RadiationShieldComponent,
     RefuelHandler,
     RelieveCrewShiftHandler,
     RepairSystemHandler,
     ReroutePowerHandler,
-    ScanHandler,
-    SealBulkheadHandler,
     SalvageClaimComponent,
     SalvageClaimedEvent,
+    ScanHandler,
+    SealBulkheadHandler,
     SensorComponent,
     ShipComponent,
     ShipSystemComponent,
@@ -112,6 +125,9 @@ from bunnyland.mechanics.voidsim import (
     SignalDetectedEvent,
     StarSystemComponent,
     StationComponent,
+    StudyAlienArtifactHandler,
+    TranslationMatrixComponent,
+    TranslationProgressedEvent,
     UndockHandler,
     UpgradeInstalledEvent,
     WorksShift,
@@ -150,6 +166,11 @@ def _install(actor):
     actor.register_handler(LoadCargoHandler())
     actor.register_handler(DeliverCargoHandler())
     actor.register_handler(ClaimSalvageHandler())
+    actor.register_handler(InitiateContactHandler())
+    actor.register_handler(AttemptTranslationHandler())
+    actor.register_handler(QuarantineSampleHandler())
+    actor.register_handler(NegotiateAlienHandler())
+    actor.register_handler(StudyAlienArtifactHandler())
     actor.register_consequence(LifeSupportConsequence())
     actor.register_consequence(JumpTravelConsequence())
     actor.register_consequence(ChaosInfluenceConsequence())
@@ -2408,6 +2429,118 @@ async def test_claim_salvage_requires_accepted_rights_and_marks_claim():
         for output_id in output_ids
         if output_id is not None
     )
+
+
+async def test_alien_contact_translation_quarantine_diplomacy_and_artifact_study():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    species = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="Glass Choir", kind="species"),
+            AlienSpeciesComponent(name="Glass Choir", disposition="wary"),
+        ],
+    )
+    contact = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="first contact ping", kind="contact"),
+            FirstContactComponent(species_id=str(species)),
+        ],
+    )
+    matrix = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="choir lexicon", kind="translation"),
+            TranslationMatrixComponent(species_id=str(species), progress=80.0),
+        ],
+    )
+    sample = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="glowing spore", kind="sample")],
+    )
+    mission = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="choir envoy", kind="mission"),
+            DiplomaticMissionComponent(species_id=str(species), standing=1),
+        ],
+    )
+    artifact = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="glass knot", kind="artifact"),
+            AlienArtifactComponent(species_id=str(species), insight="harmony map"),
+        ],
+    )
+    contacted: list[FirstContactEvent] = []
+    translated: list[TranslationProgressedEvent] = []
+    quarantined: list[QuarantineStartedEvent] = []
+    diplomacy: list[DiplomacyChangedEvent] = []
+    studied: list[AlienArtifactStudiedEvent] = []
+    scenario.actor.bus.subscribe(FirstContactEvent, contacted.append)
+    scenario.actor.bus.subscribe(TranslationProgressedEvent, translated.append)
+    scenario.actor.bus.subscribe(QuarantineStartedEvent, quarantined.append)
+    scenario.actor.bus.subscribe(DiplomacyChangedEvent, diplomacy.append)
+    scenario.actor.bus.subscribe(AlienArtifactStudiedEvent, studied.append)
+
+    await scenario.actor.submit(_cmd(scenario, "initiate-contact", contact_id=str(contact)))
+    await scenario.actor.tick(HOUR)
+    assert contacted[0].status == "contacted"
+    assert scenario.actor.world.get_entity(contact).get_component(
+        FirstContactComponent
+    ).contacted_by == (
+        str(scenario.character),
+    )
+
+    await scenario.actor.submit(
+        _cmd(scenario, "attempt-translation", matrix_id=str(matrix), progress=25)
+    )
+    await scenario.actor.tick(HOUR)
+    assert scenario.actor.world.get_entity(matrix).get_component(
+        TranslationMatrixComponent
+    ).complete is True
+    assert translated[0].progress == 100.0
+
+    await scenario.actor.submit(
+        _cmd(scenario, "quarantine-sample", target_id=str(sample), reason="unknown spores")
+    )
+    await scenario.actor.tick(HOUR)
+    assert (
+        scenario.actor.world.get_entity(sample).get_component(QuarantineComponent).reason
+        == "unknown spores"
+    )
+    assert quarantined[0].target_id == str(sample)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "negotiate-alien", mission_id=str(mission), standing_delta=2)
+    )
+    await scenario.actor.tick(HOUR)
+    assert (
+        scenario.actor.world.get_entity(mission)
+        .get_component(DiplomaticMissionComponent)
+        .standing
+        == 3
+    )
+    assert diplomacy[0].standing == 3
+
+    await scenario.actor.submit(
+        _cmd(scenario, "study-alien-artifact", artifact_id=str(artifact))
+    )
+    await scenario.actor.tick(HOUR)
+    assert scenario.actor.world.get_entity(artifact).get_component(
+        AlienArtifactComponent
+    ).studied_by == (
+        str(scenario.character),
+    )
+    assert studied[0].insight == "harmony map"
+
+    fragments = voidsim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+    assert any("Glass Choir" in line for line in fragments)
+    assert any("choir lexicon" in line and "complete" in line for line in fragments)
+    assert any("choir envoy" in line and "standing 3" in line for line in fragments)
 
 
 def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():

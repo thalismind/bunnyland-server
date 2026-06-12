@@ -196,6 +196,50 @@ class SalvageClaimComponent(Component):
     claimed: bool = False
 
 
+# --- 8.5 Alien contact, diplomacy, and xenobiology ------------------------------------
+
+
+@dataclass(frozen=True)
+class AlienSpeciesComponent(Component):
+    name: str
+    disposition: str = "unknown"
+
+
+@dataclass(frozen=True)
+class FirstContactComponent(Component):
+    species_id: str
+    contacted_by: tuple[str, ...] = ()
+    status: str = "uncontacted"
+
+
+@dataclass(frozen=True)
+class TranslationMatrixComponent(Component):
+    species_id: str
+    progress: float = 0.0
+    complete: bool = False
+
+
+@dataclass(frozen=True)
+class QuarantineComponent(Component):
+    reason: str = "unknown organism"
+    active: bool = True
+    started_by: str | None = None
+
+
+@dataclass(frozen=True)
+class DiplomaticMissionComponent(Component):
+    species_id: str
+    standing: int = 0
+    last_negotiated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class AlienArtifactComponent(Component):
+    species_id: str = ""
+    studied_by: tuple[str, ...] = ()
+    insight: str = ""
+
+
 # --- 8.2 Space travel, orbits, and navigation -----------------------------------------
 
 
@@ -342,6 +386,36 @@ class SalvageClaimedEvent(DomainEvent):
     site_id: str
     contract_id: str | None = None
     output_ids: tuple[str, ...] = ()
+
+
+class FirstContactEvent(DomainEvent):
+    contact_id: str
+    species_id: str
+    status: str
+
+
+class TranslationProgressedEvent(DomainEvent):
+    matrix_id: str
+    species_id: str
+    progress: float
+    complete: bool
+
+
+class QuarantineStartedEvent(DomainEvent):
+    target_id: str
+    reason: str
+
+
+class DiplomacyChangedEvent(DomainEvent):
+    mission_id: str
+    species_id: str
+    standing: int
+
+
+class AlienArtifactStudiedEvent(DomainEvent):
+    artifact_id: str
+    species_id: str
+    insight: str
 
 
 class DockingCompletedEvent(DomainEvent):
@@ -1021,6 +1095,181 @@ class ClaimSalvageHandler:
                     site_id=component.site_id,
                     contract_id=str(contract_id) if contract_id is not None else None,
                     output_ids=output_ids,
+                )
+            )
+        )
+
+
+class InitiateContactHandler:
+    command_type = "initiate-contact"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        contact, error = _reachable_component(
+            ctx, character_id, command.payload.get("contact_id"), FirstContactComponent
+        )
+        if contact is None:
+            return rejected(error if error else "target is not a contact")
+        component = contact.get_component(FirstContactComponent)
+        if str(character_id) in component.contacted_by:
+            return rejected("contact already initiated")
+        updated = replace(
+            component,
+            contacted_by=tuple(sorted((*component.contacted_by, str(character_id)))),
+            status="contacted",
+        )
+        replace_component(contact, updated)
+        return ok(
+            FirstContactEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(contact.id), component.species_id),
+                    contact_id=str(contact.id),
+                    species_id=component.species_id,
+                    status=updated.status,
+                )
+            )
+        )
+
+
+class AttemptTranslationHandler:
+    command_type = "attempt-translation"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        matrix, error = _reachable_component(
+            ctx, character_id, command.payload.get("matrix_id"), TranslationMatrixComponent
+        )
+        if matrix is None:
+            return rejected(error if error else "target is not a translation matrix")
+        amount = float(command.payload.get("progress", 25.0))
+        component = matrix.get_component(TranslationMatrixComponent)
+        if component.complete:
+            return rejected("translation is already complete")
+        progress = min(100.0, component.progress + max(0.0, amount))
+        updated = replace(component, progress=progress, complete=progress >= 100.0)
+        replace_component(matrix, updated)
+        return ok(
+            TranslationProgressedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(matrix.id), component.species_id),
+                    matrix_id=str(matrix.id),
+                    species_id=component.species_id,
+                    progress=updated.progress,
+                    complete=updated.complete,
+                )
+            )
+        )
+
+
+class QuarantineSampleHandler:
+    command_type = "quarantine-sample"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if character_id is None or target_id is None:
+            return rejected("invalid character or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        character = ctx.entity(character_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+        target = ctx.entity(target_id)
+        reason = str(command.payload.get("reason", "unknown organism")).strip()
+        reason = reason or "unknown organism"
+        replace_component(
+            target,
+            QuarantineComponent(reason=reason, active=True, started_by=str(character_id)),
+        )
+        return ok(
+            QuarantineStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    reason=reason,
+                )
+            )
+        )
+
+
+class NegotiateAlienHandler:
+    command_type = "negotiate-alien"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        mission, error = _reachable_component(
+            ctx, character_id, command.payload.get("mission_id"), DiplomaticMissionComponent
+        )
+        if mission is None:
+            return rejected(error if error else "target is not a diplomatic mission")
+        delta = int(command.payload.get("standing_delta", 1))
+        component = mission.get_component(DiplomaticMissionComponent)
+        updated = replace(
+            component,
+            standing=component.standing + delta,
+            last_negotiated_epoch=ctx.epoch,
+        )
+        replace_component(mission, updated)
+        return ok(
+            DiplomacyChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(mission.id), component.species_id),
+                    mission_id=str(mission.id),
+                    species_id=component.species_id,
+                    standing=updated.standing,
+                )
+            )
+        )
+
+
+class StudyAlienArtifactHandler:
+    command_type = "study-alien-artifact"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        artifact, error = _reachable_component(
+            ctx, character_id, command.payload.get("artifact_id"), AlienArtifactComponent
+        )
+        if artifact is None:
+            return rejected(error if error else "target is not an alien artifact")
+        component = artifact.get_component(AlienArtifactComponent)
+        if str(character_id) in component.studied_by:
+            return rejected("artifact already studied")
+        updated = replace(
+            component,
+            studied_by=tuple(sorted((*component.studied_by, str(character_id)))),
+        )
+        replace_component(artifact, updated)
+        return ok(
+            AlienArtifactStudiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(artifact.id),),
+                    artifact_id=str(artifact.id),
+                    species_id=component.species_id,
+                    insight=component.insight,
                 )
             )
         )
@@ -1993,6 +2242,28 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
             claim = entity.get_component(SalvageClaimComponent)
             if not claim.claimed:
                 lines.append(f"Salvage claim available: {_name(entity)}.")
+        if entity.has_component(AlienSpeciesComponent):
+            species = entity.get_component(AlienSpeciesComponent)
+            lines.append(f"Alien species contact: {species.name} ({species.disposition}).")
+        if entity.has_component(FirstContactComponent):
+            contact = entity.get_component(FirstContactComponent)
+            if str(character.id) not in contact.contacted_by:
+                lines.append(f"First contact opportunity: {_name(entity)}.")
+        if entity.has_component(TranslationMatrixComponent):
+            matrix = entity.get_component(TranslationMatrixComponent)
+            status = "complete" if matrix.complete else f"{matrix.progress:.0f}%"
+            lines.append(f"Translation matrix {_name(entity)}: {status}.")
+        if entity.has_component(QuarantineComponent):
+            quarantine = entity.get_component(QuarantineComponent)
+            if quarantine.active:
+                lines.append(f"Quarantined sample {_name(entity)}: {quarantine.reason}.")
+        if entity.has_component(DiplomaticMissionComponent):
+            mission = entity.get_component(DiplomaticMissionComponent)
+            lines.append(f"Diplomatic mission {_name(entity)}: standing {mission.standing}.")
+        if entity.has_component(AlienArtifactComponent):
+            artifact = entity.get_component(AlienArtifactComponent)
+            if str(character.id) not in artifact.studied_by:
+                lines.append(f"Alien artifact ready for study: {_name(entity)}.")
         if entity.has_component(AirlockComponent):
             airlock = entity.get_component(AirlockComponent)
             lines.append(f"Airlock {_name(entity)}: {airlock.state}.")
@@ -2076,7 +2347,11 @@ def install_voidsim(actor) -> None:
 __all__ = [
     "AirlockComponent",
     "AirlockCycledEvent",
+    "AlienArtifactComponent",
+    "AlienArtifactStudiedEvent",
+    "AlienSpeciesComponent",
     "AnswerDistressSignalHandler",
+    "AttemptTranslationHandler",
     "AssignCrewShiftHandler",
     "AstrogationComponent",
     "BlueprintComponent",
@@ -2103,6 +2378,8 @@ __all__ = [
     "CycleAirlockHandler",
     "DeliverCargoHandler",
     "DistressSignalComponent",
+    "DiplomacyChangedEvent",
+    "DiplomaticMissionComponent",
     "DutyShiftComponent",
     "DockHandler",
     "DockedTo",
@@ -2113,9 +2390,12 @@ __all__ = [
     "FabricatorComponent",
     "FuelChangedEvent",
     "FuelComponent",
+    "FirstContactComponent",
+    "FirstContactEvent",
     "HabitatModuleComponent",
     "InspectShipSystemHandler",
     "InstallUpgradeHandler",
+    "InitiateContactHandler",
     "ItemFabricatedEvent",
     "JumpCompletedEvent",
     "JumpDriveComponent",
@@ -2133,6 +2413,7 @@ __all__ = [
     "LoadCargoHandler",
     "ModuleEvacuatedEvent",
     "CyberneticMutationPressureComponent",
+    "NegotiateAlienHandler",
     "NavigationHazardEncounteredEvent",
     "NavigationRouteComponent",
     "OpenAirlockHandler",
@@ -2145,6 +2426,9 @@ __all__ = [
     "PowerReroutedEvent",
     "PressureChangedEvent",
     "PressurizedComponent",
+    "QuarantineComponent",
+    "QuarantineSampleHandler",
+    "QuarantineStartedEvent",
     "RadiationShieldComponent",
     "RadiationMutationPressureComponent",
     "RefuelHandler",
@@ -2164,6 +2448,9 @@ __all__ = [
     "SignalDetectedEvent",
     "StarSystemComponent",
     "StationComponent",
+    "StudyAlienArtifactHandler",
+    "TranslationMatrixComponent",
+    "TranslationProgressedEvent",
     "UndockHandler",
     "UpgradeInstalledEvent",
     "WorksShift",
