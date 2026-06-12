@@ -341,6 +341,30 @@ def _add_resource_stack(
     return str(item.id)
 
 
+def _spend_inventory_resource(
+    character: Entity, world: World, resource_type: str, quantity: int
+) -> bool:
+    stack_entity = _resource_stack_in_inventory(character, world, resource_type)
+    have = (
+        stack_entity.get_component(ResourceStackComponent).quantity
+        if stack_entity is not None
+        else 0
+    )
+    if have < quantity:
+        return False
+    stack = stack_entity.get_component(ResourceStackComponent)
+    remaining = stack.quantity - quantity
+    if remaining > 0:
+        replace_component(stack_entity, replace(stack, quantity=remaining))
+        replace_component(
+            stack_entity,
+            IdentityComponent(name=_stack_name(resource_type, remaining), kind="resource"),
+        )
+    else:
+        _remove_from_container(world, stack_entity.id)
+    return True
+
+
 def _radiation_protection(world: World, character: Entity) -> float:
     protection = 0.0
     for entity_id in reachable_ids(world, character):
@@ -1100,6 +1124,26 @@ class StabilizeMutationHandler:
 
 
 @dataclass(frozen=True)
+class SettlementComponent(Component):
+    name: str
+    claimed_by: str | None = None
+
+
+@dataclass(frozen=True)
+class WaterPurifierComponent(Component):
+    output_per_day: int = 1
+    built: bool = False
+    scrap_cost: int = 2
+
+
+@dataclass(frozen=True)
+class GeneratorComponent(Component):
+    power_output: int = 5
+    powered: bool = False
+    fuel_cost: int = 1
+
+
+@dataclass(frozen=True)
 class OldWorldTechComponent(Component):
     """A pre-war device that can be identified and then restored to working order."""
 
@@ -1126,6 +1170,21 @@ class OldWorldTechRestoredEvent(DomainEvent):
     item_id: str
     tech_name: str
     scrap_spent: int
+
+
+class SettlementClaimedEvent(DomainEvent):
+    settlement_id: str
+    name: str
+
+
+class PurifierBuiltEvent(DomainEvent):
+    settlement_id: str
+    scrap_spent: int
+
+
+class GeneratorPoweredEvent(DomainEvent):
+    generator_id: str
+    fuel_spent: int
 
 
 class IdentifyTechHandler:
@@ -1212,6 +1271,109 @@ class RestoreTechHandler:
         )
 
 
+class ClaimSettlementHandler:
+    command_type = "claim-settlement"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        settlement, error = _reachable_component(
+            ctx, character_id, command.payload.get("settlement_id"), SettlementComponent
+        )
+        if settlement is None:
+            return rejected(error if error else "target is not a settlement")
+        component = settlement.get_component(SettlementComponent)
+        if component.claimed_by is not None:
+            return rejected("settlement is already claimed")
+        replace_component(settlement, replace(component, claimed_by=str(character_id)))
+        return ok(
+            SettlementClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(settlement.id),),
+                    settlement_id=str(settlement.id),
+                    name=component.name,
+                )
+            )
+        )
+
+
+class BuildPurifierHandler:
+    command_type = "build-purifier"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        settlement, error = _reachable_component(
+            ctx, character_id, command.payload.get("settlement_id"), SettlementComponent
+        )
+        if settlement is None:
+            return rejected(error if error else "target is not a settlement")
+        settlement_state = settlement.get_component(SettlementComponent)
+        if settlement_state.claimed_by != str(character_id):
+            return rejected("claim the settlement first")
+        purifier = (
+            settlement.get_component(WaterPurifierComponent)
+            if settlement.has_component(WaterPurifierComponent)
+            else WaterPurifierComponent()
+        )
+        if purifier.built:
+            return rejected("purifier is already built")
+        character = ctx.entity(character_id)
+        if not _spend_inventory_resource(character, ctx.world, "scrap", purifier.scrap_cost):
+            return rejected("not enough scrap to build purifier")
+        replace_component(settlement, replace(purifier, built=True))
+        return ok(
+            PurifierBuiltEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(settlement.id),),
+                    settlement_id=str(settlement.id),
+                    scrap_spent=purifier.scrap_cost,
+                )
+            )
+        )
+
+
+class PowerGeneratorHandler:
+    command_type = "power-generator"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        generator, error = _reachable_component(
+            ctx, character_id, command.payload.get("generator_id"), GeneratorComponent
+        )
+        if generator is None:
+            return rejected(error if error else "target is not a generator")
+        component = generator.get_component(GeneratorComponent)
+        if component.powered:
+            return rejected("generator is already powered")
+        character = ctx.entity(character_id)
+        if not _spend_inventory_resource(character, ctx.world, "fuel", component.fuel_cost):
+            return rejected("not enough fuel to power generator")
+        replace_component(generator, replace(component, powered=True))
+        return ok(
+            GeneratorPoweredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(generator.id),),
+                    generator_id=str(generator.id),
+                    fuel_spent=component.fuel_cost,
+                )
+            )
+        )
+
+
 def nukesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     if character.has_component(RadiationDoseComponent):
@@ -1275,6 +1437,18 @@ def nukesim_fragments(world: World, character: Entity) -> list[str]:
             lead = entity.get_component(TechLeadComponent)
             hint = f" near {lead.location_hint}" if lead.location_hint else ""
             lines.append(f"Tech lead: {lead.target_tech}{hint}.")
+        if entity.has_component(SettlementComponent):
+            settlement = entity.get_component(SettlementComponent)
+            owner = "unclaimed" if settlement.claimed_by is None else "claimed"
+            lines.append(f"Settlement {_name(entity)}: {owner}.")
+        if entity.has_component(WaterPurifierComponent):
+            purifier = entity.get_component(WaterPurifierComponent)
+            state = "built" if purifier.built else f"needs {purifier.scrap_cost} scrap"
+            lines.append(f"Water purifier {_name(entity)}: {state}.")
+        if entity.has_component(GeneratorComponent):
+            generator = entity.get_component(GeneratorComponent)
+            state = "powered" if generator.powered else f"needs {generator.fuel_cost} fuel"
+            lines.append(f"Generator {_name(entity)}: {state}.")
     return sorted(lines)
 
 
@@ -1287,13 +1461,17 @@ def install_nukesim(actor) -> None:
 __all__ = [
     "AddictionComponent",
     "AddictionWithdrawalConsequence",
+    "BuildPurifierHandler",
     "ChemComponent",
     "ChemTakenEvent",
     "ContaminatedWaterDrunkEvent",
+    "ClaimSettlementHandler",
     "DecontaminateHandler",
     "DecontaminationAppliedEvent",
     "DecontaminationComponent",
     "DrinkContaminatedWaterHandler",
+    "GeneratorComponent",
+    "GeneratorPoweredEvent",
     "HazardTriggeredEvent",
     "IdentifyTechHandler",
     "ItemScrappedEvent",
@@ -1303,6 +1481,8 @@ __all__ = [
     "OldWorldTechComponent",
     "OldWorldTechIdentifiedEvent",
     "OldWorldTechRestoredEvent",
+    "PowerGeneratorHandler",
+    "PurifierBuiltEvent",
     "MutationComponent",
     "MutationManifestedEvent",
     "MutationPressureChangedEvent",
@@ -1328,11 +1508,14 @@ __all__ = [
     "ScavengeSiteComponent",
     "ScrapItemHandler",
     "SealRadiationSourceHandler",
+    "SettlementClaimedEvent",
+    "SettlementComponent",
     "SiteScavengedEvent",
     "StabilizeMutationHandler",
     "TakeChemHandler",
     "TechLeadComponent",
     "UseRadMedicineHandler",
+    "WaterPurifierComponent",
     "WaterPurifiedEvent",
     "WaterPurityComponent",
     "WithdrawalProgressedEvent",

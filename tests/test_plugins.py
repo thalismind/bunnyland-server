@@ -624,13 +624,31 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     }
 
     nuke = plugins[NUKESIM]
-    assert {"OldWorldTechComponent", "TechLeadComponent"} <= {
+    assert {
+        "OldWorldTechComponent",
+        "TechLeadComponent",
+        "SettlementComponent",
+        "WaterPurifierComponent",
+        "GeneratorComponent",
+    } <= {
         component.__name__ for component in nuke.ecs.components
     }
-    assert {"identify-tech", "restore-tech"} <= {
+    assert {
+        "identify-tech",
+        "restore-tech",
+        "claim-settlement",
+        "build-purifier",
+        "power-generator",
+    } <= {
         handler.command_type for handler in nuke.commands.action_handlers
     }
-    assert {"OldWorldTechIdentifiedEvent", "OldWorldTechRestoredEvent"} <= {
+    assert {
+        "OldWorldTechIdentifiedEvent",
+        "OldWorldTechRestoredEvent",
+        "SettlementClaimedEvent",
+        "PurifierBuiltEvent",
+        "GeneratorPoweredEvent",
+    } <= {
         event.__name__ for event in nuke.commands.typed_events
     }
 

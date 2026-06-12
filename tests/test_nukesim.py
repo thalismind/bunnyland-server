@@ -22,13 +22,17 @@ from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.colonysim import ResourceStackComponent
 from bunnyland.mechanics.nukesim import (
     AddictionComponent,
+    BuildPurifierHandler,
     ChemComponent,
     ChemTakenEvent,
+    ClaimSettlementHandler,
     ContaminatedWaterDrunkEvent,
     DecontaminateHandler,
     DecontaminationAppliedEvent,
     DecontaminationComponent,
     DrinkContaminatedWaterHandler,
+    GeneratorComponent,
+    GeneratorPoweredEvent,
     IdentifyTechHandler,
     ItemScrappedEvent,
     JunkComponent,
@@ -39,6 +43,8 @@ from bunnyland.mechanics.nukesim import (
     OldWorldTechComponent,
     OldWorldTechIdentifiedEvent,
     OldWorldTechRestoredEvent,
+    PowerGeneratorHandler,
+    PurifierBuiltEvent,
     PurifyWaterHandler,
     RadiationDoseComponent,
     RadiationExposureEvent,
@@ -54,10 +60,13 @@ from bunnyland.mechanics.nukesim import (
     ScavengeSiteComponent,
     ScrapItemHandler,
     SealRadiationSourceHandler,
+    SettlementClaimedEvent,
+    SettlementComponent,
     StabilizeMutationHandler,
     TakeChemHandler,
     TechLeadComponent,
     UseRadMedicineHandler,
+    WaterPurifierComponent,
     WaterPurifiedEvent,
     WaterPurityComponent,
     WithdrawalProgressedEvent,
@@ -82,6 +91,9 @@ def _install(actor):
     actor.register_handler(TakeChemHandler())
     actor.register_handler(PurifyWaterHandler())
     actor.register_handler(DrinkContaminatedWaterHandler())
+    actor.register_handler(ClaimSettlementHandler())
+    actor.register_handler(BuildPurifierHandler())
+    actor.register_handler(PowerGeneratorHandler())
     install_nukesim(actor)
 
 
@@ -703,6 +715,15 @@ def _scrap(scenario, quantity):
     )
 
 
+def _fuel(scenario, quantity):
+    return _inventory_entity(
+        scenario,
+        f"fuel ({quantity})",
+        "resource",
+        [ResourceStackComponent(resource_type="fuel", quantity=quantity)],
+    )
+
+
 async def test_identify_then_restore_old_world_tech_consumes_scrap():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -735,6 +756,61 @@ async def test_identify_then_restore_old_world_tech_consumes_scrap():
     character = scenario.actor.world.get_entity(scenario.character)
     fragments = nukesim_fragments(scenario.actor.world, character)
     assert any("water purifier (functional)" in line for line in fragments)
+
+
+async def test_claim_settlement_build_purifier_and_power_generator():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    settlement = _room_entity(
+        scenario,
+        "Red Rocket burrow",
+        "settlement",
+        [
+            SettlementComponent(name="Red Rocket burrow"),
+            WaterPurifierComponent(output_per_day=3, scrap_cost=2),
+        ],
+    )
+    generator = _room_entity(
+        scenario,
+        "patched generator",
+        "generator",
+        [GeneratorComponent(power_output=6, fuel_cost=1)],
+    )
+    scrap = _scrap(scenario, 3)
+    fuel = _fuel(scenario, 1)
+    claimed: list[SettlementClaimedEvent] = []
+    built: list[PurifierBuiltEvent] = []
+    powered: list[GeneratorPoweredEvent] = []
+    scenario.actor.bus.subscribe(SettlementClaimedEvent, claimed.append)
+    scenario.actor.bus.subscribe(PurifierBuiltEvent, built.append)
+    scenario.actor.bus.subscribe(GeneratorPoweredEvent, powered.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "claim-settlement", settlement_id=str(settlement))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "build-purifier", settlement_id=str(settlement))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "power-generator", generator_id=str(generator))
+    )
+    await scenario.actor.tick(HOUR)
+
+    world = scenario.actor.world
+    settlement_state = world.get_entity(settlement).get_component(SettlementComponent)
+    purifier = world.get_entity(settlement).get_component(WaterPurifierComponent)
+    generator_state = world.get_entity(generator).get_component(GeneratorComponent)
+    scrap_left = world.get_entity(scrap).get_component(ResourceStackComponent)
+    assert settlement_state.claimed_by == str(scenario.character)
+    assert purifier.built is True
+    assert generator_state.powered is True
+    assert scrap_left.quantity == 1
+    assert not world.has_entity(fuel) or container_of(world.get_entity(fuel)) is None
+    assert claimed and claimed[0].name == "Red Rocket burrow"
+    assert built and built[0].scrap_spent == 2
+    assert powered and powered[0].fuel_spent == 1
 
 
 def test_old_world_tech_handlers_reject_invalid_and_cover_edges_directly():
@@ -803,11 +879,24 @@ def test_nukesim_fragments_show_unidentified_tech_and_leads():
         "item",
         [TechLeadComponent(target_tech="fusion core", location_hint="the old reactor")],
     )
+    _room_entity(
+        scenario,
+        "hilltop burrow",
+        "settlement",
+        [
+            SettlementComponent(name="hilltop burrow"),
+            WaterPurifierComponent(scrap_cost=4),
+            GeneratorComponent(fuel_cost=2),
+        ],
+    )
 
     character = scenario.actor.world.get_entity(scenario.character)
     fragments = nukesim_fragments(scenario.actor.world, character)
     assert any("unknown device (unidentified)" in line for line in fragments)
     assert any("Tech lead: fusion core near the old reactor" in line for line in fragments)
+    assert any("Settlement hilltop burrow: unclaimed" in line for line in fragments)
+    assert any("Water purifier hilltop burrow: needs 4 scrap" in line for line in fragments)
+    assert any("Generator hilltop burrow: needs 2 fuel" in line for line in fragments)
 
 
 async def test_take_chem_relieves_sickness_and_builds_addiction():

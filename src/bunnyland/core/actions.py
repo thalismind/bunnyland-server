@@ -1141,6 +1141,9 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="restore_tech",
         patterns=("restore {tech_id}",),
     ),
+    _definition("claim-settlement", ("settlement_id",), tool_name="claim_settlement"),
+    _definition("build-purifier", ("settlement_id",), tool_name="build_purifier"),
+    _definition("power-generator", ("generator_id",), tool_name="power_generator"),
     _definition("resolve-colony-incident", ("incident_id",), tool_name="resolve_colony_incident"),
     _definition("resolve-incident", ("incident_id",), tool_name="resolve_incident"),
 )
