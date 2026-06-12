@@ -103,6 +103,8 @@ from bunnyland.mechanics.dinosim import (
     GuardAnimalComponent,
     GuardAssignedEvent,
     GuardBehaviorComponent,
+    HerdComponent,
+    HerdTrackedEvent,
     HarvestProductHandler,
     HatchEggHandler,
     HiddenFromCreatureEvent,
@@ -118,8 +120,11 @@ from bunnyland.mechanics.dinosim import (
     KaijuSpawnSpec,
     LayEggHandler,
     LockPenHandler,
+    MarkTerritoryHandler,
     MountComponent,
     MountCreatureHandler,
+    NestComponent,
+    NestPreparedEvent,
     ObserveCreatureHandler,
     OpenPenHandler,
     PackHuntComponent,
@@ -127,6 +132,7 @@ from bunnyland.mechanics.dinosim import (
     PenOpenedEvent,
     PredatorDrivenOffEvent,
     PrepareCloneHandler,
+    PrepareNestHandler,
     QuarantinePenComponent,
     RanchLaborComponent,
     RanchWorkAssignedEvent,
@@ -154,6 +160,9 @@ from bunnyland.mechanics.dinosim import (
     ToxinComponent,
     TrackComponent,
     TrackCreatureHandler,
+    TrackHerdHandler,
+    TerritoryComponent,
+    TerritoryMarkedEvent,
     TrainCommandHandler,
     TrainingComponent,
     TrampleComponent,
@@ -194,6 +203,9 @@ def _install(actor):
     actor.register_handler(IncubateEggHandler())
     actor.register_handler(HatchEggHandler())
     actor.register_handler(TrackCreatureHandler())
+    actor.register_handler(MarkTerritoryHandler())
+    actor.register_handler(TrackHerdHandler())
+    actor.register_handler(PrepareNestHandler())
     actor.register_handler(SetBaitHandler())
     actor.register_handler(TranquilizeCreatureHandler())
     actor.register_handler(ApproachCreatureHandler())
@@ -639,6 +651,66 @@ async def test_creature_can_be_tracked_tamed_trained_commanded_mounted_and_recal
     )
     assert "Your guard: clever raptor." in fragments
     assert "clever raptor knows commands: guard." in fragments
+
+
+async def test_ecology_territory_herd_and_nest_loop():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    territory = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="fern valley", kind="territory"),
+            TerritoryComponent(species_name="triceratops", threat_level=2),
+        ],
+    )
+    herd = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="valley herd", kind="herd"),
+            HerdComponent(species_name="triceratops", size=6),
+        ],
+    )
+    nest = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="fern nest", kind="nest"),
+            NestComponent(species_name="triceratops"),
+        ],
+    )
+    for entity in (territory, herd, nest):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    marked: list[TerritoryMarkedEvent] = []
+    tracked: list[HerdTrackedEvent] = []
+    prepared: list[NestPreparedEvent] = []
+    scenario.actor.bus.subscribe(TerritoryMarkedEvent, marked.append)
+    scenario.actor.bus.subscribe(HerdTrackedEvent, tracked.append)
+    scenario.actor.bus.subscribe(NestPreparedEvent, prepared.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "mark-territory", territory_id=str(territory.id))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "track-herd", herd_id=str(herd.id)))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "prepare-nest", nest_id=str(nest.id)))
+    await scenario.actor.tick(HOUR)
+
+    assert territory.get_component(TerritoryComponent).marked_by == str(scenario.character)
+    assert herd.get_component(HerdComponent).last_tracked_epoch > 0
+    assert nest.get_component(NestComponent).prepared is True
+    assert marked and marked[0].species_name == "triceratops"
+    assert tracked and tracked[0].size == 6
+    assert prepared and prepared[0].nest_id == str(nest.id)
+
+    fragments = dinosim_fragments(
+        scenario.actor.world,
+        scenario.actor.world.get_entity(scenario.character),
+    )
+    assert any("Territory fern valley: triceratops, marked" in line for line in fragments)
+    assert any("Herd valley herd: triceratops x6" in line for line in fragments)
+    assert any("Nest fern nest: triceratops, prepared" in line for line in fragments)
 
 
 async def test_enclosure_escape_recapture_hide_and_evacuation_loop():

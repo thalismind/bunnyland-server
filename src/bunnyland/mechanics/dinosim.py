@@ -139,6 +139,29 @@ class TrackComponent(Component):
 
 
 @dataclass(frozen=True)
+class TerritoryComponent(Component):
+    species_name: str = ""
+    marked_by: str | None = None
+    marked_at_epoch: int = 0
+    threat_level: int = 0
+
+
+@dataclass(frozen=True)
+class HerdComponent(Component):
+    species_name: str
+    size: int = 1
+    last_tracked_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class NestComponent(Component):
+    species_name: str
+    prepared: bool = False
+    prepared_by: str | None = None
+    prepared_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class ScentComponent(Component):
     species_name: str = ""
     strength: float = 1.0
@@ -476,6 +499,22 @@ class EggHatchedEvent(DomainEvent):
 class CreatureTrackedEvent(DomainEvent):
     creature_id: str
     tracked_room_id: str
+    species_name: str
+
+
+class TerritoryMarkedEvent(DomainEvent):
+    territory_id: str
+    species_name: str
+
+
+class HerdTrackedEvent(DomainEvent):
+    herd_id: str
+    species_name: str
+    size: int
+
+
+class NestPreparedEvent(DomainEvent):
+    nest_id: str
     species_name: str
 
 
@@ -1627,6 +1666,109 @@ class TrackCreatureHandler:
                     creature_id=str(creature.id),
                     tracked_room_id=room_id,
                     species_name=_species_name(creature),
+                )
+            )
+        )
+
+
+class MarkTerritoryHandler:
+    command_type = "mark-territory"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        territory_id = parse_entity_id(command.payload.get("territory_id"))
+        if character_id is None or territory_id is None:
+            return rejected("invalid character or territory id")
+        territory = _reachable_entity(ctx, character_id, territory_id)
+        if territory is None:
+            return rejected("territory is not reachable")
+        if not territory.has_component(TerritoryComponent):
+            return rejected("target is not a territory")
+        component = territory.get_component(TerritoryComponent)
+        if component.marked_by == str(character_id):
+            return rejected("territory is already marked by you")
+        replace_component(
+            territory,
+            replace(component, marked_by=str(character_id), marked_at_epoch=ctx.epoch),
+        )
+        return ok(
+            TerritoryMarkedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(territory.id),),
+                    territory_id=str(territory.id),
+                    species_name=component.species_name,
+                )
+            )
+        )
+
+
+class TrackHerdHandler:
+    command_type = "track-herd"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        herd_id = parse_entity_id(command.payload.get("herd_id"))
+        if character_id is None or herd_id is None:
+            return rejected("invalid character or herd id")
+        herd = _reachable_entity(ctx, character_id, herd_id)
+        if herd is None:
+            return rejected("herd is not reachable")
+        if not herd.has_component(HerdComponent):
+            return rejected("target is not a herd")
+        component = herd.get_component(HerdComponent)
+        replace_component(herd, replace(component, last_tracked_epoch=ctx.epoch))
+        return ok(
+            HerdTrackedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(herd.id),),
+                    herd_id=str(herd.id),
+                    species_name=component.species_name,
+                    size=component.size,
+                )
+            )
+        )
+
+
+class PrepareNestHandler:
+    command_type = "prepare-nest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        nest_id = parse_entity_id(command.payload.get("nest_id"))
+        if character_id is None or nest_id is None:
+            return rejected("invalid character or nest id")
+        nest = _reachable_entity(ctx, character_id, nest_id)
+        if nest is None:
+            return rejected("nest is not reachable")
+        if not nest.has_component(NestComponent):
+            return rejected("target is not a nest")
+        component = nest.get_component(NestComponent)
+        if component.prepared:
+            return rejected("nest is already prepared")
+        replace_component(
+            nest,
+            replace(
+                component,
+                prepared=True,
+                prepared_by=str(character_id),
+                prepared_at_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            NestPreparedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(nest.id),),
+                    nest_id=str(nest.id),
+                    species_name=component.species_name,
                 )
             )
         )
@@ -3113,6 +3255,19 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(TrackComponent):
             track = entity.get_component(TrackComponent)
             lines.append(f"Tracked creature: {name} near {track.room_id}.")
+        if entity.has_component(TerritoryComponent):
+            territory = entity.get_component(TerritoryComponent)
+            state = "marked" if territory.marked_by else "unmarked"
+            lines.append(
+                f"Territory {name}: {territory.species_name or 'unknown species'}, {state}."
+            )
+        if entity.has_component(HerdComponent):
+            herd = entity.get_component(HerdComponent)
+            lines.append(f"Herd {name}: {herd.species_name} x{herd.size}.")
+        if entity.has_component(NestComponent):
+            nest = entity.get_component(NestComponent)
+            state = "prepared" if nest.prepared else "unprepared"
+            lines.append(f"Nest {name}: {nest.species_name}, {state}.")
         if entity.has_component(CreatureNeedComponent):
             need = entity.get_component(CreatureNeedComponent)
             state = "hungry" if need.hunger >= HUNGRY_THRESHOLD else "fed"
@@ -3305,6 +3460,8 @@ __all__ = [
     "GuardAnimalComponent",
     "GuardAssignedEvent",
     "GuardBehaviorComponent",
+    "HerdComponent",
+    "HerdTrackedEvent",
     "HatchEggHandler",
     "HatchlingComponent",
     "HiddenFromCreatureEvent",
@@ -3323,6 +3480,9 @@ __all__ = [
     "LockPenHandler",
     "MountComponent",
     "MountCreatureHandler",
+    "MarkTerritoryHandler",
+    "NestComponent",
+    "NestPreparedEvent",
     "ObserveCreatureHandler",
     "OpenPenHandler",
     "PackHuntComponent",
@@ -3330,6 +3490,7 @@ __all__ = [
     "PenOpenedEvent",
     "PredatorDrivenOffEvent",
     "PrepareCloneHandler",
+    "PrepareNestHandler",
     "QuarantinePenComponent",
     "RecallComponent",
     "RecallCreatureHandler",
@@ -3357,8 +3518,11 @@ __all__ = [
     "TamingComponent",
     "TamingProgressedEvent",
     "TargetWeakPointHandler",
+    "TerritoryComponent",
+    "TerritoryMarkedEvent",
     "TrackComponent",
     "TrackCreatureHandler",
+    "TrackHerdHandler",
     "TrainCommandHandler",
     "TrainingComponent",
     "TrampleComponent",

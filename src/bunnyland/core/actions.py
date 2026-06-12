@@ -533,6 +533,9 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="track_creature",
         patterns=("track {creature_id}",),
     ),
+    _definition("mark-territory", ("territory_id",), tool_name="mark_territory"),
+    _definition("track-herd", ("herd_id",), tool_name="track_herd"),
+    _definition("prepare-nest", ("nest_id",), tool_name="prepare_nest"),
     _definition(
         "set-bait",
         ("bait_id", "target_species", "potency"),

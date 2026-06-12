@@ -652,6 +652,17 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         event.__name__ for event in nuke.commands.typed_events
     }
 
+    dino = plugins[DINOSIM]
+    assert {"TerritoryComponent", "HerdComponent", "NestComponent"} <= {
+        component.__name__ for component in dino.ecs.components
+    }
+    assert {"mark-territory", "track-herd", "prepare-nest"} <= {
+        handler.command_type for handler in dino.commands.action_handlers
+    }
+    assert {"TerritoryMarkedEvent", "HerdTrackedEvent", "NestPreparedEvent"} <= {
+        event.__name__ for event in dino.commands.typed_events
+    }
+
 
 def test_ecs_systems_can_be_instances_or_classes():
     # apply should accept a system instance as well as a class.
