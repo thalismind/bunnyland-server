@@ -26,6 +26,7 @@ from bunnyland.mechanics.daggersim import (
     AcceptGeneratedQuestHandler,
     AccountOpenedEvent,
     AfflictionContractedEvent,
+    AfflictionCuredEvent,
     AskForWorkHandler,
     AskRumorHandler,
     AttemptPacifyHandler,
@@ -46,6 +47,7 @@ from bunnyland.mechanics.daggersim import (
     CreaturePacifiedEvent,
     CrimeCommittedEvent,
     CrimeRecordComponent,
+    CureAfflictionHandler,
     CustomClassComponent,
     CustomClassCreatedEvent,
     CustomSpellComponent,
@@ -64,6 +66,7 @@ from bunnyland.mechanics.daggersim import (
     DungeonRoomDiscoveredEvent,
     EnchantedItemComponent,
     EnchantItemHandler,
+    EndTransformationHandler,
     EnterDungeonHandler,
     EtiquetteSkillComponent,
     ExpandSiteHandler,
@@ -72,6 +75,7 @@ from bunnyland.mechanics.daggersim import (
     FeedingNeedChangedEvent,
     FeedingNeedComponent,
     FeedingNeedConsequence,
+    FeedOnHandler,
     FinePaidEvent,
     GeneratedQuestComponent,
     GeneratedSiteInstantiatedEvent,
@@ -132,6 +136,7 @@ from bunnyland.mechanics.daggersim import (
     StreetwiseSkillComponent,
     SupernaturalAfflictionComponent,
     TakeLoanHandler,
+    TransformationEndedEvent,
     TransformationStartedEvent,
     TransformHandler,
     TravelCompletedEvent,
@@ -187,6 +192,9 @@ def _install(actor):
     actor.register_handler(AttemptPacifyHandler())
     actor.register_handler(ContractAfflictionHandler())
     actor.register_handler(TransformHandler())
+    actor.register_handler(FeedOnHandler())
+    actor.register_handler(EndTransformationHandler())
+    actor.register_handler(CureAfflictionHandler())
     actor.register_handler(RequestDungeonHandler())
     actor.register_handler(EnterDungeonHandler())
     actor.register_handler(SearchRoomHandler())
@@ -3569,3 +3577,149 @@ def test_install_daggersim_registers_plugin_consequences():
         "LoanDueConsequence",
         "FeedingNeedConsequence",
     }
+
+
+def _afflicted(scenario, affliction_type="vampire", *, feeding=5.0, transformed=False):
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(
+        SupernaturalAfflictionComponent(
+            affliction_type=affliction_type, contracted_at_epoch=0, stage="active"
+        )
+    )
+    character.add_component(FeedingNeedComponent(current=feeding, last_updated_epoch=0))
+    if transformed:
+        character.add_component(
+            WereformComponent(form_name=affliction_type, transformed_at_epoch=0)
+        )
+    return character
+
+
+def _victim(scenario, name="Wanderer"):
+    victim = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name=name, kind="character"), CharacterComponent(species="bunny")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), victim.id
+    )
+    return victim.id
+
+
+async def test_feed_on_target_satisfies_feeding_need():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _afflicted(scenario, feeding=8.0)
+    victim = _victim(scenario)
+    feeding: list[FeedingNeedChangedEvent] = []
+    scenario.actor.bus.subscribe(FeedingNeedChangedEvent, feeding.append)
+
+    await scenario.actor.submit(_cmd(scenario, "feed-on", target_id=str(victim)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(FeedingNeedComponent).current == 0.0
+    assert feeding and feeding[-1].current == 0.0
+
+
+async def test_end_transformation_reverts_to_dormant():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _afflicted(scenario, transformed=True)
+    ended: list[TransformationEndedEvent] = []
+    scenario.actor.bus.subscribe(TransformationEndedEvent, ended.append)
+
+    await scenario.actor.submit(_cmd(scenario, "end-transformation"))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(WereformComponent)
+    assert character.get_component(SupernaturalAfflictionComponent).stage == "dormant"
+    assert ended and ended[0].affliction_type == "vampire"
+
+
+async def test_cure_affliction_removes_curse_and_feeding_need():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _afflicted(scenario, transformed=True)
+    cured: list[AfflictionCuredEvent] = []
+    scenario.actor.bus.subscribe(AfflictionCuredEvent, cured.append)
+
+    await scenario.actor.submit(_cmd(scenario, "cure-affliction"))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(SupernaturalAfflictionComponent)
+    assert not character.has_component(FeedingNeedComponent)
+    assert not character.has_component(WereformComponent)
+    assert cured and cured[0].affliction_type == "vampire"
+
+
+def test_curse_handlers_reject_bad_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    victim = _victim(scenario)
+
+    cases = [
+        (FeedOnHandler(), _handler_cmd(scenario, "feed-on", character_id="x"), "invalid character"),
+        (
+            FeedOnHandler(),
+            _handler_cmd(scenario, "feed-on", target_id=str(victim)),
+            "no feeding need",
+        ),
+        (
+            EndTransformationHandler(),
+            _handler_cmd(scenario, "end-transformation", character_id="x"),
+            "invalid character",
+        ),
+        (
+            EndTransformationHandler(),
+            _handler_cmd(scenario, "end-transformation"),
+            "not transformed",
+        ),
+        (
+            CureAfflictionHandler(),
+            _handler_cmd(scenario, "cure-affliction", character_id="x"),
+            "invalid character",
+        ),
+        (
+            CureAfflictionHandler(),
+            _handler_cmd(scenario, "cure-affliction"),
+            "no supernatural affliction",
+        ),
+    ]
+    for handler, command, expected in cases:
+        result = handler.execute(ctx, command)
+        assert not result.ok, expected
+        assert expected in result.reason, (expected, result.reason)
+
+    # With an affliction, feed-on still validates the target.
+    _afflicted(scenario)
+    far_victim = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far soul", kind="character"), CharacterComponent(species="bunny")],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), far_victim.id
+    )
+    feed_cases = [
+        (_handler_cmd(scenario, "feed-on", target_id=str(scenario.character)), "yourself"),
+        (_handler_cmd(scenario, "feed-on"), "invalid feeding target"),
+        (_handler_cmd(scenario, "feed-on", target_id="ghost_1"), "does not exist"),
+        (_handler_cmd(scenario, "feed-on", target_id=str(far_victim.id)), "not reachable"),
+    ]
+    for command, expected in feed_cases:
+        result = FeedOnHandler().execute(ctx, command)
+        assert not result.ok, expected
+        assert expected in result.reason, (expected, result.reason)
+
+
+def test_daggersim_fragments_show_transformed_state():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _afflicted(scenario, transformed=True)
+
+    lines = daggersim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+    assert any("Transformed into vampire" in line for line in lines)

@@ -147,6 +147,19 @@ Contract an affliction and transform:
 !transform form_name="moon hare"
 ```
 
+An affliction grows a feeding need over time. Feed on a reachable character to satisfy it,
+end your transformation to return to a dormant state, or seek a cure to lift the curse
+entirely:
+
+```text
+!feed-on target_id="Wanderer"
+!end-transformation
+!cure-affliction
+```
+
+Your affliction, its stage, your feeding need, and whether you are currently transformed
+all show in your character context.
+
 ## Dungeons
 
 Request a dungeon from a reachable dungeon hook:

@@ -560,6 +560,15 @@ class TransformationStartedEvent(DomainEvent):
     form_name: str
 
 
+class TransformationEndedEvent(DomainEvent):
+    affliction_type: str
+    form_name: str
+
+
+class AfflictionCuredEvent(DomainEvent):
+    affliction_type: str
+
+
 class DungeonRequestedEvent(DomainEvent):
     dungeon_id: str
     theme: str
@@ -1919,6 +1928,102 @@ class TransformHandler:
         )
 
 
+class FeedOnHandler:
+    command_type = "feed-on"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(FeedingNeedComponent):
+            return rejected("character has no feeding need")
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if target_id is None:
+            return rejected("invalid feeding target")
+        if target_id == character_id:
+            return rejected("cannot feed on yourself")
+        if not ctx.world.has_entity(target_id):
+            return rejected("feeding target does not exist")
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("feeding target is not reachable")
+
+        need = character.get_component(FeedingNeedComponent)
+        replace_component(character, replace(need, current=0.0, last_updated_epoch=ctx.epoch))
+        return ok(
+            FeedingNeedChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
+                    current=0.0,
+                    maximum=need.maximum,
+                )
+            )
+        )
+
+
+class EndTransformationHandler:
+    command_type = "end-transformation"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(WereformComponent):
+            return rejected("character is not transformed")
+
+        wereform = character.get_component(WereformComponent)
+        character.remove_component(WereformComponent)
+        affliction_type = wereform.form_name
+        if character.has_component(SupernaturalAfflictionComponent):
+            affliction = character.get_component(SupernaturalAfflictionComponent)
+            affliction_type = affliction.affliction_type
+            replace_component(character, replace(affliction, stage="dormant"))
+        return ok(
+            TransformationEndedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    affliction_type=affliction_type,
+                    form_name=wereform.form_name,
+                )
+            )
+        )
+
+
+class CureAfflictionHandler:
+    command_type = "cure-affliction"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(SupernaturalAfflictionComponent):
+            return rejected("character has no supernatural affliction")
+
+        affliction_type = character.get_component(SupernaturalAfflictionComponent).affliction_type
+        character.remove_component(SupernaturalAfflictionComponent)
+        if character.has_component(FeedingNeedComponent):
+            character.remove_component(FeedingNeedComponent)
+        if character.has_component(WereformComponent):
+            character.remove_component(WereformComponent)
+        return ok(
+            AfflictionCuredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    affliction_type=affliction_type,
+                )
+            )
+        )
+
+
 class FeedingNeedConsequence:
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
         events: list[DomainEvent] = []
@@ -2551,6 +2656,10 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(FeedingNeedComponent):
         need = character.get_component(FeedingNeedComponent)
         lines.append(f"Feeding need: {need.current:.1f}/{need.maximum:.1f}.")
+    if character.has_component(WereformComponent):
+        lines.append(
+            f"Transformed into {character.get_component(WereformComponent).form_name}."
+        )
     if character.has_component(TravelPlanComponent):
         plan = character.get_component(TravelPlanComponent)
         lines.append(
@@ -2661,6 +2770,7 @@ __all__ = [
     "AcceptGeneratedQuestHandler",
     "AccountOpenedEvent",
     "AfflictionContractedEvent",
+    "AfflictionCuredEvent",
     "AskForWorkHandler",
     "BankAccountComponent",
     "BankComponent",
@@ -2670,6 +2780,7 @@ __all__ = [
     "CompleteGeneratedQuestHandler",
     "CommitCrimeHandler",
     "ContractAfflictionHandler",
+    "CureAfflictionHandler",
     "CastSpellHandler",
     "ClassTemplateComponent",
     "CreateCustomClassHandler",
@@ -2692,6 +2803,8 @@ __all__ = [
     "ExpansionRequestedEvent",
     "FinePaidEvent",
     "FeedingNeedChangedEvent",
+    "EndTransformationHandler",
+    "FeedOnHandler",
     "FeedingNeedComponent",
     "FeedingNeedConsequence",
     "GeneratedSiteInstantiatedEvent",
@@ -2746,6 +2859,7 @@ __all__ = [
     "TravelRoute",
     "TravelStartedEvent",
     "TransformHandler",
+    "TransformationEndedEvent",
     "TransformationStartedEvent",
     "TakeLoanHandler",
     "UnrealizedLocationComponent",
