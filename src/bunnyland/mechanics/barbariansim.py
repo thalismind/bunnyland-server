@@ -152,6 +152,20 @@ class FortificationComponent(Component):
 
 
 @dataclass(frozen=True)
+class BaseClaimComponent(Component):
+    claimed_by: str
+    clan: str = ""
+    claimed_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class TrapComponent(Component):
+    damage: float = 5.0
+    armed: bool = True
+    placed_by: str | None = None
+
+
+@dataclass(frozen=True)
 class ThrallComponent(Component):
     """A subdued captive bound to a master as a worker (catalogue 4.5).
 
@@ -243,6 +257,20 @@ class ItemRepairedEvent(DomainEvent):
     item_id: str
     durability: float
     maximum: float
+
+
+class BaseClaimedEvent(DomainEvent):
+    base_id: str
+    clan: str = ""
+
+
+class TrapPlacedEvent(DomainEvent):
+    trap_id: str
+    damage: float
+
+
+class TrapDisarmedEvent(DomainEvent):
+    trap_id: str
 
 
 class ThrallTakenEvent(DomainEvent):
@@ -858,6 +886,114 @@ class FortifyHandler:
         )
 
 
+class ClaimBaseHandler:
+    command_type = "claim-base"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("base_id"))
+        if actor_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(actor_id)
+        if target_id is None:
+            target_id = container_of(character)
+        if target_id is None or not ctx.world.has_entity(target_id):
+            return rejected("base does not exist")
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("base is not reachable")
+        base = ctx.entity(target_id)
+        if base.has_component(BaseClaimComponent):
+            return rejected("base is already claimed")
+        clan = str(command.payload.get("clan", "")).strip()
+        base.add_component(
+            BaseClaimComponent(
+                claimed_by=str(actor_id),
+                clan=clan,
+                claimed_at_epoch=ctx.epoch,
+            )
+        )
+        return ok(
+            BaseClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(target_id),),
+                    base_id=str(target_id),
+                    clan=clan,
+                )
+            )
+        )
+
+
+class PlaceTrapHandler:
+    command_type = "place-trap"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        if actor_id is None:
+            return rejected("invalid character id")
+        room_id = container_of(ctx.entity(actor_id))
+        if room_id is None:
+            return rejected("no room to place trap")
+        damage = float(command.payload.get("damage", 5.0))
+        if damage <= 0:
+            return rejected("trap damage must be positive")
+        trap = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name="armed trap", kind="trap"),
+                TrapComponent(damage=damage, armed=True, placed_by=str(actor_id)),
+            ],
+        )
+        ctx.entity(room_id).add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), trap.id)
+        return ok(
+            TrapPlacedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(room_id),
+                    target_ids=(str(trap.id),),
+                    trap_id=str(trap.id),
+                    damage=damage,
+                )
+            )
+        )
+
+
+class DisarmTrapHandler:
+    command_type = "disarm-trap"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        trap_id = parse_entity_id(command.payload.get("trap_id"))
+        if actor_id is None or trap_id is None:
+            return rejected("invalid character or trap id")
+        if not ctx.world.has_entity(trap_id):
+            return rejected("trap does not exist")
+        character = ctx.entity(actor_id)
+        if trap_id not in reachable_ids(ctx.world, character):
+            return rejected("trap is not reachable")
+        trap = ctx.entity(trap_id)
+        if not trap.has_component(TrapComponent):
+            return rejected("target is not a trap")
+        component = trap.get_component(TrapComponent)
+        if not component.armed:
+            return rejected("trap is already disarmed")
+        replace_component(trap, replace(component, armed=False))
+        return ok(
+            TrapDisarmedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(trap_id),),
+                    trap_id=str(trap_id),
+                )
+            )
+        )
+
+
 class RaidHandler:
     command_type = "raid"
 
@@ -1433,6 +1569,24 @@ def barbariansim_fragments(world: World, character) -> list[str]:
             lines.append(
                 f"Reachable fortification: rating {fort.rating}, durability {fort.durability}."
             )
+        if entity.has_component(BaseClaimComponent):
+            claim = entity.get_component(BaseClaimComponent)
+            clan = f" for {claim.clan}" if claim.clan else ""
+            base_name = (
+                entity.get_component(IdentityComponent).name
+                if entity.has_component(IdentityComponent)
+                else str(entity.id)
+            )
+            lines.append(f"Base claim on {base_name}{clan}.")
+        if entity.has_component(TrapComponent):
+            trap = entity.get_component(TrapComponent)
+            state = "armed" if trap.armed else "disarmed"
+            trap_name = (
+                entity.get_component(IdentityComponent).name
+                if entity.has_component(IdentityComponent)
+                else str(entity.id)
+            )
+            lines.append(f"Trap {trap_name}: {state}, {trap.damage:g} damage.")
     return sorted(lines)
 
 
@@ -1452,8 +1606,11 @@ __all__ = [
     "AttackHandler",
     "BarbarianRaidEnrichment",
     "BarbarianSimPolicyComponent",
+    "BaseClaimComponent",
+    "BaseClaimedEvent",
     "CharacterPoisonedEvent",
     "ChallengeHandler",
+    "ClaimBaseHandler",
     "CleanseCorruptionHandler",
     "CorruptionCleansedEvent",
     "CorruptionComponent",
@@ -1461,6 +1618,7 @@ __all__ = [
     "DefendHandler",
     "DefendingComponent",
     "CommandFollowerHandler",
+    "DisarmTrapHandler",
     "DurabilityComponent",
     "ExposureChangedEvent",
     "ExposureDamageEvent",
@@ -1474,6 +1632,7 @@ __all__ = [
     "ItemBrokenEvent",
     "ItemDamagedEvent",
     "ItemRepairedEvent",
+    "PlaceTrapHandler",
     "PickpocketHandler",
     "PoisonCharacterHandler",
     "PoisonComponent",
@@ -1498,6 +1657,9 @@ __all__ = [
     "ThrallReleasedEvent",
     "ThrallTakenEvent",
     "TreatPoisonHandler",
+    "TrapComponent",
+    "TrapDisarmedEvent",
+    "TrapPlacedEvent",
     "WeaponComponent",
     "barbariansim_fragments",
     "ensure_barbariansim_policy",

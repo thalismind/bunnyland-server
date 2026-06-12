@@ -564,6 +564,17 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "CollectionUpdatedEvent",
     } <= {event.__name__ for event in garden.commands.typed_events}
 
+    barbarian = plugins[BARBARIANSIM]
+    assert {"BaseClaimComponent", "TrapComponent"} <= {
+        component.__name__ for component in barbarian.ecs.components
+    }
+    assert {"claim-base", "place-trap", "disarm-trap"} <= {
+        handler.command_type for handler in barbarian.commands.action_handlers
+    }
+    assert {"BaseClaimedEvent", "TrapPlacedEvent", "TrapDisarmedEvent"} <= {
+        event.__name__ for event in barbarian.commands.typed_events
+    }
+
     dragon = plugins[DRAGONSIM]
     assert {
         "PerkComponent",

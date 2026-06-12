@@ -985,6 +985,9 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("defend", ("stamina_cost", "reduction"), tool_name="defend"),
     _definition("challenge", ("target_id", "terms"), tool_name="challenge"),
     _definition("fortify", ("target_id", "strength"), tool_name="fortify"),
+    _definition("claim-base", ("base_id", "clan"), tool_name="claim_base"),
+    _definition("place-trap", ("damage",), tool_name="place_trap"),
+    _definition("disarm-trap", ("trap_id",), tool_name="disarm_trap"),
     _definition("raid", ("target_id", "intensity"), tool_name="raid"),
     _definition("repair-item", ("item_id", "amount"), tool_name="repair_item"),
     _definition(

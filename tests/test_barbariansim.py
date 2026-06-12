@@ -24,6 +24,7 @@ from bunnyland.core import (
     Wearing,
     build_submitted_command,
     container_of,
+    parse_entity_id,
     replace_component,
     spawn_entity,
 )
@@ -39,9 +40,12 @@ from bunnyland.core.events import (
 from bunnyland.mechanics.barbariansim import (
     ArmorComponent,
     AttackHandler,
+    BaseClaimComponent,
+    BaseClaimedEvent,
     BarbarianRaidEnrichment,
     ChallengeHandler,
     CharacterPoisonedEvent,
+    ClaimBaseHandler,
     CleanseCorruptionHandler,
     CommandFollowerHandler,
     CorruptionCleansedEvent,
@@ -49,6 +53,7 @@ from bunnyland.mechanics.barbariansim import (
     CorruptionGainedEvent,
     DefendHandler,
     DefendingComponent,
+    DisarmTrapHandler,
     DurabilityComponent,
     ExposureDamageEvent,
     FollowerComponent,
@@ -62,6 +67,7 @@ from bunnyland.mechanics.barbariansim import (
     ItemDamagedEvent,
     ItemRepairedEvent,
     PickpocketHandler,
+    PlaceTrapHandler,
     PoisonCharacterHandler,
     PoisonComponent,
     PoisonProgressedEvent,
@@ -82,6 +88,9 @@ from bunnyland.mechanics.barbariansim import (
     ThrallReleasedEvent,
     ThrallTakenEvent,
     TreatPoisonHandler,
+    TrapComponent,
+    TrapDisarmedEvent,
+    TrapPlacedEvent,
     WeaponComponent,
     barbariansim_fragments,
     generate_raid_spawn_specs,
@@ -109,6 +118,9 @@ def _install(actor, *, enabled=frozenset({BoundaryTag.PVP})):
     actor.register_handler(DefendHandler())
     actor.register_handler(ChallengeHandler())
     actor.register_handler(FortifyHandler())
+    actor.register_handler(ClaimBaseHandler())
+    actor.register_handler(PlaceTrapHandler())
+    actor.register_handler(DisarmTrapHandler())
     actor.register_handler(RaidHandler())
     actor.register_handler(RepairItemHandler())
     actor.register_handler(PoisonCharacterHandler())
@@ -916,6 +928,43 @@ async def test_fortify_current_room_and_raid_damage_fortification():
 
     assert raids[0].damage == 3.0
     assert room.get_component(FortificationComponent).durability == 7.0
+
+
+async def test_claim_base_place_and_disarm_trap():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset())
+    claimed: list[BaseClaimedEvent] = []
+    placed: list[TrapPlacedEvent] = []
+    disarmed: list[TrapDisarmedEvent] = []
+    scenario.actor.bus.subscribe(BaseClaimedEvent, claimed.append)
+    scenario.actor.bus.subscribe(TrapPlacedEvent, placed.append)
+    scenario.actor.bus.subscribe(TrapDisarmedEvent, disarmed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "claim-base", clan="Moss Fangs"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "place-trap", damage=7.0))
+    await scenario.actor.tick(HOUR)
+
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    claim = room.get_component(BaseClaimComponent)
+    trap_id = parse_entity_id(placed[0].trap_id)
+    assert trap_id is not None
+    trap = scenario.actor.world.get_entity(trap_id)
+    assert claim.claimed_by == str(scenario.character)
+    assert claimed[0].clan == "Moss Fangs"
+    assert trap.get_component(TrapComponent).armed is True
+
+    await scenario.actor.submit(_cmd(scenario, "disarm-trap", trap_id=str(trap_id)))
+    await scenario.actor.tick(HOUR)
+
+    assert trap.get_component(TrapComponent).armed is False
+    assert disarmed[0].trap_id == str(trap_id)
+    fragments = barbariansim_fragments(
+        scenario.actor.world,
+        scenario.actor.world.get_entity(scenario.character),
+    )
+    assert any("Base claim" in line and "Moss Fangs" in line for line in fragments)
+    assert any("Trap armed trap: disarmed, 7 damage" in line for line in fragments)
 
 
 async def test_fortify_rejects_unreachable_target():
