@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from random import Random
 from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
@@ -19,6 +20,7 @@ from ..core.components import (
     CharacterComponent,
     IdentityComponent,
     PortableComponent,
+    RegionComponent,
     RoomComponent,
 )
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component, spawn_entity
@@ -28,6 +30,15 @@ from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .lifesim import AgeComponent, LifeStageComponent
 
 DEFAULT_INCUBATION_SECONDS = 24 * 60 * 60
+
+_KAIJU_NAMES = (
+    "rampaging kaiju alpha",
+    "rampaging kaiju beta",
+    "rampaging kaiju gamma",
+    "rampaging kaiju delta",
+)
+
+_KAIJU_ATTACKS = ("trample", "tail sweep", "sky roar", "building crush")
 
 
 def _event_base(epoch: int, **kwargs) -> dict:
@@ -273,7 +284,18 @@ class ContainmentProtocolComponent(Component):
 @dataclass(frozen=True)
 class KaijuComponent(Component):
     threat_level: int = 10
+    difficulty: str = "major"
     target_room_id: str | None = None
+
+
+@dataclass(frozen=True)
+class KaijuSpawnSpec:
+    name: str
+    threat_level: int
+    difficulty: str
+    attack_type: str = "trample"
+    damage: float = 5.0
+    roar_fear: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -691,6 +713,159 @@ def _is_creature(entity: Entity) -> bool:
         or entity.has_component(ReptileProcreationComponent)
         or entity.has_component(KaijuComponent)
     )
+
+
+def kaiju_difficulty_for_threat(threat_level: int) -> str:
+    if threat_level >= 10:
+        return "colossal"
+    if threat_level >= 7:
+        return "epic"
+    return "major"
+
+
+def generate_kaiju_spawn_specs(
+    attack_budget: int | float, seed: str = ""
+) -> tuple[KaijuSpawnSpec, ...]:
+    total = max(1, int(round(attack_budget)))
+    count = 1
+    if total >= 18:
+        count = 3
+    elif total >= 10:
+        count = 2
+    base = total // count
+    remainder = total % count
+    threats = [base + (1 if index < remainder else 0) for index in range(count)]
+    rng = Random(seed)
+    names = list(_KAIJU_NAMES)
+    attacks = list(_KAIJU_ATTACKS)
+    rng.shuffle(names)
+    rng.shuffle(attacks)
+    return tuple(
+        KaijuSpawnSpec(
+            name=names[index],
+            threat_level=threat,
+            difficulty=kaiju_difficulty_for_threat(threat),
+            attack_type=attacks[index],
+            damage=float(max(4, threat)),
+            roar_fear=float(max(2, threat // 2)),
+        )
+        for index, threat in enumerate(threats)
+    )
+
+
+def _region_for_room(world: World, room: Entity) -> Entity | None:
+    for source_id, edge in room.get_incoming_relationships(Contains):
+        if edge.mode != ContainmentMode.REGION or not world.has_entity(source_id):
+            continue
+        source = world.get_entity(source_id)
+        if source.has_component(RegionComponent):
+            return source
+    return None
+
+
+def _region_rooms(world: World, region: Entity) -> tuple[Entity, ...]:
+    rooms: list[Entity] = []
+    stack = [region]
+    seen: set[EntityId] = set()
+    while stack:
+        entity = stack.pop()
+        if entity.id in seen:
+            continue
+        seen.add(entity.id)
+        for edge, child_id in entity.get_relationships(Contains):
+            if edge.mode != ContainmentMode.REGION or not world.has_entity(child_id):
+                continue
+            child = world.get_entity(child_id)
+            if child.has_component(RoomComponent):
+                rooms.append(child)
+            if child.has_component(RegionComponent):
+                stack.append(child)
+    return tuple(sorted(rooms, key=lambda room: str(room.id)))
+
+
+def selected_kaiju_rooms(
+    world: World, target_room_id: EntityId | None, count: int, seed: str = ""
+) -> tuple[Entity, ...]:
+    if count <= 0 or target_room_id is None or not world.has_entity(target_room_id):
+        return ()
+    target_room = world.get_entity(target_room_id)
+    if not target_room.has_component(RoomComponent):
+        return ()
+    region = _region_for_room(world, target_room)
+    rooms = list(_region_rooms(world, region)) if region is not None else [target_room]
+    if not rooms:
+        rooms = [target_room]
+    rng = Random(seed)
+    rng.shuffle(rooms)
+    if len(rooms) >= count:
+        return tuple(rooms[:count])
+    selected = list(rooms)
+    while len(selected) < count:
+        selected.append(rooms[len(selected) % len(rooms)])
+    return tuple(selected)
+
+
+class DinoIncidentEnrichment:
+    """Dino-sim incident enrichment for generated storyteller kaiju attacks."""
+
+    def __init__(self, world: World):
+        self.world = world
+
+    def subscribe(self, bus) -> None:
+        from .storyteller import IncidentGeneratedEvent
+
+        bus.subscribe(IncidentGeneratedEvent, self._on_incident)
+
+    def _on_incident(self, event) -> None:
+        if event.kind != "kaiju_attack" and "kaiju-spawn" not in event.wants:
+            return
+        from .storyteller import IncidentSpawned
+
+        incident_id = parse_entity_id(event.incident_id)
+        room_id = parse_entity_id(event.room_id)
+        if (
+            incident_id is None
+            or room_id is None
+            or not self.world.has_entity(incident_id)
+            or not self.world.has_entity(room_id)
+        ):
+            return
+        incident = self.world.get_entity(incident_id)
+        if incident.get_relationships(IncidentSpawned):
+            return
+        specs = generate_kaiju_spawn_specs(event.budget_spent, event.seed)
+        rooms = selected_kaiju_rooms(self.world, room_id, len(specs), event.seed)
+        if len(rooms) != len(specs):
+            return
+        for spec, room in zip(specs, rooms, strict=True):
+            kaiju = spawn_entity(
+                self.world,
+                [
+                    IdentityComponent(
+                        name=spec.name,
+                        kind="character",
+                        tags=("dinosim", "kaiju", spec.difficulty),
+                    ),
+                    CharacterComponent(species="kaiju"),
+                    KaijuComponent(
+                        threat_level=spec.threat_level,
+                        difficulty=spec.difficulty,
+                        target_room_id=str(room.id),
+                    ),
+                    CreatureAttackComponent(damage=spec.damage, attack_type=spec.attack_type),
+                    RoarComponent(fear=spec.roar_fear, radius="region"),
+                    TrampleComponent(damage=spec.damage),
+                    ArmorPlateComponent(rating=max(1.0, spec.threat_level / 5)),
+                    WeakPointComponent(label="glowing dorsal plate"),
+                ],
+            )
+            room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), kaiju.id)
+            incident.add_relationship(IncidentSpawned(kind="monster"), kaiju.id)
+        replace_component(
+            incident,
+            SettlementDamageComponent(severity=max(1, int(round(event.budget_spent / 5)))),
+        )
+        incident.add_relationship(IncidentSpawned(kind="damage"), incident.id)
 
 
 def _reachable_creature(
@@ -2842,6 +3017,7 @@ def install_dinosim(actor) -> None:
     ensure_dinosim_policy(actor)
     actor.register_consequence(IncubationConsequence())
     actor.register_consequence(EscapeRiskConsequence())
+    DinoIncidentEnrichment(actor.world).subscribe(actor.bus)
 
 
 __all__ = [
@@ -2888,6 +3064,7 @@ __all__ = [
     "CreatureTranquilizedEvent",
     "CreatureTrampledEvent",
     "DinosaurComponent",
+    "DinoIncidentEnrichment",
     "DinosimPolicyComponent",
     "DodgeCreatureHandler",
     "DriveOffPredatorHandler",
@@ -2932,6 +3109,7 @@ __all__ = [
     "IncubationConsequence",
     "KaijuComponent",
     "KaijuArrivedEvent",
+    "KaijuSpawnSpec",
     "LayEggHandler",
     "LockPenHandler",
     "MountComponent",
@@ -2982,5 +3160,8 @@ __all__ = [
     "WeakPointComponent",
     "dinosim_fragments",
     "ensure_dinosim_policy",
+    "generate_kaiju_spawn_specs",
     "install_dinosim",
+    "kaiju_difficulty_for_threat",
+    "selected_kaiju_rooms",
 ]

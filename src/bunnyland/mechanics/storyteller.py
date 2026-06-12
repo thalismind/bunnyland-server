@@ -14,6 +14,7 @@ from ..core.components import (
     AdminComponent,
     CharacterComponent,
     DeadComponent,
+    GenerationIntentComponent,
     HealthComponent,
     IdentityComponent,
     PortableComponent,
@@ -97,6 +98,31 @@ class IncidentResolvedEvent(DomainEvent):
     kind: str
 
 
+class IncidentGeneratedEvent(DomainEvent):
+    seed: str
+    incident_id: str
+    incident_key: str
+    kind: str
+    budget_spent: float
+    generation: GenerationIntentComponent
+
+    @property
+    def intent(self) -> str:
+        return self.generation.description
+
+    @property
+    def tags(self) -> tuple[str, ...]:
+        return self.generation.tags
+
+    @property
+    def wants(self) -> tuple[str, ...]:
+        return self.generation.wants
+
+    @property
+    def needs(self) -> tuple[str, ...]:
+        return self.generation.needs
+
+
 def _event_base(epoch: int, **kwargs) -> dict:
     base = {
         "event_id": uuid4().hex,
@@ -141,11 +167,50 @@ def _choose_incident(world: World, points: float) -> tuple[str, float]:
     return "resource_drop", min(points, 2.0)
 
 
+def _incident_generation(kind: str, spent: float) -> GenerationIntentComponent:
+    if kind == "resource_drop":
+        return GenerationIntentComponent(
+            description="a resource drop incident that should create claimable supplies",
+            tags=("incident", "supply", "loot"),
+            wants=("loot", "claimable-reward"),
+            source_key=kind,
+            entity_kind="incident",
+        )
+    if kind == "hostile_encounter":
+        return GenerationIntentComponent(
+            description="a hostile encounter incident that should create an enemy threat",
+            tags=("incident", "combat", "hostile"),
+            wants=("monster", "enemy-threat"),
+            source_key=kind,
+            entity_kind="incident",
+        )
+    if kind == "kaiju_attack":
+        return GenerationIntentComponent(
+            description=(
+                f"a kaiju attack incident with total attack budget {spent:g}; "
+                "spawn kaiju threats across the selected region"
+            ),
+            tags=("incident", "kaiju", "regional-threat"),
+            wants=("kaiju-spawn", "regional-placement", "settlement-damage"),
+            needs=("dinosim",),
+            source_key=kind,
+            entity_kind="incident",
+        )
+    return GenerationIntentComponent(
+        description=f"a {kind.replace('_', ' ')} incident",
+        tags=("incident", kind),
+        source_key=kind,
+        entity_kind="incident",
+    )
+
+
 def _spawn_incident(world: World, epoch: int, room, kind: str, spent: float):
+    generation = _incident_generation(kind, spent)
     incident = spawn_entity(
         world,
         [
             IdentityComponent(name=kind.replace("_", " "), kind="incident"),
+            generation,
             IncidentComponent(
                 kind=kind,
                 budget_spent=spent,
@@ -156,9 +221,33 @@ def _spawn_incident(world: World, epoch: int, room, kind: str, spent: float):
     )
     if room is not None:
         room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), incident.id)
-        if kind == "resource_drop":
+    return incident
+
+
+class StorytellerIncidentEnrichment:
+    """Builtin incident enrichment for core storyteller incidents."""
+
+    def __init__(self, world: World):
+        self.world = world
+
+    def subscribe(self, bus) -> None:
+        bus.subscribe(IncidentGeneratedEvent, self._on_incident)
+
+    def _on_incident(self, event: IncidentGeneratedEvent) -> None:
+        incident_id = parse_entity_id(event.incident_id)
+        room_id = parse_entity_id(event.room_id)
+        if (
+            incident_id is None
+            or room_id is None
+            or not self.world.has_entity(incident_id)
+            or not self.world.has_entity(room_id)
+        ):
+            return
+        incident = self.world.get_entity(incident_id)
+        room = self.world.get_entity(room_id)
+        if event.kind == "resource_drop":
             supply = spawn_entity(
-                world,
+                self.world,
                 [
                     IdentityComponent(name="supply bundle", kind="item"),
                     PortableComponent(can_pick_up=True),
@@ -166,9 +255,9 @@ def _spawn_incident(world: World, epoch: int, room, kind: str, spent: float):
             )
             room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), supply.id)
             incident.add_relationship(IncidentSpawned(kind="loot"), supply.id)
-        elif kind == "hostile_encounter":
+        elif event.kind == "hostile_encounter":
             hostile = spawn_entity(
-                world,
+                self.world,
                 [
                     IdentityComponent(name="hostile raider", kind="character"),
                     CharacterComponent(species="raider"),
@@ -177,19 +266,6 @@ def _spawn_incident(world: World, epoch: int, room, kind: str, spent: float):
             )
             room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), hostile.id)
             incident.add_relationship(IncidentSpawned(kind="monster"), hostile.id)
-        elif kind == "kaiju_attack":
-            kaiju = spawn_entity(
-                world,
-                [
-                    IdentityComponent(name="rampaging kaiju", kind="kaiju"),
-                    KaijuComponent(threat_level=15, target_room_id=str(room.id)),
-                ],
-            )
-            room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), kaiju.id)
-            incident.add_relationship(IncidentSpawned(kind="monster"), kaiju.id)
-            replace_component(incident, SettlementDamageComponent(severity=3))
-            incident.add_relationship(IncidentSpawned(kind="damage"), incident.id)
-    return incident
 
 
 def _is_admin(ctx: HandlerContext, command: SubmittedCommand, actor_id: EntityId) -> bool:
@@ -366,6 +442,23 @@ class StorytellerConsequence:
                     )
                 )
             )
+            generation = incident.get_component(GenerationIntentComponent)
+            events.append(
+                IncidentGeneratedEvent(
+                    **_event_base(
+                        epoch,
+                        actor_id=str(entity.id),
+                        room_id=room_id,
+                        target_ids=(str(incident.id),),
+                        seed=f"{kind}:{epoch}:{spent:g}",
+                        incident_id=str(incident.id),
+                        incident_key=kind,
+                        kind=kind,
+                        budget_spent=spent,
+                        generation=generation,
+                    )
+                )
+            )
             events.append(
                 IncidentStartedEvent(
                     **_event_base(
@@ -451,18 +544,21 @@ def storyteller_fragments(world: World, character) -> list[str]:
 def install_storyteller(actor) -> None:
     actor.register_consequence(StorytellerConsequence())
     actor.register_consequence(IncidentAutoResolutionConsequence())
+    StorytellerIncidentEnrichment(actor.world).subscribe(actor.bus)
 
 
 __all__ = [
     "IncidentBudgetComponent",
     "IncidentComponent",
     "IncidentAutoResolutionConsequence",
+    "IncidentGeneratedEvent",
     "IncidentHistoryComponent",
     "IncidentProposedEvent",
     "IncidentResolvedEvent",
     "IncidentSpawned",
     "IncidentStartedEvent",
     "ResolveIncidentHandler",
+    "StorytellerIncidentEnrichment",
     "StorytellerComponent",
     "StorytellerConsequence",
     "ThreatPointsComponent",

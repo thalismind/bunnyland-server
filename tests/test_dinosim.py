@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -16,7 +18,12 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
-from bunnyland.core.components import CharacterComponent, RoomComponent
+from bunnyland.core.components import (
+    CharacterComponent,
+    GenerationIntentComponent,
+    RegionComponent,
+    RoomComponent,
+)
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.colonysim import install_colonysim
@@ -60,6 +67,7 @@ from bunnyland.mechanics.dinosim import (
     CreatureTrackedEvent,
     CreatureTrampledEvent,
     CreatureTranquilizedEvent,
+    DinoIncidentEnrichment,
     DinosaurComponent,
     DodgeCreatureHandler,
     DriveOffPredatorHandler,
@@ -100,6 +108,7 @@ from bunnyland.mechanics.dinosim import (
     IncubationConsequence,
     KaijuArrivedEvent,
     KaijuComponent,
+    KaijuSpawnSpec,
     LayEggHandler,
     LockPenHandler,
     MountComponent,
@@ -148,12 +157,17 @@ from bunnyland.mechanics.dinosim import (
     _entity_room_id,
     _species_name,
     dinosim_fragments,
+    generate_kaiju_spawn_specs,
     install_dinosim,
+    kaiju_difficulty_for_threat,
+    selected_kaiju_rooms,
 )
 from bunnyland.mechanics.lifesim import LifeStageComponent
 from bunnyland.mechanics.storyteller import (
     IncidentBudgetComponent,
     IncidentComponent,
+    IncidentGeneratedEvent,
+    IncidentSpawned,
     StorytellerComponent,
     StorytellerConsequence,
 )
@@ -285,6 +299,99 @@ def test_species_name_prefers_specific_components():
     assert _species_name(character) == "iguanodon"
     assert _species_name(named) == "mystery lizard"
     assert _species_name(unknown) == "unknown reptile"
+
+
+def test_generate_kaiju_spawn_specs_splits_attack_budget_into_epic_threats():
+    specs = generate_kaiju_spawn_specs(15, "kaiju_attack:3600:15")
+
+    assert all(isinstance(spec, KaijuSpawnSpec) for spec in specs)
+    assert specs == generate_kaiju_spawn_specs(15, "kaiju_attack:3600:15")
+    assert len(specs) == 2
+    assert sum(spec.threat_level for spec in specs) == 15
+    assert {spec.difficulty for spec in specs} == {"epic"}
+    assert kaiju_difficulty_for_threat(6) == "major"
+    assert kaiju_difficulty_for_threat(10) == "colossal"
+    assert len(generate_kaiju_spawn_specs(18, "larger")) == 3
+
+
+def test_selected_kaiju_rooms_uses_seeded_region_selection_and_fallbacks():
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    assert selected_kaiju_rooms(world, None, 1, "seed") == ()
+    assert selected_kaiju_rooms(world, scenario.room_a, 0, "seed") == ()
+    prop = spawn_entity(world, [IdentityComponent(name="marker", kind="prop")])
+    assert selected_kaiju_rooms(world, prop.id, 1, "seed") == ()
+
+    fallback = selected_kaiju_rooms(world, scenario.room_a, 2, "seed")
+    assert tuple(room.id for room in fallback) == (scenario.room_a, scenario.room_a)
+
+    region = spawn_entity(world, [RegionComponent(name="Mosslit Basin")])
+    nested = spawn_entity(world, [RegionComponent(name="South Ridge")])
+    room_c = spawn_entity(world, [RoomComponent(title="Cliff Overlook")])
+    region.add_relationship(Contains(mode=ContainmentMode.REGION), scenario.room_a)
+    region.add_relationship(Contains(mode=ContainmentMode.REGION), nested.id)
+    nested.add_relationship(Contains(mode=ContainmentMode.REGION), scenario.room_b)
+    nested.add_relationship(Contains(mode=ContainmentMode.REGION), room_c.id)
+
+    selected = selected_kaiju_rooms(world, scenario.room_a, 2, "region-seed")
+    assert selected == selected_kaiju_rooms(world, scenario.room_a, 2, "region-seed")
+    assert len(selected) == 2
+    assert {room.id for room in selected} <= {scenario.room_a, scenario.room_b, room_c.id}
+
+
+def test_dino_incident_enrichment_is_seeded_and_idempotent():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    incident = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="kaiju attack", kind="incident"),
+            IncidentComponent(kind="kaiju_attack", budget_spent=15, started_at_epoch=0),
+        ],
+    )
+    enrichment = DinoIncidentEnrichment(world)
+
+    def event_for(
+        target,
+        *,
+        kind: str = "kaiju_attack",
+        incident_id: str | None = None,
+        wants: tuple[str, ...] = ("kaiju-spawn",),
+    ) -> IncidentGeneratedEvent:
+        return IncidentGeneratedEvent(
+            event_id="event",
+            world_epoch=0,
+            created_at=datetime.now(UTC),
+            room_id=str(target.id),
+            target_ids=(str(incident.id),),
+            seed="kaiju-seed",
+            incident_id=incident_id if incident_id is not None else str(incident.id),
+            incident_key=kind,
+            kind=kind,
+            budget_spent=15,
+            generation=GenerationIntentComponent(wants=wants),
+        )
+
+    enrichment._on_incident(
+        event_for(world.get_entity(scenario.room_a), kind="resource_drop", wants=())
+    )
+    assert incident.get_relationships(IncidentSpawned) == []
+
+    enrichment._on_incident(event_for(world.get_entity(scenario.room_a), incident_id="not-an-id"))
+    assert incident.get_relationships(IncidentSpawned) == []
+
+    prop = spawn_entity(world, [IdentityComponent(name="not a room", kind="prop")])
+    enrichment._on_incident(event_for(prop))
+    assert incident.get_relationships(IncidentSpawned) == []
+
+    enrichment._on_incident(event_for(world.get_entity(scenario.room_a)))
+    spawned = incident.get_relationships(IncidentSpawned)
+    assert len([edge for edge, _target_id in spawned if edge.kind == "monster"]) == 2
+    assert incident.has_component(SettlementDamageComponent)
+
+    enrichment._on_incident(event_for(world.get_entity(scenario.room_a)))
+    assert incident.get_relationships(IncidentSpawned) == spawned
 
 
 async def test_fossil_identification_extracts_sample_and_prepares_clone_egg():
@@ -2372,8 +2479,13 @@ async def test_storyteller_selects_kaiju_attack_only_when_colonysim_and_dinosim_
     install_colonysim(scenario.actor)
     install_dinosim(scenario.actor)
     scenario.actor.register_consequence(StorytellerConsequence())
+    world = scenario.actor.world
+    region = spawn_entity(world, [RegionComponent(name="Mosslit Basin")])
+    room_c = spawn_entity(world, [RoomComponent(title="South Ridge")])
+    for room_id in (scenario.room_a, scenario.room_b, room_c.id):
+        region.add_relationship(Contains(mode=ContainmentMode.REGION), room_id)
     spawn_entity(
-        scenario.actor.world,
+        world,
         [
             IdentityComponent(name="kaiju storyteller", kind="controller"),
             StorytellerComponent(interval_seconds=HOUR, next_incident_epoch=HOUR),
@@ -2389,4 +2501,16 @@ async def test_storyteller_selects_kaiju_attack_only_when_colonysim_and_dinosim_
     )
     assert incident.get_component(IncidentComponent).kind == "kaiju_attack"
     assert incident.has_component(SettlementDamageComponent)
-    assert any(entity.has_component(KaijuComponent) for entity in _room_contents(scenario))
+    region_room_entities = []
+    for _edge, room_id in region.get_relationships(Contains):
+        room = world.get_entity(room_id)
+        region_room_entities.extend(
+            world.get_entity(entity_id)
+            for _content_edge, entity_id in room.get_relationships(Contains)
+        )
+    kaiju = [entity for entity in region_room_entities if entity.has_component(KaijuComponent)]
+    assert 1 <= len(kaiju) <= 3
+    assert sum(entity.get_component(KaijuComponent).threat_level for entity in kaiju) == 15
+    assert all(entity.has_component(CharacterComponent) for entity in kaiju)
+    assert all(entity.get_component(KaijuComponent).difficulty for entity in kaiju)
+    assert len({container_of(entity) for entity in kaiju}) > 1

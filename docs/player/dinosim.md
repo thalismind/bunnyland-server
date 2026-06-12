@@ -208,7 +208,8 @@ Assign ranch labor or guard duty to a creature:
 
 Kaiju attacks are storyteller incidents when both `bunnyland.dinosim` and
 `bunnyland.colonysim` are enabled. The storyteller budget can select a `kaiju_attack`,
-place an active incident in a room, spawn a kaiju threat, and attach settlement damage.
+place an active incident in a room, split the attack budget across one to three epic
+kaiju, choose target rooms from the incident room's region, and attach settlement damage.
 
 Resolve the active incident with the normal storyteller command:
 

@@ -762,6 +762,7 @@ from ..mechanics.social import SocialBond, install_social, relationship_fragment
 from ..mechanics.storyteller import (
     IncidentBudgetComponent,
     IncidentComponent,
+    IncidentGeneratedEvent,
     IncidentHistoryComponent,
     IncidentProposedEvent,
     IncidentResolvedEvent,
@@ -2107,6 +2108,7 @@ def storyteller_plugin() -> Plugin:
         commands=CommandContribution(
             action_handlers=(ResolveIncidentHandler,),
             typed_events=(
+                IncidentGeneratedEvent,
                 IncidentProposedEvent,
                 IncidentStartedEvent,
                 IncidentResolvedEvent,

@@ -1559,8 +1559,8 @@ async def test_discord_playtest_dinosim_kaiju_incident_loop(scenario):
         for _edge, entity_id in room.get_relationships(Contains)
     ]
     assert rejected == []
-    assert result.ticks == 5
-    assert len(result.inputs) == 3
+    assert result.ticks == 6
+    assert len(result.inputs) == 4
     assert len(incidents) == 1
     assert incidents[0].get_component(IncidentComponent).kind == "kaiju_attack"
     assert incidents[0].has_component(dino.SettlementDamageComponent)

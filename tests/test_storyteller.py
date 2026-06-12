@@ -37,6 +37,7 @@ from bunnyland.mechanics.storyteller import (
     IncidentAutoResolutionConsequence,
     IncidentBudgetComponent,
     IncidentComponent,
+    IncidentGeneratedEvent,
     IncidentHistoryComponent,
     IncidentProposedEvent,
     IncidentResolvedEvent,
@@ -87,15 +88,20 @@ async def test_storyteller_budget_starts_resource_drop_and_resolves_incident():
     _install(scenario.actor)
     storyteller = _storyteller(scenario, points=4.0)
     proposed: list[IncidentProposedEvent] = []
+    generated: list[IncidentGeneratedEvent] = []
     started: list[IncidentStartedEvent] = []
     resolved: list[IncidentResolvedEvent] = []
     scenario.actor.bus.subscribe(IncidentProposedEvent, proposed.append)
+    scenario.actor.bus.subscribe(IncidentGeneratedEvent, generated.append)
     scenario.actor.bus.subscribe(IncidentStartedEvent, started.append)
     scenario.actor.bus.subscribe(IncidentResolvedEvent, resolved.append)
 
     await scenario.actor.tick(HOUR)
 
     assert proposed[0].kind == "resource_drop"
+    assert generated[0].kind == "resource_drop"
+    assert generated[0].wants == ("loot", "claimable-reward")
+    assert "supply" in generated[0].tags
     assert started[0].room_id_started == str(scenario.room_a)
     incident_id = proposed[0].incident_id
     incident = scenario.actor.world.get_entity(parse_entity_id(incident_id))
