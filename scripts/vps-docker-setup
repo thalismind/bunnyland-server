@@ -354,6 +354,9 @@ render_frontend_service() {
       nginx_template="./deploy/nginx/frontend-tls-home.conf"
     fi
   fi
+  if [[ "$selected_runtime" != "docker" ]]; then
+    nginx_template="${nginx_template%.conf}-static.conf"
+  fi
 
   printf '  frontend:\n'
   printf '    image: %s\n' "$(yaml_quote "ghcr.io/thalismind/bunnyland-web:$web_tag")"
@@ -362,6 +365,9 @@ render_frontend_service() {
   printf '    environment:\n'
   printf '      BUNNYLAND_API_UPSTREAM: %s\n' "$(yaml_quote "http://server:8765")"
   printf '      BUNNYLAND_SERVER_NAME: %s\n' "$(yaml_quote "$BUNNYLAND_DOMAIN")"
+  if [[ "$selected_runtime" == "docker" ]]; then
+    printf '      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"\n'
+  fi
   if [[ "$enable_tls" == "1" ]]; then
     printf '      BUNNYLAND_CERT_NAME: %s\n' "$(yaml_quote "$cert_name")"
   fi
