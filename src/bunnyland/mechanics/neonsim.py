@@ -41,9 +41,13 @@ from ..core.ecs import (
     replace_component,
     spawn_entity,
 )
+from ..core.ecs import (
+    entity_name as _name,
+)
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..prompts import ComponentPromptContext
 from .colonysim import ResourceStackComponent
 from .daggersim import BountyComponent, BountyPostedEvent, DebtComponent
 from .voidsim import DroneComponent
@@ -72,6 +76,22 @@ class CyberpunkSiteComponent(Component):
 
     site_type: str = "site"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        tags: list[str] = []
+        if ctx.entity.has_component(SecurityZoneComponent):
+            zone = ctx.entity.get_component(SecurityZoneComponent)
+            tags.append(f"clearance {zone.clearance_required}")
+            if zone.alarm_raised:
+                tags.append("ALARM")
+        if ctx.entity.has_component(PublicAccessComponent):
+            tags.append("public")
+        if ctx.entity.has_component(RestrictedAreaComponent):
+            tags.append("restricted")
+        if ctx.target is not None and ctx.target.has_relationship(InsideZone, ctx.entity.id):
+            tags.append("you are inside")
+        suffix = f" ({', '.join(tags)})" if tags else ""
+        return (f"Site {_name(ctx.entity)}: {self.site_type}{suffix}.",)
+
 
 @dataclass(frozen=True)
 class SecurityZoneComponent(Component):
@@ -89,6 +109,12 @@ class AccessLevelComponent(Component):
     clearance: int = 0
     passes: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or (self.clearance <= 0 and not self.passes):
+            return ()
+        passes = f", passes: {', '.join(self.passes)}" if self.passes else ""
+        return (f"Security clearance: level {self.clearance}{passes}.",)
+
 
 @dataclass(frozen=True)
 class CheckpointComponent(Component):
@@ -99,10 +125,22 @@ class CheckpointComponent(Component):
     zone_tag: str = ""
     alerted: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "alerted" if self.alerted else "calm"
+        bribe = f", bribe {self.bribe_cost} scrip" if self.bribe_cost > 0 else ""
+        return (
+            f"Checkpoint {_name(ctx.entity)}: clearance {self.clearance_required}, "
+            f"{state}{bribe}.",
+        )
+
 
 @dataclass(frozen=True)
 class SafehouseComponent(Component):
     claimed_by: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "unclaimed" if self.claimed_by is None else "claimed"
+        return (f"Safehouse {_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -181,12 +219,6 @@ def _event_base(epoch: int, **kwargs) -> dict:
 def _room_id(world: World, character_id: EntityId) -> str | None:
     raw = container_of(world.get_entity(character_id))
     return str(raw) if raw is not None else None
-
-
-def _name(entity: Entity) -> str:
-    if entity.has_component(IdentityComponent):
-        return entity.get_component(IdentityComponent).name
-    return str(entity.id)
 
 
 def _district_name(world: World, character_id: EntityId) -> str:
@@ -613,6 +645,30 @@ class DeviceComponent(Component):
     disabled: bool = False
     owner: str = ""
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        states: list[str] = []
+        if not self.powered:
+            states.append("unpowered")
+        if self.disabled:
+            states.append("disabled")
+        if (
+            ctx.entity.has_component(CameraComponent)
+            and ctx.entity.get_component(CameraComponent).looped
+        ):
+            states.append("looped")
+        if ctx.entity.has_component(SurveillanceCoverageComponent) and not states:
+            states.append("watching")
+        if ctx.entity.has_component(HackableComponent):
+            hack = ctx.entity.get_component(HackableComponent)
+            if hack.breached:
+                states.append(f"breached/{hack.privilege}")
+            else:
+                states.append(f"security {hack.security}")
+            if hack.backdoored:
+                states.append("backdoored")
+        suffix = f" ({', '.join(states)})" if states else ""
+        return (f"Device {_name(ctx.entity)}: {self.device_type}{suffix}.",)
+
 
 @dataclass(frozen=True)
 class CameraComponent(Component):
@@ -634,6 +690,11 @@ class RecordedEvidenceComponent(Component):
     device_id: str
     device_type: str = "camera"
     wiped: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.wiped:
+            return ()
+        return (f"Recorded evidence: {_name(ctx.entity)} ({self.device_type}).",)
 
 
 @dataclass(frozen=True)
@@ -1034,6 +1095,11 @@ class TraceTimerComponent(Component):
     remaining: float = 0.0
     source_id: str = ""
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Counter-intrusion trace closing in: {self.remaining:g}s left.",)
 
 
 # --- Events (catalogue 10.3) ---------------------------------------------------------
@@ -1675,6 +1741,12 @@ class BlackMarketComponent(Component):
     contraband_value: int = 10
     contraband_heat: float = 2.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (
+            f"Black market {_name(ctx.entity)}: {self.contraband_name} "
+            f"for {self.price} scrip.",
+        )
+
 
 @dataclass(frozen=True)
 class DataBrokerComponent(Component):
@@ -1682,11 +1754,17 @@ class DataBrokerComponent(Component):
 
     rate: int = 50
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Data broker {_name(ctx.entity)} buying data here.",)
+
 
 @dataclass(frozen=True)
 class ContrabandComponent(Component):
     value: int = 10
     heat: float = 2.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Contraband: {_name(ctx.entity)}.",)
 
 
 @dataclass(frozen=True)
@@ -1696,10 +1774,20 @@ class HeatComponent(Component):
     amount: float = 0.0
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or self.amount <= 0.0:
+            return ()
+        return (f"Police heat: {self.amount:g}.",)
+
 
 @dataclass(frozen=True)
 class WantedLevelComponent(Component):
     level: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Wanted level: {self.level}.",)
 
 
 @dataclass(frozen=True)
@@ -1707,6 +1795,10 @@ class InformantComponent(Component):
     faction: str = "police"
     flip_cost: int = 30
     flipped: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "turned" if self.flipped else "available"
+        return (f"Informant {_name(ctx.entity)} ({self.faction}): {state}.",)
 
 
 @dataclass(frozen=True)
@@ -2238,6 +2330,19 @@ class ImplantComponent(Component):
     serviced_epoch: int = 0
     maintenance_due_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and ctx.target.has_relationship(HasImplant, ctx.entity.id):
+            tags = [self.slot]
+            if not self.active:
+                tags.append("offline")
+            if self.overclocked:
+                tags.append("overclocked")
+            if not self.legal:
+                tags.append("illegal")
+            return (f"Implant {_name(ctx.entity)}: {self.implant_type} ({', '.join(tags)}).",)
+        legality = "legal" if self.legal else "ILLEGAL"
+        return (f"Implant for sale: {_name(ctx.entity)} ({self.implant_type}, {legality}).",)
+
 
 @dataclass(frozen=True)
 class AugmentationSlotsComponent(Component):
@@ -2251,6 +2356,10 @@ class ClinicComponent(Component):
     licensed: bool = True
     install_cost: int = 50
     service_cost: int = 20
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        kind = "Licensed clinic" if self.licensed else "Street surgeon"
+        return (f"{kind} {_name(ctx.entity)}: install {self.install_cost} scrip.",)
 
 
 @dataclass(frozen=True)
@@ -2732,10 +2841,17 @@ class FixerComponent(Component):
     name: str = "fixer"
     burned: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "burned" if self.burned else "open for work"
+        return (f"Fixer {_name(ctx.entity)}: {state}.",)
+
 
 @dataclass(frozen=True)
 class HandlerComponent(Component):
     contract_id: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Handler {_name(ctx.entity)} waiting for a hand-off.",)
 
 
 @dataclass(frozen=True)
@@ -2745,6 +2861,12 @@ class RunnerContractComponent(Component):
     status: str = "offered"
     accepted_by: str | None = None
     double_cross: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (
+            f"Contract {_name(ctx.entity)}: {self.objective}, "
+            f"{self.payout} scrip ({self.status}).",
+        )
 
 
 @dataclass(frozen=True)
@@ -2758,10 +2880,18 @@ class BlackmailFileComponent(Component):
     leaked: bool = False
     used: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "leaked" if self.leaked else "leverage"
+        return (f"Blackmail file {_name(ctx.entity)}: {state}.",)
+
 
 @dataclass(frozen=True)
 class AssetExtractionComponent(Component):
     extracted: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "extracted" if self.extracted else "awaiting extraction"
+        return (f"Asset {_name(ctx.entity)}: {state}.",)
 
 
 DOUBLE_CROSS_HEAT = 5.0
@@ -3169,133 +3299,53 @@ class ExtractAssetHandler:
 
 def neonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
+    ctx = ComponentPromptContext.for_entity(world, character)
     if character.has_component(AccessLevelComponent):
-        access = character.get_component(AccessLevelComponent)
-        if access.clearance > 0 or access.passes:
-            passes = f", passes: {', '.join(access.passes)}" if access.passes else ""
-            lines.append(f"Security clearance: level {access.clearance}{passes}.")
+        lines.extend(character.get_component(AccessLevelComponent).prompt_fragments(ctx))
 
-    inside = {site_id for _edge, site_id in character.get_relationships(InsideZone)}
     for entity_id in reachable_ids(world, character):
         if not world.has_entity(entity_id):
             continue
         entity = world.get_entity(entity_id)
-        if entity.has_component(CyberpunkSiteComponent):
-            site = entity.get_component(CyberpunkSiteComponent)
-            tags = []
-            if entity.has_component(SecurityZoneComponent):
-                zone = entity.get_component(SecurityZoneComponent)
-                tags.append(f"clearance {zone.clearance_required}")
-                if zone.alarm_raised:
-                    tags.append("ALARM")
-            if entity.has_component(PublicAccessComponent):
-                tags.append("public")
-            if entity.has_component(RestrictedAreaComponent):
-                tags.append("restricted")
-            if entity_id in inside:
-                tags.append("you are inside")
-            suffix = f" ({', '.join(tags)})" if tags else ""
-            lines.append(f"Site {_name(entity)}: {site.site_type}{suffix}.")
-        if entity.has_component(CheckpointComponent):
-            gate = entity.get_component(CheckpointComponent)
-            state = "alerted" if gate.alerted else "calm"
-            bribe = f", bribe {gate.bribe_cost} scrip" if gate.bribe_cost > 0 else ""
-            lines.append(
-                f"Checkpoint {_name(entity)}: clearance {gate.clearance_required}, "
-                f"{state}{bribe}."
-            )
-        if entity.has_component(SafehouseComponent):
-            owner = entity.get_component(SafehouseComponent).claimed_by
-            state = "unclaimed" if owner is None else "claimed"
-            lines.append(f"Safehouse {_name(entity)}: {state}.")
-        if entity.has_component(DeviceComponent):
-            dev = entity.get_component(DeviceComponent)
-            states = []
-            if not dev.powered:
-                states.append("unpowered")
-            if dev.disabled:
-                states.append("disabled")
-            if entity.has_component(CameraComponent):
-                if entity.get_component(CameraComponent).looped:
-                    states.append("looped")
-            if entity.has_component(SurveillanceCoverageComponent) and not states:
-                states.append("watching")
-            if entity.has_component(HackableComponent):
-                hack = entity.get_component(HackableComponent)
-                if hack.breached:
-                    states.append(f"breached/{hack.privilege}")
-                else:
-                    states.append(f"security {hack.security}")
-                if hack.backdoored:
-                    states.append("backdoored")
-            suffix = f" ({', '.join(states)})" if states else ""
-            lines.append(f"Device {_name(entity)}: {dev.device_type}{suffix}.")
-        if entity.has_component(RecordedEvidenceComponent):
-            record = entity.get_component(RecordedEvidenceComponent)
-            if not record.wiped:
-                lines.append(f"Recorded evidence: {_name(entity)} ({record.device_type}).")
-        if entity.has_component(BlackMarketComponent):
-            market = entity.get_component(BlackMarketComponent)
-            lines.append(
-                f"Black market {_name(entity)}: {market.contraband_name} for {market.price} scrip."
-            )
-        if entity.has_component(DataBrokerComponent):
-            lines.append(f"Data broker {_name(entity)} buying data here.")
-        if entity.has_component(InformantComponent):
-            informant = entity.get_component(InformantComponent)
-            state = "turned" if informant.flipped else "available"
-            lines.append(f"Informant {_name(entity)} ({informant.faction}): {state}.")
-        if entity.has_component(ContrabandComponent):
-            lines.append(f"Contraband: {_name(entity)}.")
-        if entity.has_component(ClinicComponent):
-            clinic = entity.get_component(ClinicComponent)
-            kind = "Licensed clinic" if clinic.licensed else "Street surgeon"
-            lines.append(f"{kind} {_name(entity)}: install {clinic.install_cost} scrip.")
-        if entity.has_component(ImplantComponent) and not character.has_relationship(
-            HasImplant, entity_id
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        for component_type in (
+            CyberpunkSiteComponent,
+            CheckpointComponent,
+            SafehouseComponent,
+            DeviceComponent,
+            RecordedEvidenceComponent,
+            BlackMarketComponent,
+            DataBrokerComponent,
+            InformantComponent,
+            ContrabandComponent,
+            ClinicComponent,
+            ImplantComponent,
+            FixerComponent,
+            HandlerComponent,
+            RunnerContractComponent,
+            BlackmailFileComponent,
+            AssetExtractionComponent,
         ):
-            implant = entity.get_component(ImplantComponent)
-            legality = "legal" if implant.legal else "ILLEGAL"
-            lines.append(f"Implant for sale: {_name(entity)} ({implant.implant_type}, {legality}).")
-        if entity.has_component(FixerComponent):
-            fixer = entity.get_component(FixerComponent)
-            state = "burned" if fixer.burned else "open for work"
-            lines.append(f"Fixer {_name(entity)}: {state}.")
-        if entity.has_component(HandlerComponent):
-            lines.append(f"Handler {_name(entity)} waiting for a hand-off.")
-        if entity.has_component(RunnerContractComponent):
-            contract = entity.get_component(RunnerContractComponent)
-            lines.append(
-                f"Contract {_name(entity)}: {contract.objective}, "
-                f"{contract.payout} scrip ({contract.status})."
-            )
-        if entity.has_component(BlackmailFileComponent):
-            blackmail = entity.get_component(BlackmailFileComponent)
-            state = "leaked" if blackmail.leaked else "leverage"
-            lines.append(f"Blackmail file {_name(entity)}: {state}.")
-        if entity.has_component(AssetExtractionComponent):
-            asset = entity.get_component(AssetExtractionComponent)
-            state = "extracted" if asset.extracted else "awaiting extraction"
-            lines.append(f"Asset {_name(entity)}: {state}.")
+            if entity.has_component(component_type):
+                if component_type is ImplantComponent and character.has_relationship(
+                    HasImplant, entity_id
+                ):
+                    continue
+                lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     for _edge, implant in _installed_implants(character, world):
-        comp = implant.get_component(ImplantComponent)
-        tags = [comp.slot]
-        if not comp.active:
-            tags.append("offline")
-        if comp.overclocked:
-            tags.append("overclocked")
-        if not comp.legal:
-            tags.append("illegal")
-        lines.append(f"Implant {_name(implant)}: {comp.implant_type} ({', '.join(tags)}).")
-    if character.has_component(TraceTimerComponent):
-        timer = character.get_component(TraceTimerComponent)
-        lines.append(f"Counter-intrusion trace closing in: {timer.remaining:g}s left.")
-    if character.has_component(HeatComponent):
-        heat = character.get_component(HeatComponent)
-        if heat.amount > 0.0:
-            lines.append(f"Police heat: {heat.amount:g}.")
-    if character.has_component(WantedLevelComponent):
-        lines.append(f"Wanted level: {character.get_component(WantedLevelComponent).level}.")
+        implant_ctx = ComponentPromptContext.for_entity(
+            world, implant, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        lines.extend(implant.get_component(ImplantComponent).prompt_fragments(implant_ctx))
+    for component_type in (
+        TraceTimerComponent,
+        HeatComponent,
+        WantedLevelComponent,
+    ):
+        if character.has_component(component_type):
+            lines.extend(character.get_component(component_type).prompt_fragments(ctx))
     if character.has_component(DebtComponent):
         lines.append(f"Outstanding debt: {character.get_component(DebtComponent).amount} scrip.")
     return sorted(lines)

@@ -172,6 +172,7 @@ from bunnyland.mechanics.neonsim import (
     neonsim_fragments,
 )
 from bunnyland.mechanics.voidsim import DroneComponent
+from bunnyland.prompts import ComponentPromptContext
 
 
 def _install(actor):
@@ -832,6 +833,58 @@ async def test_fragments_describe_access_and_sites():
     assert "Site corp lobby: corp campus (clearance 3, restricted)." in joined
     assert "Checkpoint gate: clearance 3, calm, bribe 10 scrip." in joined
     assert "Safehouse den: unclaimed." in joined
+
+
+def test_component_prompt_fragments_cover_site_device_and_implant_context():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    site_id = _room_entity(
+        scenario,
+        "vault",
+        "site",
+        [
+            CyberpunkSiteComponent(site_type="data center"),
+            SecurityZoneComponent(clearance_required=4, alarm_raised=True),
+            RestrictedAreaComponent(),
+        ],
+    )
+    device_id = _room_entity(
+        scenario,
+        "camera node",
+        "device",
+        [
+            DeviceComponent(device_type="camera"),
+            CameraComponent(looped=True),
+            HackableComponent(security=3, breached=True, privilege="admin"),
+        ],
+    )
+    implant_id = _inventory_entity(
+        scenario,
+        "wire reflex",
+        "implant",
+        [ImplantComponent(implant_type="reflex booster", legal=False, overclocked=True)],
+    )
+    character.add_relationship(InsideZone(authorized=False), site_id)
+    character.remove_relationship(Contains, implant_id)
+    character.add_relationship(HasImplant(slot="body"), implant_id)
+
+    site = world.get_entity(site_id)
+    device = world.get_entity(device_id)
+    implant = world.get_entity(implant_id)
+    site_ctx = ComponentPromptContext.for_entity(world, site, target=character)
+    device_ctx = ComponentPromptContext.for_entity(world, device, target=character)
+    implant_ctx = ComponentPromptContext.for_entity(world, implant, target=character)
+
+    assert site.get_component(CyberpunkSiteComponent).prompt_fragments(site_ctx) == (
+        "Site vault: data center (clearance 4, ALARM, restricted, you are inside).",
+    )
+    assert device.get_component(DeviceComponent).prompt_fragments(device_ctx) == (
+        "Device camera node: camera (looped, breached/admin).",
+    )
+    assert implant.get_component(ImplantComponent).prompt_fragments(implant_ctx) == (
+        "Implant wire reflex: reflex booster (body, overclocked, illegal).",
+    )
 
 
 # --- error paths: invalid / missing / unreachable / wrong-kind ----------------------
