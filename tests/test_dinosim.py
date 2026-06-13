@@ -222,6 +222,7 @@ from bunnyland.mechanics.storyteller import (
     StorytellerComponent,
     StorytellerConsequence,
 )
+from bunnyland.prompts import ComponentPromptContext
 
 HOUR = 60 * 60
 DAY = 24 * HOUR
@@ -2195,6 +2196,51 @@ def test_dinosim_fragments_cover_danger_settlement_and_enclosure_branches():
     assert "Settlement damage on Mosslit Burrow: severity 2." in fragments
     assert "Army response signaled for Mosslit Burrow: strength 4." in fragments
     assert "Risk Pen escape risk: 0.5." in fragments
+
+
+def test_dinosim_component_prompt_fragments_cover_compound_and_target_state():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    egg = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="warm egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True),
+            IncubationComponent(started_at_epoch=0, ready=True, temperature=32.0),
+        ],
+    )
+    companion = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Blue", kind="character"),
+            CompanionComponent(owner_id=str(character.id), role="companion"),
+        ],
+    )
+    pen = spawn_entity(
+        world,
+        [
+            EnclosureComponent(name="Risk Pen"),
+            GateComponent(open=True, locked=False),
+            EscapeRiskComponent(risk=0.5),
+        ],
+    )
+    egg_ctx = ComponentPromptContext.for_entity(world, egg)
+    companion_ctx = ComponentPromptContext.for_entity(world, companion, target=character)
+    pen_ctx = ComponentPromptContext.for_entity(world, pen)
+
+    assert egg.get_component(EggComponent).prompt_fragments(egg_ctx) == (
+        "Nearby egg: warm egg (raptor, ready to hatch, 32 C).",
+    )
+    assert companion.get_component(CompanionComponent).prompt_fragments(companion_ctx) == (
+        "Your companion: Blue.",
+    )
+    assert pen.get_component(GateComponent).prompt_fragments(pen_ctx) == (
+        "Risk Pen gate: open, unlocked.",
+    )
+    assert pen.get_component(EscapeRiskComponent).prompt_fragments(pen_ctx) == (
+        "Risk Pen escape risk: 0.5.",
+    )
 
 
 def test_dinosim_consequences_cover_policy_reuse_and_escape_risk_edges_directly():

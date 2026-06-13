@@ -44,6 +44,7 @@ from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility
 from ..core.events import event_base as _event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..prompts import ComponentPromptContext
 from .colonysim import ResourceStackComponent
 from .lifesim import AgeComponent, LifeStageComponent
 
@@ -82,12 +83,23 @@ class FossilFragmentComponent(Component):
     sample_quality: float = 1.0
     cleaned: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        name = _entity_name(ctx.entity)
+        if ctx.entity.has_component(SpeciesIdentificationComponent):
+            identification = ctx.entity.get_component(SpeciesIdentificationComponent)
+            return (f"Nearby fossil: {name} ({identification.species_name}).",)
+        return (f"Nearby unidentified fossil: {name}.",)
+
 
 @dataclass(frozen=True)
 class FossilSurveyComponent(Component):
     surveyed_by: tuple[str, ...] = ()
     excavation_progress: float = 0.0
     stabilized: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "stabilized" if self.stabilized else f"excavation {self.excavation_progress:g}"
+        return (f"Fossil survey {_entity_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -102,6 +114,9 @@ class AncientSampleComponent(Component):
     species_name: str
     viability: float = 1.0
     source_fossil_id: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Nearby ancient sample: {_entity_name(ctx.entity)} ({self.species_name}).",)
 
 
 @dataclass(frozen=True)
@@ -119,6 +134,15 @@ class EggComponent(Component):
     fertilized: bool = False
     parent_ids: tuple[str, ...] = ()
     source: str = "natural"
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "fertilized" if self.fertilized else "unfertilized"
+        if ctx.entity.has_component(IncubationComponent):
+            incubation = ctx.entity.get_component(IncubationComponent)
+            state = "ready to hatch" if incubation.ready else "incubating"
+            if incubation.temperature is not None:
+                state = f"{state}, {incubation.temperature:g} C"
+        return (f"Nearby egg: {_entity_name(ctx.entity)} ({self.species_name}, {state}).",)
 
 
 @dataclass(frozen=True)
@@ -147,6 +171,11 @@ class LabIncubationComponent(Component):
     lab_id: str
     active: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.active:
+            return ()
+        return (f"Lab incubation active for {_entity_name(ctx.entity)}: {self.lab_id}.",)
+
 
 @dataclass(frozen=True)
 class HatchlingComponent(Component):
@@ -160,11 +189,19 @@ class EggInspectionComponent(Component):
     viability: float = 1.0
     inspected_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Egg inspection for {_entity_name(ctx.entity)}: viability {self.viability:g}.",)
+
 
 @dataclass(frozen=True)
 class ImprintComponent(Component):
     imprinted_by: str
     bond: float = 1.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or self.imprinted_by != str(ctx.target.id):
+            return ()
+        return (f"Imprinted creature: {_entity_name(ctx.entity)} bond {self.bond:g}.",)
 
 
 @dataclass(frozen=True)
@@ -172,16 +209,30 @@ class JuvenileCareComponent(Component):
     cared_by: str
     care_level: float = 0.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Juvenile care for {_entity_name(ctx.entity)}: {self.care_level:g}.",)
+
 
 @dataclass(frozen=True)
 class WaterCreatureComponent(Component):
     species_name: str
     depth_preference: str = "shallows"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (
+            f"Water creature {_entity_name(ctx.entity)}: "
+            f"{self.species_name} in {self.depth_preference}.",
+        )
+
 
 @dataclass(frozen=True)
 class WaterStudyComponent(Component):
     studied_by: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        studied = ctx.target is not None and str(ctx.target.id) in self.studied_by
+        state = "studied" if studied else "unstudied"
+        return (f"Water study {_entity_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -189,11 +240,20 @@ class BroodingComponent(Component):
     brooder_id: str
     warmth: float = 1.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Brooding {_entity_name(ctx.entity)}: warmth {self.warmth:g}.",)
+
 
 @dataclass(frozen=True)
 class ContainmentPanicComponent(Component):
     severity: int = 1
     active: bool = True
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.active or not ctx.entity.has_component(EnclosureComponent):
+            return ()
+        enclosure = ctx.entity.get_component(EnclosureComponent)
+        return (f"{enclosure.name} containment panic: severity {self.severity}.",)
 
 
 @dataclass(frozen=True)
@@ -201,6 +261,9 @@ class TrackComponent(Component):
     room_id: str
     freshness: float = 1.0
     last_tracked_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Tracked creature: {_entity_name(ctx.entity)} near {self.room_id}.",)
 
 
 @dataclass(frozen=True)
@@ -210,12 +273,22 @@ class TerritoryComponent(Component):
     marked_at_epoch: int = 0
     threat_level: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "marked" if self.marked_by else "unmarked"
+        return (
+            f"Territory {_entity_name(ctx.entity)}: "
+            f"{self.species_name or 'unknown species'}, {state}.",
+        )
+
 
 @dataclass(frozen=True)
 class HerdComponent(Component):
     species_name: str
     size: int = 1
     last_tracked_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Herd {_entity_name(ctx.entity)}: {self.species_name} x{self.size}.",)
 
 
 @dataclass(frozen=True)
@@ -224,6 +297,10 @@ class NestComponent(Component):
     prepared: bool = False
     prepared_by: str | None = None
     prepared_at_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "prepared" if self.prepared else "unprepared"
+        return (f"Nest {_entity_name(ctx.entity)}: {self.species_name}, {state}.",)
 
 
 @dataclass(frozen=True)
@@ -239,6 +316,10 @@ class BaitComponent(Component):
     set_by_id: str = ""
     set_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        target = self.target_species or "any creature"
+        return (f"Bait set for {target}: {_entity_name(ctx.entity)}.",)
+
 
 @dataclass(frozen=True)
 class TranquilizerComponent(Component):
@@ -253,6 +334,10 @@ class TamingComponent(Component):
     required: float = 3.0
     tamer_id: str = ""
     tamed: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "tamed" if self.tamed else f"{self.progress:g}/{self.required:g}"
+        return (f"Taming progress for {_entity_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -271,6 +356,12 @@ class TrainingComponent(Component):
     progress: dict[str, float] | None = None
     required: float = 2.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.learned_commands:
+            return ()
+        commands = ", ".join(self.learned_commands)
+        return (f"{_entity_name(ctx.entity)} knows commands: {commands}.",)
+
 
 @dataclass(frozen=True)
 class CommandComponent(Component):
@@ -278,6 +369,9 @@ class CommandComponent(Component):
     commanded_by_id: str
     target_id: str = ""
     issued_at_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"{_entity_name(ctx.entity)} is commanded to {self.command_name}.",)
 
 
 @dataclass(frozen=True)
@@ -290,6 +384,11 @@ class MountComponent(Component):
 class CompanionComponent(Component):
     owner_id: str
     role: str = "companion"
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or self.owner_id != str(ctx.target.id):
+            return ()
+        return (f"Your {self.role}: {_entity_name(ctx.entity)}.",)
 
 
 @dataclass(frozen=True)
@@ -317,17 +416,35 @@ class EnclosureComponent(Component):
     built_by_id: str = ""
     built_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Enclosure nearby: {self.name}.",)
+
 
 @dataclass(frozen=True)
 class FenceComponent(Component):
     integrity: float = 10.0
     maximum: float = 10.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.entity.has_component(EnclosureComponent):
+            return ()
+        enclosure = ctx.entity.get_component(EnclosureComponent)
+        return (f"{enclosure.name} fence: {self.integrity:g}/{self.maximum:g}.",)
+
 
 @dataclass(frozen=True)
 class GateComponent(Component):
     open: bool = False
     locked: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.entity.has_component(EnclosureComponent):
+            return ()
+        enclosure = ctx.entity.get_component(EnclosureComponent)
+        state = "open" if self.open else "closed"
+        lock = "locked" if self.locked else "unlocked"
+        return (f"{enclosure.name} gate: {state}, {lock}.",)
 
 
 @dataclass(frozen=True)
@@ -350,6 +467,12 @@ class EscapeRiskComponent(Component):
     risk: float = 0.0
     threshold: float = 1.0
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.risk <= 0.0 or not ctx.entity.has_component(EnclosureComponent):
+            return ()
+        enclosure = ctx.entity.get_component(EnclosureComponent)
+        return (f"{enclosure.name} escape risk: {self.risk:g}.",)
 
 
 @dataclass(frozen=True)
@@ -375,6 +498,9 @@ class KaijuComponent(Component):
     difficulty: str = "major"
     target_room_id: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Kaiju threat nearby: {_entity_name(ctx.entity)} threat {self.threat_level}.",)
+
 
 @dataclass(frozen=True)
 class KaijuSpawnSpec:
@@ -391,11 +517,19 @@ class SettlementDamageComponent(Component):
     severity: int = 1
     repaired: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.repaired:
+            return ()
+        return (f"Settlement damage on {_entity_name(ctx.entity)}: severity {self.severity}.",)
+
 
 @dataclass(frozen=True)
 class CreatureAttackComponent(Component):
     damage: float = 2.0
     attack_type: str = "bite"
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Dangerous creature: {_entity_name(ctx.entity)} ({self.attack_type}).",)
 
 
 @dataclass(frozen=True)
@@ -432,6 +566,11 @@ class WeakPointComponent(Component):
     exposed: bool = True
     damage_multiplier: float = 2.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.exposed:
+            return ()
+        return (f"{_entity_name(ctx.entity)} has exposed weak point: {self.label}.",)
+
 
 @dataclass(frozen=True)
 class PackHuntComponent(Component):
@@ -443,6 +582,11 @@ class PackHuntComponent(Component):
 class ApexPredatorComponent(Component):
     threat_level: int = 5
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.threat_level <= 0:
+            return ()
+        return (f"Apex predator nearby: {_entity_name(ctx.entity)} threat {self.threat_level}.",)
+
 
 @dataclass(frozen=True)
 class ArmyResponseComponent(Component):
@@ -450,11 +594,22 @@ class ArmyResponseComponent(Component):
     strength: float = 5.0
     called_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.called:
+            return ()
+        return (
+            f"Army response signaled for {_entity_name(ctx.entity)}: "
+            f"strength {self.strength:g}.",
+        )
+
 
 @dataclass(frozen=True)
 class FeedStoreComponent(Component):
     feed: float = 0.0
     capacity: float = 20.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Feed store at {_entity_name(ctx.entity)}: {self.feed:g}/{self.capacity:g}.",)
 
 
 @dataclass(frozen=True)
@@ -470,6 +625,13 @@ class CreatureNeedComponent(Component):
     hunger_per_hour: float = 5.0
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "hungry" if self.hunger >= HUNGRY_THRESHOLD else "fed"
+        return (
+            f"Creature {_entity_name(ctx.entity)}: hunger {self.hunger:g} "
+            f"({state}), stress {self.stress:g}.",
+        )
+
 
 @dataclass(frozen=True)
 class CreatureProductComponent(Component):
@@ -479,17 +641,35 @@ class CreatureProductComponent(Component):
     collected_at_epoch: int = 0
     renewable: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.quantity <= 0.0:
+            return ()
+        return (
+            f"Creature product available from {_entity_name(ctx.entity)}: "
+            f"{self.product_type} x{self.quantity:g}.",
+        )
+
 
 @dataclass(frozen=True)
 class HideComponent(Component):
     quality: float = 1.0
     harvested: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.harvested:
+            return ()
+        return (f"{_entity_name(ctx.entity)} has harvestable hide.",)
+
 
 @dataclass(frozen=True)
 class BoneComponent(Component):
     quality: float = 1.0
     harvested: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.harvested:
+            return ()
+        return (f"{_entity_name(ctx.entity)} has harvestable bone.",)
 
 
 @dataclass(frozen=True)
@@ -498,11 +678,21 @@ class ToxinComponent(Component):
     quantity: float = 1.0
     maximum: float = 1.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.quantity <= 0.0:
+            return ()
+        return (f"{_entity_name(ctx.entity)} has toxin available: {self.quantity:g}.",)
+
 
 @dataclass(frozen=True)
 class CreatureMilkComponent(Component):
     volume: float = 1.0
     maximum: float = 1.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.volume <= 0.0:
+            return ()
+        return (f"{_entity_name(ctx.entity)} has milk available: {self.volume:g}.",)
 
 
 @dataclass(frozen=True)
@@ -512,12 +702,22 @@ class RanchLaborComponent(Component):
     assigned_by_id: str = ""
     active: bool = True
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.active:
+            return ()
+        return (f"{_entity_name(ctx.entity)} is assigned to ranch work: {self.work_type}.",)
+
 
 @dataclass(frozen=True)
 class GuardAnimalComponent(Component):
     location_id: str = ""
     assigned_by_id: str = ""
     active: bool = True
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.active:
+            return ()
+        return (f"{_entity_name(ctx.entity)} is assigned as guard animal for {self.location_id}.",)
 
 
 class FossilIdentifiedEvent(DomainEvent):
@@ -3673,176 +3873,56 @@ class EvacuateRoomHandler:
 
 def dinosim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
+    ctx = ComponentPromptContext.for_entity(world, character)
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        name = _entity_name(entity)
-        if entity.has_component(FossilFragmentComponent):
-            if entity.has_component(SpeciesIdentificationComponent):
-                identification = entity.get_component(SpeciesIdentificationComponent)
-                lines.append(f"Nearby fossil: {name} ({identification.species_name}).")
-            else:
-                lines.append(f"Nearby unidentified fossil: {name}.")
-        if entity.has_component(FossilSurveyComponent):
-            survey = entity.get_component(FossilSurveyComponent)
-            state = (
-                "stabilized" if survey.stabilized else f"excavation {survey.excavation_progress:g}"
-            )
-            lines.append(f"Fossil survey {name}: {state}.")
-        if entity.has_component(AncientSampleComponent):
-            sample = entity.get_component(AncientSampleComponent)
-            lines.append(f"Nearby ancient sample: {name} ({sample.species_name}).")
-        if entity.has_component(EggComponent):
-            egg = entity.get_component(EggComponent)
-            state = "fertilized" if egg.fertilized else "unfertilized"
-            if entity.has_component(IncubationComponent):
-                incubation = entity.get_component(IncubationComponent)
-                state = "ready to hatch" if incubation.ready else "incubating"
-                if incubation.temperature is not None:
-                    state = f"{state}, {incubation.temperature:g} C"
-            lines.append(f"Nearby egg: {name} ({egg.species_name}, {state}).")
-        if entity.has_component(LabIncubationComponent):
-            lab = entity.get_component(LabIncubationComponent)
-            if lab.active:
-                lines.append(f"Lab incubation active for {name}: {lab.lab_id}.")
-        if entity.has_component(EggInspectionComponent):
-            inspection = entity.get_component(EggInspectionComponent)
-            lines.append(f"Egg inspection for {name}: viability {inspection.viability:g}.")
-        if entity.has_component(BroodingComponent):
-            brooding = entity.get_component(BroodingComponent)
-            lines.append(f"Brooding {name}: warmth {brooding.warmth:g}.")
-        if entity.has_component(TrackComponent):
-            track = entity.get_component(TrackComponent)
-            lines.append(f"Tracked creature: {name} near {track.room_id}.")
-        if entity.has_component(TerritoryComponent):
-            territory = entity.get_component(TerritoryComponent)
-            state = "marked" if territory.marked_by else "unmarked"
-            lines.append(
-                f"Territory {name}: {territory.species_name or 'unknown species'}, {state}."
-            )
-        if entity.has_component(HerdComponent):
-            herd = entity.get_component(HerdComponent)
-            lines.append(f"Herd {name}: {herd.species_name} x{herd.size}.")
-        if entity.has_component(NestComponent):
-            nest = entity.get_component(NestComponent)
-            state = "prepared" if nest.prepared else "unprepared"
-            lines.append(f"Nest {name}: {nest.species_name}, {state}.")
-        if entity.has_component(CreatureNeedComponent):
-            need = entity.get_component(CreatureNeedComponent)
-            state = "hungry" if need.hunger >= HUNGRY_THRESHOLD else "fed"
-            lines.append(
-                f"Creature {name}: hunger {need.hunger:g} ({state}), stress {need.stress:g}."
-            )
-        if entity.has_component(ImprintComponent):
-            imprint = entity.get_component(ImprintComponent)
-            if imprint.imprinted_by == str(character.id):
-                lines.append(f"Imprinted creature: {name} bond {imprint.bond:g}.")
-        if entity.has_component(JuvenileCareComponent):
-            care = entity.get_component(JuvenileCareComponent)
-            lines.append(f"Juvenile care for {name}: {care.care_level:g}.")
-        if entity.has_component(WaterCreatureComponent):
-            water = entity.get_component(WaterCreatureComponent)
-            lines.append(
-                f"Water creature {name}: {water.species_name} in {water.depth_preference}."
-            )
-        if entity.has_component(WaterStudyComponent):
-            study = entity.get_component(WaterStudyComponent)
-            state = "studied" if str(character.id) in study.studied_by else "unstudied"
-            lines.append(f"Water study {name}: {state}.")
-        if entity.has_component(TamingComponent):
-            taming = entity.get_component(TamingComponent)
-            state = "tamed" if taming.tamed else f"{taming.progress:g}/{taming.required:g}"
-            lines.append(f"Taming progress for {name}: {state}.")
-        if entity.has_component(CompanionComponent):
-            companion = entity.get_component(CompanionComponent)
-            if companion.owner_id == str(character.id):
-                lines.append(f"Your {companion.role}: {name}.")
-        if entity.has_component(TrainingComponent):
-            training = entity.get_component(TrainingComponent)
-            if training.learned_commands:
-                commands = ", ".join(training.learned_commands)
-                lines.append(f"{name} knows commands: {commands}.")
-        if entity.has_component(CommandComponent):
-            current = entity.get_component(CommandComponent)
-            lines.append(f"{name} is commanded to {current.command_name}.")
-        if entity.has_component(BaitComponent):
-            bait = entity.get_component(BaitComponent)
-            target = bait.target_species or "any creature"
-            lines.append(f"Bait set for {target}: {name}.")
-        if entity.has_component(CreatureAttackComponent):
-            attack = entity.get_component(CreatureAttackComponent)
-            lines.append(f"Dangerous creature: {name} ({attack.attack_type}).")
-        if entity.has_component(WeakPointComponent):
-            weak_point = entity.get_component(WeakPointComponent)
-            if weak_point.exposed:
-                lines.append(f"{name} has exposed weak point: {weak_point.label}.")
-        if entity.has_component(ApexPredatorComponent):
-            apex = entity.get_component(ApexPredatorComponent)
-            if apex.threat_level > 0:
-                lines.append(f"Apex predator nearby: {name} threat {apex.threat_level}.")
-        if entity.has_component(KaijuComponent):
-            kaiju = entity.get_component(KaijuComponent)
-            lines.append(f"Kaiju threat nearby: {name} threat {kaiju.threat_level}.")
-        if entity.has_component(SettlementDamageComponent):
-            damage = entity.get_component(SettlementDamageComponent)
-            if not damage.repaired:
-                lines.append(f"Settlement damage on {name}: severity {damage.severity}.")
-        if entity.has_component(ArmyResponseComponent):
-            response = entity.get_component(ArmyResponseComponent)
-            if response.called:
-                lines.append(f"Army response signaled for {name}: strength {response.strength:g}.")
-        if entity.has_component(FeedStoreComponent):
-            feed_store = entity.get_component(FeedStoreComponent)
-            lines.append(f"Feed store at {name}: {feed_store.feed:g}/{feed_store.capacity:g}.")
-        if entity.has_component(CreatureProductComponent):
-            product = entity.get_component(CreatureProductComponent)
-            if product.quantity > 0.0:
-                lines.append(
-                    f"Creature product available from {name}: "
-                    f"{product.product_type} x{product.quantity:g}."
-                )
-        if entity.has_component(CreatureMilkComponent):
-            milk = entity.get_component(CreatureMilkComponent)
-            if milk.volume > 0.0:
-                lines.append(f"{name} has milk available: {milk.volume:g}.")
-        if entity.has_component(ToxinComponent):
-            toxin = entity.get_component(ToxinComponent)
-            if toxin.quantity > 0.0:
-                lines.append(f"{name} has toxin available: {toxin.quantity:g}.")
-        if entity.has_component(HideComponent):
-            hide = entity.get_component(HideComponent)
-            if not hide.harvested:
-                lines.append(f"{name} has harvestable hide.")
-        if entity.has_component(BoneComponent):
-            bone = entity.get_component(BoneComponent)
-            if not bone.harvested:
-                lines.append(f"{name} has harvestable bone.")
-        if entity.has_component(RanchLaborComponent):
-            labor = entity.get_component(RanchLaborComponent)
-            if labor.active:
-                lines.append(f"{name} is assigned to ranch work: {labor.work_type}.")
-        if entity.has_component(GuardAnimalComponent):
-            guard = entity.get_component(GuardAnimalComponent)
-            if guard.active:
-                lines.append(f"{name} is assigned as guard animal for {guard.location_id}.")
-        if entity.has_component(EnclosureComponent):
-            enclosure = entity.get_component(EnclosureComponent)
-            lines.append(f"Enclosure nearby: {enclosure.name}.")
-            if entity.has_component(FenceComponent):
-                fence = entity.get_component(FenceComponent)
-                lines.append(f"{enclosure.name} fence: {fence.integrity:g}/{fence.maximum:g}.")
-            if entity.has_component(GateComponent):
-                gate = entity.get_component(GateComponent)
-                state = "open" if gate.open else "closed"
-                lock = "locked" if gate.locked else "unlocked"
-                lines.append(f"{enclosure.name} gate: {state}, {lock}.")
-            if entity.has_component(EscapeRiskComponent):
-                risk = entity.get_component(EscapeRiskComponent)
-                if risk.risk > 0.0:
-                    lines.append(f"{enclosure.name} escape risk: {risk.risk:g}.")
-            if entity.has_component(ContainmentPanicComponent):
-                panic = entity.get_component(ContainmentPanicComponent)
-                if panic.active:
-                    lines.append(f"{enclosure.name} containment panic: severity {panic.severity}.")
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        for component_type in (
+            FossilFragmentComponent,
+            FossilSurveyComponent,
+            AncientSampleComponent,
+            EggComponent,
+            LabIncubationComponent,
+            EggInspectionComponent,
+            BroodingComponent,
+            TrackComponent,
+            TerritoryComponent,
+            HerdComponent,
+            NestComponent,
+            CreatureNeedComponent,
+            ImprintComponent,
+            JuvenileCareComponent,
+            WaterCreatureComponent,
+            WaterStudyComponent,
+            TamingComponent,
+            CompanionComponent,
+            TrainingComponent,
+            CommandComponent,
+            BaitComponent,
+            CreatureAttackComponent,
+            WeakPointComponent,
+            ApexPredatorComponent,
+            KaijuComponent,
+            SettlementDamageComponent,
+            ArmyResponseComponent,
+            FeedStoreComponent,
+            CreatureProductComponent,
+            CreatureMilkComponent,
+            ToxinComponent,
+            HideComponent,
+            BoneComponent,
+            RanchLaborComponent,
+            GuardAnimalComponent,
+            EnclosureComponent,
+            FenceComponent,
+            GateComponent,
+            EscapeRiskComponent,
+            ContainmentPanicComponent,
+        ):
+            if entity.has_component(component_type):
+                lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     return sorted(lines)
 
 
