@@ -6,6 +6,7 @@ services:
       BUNNYLAND_CERT_NAME: ${BUNNYLAND_CERT_NAME:-sandbox.example.com}
       BUNNYLAND_HOME_NAME: ${BUNNYLAND_HOME_DOMAIN:?set BUNNYLAND_HOME_DOMAIN to the homepage domain}
       BUNNYLAND_HOME_CERT_NAME: ${BUNNYLAND_HOME_CERT_NAME:?set BUNNYLAND_HOME_CERT_NAME to the homepage certificate name}
+      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
     volumes:
       - ./deploy/nginx/frontend-tls-home.conf:/etc/nginx/templates/default.conf.template:ro
       - ${BUNNYLAND_LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro

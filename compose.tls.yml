@@ -4,6 +4,7 @@ services:
       BUNNYLAND_API_UPSTREAM: http://server:8765
       BUNNYLAND_SERVER_NAME: ${BUNNYLAND_SERVER_NAME:-sandbox.example.com}
       BUNNYLAND_CERT_NAME: ${BUNNYLAND_CERT_NAME:-sandbox.example.com}
+      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
     volumes:
       - ./deploy/nginx/frontend-tls.conf:/etc/nginx/templates/default.conf.template:ro
       - ${BUNNYLAND_LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
