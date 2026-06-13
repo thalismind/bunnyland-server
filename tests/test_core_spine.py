@@ -123,6 +123,7 @@ def test_safe_entity_helpers_cover_missing_and_dangling_paths(monkeypatch):
 
     assert entity_name(character) == "Juniper"
     assert entity_name(loose) == str(loose.id)
+    assert entity_name(loose, "something") == "something"
     assert room_id_for(world, scenario.character) == str(scenario.room_a)
     assert room_id_for(world, parse_entity_id("entity_999999")) is None
     assert entity_room_id(character) == str(scenario.room_a)

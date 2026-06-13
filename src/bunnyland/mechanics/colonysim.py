@@ -28,6 +28,7 @@ from ..core.components import (
 from ..core.ecs import (
     container_of,
     contents,
+    entity_name,
     parse_entity_id,
     reachable_ids,
     replace_component,
@@ -107,8 +108,7 @@ class ForbiddenComponent(Component):
     forbidden: bool = True
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        name = _identity_name(ctx.entity, "something")
-        return (f"{name} is forbidden for hauling.",)
+        return (f"{entity_name(ctx.entity, 'something')} is forbidden for hauling.",)
 
 
 @dataclass(frozen=True)
@@ -839,12 +839,6 @@ def _same_room_or_self(world: World, left_id: EntityId, right_id: EntityId) -> b
 
 def _resource_name(resource_type: str, quantity: int) -> str:
     return f"{resource_type} x{quantity}"
-
-
-def _identity_name(entity: Entity, fallback: str) -> str:
-    if entity.has_component(IdentityComponent):
-        return entity.get_component(IdentityComponent).name
-    return fallback
 
 
 def _parse_types(raw: object) -> tuple[str, ...]:
@@ -2288,7 +2282,7 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
                 f"Nearby stockpile: {load}/{stockpile.capacity} stored, accepts {filter_text}."
             )
         if character.has_relationship(Owns, entity_id) and entity_id != character.id:
-            lines.append(f"You own {_identity_name(entity, 'something')}.")
+            lines.append(f"You own {entity_name(entity, 'something')}.")
     for _edge, part_id in character.get_relationships(HasBodyPart):
         if not world.has_entity(part_id):
             continue

@@ -29,6 +29,7 @@ from ..core.components import (
 from ..core.controllers import LLMControllerComponent
 from ..core.ecs import (
     container_of,
+    entity_name,
     parse_entity_id,
     reachable_ids,
     replace_component,
@@ -324,7 +325,7 @@ class HomeObjectComponent(Component):
     upgrade_level: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        name = _identity_name(ctx.entity, "home object")
+        name = entity_name(ctx.entity, "home object")
         return (
             f"Nearby home object: {name} offers {self.affordance}, "
             f"condition {self.condition:.1f}, clean {self.cleanliness:.1f}.",
@@ -396,7 +397,7 @@ class PartnerOf(Edge):
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if self.status != "together" or ctx.target is None:
             return ()
-        return (f"You are partners with {_identity_name(ctx.target, 'someone')}.",)
+        return (f"You are partners with {entity_name(ctx.target, 'someone')}.",)
 
 
 @dataclass(frozen=True)
@@ -407,7 +408,7 @@ class RelationshipStatus(Edge):
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if ctx.target is None:
             return ()
-        return (f"{_identity_name(ctx.target, 'someone')} is your {self.status}.",)
+        return (f"{entity_name(ctx.target, 'someone')} is your {self.status}.",)
 
 
 @dataclass(frozen=True)
@@ -2530,12 +2531,6 @@ class RestfulSleepConsequence:
         return events
 
 
-def _identity_name(entity: Entity, fallback: str) -> str:
-    if entity.has_component(IdentityComponent):
-        return entity.get_component(IdentityComponent).name
-    return fallback
-
-
 def lifesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     ctx = ComponentPromptContext.for_entity(world, character)
@@ -2618,11 +2613,11 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         partner_name = "someone"
         if world.has_entity(rival_id):
             rival = world.get_entity(rival_id)
-            rival_name = _identity_name(rival, "someone")
+            rival_name = entity_name(rival, "someone")
         partner_id = parse_entity_id(edge.partner_id)
         if partner_id is not None and world.has_entity(partner_id):
             partner = world.get_entity(partner_id)
-            partner_name = _identity_name(partner, "someone")
+            partner_name = entity_name(partner, "someone")
         lines.append(f"You feel jealous of {rival_name} over {partner_name}.")
     for edge, target_id in character.get_relationships(PartnerOf):
         if not world.has_entity(target_id) or edge.status != "together":
@@ -2641,7 +2636,7 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         )
         lines.extend(edge.prompt_fragments(edge_ctx))
     children = [
-        _identity_name(world.get_entity(child_id), "someone")
+        entity_name(world.get_entity(child_id), "someone")
         for _edge, child_id in character.get_relationships(ParentOf)
         if world.has_entity(child_id)
     ]
@@ -2650,7 +2645,7 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     parents = []
     for parent in world.query().with_all([CharacterComponent]).execute_entities():
         if parent.has_relationship(ParentOf, character.id):
-            parents.append(_identity_name(parent, "someone"))
+            parents.append(entity_name(parent, "someone"))
     if parents:
         lines.append("Your parents: " + ", ".join(sorted(parents)) + ".")
     for entity_id in reachable_ids(world, character):

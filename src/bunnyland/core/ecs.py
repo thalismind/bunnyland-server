@@ -102,12 +102,14 @@ def reachable_ids(world: World, character: Entity) -> set[EntityId]:
     return reachable
 
 
-def entity_name(entity: Entity) -> str:
-    """Return an entity's display name, falling back to its id."""
+def entity_name(entity: Entity, fallback: str | None = None) -> str:
+    """Return an entity's display name, falling back to ``fallback`` or its id."""
     from .components import IdentityComponent
 
     if entity.has_component(IdentityComponent):
         return entity.get_component(IdentityComponent).name
+    if fallback is not None:
+        return fallback
     return str(entity.id)
 
 
