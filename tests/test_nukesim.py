@@ -119,6 +119,7 @@ from bunnyland.mechanics.nukesim import (
     install_nukesim,
     nukesim_fragments,
 )
+from bunnyland.prompts import ComponentPromptContext
 
 HOUR = 3600.0
 
@@ -742,6 +743,40 @@ def test_nukesim_prompt_fragments_surface_local_wasteland_state():
 
     assert any("Radiation dose" in line for line in fragments)
     assert any("Radiation source" in line for line in fragments)
+
+
+def test_nukesim_component_prompt_fragments_cover_self_target_and_named_state():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    sample = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="glowing sample", kind="sample"),
+            SampleComponent(sample_type="fungus", studied_by=(str(character.id),)),
+        ],
+    )
+    tech = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="scorched device", kind="item"),
+            OldWorldTechComponent(tech_name="targeting computer", identified=True),
+        ],
+    )
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    sample_ctx = ComponentPromptContext.for_entity(world, sample, target=character)
+    tech_ctx = ComponentPromptContext.for_entity(world, tech)
+
+    assert RadiationDoseComponent(amount=3.0).prompt_fragments(self_ctx) == (
+        "Radiation dose: 3 rads.",
+    )
+    assert sample.get_component(SampleComponent).prompt_fragments(sample_ctx) == (
+        "Sample glowing sample: fungus (studied).",
+    )
+    assert tech.get_component(OldWorldTechComponent).prompt_fragments(tech_ctx) == (
+        "Old-world tech scorched device: targeting computer "
+        "(identified, needs 3 scrap to restore).",
+    )
 
 
 def test_nukesim_fragments_cover_radiation_status_and_reachable_supplies():

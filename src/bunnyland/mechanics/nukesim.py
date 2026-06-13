@@ -43,6 +43,7 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility, event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
+from ..prompts import ComponentPromptContext
 from .barbariansim import DurabilityComponent
 from .colonysim import ResourceStackComponent
 from .mutation import RadiationMutationPressureComponent, RadiationShieldComponent
@@ -60,17 +61,31 @@ class RadiationSourceComponent(Component):
     sealed: bool = False
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        status = "sealed" if self.sealed else f"{self.rads_per_hour:g} rads/hour"
+        return (f"Radiation source {_name(ctx.entity)}: {self.source_type}, {status}.",)
+
 
 @dataclass(frozen=True)
 class RadiationDoseComponent(Component):
     amount: float = 0.0
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or self.amount <= 0.0:
+            return ()
+        return (f"Radiation dose: {self.amount:g} rads.",)
+
 
 @dataclass(frozen=True)
 class RadiationSicknessComponent(Component):
     severity: float = 0.0
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or self.severity <= 0.0:
+            return ()
+        return (f"Radiation sickness severity: {self.severity:g}.",)
 
 
 @dataclass(frozen=True)
@@ -87,6 +102,9 @@ class DecontaminationComponent(Component):
     mutation_pressure_reduction: float = 2.0
     uses: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Decontamination available: {_name(ctx.entity)}.",)
+
 
 @dataclass(frozen=True)
 class RadMedicineComponent(Component):
@@ -94,6 +112,9 @@ class RadMedicineComponent(Component):
     sickness_reduction: float = 1.0
     mutation_pressure_reduction: float = 1.0
     uses: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Rad medicine available: {_name(ctx.entity)}.",)
 
 
 @dataclass(frozen=True)
@@ -116,6 +137,12 @@ class MutationComponent(Component):
     stable: bool = False
     manifested_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        state = "stable" if self.stable else "unstable"
+        return (f"Mutation: {self.label} ({state}).",)
+
 
 @dataclass(frozen=True)
 class ScavengeSiteComponent(Component):
@@ -124,6 +151,10 @@ class ScavengeSiteComponent(Component):
     hazard_rads: float = 0.0
     depleted: bool = False
     last_scavenged_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        status = "depleted" if self.depleted else f"{self.charges} searches left"
+        return (f"Scavenge site {_name(ctx.entity)}: {self.site_type}, {status}.",)
 
 
 @dataclass(frozen=True)
@@ -136,6 +167,9 @@ class JunkComponent(Component):
     outputs: dict[str, int]
     contaminated_rads: float = 0.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Scrappable junk: {_name(ctx.entity)}.",)
+
 
 @dataclass(frozen=True)
 class ChemComponent(Component):
@@ -146,6 +180,10 @@ class ChemComponent(Component):
     sickness_relief: float = 0.0
     addiction_per_dose: float = 0.2
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Chem available: {self.chem_type}.",)
+
 
 @dataclass(frozen=True)
 class AddictionComponent(Component):
@@ -153,6 +191,14 @@ class AddictionComponent(Component):
 
     levels: dict[str, float]
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return tuple(
+            f"Addiction to {chem_type}: {level:.1f}."
+            for chem_type, level in sorted(self.levels.items())
+        )
 
 
 @dataclass(frozen=True)
@@ -162,6 +208,15 @@ class WaterPurityComponent(Component):
     rads_per_drink: float = 0.0
     purified: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.purified:
+            state = "purified"
+        elif self.rads_per_drink > 0.0:
+            state = f"contaminated ({self.rads_per_drink:g} rads/drink)"
+        else:
+            state = "clean"
+        return (f"Water source {_name(ctx.entity)}: {state}.",)
+
 
 @dataclass(frozen=True)
 class HotspotMarkerComponent(Component):
@@ -169,11 +224,18 @@ class HotspotMarkerComponent(Component):
     marked_by: str
     label: str = "hotspot"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Hotspot marker: {self.label}.",)
+
 
 @dataclass(frozen=True)
 class SuppressantComponent(Component):
     pressure_reduction: float = 1.0
     uses: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Radiation suppressant available: {_name(ctx.entity)}.",)
 
 
 @dataclass(frozen=True)
@@ -181,11 +243,19 @@ class SampleComponent(Component):
     sample_type: str = "irradiated tissue"
     studied_by: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        studied = ctx.target is not None and str(ctx.target.id) in self.studied_by
+        state = "studied" if studied else "unstudied"
+        return (f"Sample {_name(ctx.entity)}: {self.sample_type} ({state}).",)
+
 
 @dataclass(frozen=True)
 class LockedCrateComponent(Component):
     locked: bool = True
     key_name: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Locked crate {_name(ctx.entity)}: {'locked' if self.locked else 'open'}.",)
 
 
 @dataclass(frozen=True)
@@ -193,11 +263,19 @@ class WastelandArtifactComponent(Component):
     artifact_type: str = "relic"
     studied: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "studied" if self.studied else "unstudied"
+        return (f"Wasteland artifact {_name(ctx.entity)}: {self.artifact_type} ({state}).",)
+
 
 @dataclass(frozen=True)
 class FactionSalvageComponent(Component):
     faction_id: str
     claimed_by: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "claimed" if self.claimed_by else "available"
+        return (f"Faction salvage {_name(ctx.entity)}: {self.faction_id}, {state}.",)
 
 
 @dataclass(frozen=True)
@@ -205,16 +283,25 @@ class SchematicComponent(Component):
     mod_name: str
     resource_inputs: tuple[tuple[str, int], ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Schematic {_name(ctx.entity)}: {self.mod_name}.",)
+
 
 @dataclass(frozen=True)
 class ItemModComponent(Component):
     mod_name: str
     installed: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Item mod {_name(ctx.entity)}: {self.mod_name}.",)
+
 
 @dataclass(frozen=True)
 class FieldRepairComponent(Component):
     repair_amount: float = 1.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Field repair kit {_name(ctx.entity)}: +{self.repair_amount:g}.",)
 
 
 @dataclass(frozen=True)
@@ -222,11 +309,18 @@ class ChemRecipeComponent(Component):
     chem_type: str
     resource_inputs: tuple[tuple[str, int], ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Chem recipe {_name(ctx.entity)}: {self.chem_type}.",)
+
 
 @dataclass(frozen=True)
 class BeaconComponent(Component):
     message: str = "safe route"
     active: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "active" if self.active else "inactive"
+        return (f"Beacon {_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -234,16 +328,27 @@ class TraderRouteComponent(Component):
     destination: str
     open: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "open" if self.open else "closed"
+        return (f"Trader route {_name(ctx.entity)}: {self.destination} ({state}).",)
+
 
 @dataclass(frozen=True)
 class RaiderPressureComponent(Component):
     pressure: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Raider pressure at {_name(ctx.entity)}: {self.pressure}.",)
 
 
 @dataclass(frozen=True)
 class TerminalComponent(Component):
     booted: bool = False
     access_level: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "booted" if self.booted else "offline"
+        return (f"Terminal {_name(ctx.entity)}: {state}, access {self.access_level}.",)
 
 
 class RadiationExposureEvent(DomainEvent):
@@ -1716,12 +1821,20 @@ class SettlementComponent(Component):
     name: str
     claimed_by: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        owner = "unclaimed" if self.claimed_by is None else "claimed"
+        return (f"Settlement {_name(ctx.entity)}: {owner}.",)
+
 
 @dataclass(frozen=True)
 class SettlementSalvageComponent(Component):
     outputs: dict[str, int]
     durability_cost: float = 1.0
     depleted: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "depleted" if self.depleted else "available"
+        return (f"Settlement salvage {_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -1730,12 +1843,20 @@ class WaterPurifierComponent(Component):
     built: bool = False
     scrap_cost: int = 2
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "built" if self.built else f"needs {self.scrap_cost} scrap"
+        return (f"Water purifier {_name(ctx.entity)}: {state}.",)
+
 
 @dataclass(frozen=True)
 class GeneratorComponent(Component):
     power_output: int = 5
     powered: bool = False
     fuel_cost: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "powered" if self.powered else f"needs {self.fuel_cost} fuel"
+        return (f"Generator {_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -1747,6 +1868,16 @@ class OldWorldTechComponent(Component):
     functional: bool = False
     restore_scrap: int = 3
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        label = self.tech_name if self.identified else "unknown device"
+        if self.functional:
+            state = "functional"
+        elif self.identified:
+            state = f"identified, needs {self.restore_scrap} scrap to restore"
+        else:
+            state = "unidentified"
+        return (f"Old-world tech {_name(ctx.entity)}: {label} ({state}).",)
+
 
 @dataclass(frozen=True)
 class TechLeadComponent(Component):
@@ -1754,6 +1885,11 @@ class TechLeadComponent(Component):
 
     target_tech: str
     location_hint: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        hint = f" near {self.location_hint}" if self.location_hint else ""
+        return (f"Tech lead: {self.target_tech}{hint}.",)
 
 
 class OldWorldTechIdentifiedEvent(DomainEvent):
@@ -2035,130 +2171,53 @@ class PowerGeneratorHandler:
 
 def nukesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
-    if character.has_component(RadiationDoseComponent):
-        dose = character.get_component(RadiationDoseComponent)
-        if dose.amount > 0.0:
-            lines.append(f"Radiation dose: {dose.amount:g} rads.")
-    if character.has_component(RadiationSicknessComponent):
-        sickness = character.get_component(RadiationSicknessComponent)
-        if sickness.severity > 0.0:
-            lines.append(f"Radiation sickness severity: {sickness.severity:g}.")
-    if character.has_component(RadiationMutationPressureComponent):
-        pressure = character.get_component(RadiationMutationPressureComponent)
-        if pressure.amount > 0.0:
-            lines.append(f"Radiation mutation pressure: {pressure.amount:g}.")
-    if character.has_component(MutationComponent):
-        mutation = character.get_component(MutationComponent)
-        state = "stable" if mutation.stable else "unstable"
-        lines.append(f"Mutation: {mutation.label} ({state}).")
-    if character.has_component(AddictionComponent):
-        for chem_type, level in character.get_component(AddictionComponent).levels.items():
-            lines.append(f"Addiction to {chem_type}: {level:.1f}.")
+    ctx = ComponentPromptContext.for_entity(world, character)
+    for component_type in (
+        RadiationDoseComponent,
+        RadiationSicknessComponent,
+        RadiationMutationPressureComponent,
+        MutationComponent,
+        AddictionComponent,
+    ):
+        if character.has_component(component_type):
+            lines.extend(character.get_component(component_type).prompt_fragments(ctx))
 
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        if entity.has_component(ChemComponent):
-            lines.append(f"Chem available: {entity.get_component(ChemComponent).chem_type}.")
-        if entity.has_component(WaterPurityComponent):
-            purity = entity.get_component(WaterPurityComponent)
-            if purity.purified:
-                state = "purified"
-            elif purity.rads_per_drink > 0.0:
-                state = f"contaminated ({purity.rads_per_drink:g} rads/drink)"
-            else:
-                state = "clean"
-            lines.append(f"Water source {_name(entity)}: {state}.")
-        if entity.has_component(RadiationSourceComponent):
-            source = entity.get_component(RadiationSourceComponent)
-            status = "sealed" if source.sealed else f"{source.rads_per_hour:g} rads/hour"
-            lines.append(f"Radiation source {_name(entity)}: {source.source_type}, {status}.")
-        if entity.has_component(ScavengeSiteComponent):
-            site = entity.get_component(ScavengeSiteComponent)
-            status = "depleted" if site.depleted else f"{site.charges} searches left"
-            lines.append(f"Scavenge site {_name(entity)}: {site.site_type}, {status}.")
-        if entity.has_component(DecontaminationComponent):
-            lines.append(f"Decontamination available: {_name(entity)}.")
-        if entity.has_component(RadMedicineComponent):
-            lines.append(f"Rad medicine available: {_name(entity)}.")
-        if entity.has_component(SuppressantComponent):
-            lines.append(f"Radiation suppressant available: {_name(entity)}.")
-        if entity.has_component(SampleComponent):
-            sample = entity.get_component(SampleComponent)
-            state = "studied" if str(character.id) in sample.studied_by else "unstudied"
-            lines.append(f"Sample {_name(entity)}: {sample.sample_type} ({state}).")
-        if entity.has_component(HotspotMarkerComponent):
-            marker = entity.get_component(HotspotMarkerComponent)
-            lines.append(f"Hotspot marker: {marker.label}.")
-        if entity.has_component(LockedCrateComponent):
-            crate = entity.get_component(LockedCrateComponent)
-            lines.append(f"Locked crate {_name(entity)}: {'locked' if crate.locked else 'open'}.")
-        if entity.has_component(WastelandArtifactComponent):
-            artifact = entity.get_component(WastelandArtifactComponent)
-            state = "studied" if artifact.studied else "unstudied"
-            lines.append(f"Wasteland artifact {_name(entity)}: {artifact.artifact_type} ({state}).")
-        if entity.has_component(FactionSalvageComponent):
-            salvage = entity.get_component(FactionSalvageComponent)
-            state = "claimed" if salvage.claimed_by else "available"
-            lines.append(f"Faction salvage {_name(entity)}: {salvage.faction_id}, {state}.")
-        if entity.has_component(SchematicComponent):
-            schematic = entity.get_component(SchematicComponent)
-            lines.append(f"Schematic {_name(entity)}: {schematic.mod_name}.")
-        if entity.has_component(ItemModComponent):
-            mod = entity.get_component(ItemModComponent)
-            lines.append(f"Item mod {_name(entity)}: {mod.mod_name}.")
-        if entity.has_component(FieldRepairComponent):
-            repair = entity.get_component(FieldRepairComponent)
-            lines.append(f"Field repair kit {_name(entity)}: +{repair.repair_amount:g}.")
-        if entity.has_component(ChemRecipeComponent):
-            recipe = entity.get_component(ChemRecipeComponent)
-            lines.append(f"Chem recipe {_name(entity)}: {recipe.chem_type}.")
-        if entity.has_component(BeaconComponent):
-            beacon = entity.get_component(BeaconComponent)
-            state = "active" if beacon.active else "inactive"
-            lines.append(f"Beacon {_name(entity)}: {state}.")
-        if entity.has_component(TraderRouteComponent):
-            route = entity.get_component(TraderRouteComponent)
-            state = "open" if route.open else "closed"
-            lines.append(f"Trader route {_name(entity)}: {route.destination} ({state}).")
-        if entity.has_component(RaiderPressureComponent):
-            pressure = entity.get_component(RaiderPressureComponent)
-            lines.append(f"Raider pressure at {_name(entity)}: {pressure.pressure}.")
-        if entity.has_component(TerminalComponent):
-            terminal = entity.get_component(TerminalComponent)
-            state = "booted" if terminal.booted else "offline"
-            lines.append(f"Terminal {_name(entity)}: {state}, access {terminal.access_level}.")
-        if entity.has_component(JunkComponent):
-            lines.append(f"Scrappable junk: {_name(entity)}.")
-        if entity.has_component(OldWorldTechComponent):
-            tech = entity.get_component(OldWorldTechComponent)
-            label = tech.tech_name if tech.identified else "unknown device"
-            if tech.functional:
-                state = "functional"
-            elif tech.identified:
-                state = f"identified, needs {tech.restore_scrap} scrap to restore"
-            else:
-                state = "unidentified"
-            lines.append(f"Old-world tech {_name(entity)}: {label} ({state}).")
-        if entity.has_component(TechLeadComponent):
-            lead = entity.get_component(TechLeadComponent)
-            hint = f" near {lead.location_hint}" if lead.location_hint else ""
-            lines.append(f"Tech lead: {lead.target_tech}{hint}.")
-        if entity.has_component(SettlementComponent):
-            settlement = entity.get_component(SettlementComponent)
-            owner = "unclaimed" if settlement.claimed_by is None else "claimed"
-            lines.append(f"Settlement {_name(entity)}: {owner}.")
-        if entity.has_component(SettlementSalvageComponent):
-            salvage = entity.get_component(SettlementSalvageComponent)
-            state = "depleted" if salvage.depleted else "available"
-            lines.append(f"Settlement salvage {_name(entity)}: {state}.")
-        if entity.has_component(WaterPurifierComponent):
-            purifier = entity.get_component(WaterPurifierComponent)
-            state = "built" if purifier.built else f"needs {purifier.scrap_cost} scrap"
-            lines.append(f"Water purifier {_name(entity)}: {state}.")
-        if entity.has_component(GeneratorComponent):
-            generator = entity.get_component(GeneratorComponent)
-            state = "powered" if generator.powered else f"needs {generator.fuel_cost} fuel"
-            lines.append(f"Generator {_name(entity)}: {state}.")
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        for component_type in (
+            ChemComponent,
+            WaterPurityComponent,
+            RadiationSourceComponent,
+            ScavengeSiteComponent,
+            DecontaminationComponent,
+            RadMedicineComponent,
+            SuppressantComponent,
+            SampleComponent,
+            HotspotMarkerComponent,
+            LockedCrateComponent,
+            WastelandArtifactComponent,
+            FactionSalvageComponent,
+            SchematicComponent,
+            ItemModComponent,
+            FieldRepairComponent,
+            ChemRecipeComponent,
+            BeaconComponent,
+            TraderRouteComponent,
+            RaiderPressureComponent,
+            TerminalComponent,
+            JunkComponent,
+            OldWorldTechComponent,
+            TechLeadComponent,
+            SettlementComponent,
+            SettlementSalvageComponent,
+            WaterPurifierComponent,
+            GeneratorComponent,
+        ):
+            if entity.has_component(component_type):
+                lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     return sorted(lines)
 
 

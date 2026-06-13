@@ -5,6 +5,8 @@ from __future__ import annotations
 from pydantic.dataclasses import dataclass
 from relics import Component
 
+from ..prompts import ComponentPromptContext
+
 
 @dataclass(frozen=True)
 class RadiationShieldComponent(Component):
@@ -18,6 +20,11 @@ class ChaosMutationPressureComponent(Component):
     amount: float = 0.0
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or self.amount <= 0.0:
+            return ()
+        return (f"Chaos mutation pressure: {self.amount:g}.",)
+
 
 @dataclass(frozen=True)
 class RadiationMutationPressureComponent(Component):
@@ -25,6 +32,11 @@ class RadiationMutationPressureComponent(Component):
 
     amount: float = 0.0
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or self.amount <= 0.0:
+            return ()
+        return (f"Radiation mutation pressure: {self.amount:g}.",)
 
 
 @dataclass(frozen=True)
