@@ -1060,6 +1060,11 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "DroneComponent",
         "RecordedEvidenceComponent",
         "BlindSpotComponent",
+        "HackableComponent",
+        "ExploitComponent",
+        "CredentialComponent",
+        "DataPayloadComponent",
+        "TraceTimerComponent",
     } <= {component.__name__ for component in neon.ecs.components}
     assert "InsideZone" in {edge.__name__ for edge in neon.ecs.edges}
     assert {
@@ -1075,6 +1080,17 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "jam-sensor",
         "deploy-drone",
         "wipe-evidence",
+        "scan-network",
+        "run-exploit",
+        "use-credential",
+        "access-terminal",
+        "escalate-privileges",
+        "install-backdoor",
+        "exfiltrate-data",
+        "sabotage-system",
+        "unlock-door",
+        "evade-trace",
+        "spoof-identity",
     } <= {handler.command_type for handler in neon.commands.action_handlers}
     assert {
         "DistrictEnteredEvent",
@@ -1090,6 +1106,16 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "DroneDeployedEvent",
         "EvidenceRecordedEvent",
         "EvidenceWipedEvent",
+        "NetworkScannedEvent",
+        "CredentialUsedEvent",
+        "HackSucceededEvent",
+        "HackFailedEvent",
+        "BackdoorInstalledEvent",
+        "PrivilegesEscalatedEvent",
+        "TraceStartedEvent",
+        "DataExfiltratedEvent",
+        "SystemSabotagedEvent",
+        "AlarmRaisedEvent",
     } <= {event.__name__ for event in neon.commands.typed_events}
 
 
