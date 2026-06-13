@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -12,18 +14,25 @@ from bunnyland.core import (
     HandlerContext,
     IdentityComponent,
     Lane,
+    LockableComponent,
     PortableComponent,
     RegionComponent,
     build_submitted_command,
     container_of,
+    parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.colonysim import ResourceStackComponent
 from bunnyland.mechanics.neonsim import (
+    TRACE_SECONDS,
     AccessDeniedEvent,
     AccessGrantedEvent,
     AccessLevelComponent,
+    AccessTerminalHandler,
+    AlarmRaisedEvent,
+    BackdoorInstalledEvent,
     BlindSpotComponent,
     BribeCheckpointHandler,
     CameraComponent,
@@ -33,33 +42,62 @@ from bunnyland.mechanics.neonsim import (
     CheckpointComponent,
     CheckpointPassedEvent,
     ClaimSafehouseHandler,
+    CredentialComponent,
+    CredentialUsedEvent,
     CyberpunkSiteComponent,
+    DataExfiltratedEvent,
+    DataPayloadComponent,
     DeployDroneHandler,
     DeviceComponent,
     DeviceInspectedEvent,
     DisableCameraHandler,
     DistrictEnteredEvent,
+    DoorUnlockedEvent,
     DroneComponent,
     DroneDeployedEvent,
     EnterDistrictHandler,
+    EscalatePrivilegesHandler,
+    EvadeTraceHandler,
     EvidenceRecordedEvent,
     EvidenceWipedEvent,
+    ExfiltrateDataHandler,
+    ExploitComponent,
+    HackableComponent,
+    HackFailedEvent,
+    HackSucceededEvent,
+    IdentitySpoofedEvent,
     InsideZone,
     InspectDeviceHandler,
+    InstallBackdoorHandler,
     JamSensorHandler,
     LocationCasedEvent,
     LoopCameraHandler,
+    NetworkScannedEvent,
+    NetworkTracedEvent,
+    PrivilegesEscalatedEvent,
     PublicAccessComponent,
     RecordedEvidenceComponent,
     RestrictedAreaComponent,
+    RunExploitHandler,
+    SabotageSystemHandler,
     SafehouseClaimedEvent,
     SafehouseComponent,
+    ScanNetworkHandler,
     SecurityZoneComponent,
     SensorJammedEvent,
     ShowCredentialsHandler,
     SneakCheckpointHandler,
+    SpoofIdentityHandler,
     SurveillanceCoverageComponent,
+    SystemSabotagedEvent,
+    TerminalAccessedEvent,
+    TraceEvadedEvent,
+    TraceNetworkHandler,
+    TraceStartedEvent,
+    TraceTimerComponent,
     TrespassDetectedEvent,
+    UnlockDoorHandler,
+    UseCredentialHandler,
     WipeEvidenceHandler,
     install_neonsim,
     neonsim_fragments,
@@ -79,7 +117,54 @@ def _install(actor):
     actor.register_handler(JamSensorHandler())
     actor.register_handler(DeployDroneHandler())
     actor.register_handler(WipeEvidenceHandler())
+    actor.register_handler(ScanNetworkHandler())
+    actor.register_handler(TraceNetworkHandler())
+    actor.register_handler(RunExploitHandler())
+    actor.register_handler(UseCredentialHandler())
+    actor.register_handler(AccessTerminalHandler())
+    actor.register_handler(EscalatePrivilegesHandler())
+    actor.register_handler(InstallBackdoorHandler())
+    actor.register_handler(ExfiltrateDataHandler())
+    actor.register_handler(SabotageSystemHandler())
+    actor.register_handler(UnlockDoorHandler())
+    actor.register_handler(EvadeTraceHandler())
+    actor.register_handler(SpoofIdentityHandler())
     install_neonsim(actor)
+
+
+def _hackable(scenario, name="terminal", *, security=1, owner="", breached=False,
+              privilege="user", backdoored=False, device_type="terminal", extra=()):
+    return _room_entity(
+        scenario,
+        name,
+        "device",
+        [
+            DeviceComponent(device_type=device_type),
+            HackableComponent(
+                security=security,
+                owner=owner,
+                breached=breached,
+                privilege=privilege,
+                backdoored=backdoored,
+            ),
+            *extra,
+        ],
+    )
+
+
+def _give_exploit(scenario, power, *, single_use=False):
+    return _inventory_entity(
+        scenario, "breach kit", "tool", [ExploitComponent(power=power, single_use=single_use)]
+    )
+
+
+def _give_credential(scenario, target_owner, *, privilege="user"):
+    return _inventory_entity(
+        scenario,
+        "keycard",
+        "credential",
+        [CredentialComponent(target_owner=target_owner, privilege=privilege)],
+    )
 
 
 def _camera(scenario, name="cam", *, looped=False, disabled=False, powered=True):
@@ -1259,3 +1344,617 @@ async def test_orphan_camera_and_off_room_intruder_are_skipped():
     await scenario.actor.tick(1.0)
 
     assert recorded == []
+
+
+# --- hacking & intrusion (10.3) ------------------------------------------------------
+
+
+async def test_scan_network_reports_security():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", security=3)
+    scanned: list[NetworkScannedEvent] = []
+    scenario.actor.bus.subscribe(NetworkScannedEvent, scanned.append)
+
+    await scenario.actor.submit(_cmd(scenario, "scan-network", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert scanned[0].security == 3
+    assert scanned[0].breached is False
+
+
+async def test_trace_network_counts_nodes_in_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk")
+    _hackable(scenario, "server", device_type="server")
+    traced: list[NetworkTracedEvent] = []
+    scenario.actor.bus.subscribe(NetworkTracedEvent, traced.append)
+
+    await scenario.actor.submit(_cmd(scenario, "trace-network", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert traced[0].node_count == 2
+
+
+async def test_run_exploit_breaches_and_starts_trace():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", security=2)
+    _give_exploit(scenario, 3)
+    succeeded: list[HackSucceededEvent] = []
+    traces: list[TraceStartedEvent] = []
+    scenario.actor.bus.subscribe(HackSucceededEvent, succeeded.append)
+    scenario.actor.bus.subscribe(TraceStartedEvent, traces.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert succeeded[0].device_id == str(term)
+    assert traces[0].seconds == TRACE_SECONDS
+    assert scenario.actor.world.get_entity(term).get_component(HackableComponent).breached is True
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_component(TraceTimerComponent)
+
+
+async def test_run_exploit_consumes_single_use_exploit():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", security=1)
+    kit = _give_exploit(scenario, 2, single_use=True)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert not scenario.actor.world.has_entity(kit)
+
+
+async def test_run_exploit_fails_and_raises_alarm():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    zone_site = _room_entity(
+        scenario, "vault site", "site", [CyberpunkSiteComponent(), SecurityZoneComponent()]
+    )
+    term = _hackable(scenario, "hard server", security=5)
+    _give_exploit(scenario, 1)
+    failed: list[HackFailedEvent] = []
+    alarms: list[AlarmRaisedEvent] = []
+    scenario.actor.bus.subscribe(HackFailedEvent, failed.append)
+    scenario.actor.bus.subscribe(AlarmRaisedEvent, alarms.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert failed[0].device_id == str(term)
+    assert alarms[0].source == "failed hack"
+    assert scenario.actor.world.get_entity(term).get_component(HackableComponent).breached is False
+    zone = scenario.actor.world.get_entity(zone_site).get_component(SecurityZoneComponent)
+    assert zone.alarm_raised is True
+
+
+async def test_use_credential_breaches_cleanly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "corp node", security=4, owner="arasaka")
+    _give_credential(scenario, "arasaka", privilege="admin")
+    used: list[CredentialUsedEvent] = []
+    traces: list[TraceStartedEvent] = []
+    scenario.actor.bus.subscribe(CredentialUsedEvent, used.append)
+    scenario.actor.bus.subscribe(TraceStartedEvent, traces.append)
+
+    await scenario.actor.submit(_cmd(scenario, "use-credential", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert used[0].privilege == "admin"
+    hack = scenario.actor.world.get_entity(term).get_component(HackableComponent)
+    assert hack.breached is True
+    assert hack.privilege == "admin"
+    assert traces == []  # clean entry leaves no trace
+
+
+async def test_access_terminal_requires_breach():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", breached=True)
+    accessed: list[TerminalAccessedEvent] = []
+    scenario.actor.bus.subscribe(TerminalAccessedEvent, accessed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "access-terminal", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert accessed[0].device_id == str(term)
+
+
+async def test_escalate_privileges_to_admin():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", breached=True)
+    escalated: list[PrivilegesEscalatedEvent] = []
+    scenario.actor.bus.subscribe(PrivilegesEscalatedEvent, escalated.append)
+
+    await scenario.actor.submit(_cmd(scenario, "escalate-privileges", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert escalated[0].privilege == "admin"
+    hack = scenario.actor.world.get_entity(term).get_component(HackableComponent)
+    assert hack.privilege == "admin"
+
+
+async def test_install_backdoor_enables_future_auto_breach():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", security=9, breached=True)
+    installed: list[BackdoorInstalledEvent] = []
+    scenario.actor.bus.subscribe(BackdoorInstalledEvent, installed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "install-backdoor", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+    assert installed[0].device_id == str(term)
+
+    # Reset breached so a fresh exploit must rely on the backdoor (no exploit tool held).
+    world = scenario.actor.world
+    hack = world.get_entity(term).get_component(HackableComponent)
+    replace_component(world.get_entity(term), replace(hack, breached=False))
+    succeeded: list[HackSucceededEvent] = []
+    traces: list[TraceStartedEvent] = []
+    scenario.actor.bus.subscribe(HackSucceededEvent, succeeded.append)
+    scenario.actor.bus.subscribe(TraceStartedEvent, traces.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert succeeded[0].device_id == str(term)
+    assert traces == []  # backdoor breach is silent
+
+
+async def test_exfiltrate_data_into_inventory():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    server = _hackable(
+        scenario,
+        "data server",
+        device_type="server",
+        breached=True,
+        extra=[DataPayloadComponent(name="payroll db")],
+    )
+    exfil: list[DataExfiltratedEvent] = []
+    scenario.actor.bus.subscribe(DataExfiltratedEvent, exfil.append)
+
+    await scenario.actor.submit(_cmd(scenario, "exfiltrate-data", target_id=str(server)))
+    await scenario.actor.tick(1.0)
+
+    assert exfil[0].name == "payroll db"
+    data_id = parse_entity_id(exfil[0].data_id)
+    assert container_of(scenario.actor.world.get_entity(data_id)) == scenario.character
+    payload = scenario.actor.world.get_entity(server).get_component(DataPayloadComponent)
+    assert payload.exfiltrated is True
+
+
+async def test_exfiltrate_sensitive_data_requires_admin():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    server = _hackable(
+        scenario,
+        "secure server",
+        device_type="server",
+        breached=True,
+        privilege="user",
+        extra=[DataPayloadComponent(name="black files", sensitive=True)],
+    )
+    rejects = await _reject(scenario, _cmd(scenario, "exfiltrate-data", target_id=str(server)))
+    assert any("admin privileges" in event.reason for event in rejects)
+
+
+async def test_sabotage_system_disables_device():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "pump controller", breached=True)
+    sabotaged: list[SystemSabotagedEvent] = []
+    scenario.actor.bus.subscribe(SystemSabotagedEvent, sabotaged.append)
+
+    await scenario.actor.submit(_cmd(scenario, "sabotage-system", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert sabotaged[0].device_id == str(term)
+    assert scenario.actor.world.get_entity(term).get_component(DeviceComponent).disabled is True
+
+
+async def test_unlock_door_after_breach():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    door = _hackable(
+        scenario,
+        "mag lock",
+        device_type="lock",
+        breached=True,
+        extra=[LockableComponent(locked=True)],
+    )
+    unlocked: list[DoorUnlockedEvent] = []
+    scenario.actor.bus.subscribe(DoorUnlockedEvent, unlocked.append)
+
+    await scenario.actor.submit(_cmd(scenario, "unlock-door", target_id=str(door)))
+    await scenario.actor.tick(1.0)
+
+    assert unlocked[0].device_id == str(door)
+    assert scenario.actor.world.get_entity(door).get_component(LockableComponent).locked is False
+
+
+async def test_trace_expires_and_raises_alarm():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    zone_site = _room_entity(
+        scenario, "vault site", "site", [CyberpunkSiteComponent(), SecurityZoneComponent()]
+    )
+    term = _hackable(scenario, "kiosk", security=1)
+    _give_exploit(scenario, 2)
+    alarms: list[AlarmRaisedEvent] = []
+    scenario.actor.bus.subscribe(AlarmRaisedEvent, alarms.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+    await scenario.actor.tick(TRACE_SECONDS)
+
+    assert any(event.source == "trace" for event in alarms)
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(TraceTimerComponent)
+    zone = scenario.actor.world.get_entity(zone_site).get_component(SecurityZoneComponent)
+    assert zone.alarm_raised is True
+
+
+async def test_evade_trace_clears_it_before_expiry():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", security=1)
+    _give_exploit(scenario, 2)
+    evaded: list[TraceEvadedEvent] = []
+    alarms: list[AlarmRaisedEvent] = []
+    scenario.actor.bus.subscribe(TraceEvadedEvent, evaded.append)
+    scenario.actor.bus.subscribe(AlarmRaisedEvent, alarms.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+    await scenario.actor.submit(_cmd(scenario, "evade-trace"))
+    await scenario.actor.tick(1.0)
+    await scenario.actor.tick(TRACE_SECONDS)
+
+    assert len(evaded) == 1
+    assert alarms == []
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(TraceTimerComponent)
+
+
+async def test_spoof_identity_extends_the_trace():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", security=1)
+    _give_exploit(scenario, 2)
+    spoofed: list[IdentitySpoofedEvent] = []
+    scenario.actor.bus.subscribe(IdentitySpoofedEvent, spoofed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+    await scenario.actor.submit(_cmd(scenario, "spoof-identity"))
+    await scenario.actor.tick(1.0)
+
+    assert spoofed[0].seconds > 0
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(TraceTimerComponent).remaining > TRACE_SECONDS
+
+
+def test_hacking_fragments_describe_devices_and_trace():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _hackable(scenario, "open node", breached=True, privilege="admin", backdoored=True)
+    _hackable(scenario, "locked node", security=4)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(
+        TraceTimerComponent(remaining=120.0, source_id="x", last_updated_epoch=0)
+    )
+
+    joined = "\n".join(neonsim_fragments(scenario.actor.world, character))
+
+    assert "Device open node: terminal (breached/admin, backdoored)." in joined
+    assert "Device locked node: terminal (security 4)." in joined
+    assert "Counter-intrusion trace closing in: 120s left." in joined
+
+
+# --- error paths: hacking ------------------------------------------------------------
+
+
+def test_hacking_handlers_reject_invalid_character_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = str(scenario.room_a)
+    cases = [
+        (ScanNetworkHandler(), "scan-network"),
+        (TraceNetworkHandler(), "trace-network"),
+        (RunExploitHandler(), "run-exploit"),
+        (UseCredentialHandler(), "use-credential"),
+        (AccessTerminalHandler(), "access-terminal"),
+        (EscalatePrivilegesHandler(), "escalate-privileges"),
+        (InstallBackdoorHandler(), "install-backdoor"),
+        (ExfiltrateDataHandler(), "exfiltrate-data"),
+        (SabotageSystemHandler(), "sabotage-system"),
+        (UnlockDoorHandler(), "unlock-door"),
+        (EvadeTraceHandler(), "evade-trace"),
+        (SpoofIdentityHandler(), "spoof-identity"),
+    ]
+    for handler, command_type in cases:
+        result = handler.execute(
+            ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
+        )
+        assert result.ok is False
+        assert result.reason == "invalid character id"
+
+
+async def test_run_exploit_rejects_already_breached():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", breached=True)
+    rejects = await _reject(scenario, _cmd(scenario, "run-exploit", target_id=str(term)))
+    assert any("already breached" in event.reason for event in rejects)
+
+
+async def test_use_credential_rejects_without_match():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "corp node", owner="arasaka")
+    _give_credential(scenario, "militech")
+    rejects = await _reject(scenario, _cmd(scenario, "use-credential", target_id=str(term)))
+    assert any("no credential matches" in event.reason for event in rejects)
+
+
+async def test_access_terminal_rejects_when_locked():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk")
+    rejects = await _reject(scenario, _cmd(scenario, "access-terminal", target_id=str(term)))
+    assert any("breach it first" in event.reason for event in rejects)
+
+
+async def test_escalate_privileges_rejects_when_not_breached():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk")
+    rejects = await _reject(scenario, _cmd(scenario, "escalate-privileges", target_id=str(term)))
+    assert any("breach the system first" in event.reason for event in rejects)
+
+
+async def test_escalate_privileges_rejects_when_already_admin():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", breached=True, privilege="admin")
+    rejects = await _reject(scenario, _cmd(scenario, "escalate-privileges", target_id=str(term)))
+    assert any("already running as admin" in event.reason for event in rejects)
+
+
+async def test_install_backdoor_rejects_when_not_breached():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk")
+    rejects = await _reject(scenario, _cmd(scenario, "install-backdoor", target_id=str(term)))
+    assert any("breach the system first" in event.reason for event in rejects)
+
+
+async def test_install_backdoor_rejects_when_already_installed():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", breached=True, backdoored=True)
+    rejects = await _reject(scenario, _cmd(scenario, "install-backdoor", target_id=str(term)))
+    assert any("already installed" in event.reason for event in rejects)
+
+
+async def test_exfiltrate_rejects_when_not_breached():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    server = _hackable(
+        scenario, "server", device_type="server", extra=[DataPayloadComponent(name="db")]
+    )
+    rejects = await _reject(scenario, _cmd(scenario, "exfiltrate-data", target_id=str(server)))
+    assert any("breach the system first" in event.reason for event in rejects)
+
+
+async def test_exfiltrate_rejects_without_data():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", breached=True)
+    rejects = await _reject(scenario, _cmd(scenario, "exfiltrate-data", target_id=str(term)))
+    assert any("holds no data" in event.reason for event in rejects)
+
+
+async def test_exfiltrate_rejects_when_already_taken():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    server = _hackable(
+        scenario,
+        "server",
+        device_type="server",
+        breached=True,
+        extra=[DataPayloadComponent(name="db", exfiltrated=True)],
+    )
+    rejects = await _reject(scenario, _cmd(scenario, "exfiltrate-data", target_id=str(server)))
+    assert any("already been exfiltrated" in event.reason for event in rejects)
+
+
+async def test_sabotage_rejects_when_not_breached():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk")
+    rejects = await _reject(scenario, _cmd(scenario, "sabotage-system", target_id=str(term)))
+    assert any("breach the system first" in event.reason for event in rejects)
+
+
+async def test_unlock_door_rejects_when_already_unlocked():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    door = _hackable(
+        scenario,
+        "mag lock",
+        device_type="lock",
+        breached=True,
+        extra=[LockableComponent(locked=False)],
+    )
+    rejects = await _reject(scenario, _cmd(scenario, "unlock-door", target_id=str(door)))
+    assert any("already unlocked" in event.reason for event in rejects)
+
+
+async def test_unlock_door_rejects_non_network_lock():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    chest = _room_entity(scenario, "footlocker", "container", [LockableComponent(locked=True)])
+    rejects = await _reject(scenario, _cmd(scenario, "unlock-door", target_id=str(chest)))
+    assert any("not a network device" in event.reason for event in rejects)
+
+
+async def test_evade_trace_rejects_without_active_trace():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    rejects = await _reject(scenario, _cmd(scenario, "evade-trace"))
+    assert any("no active trace" in event.reason for event in rejects)
+
+
+async def test_spoof_identity_rejects_without_active_trace():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    rejects = await _reject(scenario, _cmd(scenario, "spoof-identity"))
+    assert any("no active trace" in event.reason for event in rejects)
+
+
+async def test_device_and_hacking_handlers_reject_wrong_kind_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
+    target = str(site)
+    cases = {
+        "loop-camera": "wrong kind",
+        "scan-network": "wrong kind",
+        "trace-network": "wrong kind",
+        "run-exploit": "wrong kind",
+        "use-credential": "wrong kind",
+        "access-terminal": "wrong kind",
+        "escalate-privileges": "wrong kind",
+        "install-backdoor": "wrong kind",
+        "exfiltrate-data": "wrong kind",
+        "sabotage-system": "wrong kind",
+        "unlock-door": "wrong kind",
+    }
+    for command_type, fragment in cases.items():
+        rejects = await _reject(scenario, _cmd(scenario, command_type, target_id=target))
+        assert any(fragment in event.reason for event in rejects), command_type
+
+
+async def test_sabotage_rejects_when_already_sabotaged():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _room_entity(
+        scenario,
+        "fried controller",
+        "device",
+        [DeviceComponent(device_type="terminal", disabled=True), HackableComponent(breached=True)],
+    )
+    rejects = await _reject(scenario, _cmd(scenario, "sabotage-system", target_id=str(term)))
+    assert any("already sabotaged" in event.reason for event in rejects)
+
+
+async def test_trace_partially_decrements_without_alarm():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    term = _hackable(scenario, "kiosk", security=1)
+    _give_exploit(scenario, 2)
+    alarms: list[AlarmRaisedEvent] = []
+    scenario.actor.bus.subscribe(AlarmRaisedEvent, alarms.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+    await scenario.actor.tick(60.0)
+
+    assert alarms == []
+    timer = scenario.actor.world.get_entity(scenario.character).get_component(TraceTimerComponent)
+    assert 0 < timer.remaining < TRACE_SECONDS
+
+
+# --- systematic error-path coverage across every target-taking handler ---------------
+
+TARGET_COMMANDS = (
+    "enter-district",
+    "show-credentials",
+    "bribe-checkpoint",
+    "sneak-through-checkpoint",
+    "claim-safehouse",
+    "case-location",
+    "inspect-device",
+    "disable-camera",
+    "loop-camera",
+    "jam-sensor",
+    "deploy-drone",
+    "wipe-evidence",
+    "scan-network",
+    "trace-network",
+    "run-exploit",
+    "use-credential",
+    "access-terminal",
+    "escalate-privileges",
+    "install-backdoor",
+    "exfiltrate-data",
+    "sabotage-system",
+    "unlock-door",
+)
+
+
+async def test_all_target_handlers_reject_missing_targets():
+    for command_type in TARGET_COMMANDS:
+        scenario = build_scenario()
+        _install(scenario.actor)
+        rejects = await _reject(scenario, _cmd(scenario, command_type, target_id="999999"))
+        assert any("does not exist" in event.reason for event in rejects), command_type
+
+
+async def test_all_target_handlers_reject_unreachable_targets():
+    for command_type in TARGET_COMMANDS:
+        scenario = build_scenario()
+        _install(scenario.actor)
+        far = _far_entity(scenario, "distant rig", "device", [CyberpunkSiteComponent()])
+        rejects = await _reject(scenario, _cmd(scenario, command_type, target_id=str(far)))
+        assert any("not reachable" in event.reason for event in rejects), command_type
+
+
+def test_zero_clearance_access_level_omits_clearance_line():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_clearance(scenario, clearance=0)
+
+    joined = "\n".join(
+        neonsim_fragments(scenario.actor.world, scenario.actor.world.get_entity(scenario.character))
+    )
+
+    assert "Security clearance" not in joined
+
+
+async def test_bribe_skips_stale_inventory_edge():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scrip = _give_scrip(scenario, 50)
+    # Remove the scrip entity but leave the dangling inventory edge: _spend_scrip must
+    # skip the stale edge and still find no spendable scrip.
+    scenario.actor.world.remove(scrip)
+    gate = _room_entity(scenario, "gate", "checkpoint", [CheckpointComponent(bribe_cost=30)])
+    rejects = await _reject(scenario, _cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    assert any("not enough scrip" in event.reason for event in rejects)
+
+
+async def test_hacking_ignores_unrelated_inventory_items():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    # Carry junk that is neither an exploit nor a credential; the lookups must skip it.
+    _give_scrip(scenario, 5)
+    _give_exploit(scenario, 3)
+    _give_credential(scenario, "arasaka")
+    term = _hackable(scenario, "kiosk", security=2, owner="arasaka")
+    succeeded: list[HackSucceededEvent] = []
+    scenario.actor.bus.subscribe(HackSucceededEvent, succeeded.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(term)))
+    await scenario.actor.tick(1.0)
+
+    assert succeeded[0].device_id == str(term)

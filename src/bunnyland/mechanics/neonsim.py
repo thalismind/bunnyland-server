@@ -5,7 +5,8 @@ modelled with the core ``RegionComponent`` rather than a bespoke district type, 
 slices reuse dagger-sim law/reputation/debt. Implemented so far: cyberpunk sites, security
 zones, access control, checkpoints, safehouses, and deterministic trespass detection
 (catalogue 10.1); networked devices, cameras, drones, surveillance, recorded evidence, and
-blind spots (catalogue 10.2).
+blind spots (catalogue 10.2); hacking, credentials, exploits, backdoors, data exfiltration,
+sabotage, and a counter-intrusion trace timer (catalogue 10.3).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from ..core.components import (
     CharacterComponent,
     DeadComponent,
     IdentityComponent,
+    LockableComponent,
     RegionComponent,
     SuspendedComponent,
 )
@@ -983,6 +985,679 @@ class WipeEvidenceHandler:
         )
 
 
+# --- Components (catalogue 10.3: hacking, credentials, intrusion) --------------------
+
+
+@dataclass(frozen=True)
+class HackableComponent(Component):
+    """A device that can be breached. ``owner`` matches a credential's ``target_owner``."""
+
+    security: int = 1
+    owner: str = ""
+    breached: bool = False
+    privilege: str = "user"
+    backdoored: bool = False
+
+
+@dataclass(frozen=True)
+class ExploitComponent(Component):
+    """A hacking tool carried in inventory. ``power`` is compared against security."""
+
+    power: int = 1
+    single_use: bool = False
+
+
+@dataclass(frozen=True)
+class CredentialComponent(Component):
+    """A stored credential/access token that opens devices owned by ``target_owner``."""
+
+    target_owner: str = ""
+    privilege: str = "user"
+
+
+@dataclass(frozen=True)
+class DataPayloadComponent(Component):
+    name: str = "data cache"
+    sensitive: bool = False
+    exfiltrated: bool = False
+
+
+@dataclass(frozen=True)
+class TraceTimerComponent(Component):
+    """A counter-intrusion trace closing in on the hacker; expiry raises the alarm."""
+
+    remaining: float = 0.0
+    source_id: str = ""
+    last_updated_epoch: int = 0
+
+
+# --- Events (catalogue 10.3) ---------------------------------------------------------
+
+
+class NetworkScannedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+    security: int
+    breached: bool
+
+
+class NetworkTracedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+    node_count: int
+
+
+class TerminalAccessedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class CredentialUsedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+    privilege: str
+
+
+class HackSucceededEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class HackFailedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class BackdoorInstalledEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class PrivilegesEscalatedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+    privilege: str
+
+
+class TraceStartedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+    seconds: float
+
+
+class TraceEvadedEvent(DomainEvent):
+    character_id: str
+
+
+class IdentitySpoofedEvent(DomainEvent):
+    character_id: str
+    seconds: float
+
+
+class DataExfiltratedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+    data_id: str
+    name: str
+
+
+class SystemSabotagedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class DoorUnlockedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class AlarmRaisedEvent(DomainEvent):
+    character_id: str
+    source: str = "intrusion"
+
+
+TRACE_SECONDS = 3600.0
+SPOOF_EXTRA_SECONDS = 3600.0
+
+
+# --- Hacking helpers -----------------------------------------------------------------
+
+
+def _best_exploit(character: Entity, world: World) -> tuple[int, Entity | None]:
+    best_power = 0
+    best_item: Entity | None = None
+    for edge, item_id in character.get_relationships(Contains):
+        if edge.mode != ContainmentMode.INVENTORY or not world.has_entity(item_id):
+            continue
+        item = world.get_entity(item_id)
+        if not item.has_component(ExploitComponent):
+            continue
+        power = item.get_component(ExploitComponent).power
+        if power > best_power:
+            best_power = power
+            best_item = item
+    return best_power, best_item
+
+
+def _matching_credential(character: Entity, world: World, owner: str) -> Entity | None:
+    for edge, item_id in character.get_relationships(Contains):
+        if edge.mode != ContainmentMode.INVENTORY or not world.has_entity(item_id):
+            continue
+        item = world.get_entity(item_id)
+        if (
+            item.has_component(CredentialComponent)
+            and item.get_component(CredentialComponent).target_owner == owner
+        ):
+            return item
+    return None
+
+
+def _raise_local_alarm(world: World, character_id: EntityId) -> None:
+    character = world.get_entity(character_id)
+    for entity_id in reachable_ids(world, character):
+        if not world.has_entity(entity_id):
+            continue
+        entity = world.get_entity(entity_id)
+        if entity.has_component(SecurityZoneComponent):
+            zone = entity.get_component(SecurityZoneComponent)
+            if not zone.alarm_raised:
+                replace_component(entity, replace(zone, alarm_raised=True))
+
+
+def _start_trace(character: Entity, world: World, epoch: int, device_id: EntityId) -> DomainEvent:
+    replace_component(
+        character,
+        TraceTimerComponent(
+            remaining=TRACE_SECONDS,
+            source_id=str(device_id),
+            last_updated_epoch=epoch,
+        ),
+    )
+    return TraceStartedEvent(
+        **_event_base(
+            epoch,
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(character.id),
+            room_id=_room_id(world, character.id),
+            target_ids=(str(device_id),),
+            character_id=str(character.id),
+            device_id=str(device_id),
+            seconds=TRACE_SECONDS,
+        )
+    )
+
+
+# --- Consequences (catalogue 10.3 systems) -------------------------------------------
+
+
+class TraceTimerConsequence:
+    """Counter-intrusion: an active trace counts down and trips the alarm on expiry."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for character in (
+            world.query()
+            .with_all([CharacterComponent, TraceTimerComponent])
+            .with_none([DeadComponent])
+            .execute_entities()
+        ):
+            timer = character.get_component(TraceTimerComponent)
+            elapsed = max(0, epoch - timer.last_updated_epoch)
+            if elapsed <= 0:
+                continue
+            remaining = timer.remaining - elapsed
+            if remaining > 0:
+                replace_component(
+                    character, replace(timer, remaining=remaining, last_updated_epoch=epoch)
+                )
+                continue
+            character.remove_component(TraceTimerComponent)
+            _raise_local_alarm(world, character.id)
+            events.append(
+                AlarmRaisedEvent(
+                    **_event_base(
+                        epoch,
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(character.id),
+                        room_id=_room_id(world, character.id),
+                        character_id=str(character.id),
+                        source="trace",
+                    )
+                )
+            )
+        return events
+
+
+# --- Handlers (catalogue 10.3 actions) -----------------------------------------------
+
+
+class ScanNetworkHandler:
+    command_type = "scan-network"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a network device")
+        hack = device.get_component(HackableComponent)
+        return ok(
+            NetworkScannedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                    security=hack.security,
+                    breached=hack.breached,
+                )
+            )
+        )
+
+
+class TraceNetworkHandler:
+    command_type = "trace-network"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a network device")
+        room_id = container_of(device)
+        node_count = 0
+        if room_id is not None and ctx.world.has_entity(room_id):
+            for _edge, sibling_id in ctx.world.get_entity(room_id).get_relationships(Contains):
+                if ctx.world.has_entity(sibling_id) and ctx.world.get_entity(
+                    sibling_id
+                ).has_component(HackableComponent):
+                    node_count += 1
+        return ok(
+            NetworkTracedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                    node_count=node_count,
+                )
+            )
+        )
+
+
+class RunExploitHandler:
+    command_type = "run-exploit"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a network device")
+        hack = device.get_component(HackableComponent)
+        if hack.breached:
+            return rejected("system is already breached")
+        character = ctx.entity(character_id)
+        power, exploit_item = _best_exploit(character, ctx.world)
+        if hack.backdoored or power >= hack.security:
+            replace_component(device, replace(hack, breached=True))
+            if exploit_item is not None and exploit_item.get_component(ExploitComponent).single_use:
+                parent_id = container_of(exploit_item)
+                if parent_id is not None and ctx.world.has_entity(parent_id):
+                    ctx.world.get_entity(parent_id).remove_relationship(Contains, exploit_item.id)
+                ctx.world.remove(exploit_item.id)
+            events: list[DomainEvent] = [
+                HackSucceededEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(device.id),),
+                        character_id=str(character_id),
+                        device_id=str(device.id),
+                    )
+                )
+            ]
+            if not hack.backdoored:
+                events.append(_start_trace(character, ctx.world, ctx.epoch, device.id))
+            return ok(*events)
+        _raise_local_alarm(ctx.world, character_id)
+        return ok(
+            HackFailedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            ),
+            AlarmRaisedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                    source="failed hack",
+                )
+            ),
+        )
+
+
+class UseCredentialHandler:
+    command_type = "use-credential"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a network device")
+        hack = device.get_component(HackableComponent)
+        character = ctx.entity(character_id)
+        credential = _matching_credential(character, ctx.world, hack.owner)
+        if credential is None:
+            return rejected("no credential matches this system")
+        privilege = credential.get_component(CredentialComponent).privilege
+        replace_component(device, replace(hack, breached=True, privilege=privilege))
+        return ok(
+            CredentialUsedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                    privilege=privilege,
+                )
+            )
+        )
+
+
+class AccessTerminalHandler:
+    command_type = "access-terminal"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a terminal")
+        hack = device.get_component(HackableComponent)
+        if not hack.breached and not hack.backdoored:
+            return rejected("terminal is locked; breach it first")
+        return ok(
+            TerminalAccessedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            )
+        )
+
+
+class EscalatePrivilegesHandler:
+    command_type = "escalate-privileges"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a network device")
+        hack = device.get_component(HackableComponent)
+        if not hack.breached and not hack.backdoored:
+            return rejected("breach the system first")
+        if hack.privilege == "admin":
+            return rejected("already running as admin")
+        replace_component(device, replace(hack, privilege="admin"))
+        return ok(
+            PrivilegesEscalatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                    privilege="admin",
+                )
+            )
+        )
+
+
+class InstallBackdoorHandler:
+    command_type = "install-backdoor"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a network device")
+        hack = device.get_component(HackableComponent)
+        if not hack.breached:
+            return rejected("breach the system first")
+        if hack.backdoored:
+            return rejected("backdoor is already installed")
+        replace_component(device, replace(hack, backdoored=True))
+        return ok(
+            BackdoorInstalledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            )
+        )
+
+
+class ExfiltrateDataHandler:
+    command_type = "exfiltrate-data"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a network device")
+        hack = device.get_component(HackableComponent)
+        if not hack.breached and not hack.backdoored:
+            return rejected("breach the system first")
+        if not device.has_component(DataPayloadComponent):
+            return rejected("target holds no data")
+        payload = device.get_component(DataPayloadComponent)
+        if payload.exfiltrated:
+            return rejected("data has already been exfiltrated")
+        if payload.sensitive and hack.privilege != "admin":
+            return rejected("sensitive data needs admin privileges")
+        replace_component(device, replace(payload, exfiltrated=True))
+        character = ctx.entity(character_id)
+        data_item = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=payload.name, kind="data"),
+                DataPayloadComponent(name=payload.name, sensitive=payload.sensitive),
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), data_item.id)
+        return ok(
+            DataExfiltratedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id), str(data_item.id)),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                    data_id=str(data_item.id),
+                    name=payload.name,
+                )
+            )
+        )
+
+
+class SabotageSystemHandler:
+    command_type = "sabotage-system"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HackableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a network device")
+        hack = device.get_component(HackableComponent)
+        if not hack.breached and not hack.backdoored:
+            return rejected("breach the system first")
+        if device.has_component(DeviceComponent):
+            dev = device.get_component(DeviceComponent)
+            if dev.disabled:
+                return rejected("system is already sabotaged")
+            replace_component(device, replace(dev, disabled=True))
+        return ok(
+            SystemSabotagedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            )
+        )
+
+
+class UnlockDoorHandler:
+    command_type = "unlock-door"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), LockableComponent
+        )
+        if device is None:
+            return rejected(error if error else "target has no electronic lock")
+        if not device.has_component(HackableComponent):
+            return rejected("target is not a network device")
+        hack = device.get_component(HackableComponent)
+        if not hack.breached and not hack.backdoored:
+            return rejected("breach the system first")
+        lock = device.get_component(LockableComponent)
+        if not lock.locked:
+            return rejected("door is already unlocked")
+        replace_component(device, replace(lock, locked=False))
+        return ok(
+            DoorUnlockedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            )
+        )
+
+
+class EvadeTraceHandler:
+    command_type = "evade-trace"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(TraceTimerComponent):
+            return rejected("no active trace to evade")
+        character.remove_component(TraceTimerComponent)
+        return ok(
+            TraceEvadedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                )
+            )
+        )
+
+
+class SpoofIdentityHandler:
+    command_type = "spoof-identity"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(TraceTimerComponent):
+            return rejected("no active trace to spoof")
+        timer = character.get_component(TraceTimerComponent)
+        replace_component(
+            character,
+            replace(
+                timer,
+                remaining=timer.remaining + SPOOF_EXTRA_SECONDS,
+                last_updated_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            IdentitySpoofedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                    seconds=SPOOF_EXTRA_SECONDS,
+                )
+            )
+        )
+
+
 # --- Prompt fragments ----------------------------------------------------------------
 
 
@@ -1039,12 +1714,23 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
                     states.append("looped")
             if entity.has_component(SurveillanceCoverageComponent) and not states:
                 states.append("watching")
+            if entity.has_component(HackableComponent):
+                hack = entity.get_component(HackableComponent)
+                if hack.breached:
+                    states.append(f"breached/{hack.privilege}")
+                else:
+                    states.append(f"security {hack.security}")
+                if hack.backdoored:
+                    states.append("backdoored")
             suffix = f" ({', '.join(states)})" if states else ""
             lines.append(f"Device {_name(entity)}: {dev.device_type}{suffix}.")
         if entity.has_component(RecordedEvidenceComponent):
             record = entity.get_component(RecordedEvidenceComponent)
             if not record.wiped:
                 lines.append(f"Recorded evidence: {_name(entity)} ({record.device_type}).")
+    if character.has_component(TraceTimerComponent):
+        timer = character.get_component(TraceTimerComponent)
+        lines.append(f"Counter-intrusion trace closing in: {timer.remaining:g}s left.")
     return sorted(lines)
 
 
@@ -1056,12 +1742,16 @@ def install_neonsim(actor) -> None:
     # same tick they are caught and ejected.
     actor.register_consequence(SurveillanceConsequence())
     actor.register_consequence(TrespassDetectionConsequence())
+    actor.register_consequence(TraceTimerConsequence())
 
 
 __all__ = [
     "AccessDeniedEvent",
     "AccessGrantedEvent",
     "AccessLevelComponent",
+    "AccessTerminalHandler",
+    "AlarmRaisedEvent",
+    "BackdoorInstalledEvent",
     "BlindSpotComponent",
     "BribeCheckpointHandler",
     "CameraComponent",
@@ -1071,35 +1761,65 @@ __all__ = [
     "CheckpointComponent",
     "CheckpointPassedEvent",
     "ClaimSafehouseHandler",
+    "CredentialComponent",
+    "CredentialUsedEvent",
     "CyberpunkSiteComponent",
+    "DataExfiltratedEvent",
+    "DataPayloadComponent",
+    "DeployDroneHandler",
     "DeviceComponent",
     "DeviceInspectedEvent",
     "DisableCameraHandler",
-    "DeployDroneHandler",
     "DistrictEnteredEvent",
+    "DoorUnlockedEvent",
     "DroneComponent",
     "DroneDeployedEvent",
     "EnterDistrictHandler",
+    "EscalatePrivilegesHandler",
+    "EvadeTraceHandler",
     "EvidenceRecordedEvent",
     "EvidenceWipedEvent",
+    "ExfiltrateDataHandler",
+    "ExploitComponent",
+    "HackFailedEvent",
+    "HackSucceededEvent",
+    "HackableComponent",
+    "IdentitySpoofedEvent",
     "InsideZone",
     "InspectDeviceHandler",
+    "InstallBackdoorHandler",
     "JamSensorHandler",
     "LocationCasedEvent",
     "LoopCameraHandler",
+    "NetworkScannedEvent",
+    "NetworkTracedEvent",
+    "PrivilegesEscalatedEvent",
     "PublicAccessComponent",
     "RecordedEvidenceComponent",
     "RestrictedAreaComponent",
+    "RunExploitHandler",
+    "SabotageSystemHandler",
     "SafehouseClaimedEvent",
     "SafehouseComponent",
+    "ScanNetworkHandler",
     "SecurityZoneComponent",
     "SensorJammedEvent",
     "ShowCredentialsHandler",
     "SneakCheckpointHandler",
+    "SpoofIdentityHandler",
     "SurveillanceConsequence",
     "SurveillanceCoverageComponent",
+    "SystemSabotagedEvent",
+    "TerminalAccessedEvent",
+    "TraceEvadedEvent",
+    "TraceNetworkHandler",
+    "TraceStartedEvent",
+    "TraceTimerComponent",
+    "TraceTimerConsequence",
     "TrespassDetectedEvent",
     "TrespassDetectionConsequence",
+    "UnlockDoorHandler",
+    "UseCredentialHandler",
     "WipeEvidenceHandler",
     "install_neonsim",
     "neonsim_fragments",

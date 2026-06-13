@@ -1640,6 +1640,43 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="wipe_evidence",
         patterns=("wipe evidence {target_id}", "erase the footage {target_id}"),
     ),
+    _definition("scan-network", ("target_id",), tool_name="scan_network"),
+    _definition("trace-network", ("target_id",), tool_name="trace_network"),
+    _definition(
+        "run-exploit",
+        ("target_id",),
+        tool_name="run_exploit",
+        patterns=("run exploit on {target_id}", "hack {target_id}"),
+    ),
+    _definition("use-credential", ("target_id",), tool_name="use_credential"),
+    _definition("access-terminal", ("target_id",), tool_name="access_terminal"),
+    _definition(
+        "escalate-privileges",
+        ("target_id",),
+        tool_name="escalate_privileges",
+        patterns=("escalate privileges on {target_id}",),
+    ),
+    _definition("install-backdoor", ("target_id",), tool_name="install_backdoor"),
+    _definition(
+        "exfiltrate-data",
+        ("target_id",),
+        tool_name="exfiltrate_data",
+        patterns=("exfiltrate data from {target_id}", "steal data from {target_id}"),
+    ),
+    _definition(
+        "sabotage-system",
+        ("target_id",),
+        tool_name="sabotage_system",
+        patterns=("sabotage {target_id}",),
+    ),
+    _definition(
+        "unlock-door",
+        ("target_id",),
+        tool_name="unlock_door",
+        patterns=("unlock door {target_id}",),
+    ),
+    _definition("evade-trace", (), tool_name="evade_trace", patterns=("evade the trace",)),
+    _definition("spoof-identity", (), tool_name="spoof_identity", patterns=("spoof your id",)),
 )
 
 
