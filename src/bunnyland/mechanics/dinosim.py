@@ -77,6 +77,13 @@ class FossilFragmentComponent(Component):
 
 
 @dataclass(frozen=True)
+class FossilSurveyComponent(Component):
+    surveyed_by: tuple[str, ...] = ()
+    excavation_progress: float = 0.0
+    stabilized: bool = False
+
+
+@dataclass(frozen=True)
 class SpeciesIdentificationComponent(Component):
     species_name: str
     confidence: float = 1.0
@@ -124,12 +131,62 @@ class IncubationComponent(Component):
     progress_seconds: int = 0
     last_updated_epoch: int = 0
     ready: bool = False
+    temperature: float | None = None
+    brooded_by: str | None = None
+
+
+@dataclass(frozen=True)
+class LabIncubationComponent(Component):
+    lab_id: str
+    active: bool = False
 
 
 @dataclass(frozen=True)
 class HatchlingComponent(Component):
     hatched_at_epoch: int
     egg_id: str
+
+
+@dataclass(frozen=True)
+class EggInspectionComponent(Component):
+    inspected_by: str
+    viability: float = 1.0
+    inspected_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class ImprintComponent(Component):
+    imprinted_by: str
+    bond: float = 1.0
+
+
+@dataclass(frozen=True)
+class JuvenileCareComponent(Component):
+    cared_by: str
+    care_level: float = 0.0
+
+
+@dataclass(frozen=True)
+class WaterCreatureComponent(Component):
+    species_name: str
+    depth_preference: str = "shallows"
+
+
+@dataclass(frozen=True)
+class WaterStudyComponent(Component):
+    studied_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BroodingComponent(Component):
+    brooder_id: str
+    warmth: float = 1.0
+
+
+@dataclass(frozen=True)
+class ContainmentPanicComponent(Component):
+    severity: int = 1
+    active: bool = True
 
 
 @dataclass(frozen=True)
@@ -462,6 +519,23 @@ class FossilIdentifiedEvent(DomainEvent):
     confidence: float
 
 
+class FossilSurveyedEvent(DomainEvent):
+    fossil_id: str
+
+
+class FossilExcavatedEvent(DomainEvent):
+    fossil_id: str
+    progress: float
+
+
+class FossilCleanedEvent(DomainEvent):
+    fossil_id: str
+
+
+class FossilStabilizedEvent(DomainEvent):
+    fossil_id: str
+
+
 class AncientSampleExtractedEvent(DomainEvent):
     fossil_id: str
     sample_id: str
@@ -489,6 +563,46 @@ class EggFertilizedEvent(DomainEvent):
 class EggIncubatedEvent(DomainEvent):
     egg_id: str
     ready_at_epoch: int
+
+
+class LabIncubationStartedEvent(DomainEvent):
+    egg_id: str
+    lab_id: str
+
+
+class EggInspectedEvent(DomainEvent):
+    egg_id: str
+    viability: float
+
+
+class CreatureImprintedEvent(DomainEvent):
+    creature_id: str
+    bond: float
+
+
+class JuvenileCareGivenEvent(DomainEvent):
+    creature_id: str
+    care_level: float
+
+
+class WaterCreatureStudiedEvent(DomainEvent):
+    creature_id: str
+    species_name: str
+
+
+class BroodingStartedEvent(DomainEvent):
+    egg_id: str
+    warmth: float
+
+
+class IncubationTemperatureSetEvent(DomainEvent):
+    egg_id: str
+    temperature: float
+
+
+class ContainmentPanicStartedEvent(DomainEvent):
+    enclosure_id: str
+    severity: int
 
 
 class EggHatchedEvent(DomainEvent):
@@ -1184,9 +1298,7 @@ class EscapeRiskConsequence:
         events: list[DomainEvent] = []
         for room in world.query().with_all([RoomComponent, EnclosureComponent]).execute_entities():
             fence = (
-                room.get_component(FenceComponent)
-                if room.has_component(FenceComponent)
-                else None
+                room.get_component(FenceComponent) if room.has_component(FenceComponent) else None
             )
             gate = room.get_component(GateComponent) if room.has_component(GateComponent) else None
             breached = room.has_component(BreachComponent)
@@ -1415,9 +1527,10 @@ class LayEggHandler:
         parent = _reachable_entity(ctx, character_id, parent_id)
         if parent is None:
             return rejected("parent is not reachable")
-        if parent.has_component(FertilityComponent) and not parent.get_component(
-            FertilityComponent
-        ).fertile:
+        if (
+            parent.has_component(FertilityComponent)
+            and not parent.get_component(FertilityComponent).fertile
+        ):
             return rejected("parent is not fertile")
         if not (
             parent.has_component(ReptileProcreationComponent)
@@ -1472,9 +1585,10 @@ class FertilizeEggHandler:
         egg = egg_entity.get_component(EggComponent)
         if egg.fertilized:
             return rejected("egg is already fertilized")
-        if parent.has_component(FertilityComponent) and not parent.get_component(
-            FertilityComponent
-        ).fertile:
+        if (
+            parent.has_component(FertilityComponent)
+            and not parent.get_component(FertilityComponent).fertile
+        ):
             return rejected("parent is not fertile")
 
         parent_ids = tuple(dict.fromkeys((*egg.parent_ids, str(parent_id))))
@@ -1599,6 +1713,371 @@ class HatchEggHandler:
         )
 
 
+class SurveyFossilHandler:
+    command_type = "survey-fossil"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        fossil_id = parse_entity_id(command.payload.get("fossil_id"))
+        if character_id is None or fossil_id is None:
+            return rejected("invalid character or fossil id")
+        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        if fossil is None or not fossil.has_component(FossilFragmentComponent):
+            return rejected("fossil is not reachable")
+        survey = (
+            fossil.get_component(FossilSurveyComponent)
+            if fossil.has_component(FossilSurveyComponent)
+            else FossilSurveyComponent()
+        )
+        replace_component(
+            fossil,
+            replace(survey, surveyed_by=tuple(sorted((*survey.surveyed_by, str(character_id))))),
+        )
+        return ok(
+            FossilSurveyedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(fossil_id),),
+                    fossil_id=str(fossil_id),
+                )
+            )
+        )
+
+
+class ExcavateFossilHandler:
+    command_type = "excavate-fossil"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        fossil_id = parse_entity_id(command.payload.get("fossil_id"))
+        if character_id is None or fossil_id is None:
+            return rejected("invalid character or fossil id")
+        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        if fossil is None or not fossil.has_component(FossilFragmentComponent):
+            return rejected("fossil is not reachable")
+        survey = (
+            fossil.get_component(FossilSurveyComponent)
+            if fossil.has_component(FossilSurveyComponent)
+            else FossilSurveyComponent()
+        )
+        progress = min(
+            1.0, survey.excavation_progress + float(command.payload.get("progress", 0.5))
+        )
+        replace_component(fossil, replace(survey, excavation_progress=progress))
+        return ok(
+            FossilExcavatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(fossil_id),),
+                    fossil_id=str(fossil_id),
+                    progress=progress,
+                )
+            )
+        )
+
+
+class CleanFossilHandler:
+    command_type = "clean-fossil"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        fossil_id = parse_entity_id(command.payload.get("fossil_id"))
+        if character_id is None or fossil_id is None:
+            return rejected("invalid character or fossil id")
+        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        if fossil is None or not fossil.has_component(FossilFragmentComponent):
+            return rejected("fossil is not reachable")
+        fragment = fossil.get_component(FossilFragmentComponent)
+        replace_component(fossil, replace(fragment, cleaned=True))
+        return ok(
+            FossilCleanedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(fossil_id),),
+                    fossil_id=str(fossil_id),
+                )
+            )
+        )
+
+
+class StabilizeFossilHandler:
+    command_type = "stabilize-fossil"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        fossil_id = parse_entity_id(command.payload.get("fossil_id"))
+        if character_id is None or fossil_id is None:
+            return rejected("invalid character or fossil id")
+        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        if fossil is None or not fossil.has_component(FossilFragmentComponent):
+            return rejected("fossil is not reachable")
+        survey = (
+            fossil.get_component(FossilSurveyComponent)
+            if fossil.has_component(FossilSurveyComponent)
+            else FossilSurveyComponent()
+        )
+        replace_component(fossil, replace(survey, stabilized=True))
+        return ok(
+            FossilStabilizedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(fossil_id),),
+                    fossil_id=str(fossil_id),
+                )
+            )
+        )
+
+
+class LabIncubateEggHandler:
+    command_type = "lab-incubate-egg"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        result = IncubateEggHandler().execute(ctx, command)
+        character_id = parse_entity_id(command.character_id)
+        egg_id = parse_entity_id(command.payload.get("egg_id"))
+        lab_id = str(command.payload.get("lab_id", "")).strip()
+        if character_id is None or egg_id is None or not result.ok:
+            return result
+        egg = ctx.entity(egg_id)
+        replace_component(egg, LabIncubationComponent(lab_id=lab_id, active=True))
+        return ok(
+            *result.events,
+            LabIncubationStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(egg_id),),
+                    egg_id=str(egg_id),
+                    lab_id=lab_id,
+                )
+            ),
+        )
+
+
+class InspectEggHandler:
+    command_type = "inspect-egg"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        egg_id = parse_entity_id(command.payload.get("egg_id"))
+        if character_id is None or egg_id is None:
+            return rejected("invalid character or egg id")
+        egg = _reachable_entity(ctx, character_id, egg_id)
+        if egg is None or not egg.has_component(EggComponent):
+            return rejected("egg is not reachable")
+        viability = float(command.payload.get("viability", 1.0))
+        replace_component(
+            egg,
+            EggInspectionComponent(
+                inspected_by=str(character_id),
+                viability=viability,
+                inspected_at_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            EggInspectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(egg_id),),
+                    egg_id=str(egg_id),
+                    viability=viability,
+                )
+            )
+        )
+
+
+class ImprintCreatureHandler:
+    command_type = "imprint-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        creature_id = parse_entity_id(command.payload.get("creature_id"))
+        if character_id is None or creature_id is None:
+            return rejected("invalid character or creature id")
+        creature = _reachable_entity(ctx, character_id, creature_id)
+        if creature is None or not _is_creature(creature):
+            return rejected("creature is not reachable")
+        bond = float(command.payload.get("bond", 1.0))
+        replace_component(creature, ImprintComponent(imprinted_by=str(character_id), bond=bond))
+        return ok(
+            CreatureImprintedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature_id),),
+                    creature_id=str(creature_id),
+                    bond=bond,
+                )
+            )
+        )
+
+
+class CareForJuvenileHandler:
+    command_type = "care-for-juvenile"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        creature_id = parse_entity_id(command.payload.get("creature_id"))
+        if character_id is None or creature_id is None:
+            return rejected("invalid character or creature id")
+        creature = _reachable_entity(ctx, character_id, creature_id)
+        if creature is None or not _is_creature(creature):
+            return rejected("creature is not reachable")
+        current = (
+            creature.get_component(JuvenileCareComponent)
+            if creature.has_component(JuvenileCareComponent)
+            else JuvenileCareComponent(cared_by=str(character_id))
+        )
+        care_level = current.care_level + float(command.payload.get("care", 1.0))
+        replace_component(
+            creature, replace(current, cared_by=str(character_id), care_level=care_level)
+        )
+        return ok(
+            JuvenileCareGivenEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature_id),),
+                    creature_id=str(creature_id),
+                    care_level=care_level,
+                )
+            )
+        )
+
+
+class StudyWaterCreatureHandler:
+    command_type = "study-water-creature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        creature_id = parse_entity_id(command.payload.get("creature_id"))
+        if character_id is None or creature_id is None:
+            return rejected("invalid character or creature id")
+        creature = _reachable_entity(ctx, character_id, creature_id)
+        if creature is None or not creature.has_component(WaterCreatureComponent):
+            return rejected("water creature is not reachable")
+        water = creature.get_component(WaterCreatureComponent)
+        study = (
+            creature.get_component(WaterStudyComponent)
+            if creature.has_component(WaterStudyComponent)
+            else WaterStudyComponent()
+        )
+        replace_component(
+            creature,
+            replace(study, studied_by=tuple(sorted((*study.studied_by, str(character_id))))),
+        )
+        return ok(
+            WaterCreatureStudiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(creature_id),),
+                    creature_id=str(creature_id),
+                    species_name=water.species_name,
+                )
+            )
+        )
+
+
+class BroodEggHandler:
+    command_type = "brood-egg"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        egg_id = parse_entity_id(command.payload.get("egg_id"))
+        if character_id is None or egg_id is None:
+            return rejected("invalid character or egg id")
+        egg = _reachable_entity(ctx, character_id, egg_id)
+        if egg is None or not egg.has_component(EggComponent):
+            return rejected("egg is not reachable")
+        warmth = float(command.payload.get("warmth", 1.0))
+        replace_component(egg, BroodingComponent(brooder_id=str(character_id), warmth=warmth))
+        if egg.has_component(IncubationComponent):
+            incubation = egg.get_component(IncubationComponent)
+            replace_component(egg, replace(incubation, brooded_by=str(character_id)))
+        return ok(
+            BroodingStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(egg_id),),
+                    egg_id=str(egg_id),
+                    warmth=warmth,
+                )
+            )
+        )
+
+
+class SetIncubationTemperatureHandler:
+    command_type = "set-incubation-temperature"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        egg_id = parse_entity_id(command.payload.get("egg_id"))
+        if character_id is None or egg_id is None:
+            return rejected("invalid character or egg id")
+        egg = _reachable_entity(ctx, character_id, egg_id)
+        if egg is None or not egg.has_component(IncubationComponent):
+            return rejected("egg is not incubating")
+        temperature = float(command.payload.get("temperature", 30.0))
+        incubation = egg.get_component(IncubationComponent)
+        replace_component(egg, replace(incubation, temperature=temperature))
+        return ok(
+            IncubationTemperatureSetEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(egg_id),),
+                    egg_id=str(egg_id),
+                    temperature=temperature,
+                )
+            )
+        )
+
+
+class TriggerContainmentPanicHandler:
+    command_type = "trigger-containment-panic"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        enclosure_id = parse_entity_id(command.payload.get("enclosure_id"))
+        if character_id is None or enclosure_id is None:
+            return rejected("invalid character or enclosure id")
+        enclosure = _reachable_entity(ctx, character_id, enclosure_id)
+        if enclosure is None or not enclosure.has_component(EnclosureComponent):
+            return rejected("enclosure is not reachable")
+        severity = int(command.payload.get("severity", 1))
+        replace_component(enclosure, ContainmentPanicComponent(severity=severity, active=True))
+        return ok(
+            ContainmentPanicStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(enclosure_id),),
+                    enclosure_id=str(enclosure_id),
+                    severity=severity,
+                )
+            )
+        )
+
+
 def _progress_taming(
     ctx: HandlerContext,
     character_id: EntityId,
@@ -1649,9 +2128,7 @@ class TrackCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         room_id = _entity_room_id(creature) or _room_id(ctx.world, character_id) or ""
@@ -1818,9 +2295,7 @@ class TranquilizeCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         item, error = _reachable_item(ctx, character_id, command.payload.get("tranquilizer_id"))
@@ -1868,14 +2343,10 @@ class ApproachCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
-        taming, trust, fear = _progress_taming(
-            ctx, character_id, creature, base_progress=0.5
-        )
+        taming, trust, fear = _progress_taming(ctx, character_id, creature, base_progress=0.5)
         return ok(
             TamingProgressedEvent(
                 **ctx.event_base(
@@ -1900,9 +2371,7 @@ class TameCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         if _companion_for_actor(creature, character_id) is not None:
@@ -1950,9 +2419,7 @@ class TrainCommandHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         if _companion_for_actor(creature, character_id) is None:
@@ -2000,9 +2467,7 @@ class MountCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         if _companion_for_actor(creature, character_id) is None:
@@ -2029,9 +2494,7 @@ class CommandCompanionHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         if _companion_for_actor(creature, character_id) is None:
@@ -2174,9 +2637,7 @@ class RepairFenceHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        enclosure, error = _enclosure_entity(
-            ctx, character_id, command.payload.get("enclosure_id")
-        )
+        enclosure, error = _enclosure_entity(ctx, character_id, command.payload.get("enclosure_id"))
         if enclosure is None:
             return rejected(error if error else "enclosure is required")
         fence = (
@@ -2208,9 +2669,7 @@ class ReinforceGateHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        enclosure, error = _enclosure_entity(
-            ctx, character_id, command.payload.get("enclosure_id")
-        )
+        enclosure, error = _enclosure_entity(ctx, character_id, command.payload.get("enclosure_id"))
         if enclosure is None:
             return rejected(error if error else "enclosure is required")
         if not enclosure.has_component(GateComponent):
@@ -2244,9 +2703,7 @@ class LockPenHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        enclosure, error = _enclosure_entity(
-            ctx, character_id, command.payload.get("enclosure_id")
-        )
+        enclosure, error = _enclosure_entity(ctx, character_id, command.payload.get("enclosure_id"))
         if enclosure is None:
             return rejected(error if error else "enclosure is required")
         gate = (
@@ -2275,9 +2732,7 @@ class OpenPenHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        enclosure, error = _enclosure_entity(
-            ctx, character_id, command.payload.get("enclosure_id")
-        )
+        enclosure, error = _enclosure_entity(ctx, character_id, command.payload.get("enclosure_id"))
         if enclosure is None:
             return rejected(error if error else "enclosure is required")
         gate = (
@@ -2306,9 +2761,7 @@ class TriggerContainmentHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        enclosure, error = _enclosure_entity(
-            ctx, character_id, command.payload.get("enclosure_id")
-        )
+        enclosure, error = _enclosure_entity(ctx, character_id, command.payload.get("enclosure_id"))
         if enclosure is None:
             return rejected(error if error else "enclosure is required")
         replace_component(
@@ -2342,14 +2795,10 @@ class RecaptureCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
-        enclosure, error = _enclosure_entity(
-            ctx, character_id, command.payload.get("enclosure_id")
-        )
+        enclosure, error = _enclosure_entity(ctx, character_id, command.payload.get("enclosure_id"))
         if enclosure is None:
             return rejected(error if error else "enclosure is required")
         _move_to_room(ctx.world, creature, enclosure.id)
@@ -2383,9 +2832,7 @@ class HideFromCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         fear = (
@@ -2415,9 +2862,7 @@ class DodgeCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         if creature.has_component(ChargeComponent):
@@ -2455,9 +2900,7 @@ class FightCreatureHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         damage = max(0.0, float(command.payload.get("damage") or 1.0) - _armor_rating(creature))
@@ -2557,9 +3000,7 @@ class TargetWeakPointHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         if not creature.has_component(WeakPointComponent):
@@ -2600,9 +3041,7 @@ class DriveOffPredatorHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         from_room_id = container_of(creature)
@@ -2782,9 +3221,7 @@ class CreatureNeedConsequence:
 
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
         events: list[DomainEvent] = []
-        for creature in (
-            world.query().with_all([CreatureNeedComponent]).execute_entities()
-        ):
+        for creature in world.query().with_all([CreatureNeedComponent]).execute_entities():
             need = creature.get_component(CreatureNeedComponent)
             elapsed = max(0, epoch - need.last_updated_epoch)
             if elapsed <= 0:
@@ -2794,9 +3231,7 @@ class CreatureNeedConsequence:
             stress = need.stress
             if hunger >= HUNGRY_THRESHOLD:
                 stress = min(100.0, stress + HUNGER_STRESS_PER_HOUR * hours)
-            updated = replace(
-                need, hunger=hunger, stress=stress, last_updated_epoch=epoch
-            )
+            updated = replace(need, hunger=hunger, stress=stress, last_updated_epoch=epoch)
             if updated == need:
                 continue
             replace_component(creature, updated)
@@ -3044,9 +3479,7 @@ class HarvestProductHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         product_type = str(command.payload.get("product_type") or "").strip().lower()
@@ -3143,9 +3576,7 @@ class AssignRanchWorkHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         work_type = str(command.payload.get("work_type") or "").strip()
@@ -3183,9 +3614,7 @@ class AssignGuardHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(
-            ctx, character_id, command.payload.get("creature_id")
-        )
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         location_id = parse_entity_id(command.payload.get("location_id"))
@@ -3270,6 +3699,12 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
                 lines.append(f"Nearby fossil: {name} ({identification.species_name}).")
             else:
                 lines.append(f"Nearby unidentified fossil: {name}.")
+        if entity.has_component(FossilSurveyComponent):
+            survey = entity.get_component(FossilSurveyComponent)
+            state = (
+                "stabilized" if survey.stabilized else f"excavation {survey.excavation_progress:g}"
+            )
+            lines.append(f"Fossil survey {name}: {state}.")
         if entity.has_component(AncientSampleComponent):
             sample = entity.get_component(AncientSampleComponent)
             lines.append(f"Nearby ancient sample: {name} ({sample.species_name}).")
@@ -3279,7 +3714,19 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
             if entity.has_component(IncubationComponent):
                 incubation = entity.get_component(IncubationComponent)
                 state = "ready to hatch" if incubation.ready else "incubating"
+                if incubation.temperature is not None:
+                    state = f"{state}, {incubation.temperature:g} C"
             lines.append(f"Nearby egg: {name} ({egg.species_name}, {state}).")
+        if entity.has_component(LabIncubationComponent):
+            lab = entity.get_component(LabIncubationComponent)
+            if lab.active:
+                lines.append(f"Lab incubation active for {name}: {lab.lab_id}.")
+        if entity.has_component(EggInspectionComponent):
+            inspection = entity.get_component(EggInspectionComponent)
+            lines.append(f"Egg inspection for {name}: viability {inspection.viability:g}.")
+        if entity.has_component(BroodingComponent):
+            brooding = entity.get_component(BroodingComponent)
+            lines.append(f"Brooding {name}: warmth {brooding.warmth:g}.")
         if entity.has_component(TrackComponent):
             track = entity.get_component(TrackComponent)
             lines.append(f"Tracked creature: {name} near {track.room_id}.")
@@ -3302,6 +3749,22 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(
                 f"Creature {name}: hunger {need.hunger:g} ({state}), stress {need.stress:g}."
             )
+        if entity.has_component(ImprintComponent):
+            imprint = entity.get_component(ImprintComponent)
+            if imprint.imprinted_by == str(character.id):
+                lines.append(f"Imprinted creature: {name} bond {imprint.bond:g}.")
+        if entity.has_component(JuvenileCareComponent):
+            care = entity.get_component(JuvenileCareComponent)
+            lines.append(f"Juvenile care for {name}: {care.care_level:g}.")
+        if entity.has_component(WaterCreatureComponent):
+            water = entity.get_component(WaterCreatureComponent)
+            lines.append(
+                f"Water creature {name}: {water.species_name} in {water.depth_preference}."
+            )
+        if entity.has_component(WaterStudyComponent):
+            study = entity.get_component(WaterStudyComponent)
+            state = "studied" if str(character.id) in study.studied_by else "unstudied"
+            lines.append(f"Water study {name}: {state}.")
         if entity.has_component(TamingComponent):
             taming = entity.get_component(TamingComponent)
             state = "tamed" if taming.tamed else f"{taming.progress:g}/{taming.required:g}"
@@ -3393,6 +3856,10 @@ def dinosim_fragments(world: World, character: Entity) -> list[str]:
                 risk = entity.get_component(EscapeRiskComponent)
                 if risk.risk > 0.0:
                     lines.append(f"{enclosure.name} escape risk: {risk.risk:g}.")
+            if entity.has_component(ContainmentPanicComponent):
+                panic = entity.get_component(ContainmentPanicComponent)
+                if panic.active:
+                    lines.append(f"{enclosure.name} containment panic: severity {panic.severity}.")
     return sorted(lines)
 
 
@@ -3418,13 +3885,18 @@ __all__ = [
     "BaitComponent",
     "BaitSetEvent",
     "BoneComponent",
+    "BroodEggHandler",
+    "BroodingComponent",
+    "BroodingStartedEvent",
     "BreachComponent",
     "BuildEnclosureHandler",
     "CalmCreatureHandler",
     "CallForHelpHandler",
+    "CareForJuvenileHandler",
     "ChargeComponent",
     "CloneCandidateComponent",
     "ClonePreparedEvent",
+    "CleanFossilHandler",
     "CollectEggHandler",
     "CommandComponent",
     "CommandCompanionHandler",
@@ -3433,6 +3905,8 @@ __all__ = [
     "CompanionComponent",
     "ContainmentProtocolComponent",
     "ContainmentTriggeredEvent",
+    "ContainmentPanicComponent",
+    "ContainmentPanicStartedEvent",
     "CreatureAttackComponent",
     "CreatureAttackedEvent",
     "CreatureCalmedEvent",
@@ -3454,6 +3928,7 @@ __all__ = [
     "CreatureTrackedEvent",
     "CreatureTranquilizedEvent",
     "CreatureTrampledEvent",
+    "CreatureImprintedEvent",
     "DinosaurComponent",
     "DinoIncidentEnrichment",
     "DinosimPolicyComponent",
@@ -3463,12 +3938,15 @@ __all__ = [
     "EggFertilizedEvent",
     "EggHatchedEvent",
     "EggIncubatedEvent",
+    "EggInspectedEvent",
+    "EggInspectionComponent",
     "EggLaidEvent",
     "EnclosureBuiltEvent",
     "EnclosureComponent",
     "EscapeRiskComponent",
     "EscapeRiskConsequence",
     "EvacuateRoomHandler",
+    "ExcavateFossilHandler",
     "ExtractAncientSampleHandler",
     "FeedCreatureHandler",
     "FeedStockedEvent",
@@ -3481,7 +3959,12 @@ __all__ = [
     "FenceRepairedEvent",
     "FightCreatureHandler",
     "FossilFragmentComponent",
+    "FossilCleanedEvent",
+    "FossilExcavatedEvent",
     "FossilIdentifiedEvent",
+    "FossilStabilizedEvent",
+    "FossilSurveyComponent",
+    "FossilSurveyedEvent",
     "GateComponent",
     "GateReinforcedEvent",
     "GrappleComponent",
@@ -3498,13 +3981,22 @@ __all__ = [
     "HideComponent",
     "HuntBehaviorComponent",
     "IdentifyFossilHandler",
+    "ImprintComponent",
+    "ImprintCreatureHandler",
     "IncubateEggHandler",
     "IncubationComponent",
     "IncubationConsequence",
+    "IncubationTemperatureSetEvent",
+    "InspectEggHandler",
+    "JuvenileCareComponent",
+    "JuvenileCareGivenEvent",
     "KaijuComponent",
     "KaijuArrivedEvent",
     "KaijuSpawnSpec",
     "LayEggHandler",
+    "LabIncubateEggHandler",
+    "LabIncubationComponent",
+    "LabIncubationStartedEvent",
     "LockPenHandler",
     "MountComponent",
     "MountCreatureHandler",
@@ -3537,6 +4029,7 @@ __all__ = [
     "SettlementDamageComponent",
     "SettlementDamagedEvent",
     "SetBaitHandler",
+    "SetIncubationTemperatureHandler",
     "SignalArmyHandler",
     "SpeciesComponent",
     "SpeciesIdentificationComponent",
@@ -3557,9 +4050,16 @@ __all__ = [
     "TranquilizeCreatureHandler",
     "TranquilizerComponent",
     "TriggerContainmentHandler",
+    "TriggerContainmentPanicHandler",
     "TrustComponent",
     "ToxinComponent",
     "WeakPointComponent",
+    "StabilizeFossilHandler",
+    "StudyWaterCreatureHandler",
+    "SurveyFossilHandler",
+    "WaterCreatureComponent",
+    "WaterCreatureStudiedEvent",
+    "WaterStudyComponent",
     "dinosim_fragments",
     "ensure_dinosim_policy",
     "generate_kaiju_spawn_specs",

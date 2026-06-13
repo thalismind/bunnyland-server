@@ -126,9 +126,11 @@ branch tags and `latest` for the default branch. The web repo publishes
 - **[Colony health and work](docs/player/colony-health-and-work.md)** — priorities,
   allowed areas, room quality, medicine, recovery, wealth, and mental states.
 - **[Barbarian-sim combat and survival](docs/player/barbariansim.md)** — challenges,
-  attacks, repairs, fortifications, poison, corruption, and pickpocketing.
+  attacks, repairs, fortifications, poison, corruption, purge readiness, rituals, danger
+  zones, treasure, and pickpocketing.
 - **[Dragon-sim exploration and quests](docs/player/dragonsim.md)** — discovering
-  locations, completing quests, and joining factions.
+  locations, tracking and branching quests, persuasion, crime reports, fixed magic, and
+  factions.
 - **[Life-sim homes, work, and family](docs/player/lifesim.md)** — aspirations, skills,
   jobs, businesses, households, homes, room claims, rent, and family.
 - **[Dagger-sim frontier play](docs/player/daggersim.md)** — rumors, travel, institutions,
@@ -137,11 +139,13 @@ branch tags and `latest` for the default branch. The web repo publishes
   institution reputation, service access, generated work, legal reputation, banking, and
   purchasable deeds.
 - **[Void-sim ships and space travel](docs/player/voidsim.md)** — airlocks, life support,
-  power, docking, fuel, sensors, orbit, landing, contracts, and jumps.
+  power, docking, fuel, sensors, orbit, landing, crew pressure, emergencies, contracts,
+  and jumps.
 - **[Void contracts, fabrication, and salvage](docs/player/void-contracts-fabrication.md)** —
   resource-backed fabrication, cargo, salvage claims, and crew watches.
 - **[Nuke-sim wasteland survival](docs/player/nukesim.md)** — radiation, mutation
-  pressure, scavenging, settlement salvage, old-world tech, and dirty water.
+  pressure, scavenging, hotspots, samples, old-world artifacts, field repairs, chems,
+  settlement salvage, old-world tech, and dirty water.
 - **[Nuke settlements and old-world tech](docs/player/nuke-settlements-tech.md)** —
   claiming settlements, salvage, purifiers, generators, and device restoration.
 - **[Dino-sim fossils, eggs, companions, and kaiju incidents](docs/player/dinosim.md)** —
@@ -194,13 +198,14 @@ full catalogue is in [`bunnyland_mechanics.md`](bunnyland_mechanics.md).
 | **Life Sim**    | Implemented | The Sims         | Needs, moods/thoughts, social bonds and jealousy, romance, family and pregnancy, skill progression, careers and household economy |
 | **Colony Sim**  | Implemented | RimWorld         | Work priorities and jobs, resource gathering, crafting recipes and workstations, ownership and reservations |
 | **Garden Sim**  | Implemented | Stardew Valley   | Soil and tilling, planting/watering/fertilizing, seasonal crop growth, harvesting, tree tapping, and sap collection |
-| **Barbarian Sim** | Implemented | Conan Exiles   | Survival combat, stamina, temperature exposure, gear durability, poison and corruption |
-| **Dragon Sim**  | Implemented | Skyrim           | Open-world discovery, radiant quests and objectives, factions and reputation |
+| **Barbarian Sim** | Implemented | Conan Exiles   | Survival combat, stamina, temperature exposure, gear durability, survival gaps, buildings, purges, rituals, danger zones, bosses, treasure, poison and corruption |
+| **Dragon Sim**  | Implemented | Skyrim           | Open-world discovery, radiant quests and objectives, quest tracking and branching, factions, reputation, persuasion, crime reports, fixed magic, artifacts, and ancient beast options |
 | **Dagger Sim**  | Implemented | Daggerfall       | Procedural frontier expansion, rumors, travel logistics, guilds/institutions and services, banking and debt, civic law and fines, custom classes and spells, language pacification, supernatural afflictions, procedural dungeons, etiquette and social approach |
-| **Void Sim**    | Implemented | FTL              | Ships, stations and habitat modules, life support, pressure and airlocks, power grids, ship-system repair, and docking |
-| **Neon Sim**    | Planned     | Deus Ex, Watch Dogs, Cyberpunk 2077 | Cyberpunk districts, usable surveillance, ECS hacking, fixer missions, corporate intrigue, street economy, wanted levels, reputation, and cybernetics |
-| **Dino Sim**    | Implemented | Jurassic Park, ARK, Dino Crisis | Fossil/species identification and cloning, egg handling, reptile procreation, incubation, hatching, tracking, taming, companion commands, enclosures and escapes, and kaiju storyteller incidents |
-| **Fortress Sim** | Planned    | Dwarf Fortress   | Deep materials, world history, civilizations, artifacts, nobles, justice, institutions, tantrum spirals, and multi-site worlds |
+| **Void Sim**    | Implemented | FTL              | Ships, stations and habitat modules, life support, pressure and airlocks, power grids, ship-system repair, docking, crew morale and mutiny, drones and ship AI, xenobiology, emergencies, passengers, customs, mining, insurance, and mortgages |
+| **Nuke Sim**    | Implemented | Fallout          | Radiation sources and shielding, mutation pressure, hotspots, suppressants, samples, locked crates, faction salvage, old-world artifacts and tech, schematics, field repair, chem brewing, beacons, trader routes, raider pressure, and terminals |
+| **Neon Sim**    | Planned, out of current parity scope | Deus Ex, Watch Dogs, Cyberpunk 2077 | Cyberpunk districts, usable surveillance, ECS hacking, fixer missions, corporate intrigue, street economy, wanted levels, reputation, and cybernetics |
+| **Dino Sim**    | Implemented | Jurassic Park, ARK, Dino Crisis | Fossil/species identification and cloning, fossil survey and preparation, lab incubation, egg inspection, imprinting, juvenile care, brooding, water creature study, containment panic, tracking, taming, companion commands, enclosures and escapes, and kaiju storyteller incidents |
+| **Fortress Sim** | Planned, out of current parity scope | Dwarf Fortress   | Deep materials, world history, civilizations, artifacts, nobles, justice, institutions, tantrum spirals, and multi-site worlds |
 
 Foundational plugins back these up: **Environment** (time, weather, fire), **Mechanisms**
 (doors, buttons), **Social Bonds**, **Policy & Boundaries**, **Persona**, **Storyteller**
@@ -217,6 +222,8 @@ uv run bunnyland serve --generator voidsim-demo --ticks 5
 The demos are `lifesim-demo`, `gardensim-demo`, `maple-farm-demo`, `colonysim-demo`,
 `barbariansim-demo`, `dragonsim-demo`, `daggersim-demo`, `voidsim-demo`, `nukesim-demo`,
 and `dinosim-demo`.
+Fast travel and richer map features remain planned follow-up work rather than part of the
+current implemented parity surface.
 There is also a larger life-sim showcase, `apartment-demo`: a quirky NYC apartment
 building of eccentric tenants with backstories, homes, and daily routines, a rat-man in
 the warren below, and hidden corners.

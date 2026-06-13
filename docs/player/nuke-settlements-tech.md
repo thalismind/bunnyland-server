@@ -89,4 +89,7 @@ purified, or contaminated. If it is contaminated, purify it before drinking:
 !power-generator generator_id="patched generator"
 !identify-tech tech_id="dusty crate"
 !restore-tech tech_id="dusty crate"
+!activate-beacon beacon_id="settlement beacon"
+!open-trader-route route_id="south road caravan"
+!boot-terminal terminal_id="vault terminal" access_level=2
 ```

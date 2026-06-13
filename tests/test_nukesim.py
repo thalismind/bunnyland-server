@@ -23,28 +23,51 @@ from bunnyland.mechanics.barbariansim import DurabilityComponent
 from bunnyland.mechanics.colonysim import ResourceStackComponent
 from bunnyland.mechanics.mutation import RadiationMutationPressureComponent
 from bunnyland.mechanics.nukesim import (
+    ActivateBeaconHandler,
     AddictionComponent,
+    BeaconActivatedEvent,
+    BeaconComponent,
+    BootTerminalHandler,
+    BrewChemHandler,
     BuildPurifierHandler,
+    ChemBrewedEvent,
     ChemComponent,
+    ChemRecipeComponent,
     ChemTakenEvent,
+    ClaimFactionSalvageHandler,
     ClaimSettlementHandler,
     ContaminatedWaterDrunkEvent,
+    CrateUnlockedEvent,
     DecontaminateHandler,
     DecontaminationAppliedEvent,
     DecontaminationComponent,
     DrinkContaminatedWaterHandler,
+    FactionSalvageClaimedEvent,
+    FactionSalvageComponent,
+    FieldRepairAppliedEvent,
+    FieldRepairComponent,
+    FieldRepairHandler,
     GeneratorComponent,
     GeneratorPoweredEvent,
+    HarvestSampleHandler,
+    HotspotMarkedEvent,
     IdentifyTechHandler,
+    IncreaseRaiderPressureHandler,
+    InstallModHandler,
+    ItemModComponent,
     ItemScrappedEvent,
     JunkComponent,
+    LockedCrateComponent,
     LootFoundEvent,
     LootTableComponent,
+    MarkHotspotHandler,
+    ModInstalledEvent,
     MutationComponent,
     MutationManifestedEvent,
     OldWorldTechComponent,
     OldWorldTechIdentifiedEvent,
     OldWorldTechRestoredEvent,
+    OpenTraderRouteHandler,
     PowerGeneratorHandler,
     PurifierBuiltEvent,
     PurifyWaterHandler,
@@ -56,11 +79,17 @@ from bunnyland.mechanics.nukesim import (
     RadiationSourceSealedEvent,
     RadMedicineComponent,
     RadProtectionComponent,
+    RaiderPressureChangedEvent,
+    RaiderPressureComponent,
     RestoreTechHandler,
     SalvageSettlementHandler,
+    SampleComponent,
+    SampleHarvestedEvent,
+    SampleStudiedEvent,
     ScanRadiationHandler,
     ScavengeHandler,
     ScavengeSiteComponent,
+    SchematicComponent,
     ScrapItemHandler,
     SealRadiationSourceHandler,
     SettlementClaimedEvent,
@@ -68,9 +97,21 @@ from bunnyland.mechanics.nukesim import (
     SettlementSalvageComponent,
     SettlementSalvagedEvent,
     StabilizeMutationHandler,
+    StudySampleHandler,
+    StudyWastelandArtifactHandler,
+    SuppressantComponent,
+    SuppressantUsedEvent,
     TakeChemHandler,
     TechLeadComponent,
+    TerminalBootedEvent,
+    TerminalComponent,
+    TraderRouteComponent,
+    TraderRouteOpenedEvent,
+    UnlockCrateHandler,
     UseRadMedicineHandler,
+    UseSuppressantHandler,
+    WastelandArtifactComponent,
+    WastelandArtifactStudiedEvent,
     WaterPurifiedEvent,
     WaterPurifierComponent,
     WaterPurityComponent,
@@ -150,6 +191,319 @@ def _inventory_entity(scenario, name, kind, components):
         Contains(mode=ContainmentMode.INVENTORY), entity.id
     )
     return entity.id
+
+
+def test_nukesim_parity_handlers_mutate_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    def entity(entity_id):
+        return scenario.actor.world.get_entity(entity_id)
+
+    source_id = _room_entity(
+        scenario,
+        "cracked isotope case",
+        "radiation-source",
+        [RadiationSourceComponent(source_type="isotope", rads_per_hour=3)],
+    )
+    suppressant_id = _inventory_entity(
+        scenario,
+        "rad foam",
+        "suppressant",
+        [SuppressantComponent(pressure_reduction=2, uses=2)],
+    )
+    sample_id = _inventory_entity(
+        scenario,
+        "glowing moss sample",
+        "sample",
+        [SampleComponent(sample_type="glowing moss")],
+    )
+    crate_id = _room_entity(
+        scenario,
+        "sealed ammo crate",
+        "crate",
+        [LockedCrateComponent()],
+    )
+    artifact_id = _room_entity(
+        scenario,
+        "vault relic",
+        "artifact",
+        [WastelandArtifactComponent(artifact_type="vault")],
+    )
+    salvage_id = _room_entity(
+        scenario,
+        "faction cache",
+        "salvage",
+        [FactionSalvageComponent(faction_id="minutemen")],
+    )
+    item_id = _room_entity(
+        scenario,
+        "pipe rifle",
+        "weapon",
+        [DurabilityComponent(current=1, maximum=5)],
+    )
+    schematic_id = _room_entity(
+        scenario,
+        "scope schematic",
+        "schematic",
+        [SchematicComponent(mod_name="scope")],
+    )
+    kit_id = _room_entity(
+        scenario,
+        "sewing kit",
+        "repair-kit",
+        [FieldRepairComponent(repair_amount=2)],
+    )
+    recipe_id = _room_entity(
+        scenario,
+        "rad tonic recipe",
+        "recipe",
+        [ChemRecipeComponent(chem_type="rad tonic")],
+    )
+    beacon_id = _room_entity(
+        scenario,
+        "settlement beacon",
+        "beacon",
+        [BeaconComponent(message="safe")],
+    )
+    route_id = _room_entity(
+        scenario,
+        "south road caravan",
+        "route",
+        [TraderRouteComponent(destination="south road")],
+    )
+    terminal_id = _room_entity(
+        scenario,
+        "vault terminal",
+        "terminal",
+        [TerminalComponent()],
+    )
+
+    calls = [
+        (
+            MarkHotspotHandler(),
+            "mark-hotspot",
+            {"source_id": str(source_id), "label": "hot"},
+            HotspotMarkedEvent,
+        ),
+        (
+            UseSuppressantHandler(),
+            "use-suppressant",
+            {"item_id": str(suppressant_id)},
+            SuppressantUsedEvent,
+        ),
+        (
+            HarvestSampleHandler(),
+            "harvest-sample",
+            {"sample_type": "glowing moss"},
+            SampleHarvestedEvent,
+        ),
+        (
+            StudySampleHandler(),
+            "study-sample",
+            {"sample_id": str(sample_id)},
+            SampleStudiedEvent,
+        ),
+        (UnlockCrateHandler(), "unlock-crate", {"crate_id": str(crate_id)}, CrateUnlockedEvent),
+        (
+            StudyWastelandArtifactHandler(),
+            "study-wasteland-artifact",
+            {"artifact_id": str(artifact_id)},
+            WastelandArtifactStudiedEvent,
+        ),
+        (
+            ClaimFactionSalvageHandler(),
+            "claim-faction-salvage",
+            {"salvage_id": str(salvage_id)},
+            FactionSalvageClaimedEvent,
+        ),
+        (
+            InstallModHandler(),
+            "install-mod",
+            {"item_id": str(item_id), "schematic_id": str(schematic_id)},
+            ModInstalledEvent,
+        ),
+        (
+            FieldRepairHandler(),
+            "field-repair",
+            {"item_id": str(item_id), "kit_id": str(kit_id)},
+            FieldRepairAppliedEvent,
+        ),
+        (BrewChemHandler(), "brew-chem", {"recipe_id": str(recipe_id)}, ChemBrewedEvent),
+        (
+            ActivateBeaconHandler(),
+            "activate-beacon",
+            {"beacon_id": str(beacon_id)},
+            BeaconActivatedEvent,
+        ),
+        (
+            OpenTraderRouteHandler(),
+            "open-trader-route",
+            {"route_id": str(route_id)},
+            TraderRouteOpenedEvent,
+        ),
+        (
+            IncreaseRaiderPressureHandler(),
+            "increase-raider-pressure",
+            {"target_id": str(source_id), "amount": 2},
+            RaiderPressureChangedEvent,
+        ),
+        (
+            BootTerminalHandler(),
+            "boot-terminal",
+            {"terminal_id": str(terminal_id), "access_level": 2},
+            TerminalBootedEvent,
+        ),
+    ]
+
+    for handler, command_type, payload, event_type in calls:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert result.ok, (command_type, result.reason)
+        assert any(isinstance(event, event_type) for event in result.events)
+
+    assert entity(suppressant_id).get_component(SuppressantComponent).uses == 1
+    assert str(scenario.character) in entity(sample_id).get_component(SampleComponent).studied_by
+    assert entity(crate_id).get_component(LockedCrateComponent).locked is False
+    assert entity(artifact_id).get_component(WastelandArtifactComponent).studied is True
+    assert entity(salvage_id).get_component(FactionSalvageComponent).claimed_by == str(
+        scenario.character
+    )
+    assert entity(item_id).get_component(ItemModComponent).mod_name == "scope"
+    assert entity(item_id).get_component(DurabilityComponent).current == 3
+    assert entity(beacon_id).get_component(BeaconComponent).active is True
+    assert entity(route_id).get_component(TraderRouteComponent).open is True
+    assert entity(source_id).get_component(RaiderPressureComponent).pressure == 2
+    assert entity(terminal_id).get_component(TerminalComponent).access_level == 2
+    fragments = nukesim_fragments(scenario.actor.world, entity(scenario.character))
+    assert "Radiation suppressant available: rad foam." in fragments
+    assert "Sample glowing moss sample: glowing moss (studied)." in fragments
+    assert "Locked crate sealed ammo crate: open." in fragments
+    assert "Wasteland artifact vault relic: vault (studied)." in fragments
+    assert "Faction salvage faction cache: minutemen, claimed." in fragments
+    assert "Schematic scope schematic: scope." in fragments
+    assert "Item mod pipe rifle: scope." in fragments
+    assert "Beacon settlement beacon: active." in fragments
+    assert "Trader route south road caravan: south road (open)." in fragments
+    assert "Terminal vault terminal: booted, access 2." in fragments
+
+
+def test_nukesim_parity_handlers_reject_invalid_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    fake = "entity_999999"
+    cases = [
+        (
+            MarkHotspotHandler(),
+            "mark-hotspot",
+            {"source_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            UseSuppressantHandler(),
+            "use-suppressant",
+            {"item_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            StudySampleHandler(),
+            "study-sample",
+            {"sample_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            UnlockCrateHandler(),
+            "unlock-crate",
+            {"crate_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            StudyWastelandArtifactHandler(),
+            "study-wasteland-artifact",
+            {"artifact_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            ClaimFactionSalvageHandler(),
+            "claim-faction-salvage",
+            {"salvage_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            InstallModHandler(),
+            "install-mod",
+            {"item_id": fake, "schematic_id": fake},
+            "invalid character or item id",
+            "invalid character or item id",
+        ),
+        (
+            FieldRepairHandler(),
+            "field-repair",
+            {"item_id": fake, "kit_id": fake},
+            "invalid character or item id",
+            "invalid character or item id",
+        ),
+        (
+            BrewChemHandler(),
+            "brew-chem",
+            {"recipe_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            ActivateBeaconHandler(),
+            "activate-beacon",
+            {"beacon_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            OpenTraderRouteHandler(),
+            "open-trader-route",
+            {"route_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            IncreaseRaiderPressureHandler(),
+            "increase-raider-pressure",
+            {"target_id": fake},
+            "invalid character or target id",
+            "invalid character or target id",
+        ),
+        (
+            BootTerminalHandler(),
+            "boot-terminal",
+            {"terminal_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+    ]
+
+    for handler, command_type, payload, invalid_reason, missing_reason in cases:
+        bad_character = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
+        )
+        assert bad_character.ok is False
+        assert bad_character.reason == invalid_reason
+        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert missing_target.ok is False
+        assert missing_target.reason == missing_reason
+
+    result = HarvestSampleHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "harvest-sample", character_id="not-an-id"),
+    )
+    assert result.ok is False
+    assert result.reason == "invalid character id"
 
 
 async def test_radiation_source_accumulates_dose_sickness_and_pressure():

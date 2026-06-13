@@ -142,6 +142,53 @@ If pickpocketing is enabled, steal a reachable item from another character:
 The item must be in the target's inventory and reachable through the normal name
 resolution rules.
 
+## Survival gaps, buildings, and purges
+
+Some survival worlds expose named gaps such as missing shelter, water, tools, or food.
+Bridge a reachable gap when you have the required supplies:
+
+```text
+!bridge-survival-gap gap_id="no shelter"
+```
+
+Buildings can decay, be upgraded, and be demolished:
+
+```text
+!decay-building building_id="log wall" amount=1
+!upgrade-building building_id="log wall" integrity=5
+!demolish-building building_id="ruined shack"
+```
+
+Prepare a base for a siege, then resolve a purge wave against it:
+
+```text
+!prepare-siege base_id="river camp" score=3
+!start-purge-wave base_id="river camp" intensity=4
+```
+
+## Rituals, danger zones, and treasure
+
+Use a shrine and ritual when both are reachable:
+
+```text
+!perform-ritual shrine_id="stone shrine" ritual_id="ember blessing"
+```
+
+Explore a danger zone, defeat its boss, and unlock treasure with the right key:
+
+```text
+!explore-danger-zone zone_id="serpent pass"
+!defeat-boss boss_id="serpent queen"
+!unlock-treasure treasure_id="sealed hoard" key_id="serpent key"
+!claim-treasure treasure_id="sealed hoard"
+```
+
+Climbing is a traversal gate or skill check, not a free movement system:
+
+```text
+!climb gate_id="cliff path"
+```
+
 ## Core loop
 
 A simple conflict loop:
@@ -154,4 +201,6 @@ A simple conflict loop:
 !repair-item item_id=Axe amount=1
 !fortify target_id="wooden palisade" strength=2
 !raid target_id="wooden palisade" intensity=5
+!prepare-siege base_id="river camp" score=3
+!start-purge-wave base_id="river camp" intensity=4
 ```

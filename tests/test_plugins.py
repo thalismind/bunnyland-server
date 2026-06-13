@@ -218,7 +218,7 @@ def test_resolve_order_places_dependencies_first():
     assert ids.index(CORE_VERBS) < ids.index(LIFESIM)
     assert ids.index(LIFESIM) < ids.index(COLONYSIM)
     assert ids.index(COLONYSIM) < ids.index(GARDENSIM)
-    assert ids.index(GARDENSIM) < ids.index(BARBARIANSIM)
+    assert ids.index(CORE_VERBS) < ids.index(BARBARIANSIM)
     assert ids.index(LIFESIM) < ids.index(DRAGONSIM)
     assert ids.index(BARBARIANSIM) < ids.index(VOIDSIM)
     assert ids.index(VOIDSIM) < ids.index(NUKESIM)
@@ -237,12 +237,7 @@ def test_builtin_sim_dependencies_match_layering_contracts():
         LIFESIM,
         COLONYSIM,
     )
-    assert plugins[BARBARIANSIM].dependencies.requires == (
-        CORE_VERBS,
-        LIFESIM,
-        COLONYSIM,
-        GARDENSIM,
-    )
+    assert plugins[BARBARIANSIM].dependencies.requires == (CORE_VERBS,)
     assert plugins[DRAGONSIM].dependencies.requires == (CORE_VERBS, LIFESIM)
     assert plugins[DAGGERSIM].dependencies.requires == (CORE_VERBS,)
     assert plugins[VOIDSIM].dependencies.requires == (
@@ -278,6 +273,14 @@ def test_dependency_cycle_raises():
     b = Plugin(id="b", name="B", dependencies=DependencyContribution(requires=("a",)))
     with pytest.raises(PluginError):
         resolve_order([a, b])
+
+
+def test_three_plugin_dependency_cycle_raises():
+    a = Plugin(id="a", name="A", dependencies=DependencyContribution(requires=("b",)))
+    b = Plugin(id="b", name="B", dependencies=DependencyContribution(requires=("c",)))
+    c = Plugin(id="c", name="C", dependencies=DependencyContribution(requires=("a",)))
+    with pytest.raises(PluginError, match="dependency cycle"):
+        resolve_order([a, b, c])
 
 
 def test_missing_recommendation_warns_but_continues(caplog):
@@ -641,13 +644,55 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     } <= {event.__name__ for event in garden.commands.typed_events}
 
     barbarian = plugins[BARBARIANSIM]
-    assert {"BaseClaimComponent", "TrapComponent"} <= {
+    assert {
+        "BaseClaimComponent",
+        "TrapComponent",
+        "SurvivalGapComponent",
+        "BuildingComponent",
+        "PurgeWaveComponent",
+        "RitualComponent",
+        "DangerZoneComponent",
+        "BossComponent",
+        "TreasureComponent",
+        "ClimbingGateComponent",
+    } <= {
         component.__name__ for component in barbarian.ecs.components
     }
-    assert {"claim-base", "place-trap", "disarm-trap"} <= {
+    assert {
+        "claim-base",
+        "place-trap",
+        "disarm-trap",
+        "bridge-survival-gap",
+        "decay-building",
+        "upgrade-building",
+        "demolish-building",
+        "prepare-siege",
+        "start-purge-wave",
+        "perform-ritual",
+        "explore-danger-zone",
+        "defeat-boss",
+        "unlock-treasure",
+        "claim-treasure",
+        "climb",
+    } <= {
         handler.command_type for handler in barbarian.commands.action_handlers
     }
-    assert {"BaseClaimedEvent", "TrapPlacedEvent", "TrapDisarmedEvent"} <= {
+    assert {
+        "BaseClaimedEvent",
+        "TrapPlacedEvent",
+        "TrapDisarmedEvent",
+        "SurvivalGapBridgedEvent",
+        "BuildingUpgradedEvent",
+        "BuildingDecayedEvent",
+        "BuildingDemolishedEvent",
+        "PurgeWaveStartedEvent",
+        "RitualPerformedEvent",
+        "DangerZoneExploredEvent",
+        "BossDefeatedEvent",
+        "TreasureUnlockedEvent",
+        "TreasureClaimedEvent",
+        "ClimbingGatePassedEvent",
+    } <= {
         event.__name__ for event in barbarian.commands.typed_events
     }
 
@@ -666,12 +711,11 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "SpellComponent",
         "PotionRecipeComponent",
         "ArtifactComponent",
-    } <= {
-        component.__name__ for component in dragon.ecs.components
-    }
-    assert {"HasPerk", "KnowsWord", "KnowsSpell"} <= {
-        edge.__name__ for edge in dragon.ecs.edges
-    }
+        "SpellCooldownComponent",
+        "PersuasionComponent",
+        "SurrenderComponent",
+    } <= {component.__name__ for component in dragon.ecs.components}
+    assert {"HasPerk", "KnowsWord", "KnowsSpell"} <= {edge.__name__ for edge in dragon.ecs.edges}
     assert {
         "mark-map",
         "trigger-encounter",
@@ -690,6 +734,15 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "cast-dragon-spell",
         "brew-potion",
         "use-artifact",
+        "track-quest",
+        "decline-quest",
+        "choose-quest-branch",
+        "persuade",
+        "surrender",
+        "report-crime",
+        "recover-magicka",
+        "identify-artifact",
+        "appease-ancient-beast",
     } <= {handler.command_type for handler in dragon.commands.action_handlers}
     assert {
         "MapMarkerAddedEvent",
@@ -708,9 +761,15 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "DragonSpellCastEvent",
         "PotionBrewedEvent",
         "ArtifactUsedEvent",
-    } <= {
-        event.__name__ for event in dragon.commands.typed_events
-    }
+        "QuestTrackedEvent",
+        "QuestDeclinedEvent",
+        "QuestBranchChosenEvent",
+        "PersuasionAttemptedEvent",
+        "SurrenderedEvent",
+        "CrimeReportedEvent",
+        "ArtifactIdentifiedEvent",
+        "AncientBeastAppeasedEvent",
+    } <= {event.__name__ for event in dragon.commands.typed_events}
     assert LIFESIM in dragon.dependencies.requires
 
     dagger = plugins[DAGGERSIM]
@@ -719,21 +778,61 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "LegalReputationComponent",
         "ServiceAccessComponent",
         "PropertyDeedComponent",
-    } <= {
-        component.__name__ for component in dagger.ecs.components
-    }
+        "InstitutionDuesComponent",
+        "LetterOfCreditComponent",
+        "SafeStorageComponent",
+        "LodgingComponent",
+        "CampingComponent",
+        "PotionMakerComponent",
+        "IngredientComponent",
+        "AfflictionStigmaComponent",
+    } <= {component.__name__ for component in dagger.ecs.components}
     assert "OwnsProperty" in {edge.__name__ for edge in dagger.ecs.edges}
-    assert "buy-property" in {
-        handler.command_type for handler in dagger.commands.action_handlers
-    }
+    assert {
+        "buy-property",
+        "promote-institution",
+        "pay-institution-dues",
+        "refuse-generated-quest",
+        "abandon-generated-quest",
+        "extend-generated-quest",
+        "lie-about-quest",
+        "issue-letter-of-credit",
+        "store-safe-item",
+        "retrieve-safe-item",
+        "send-debt-collector",
+        "sentence-crime",
+        "rent-lodging",
+        "camp",
+        "buy-travel-supplies",
+        "resolve-travel-interruption",
+        "make-potion",
+        "recharge-enchanted-item",
+        "identify-ingredient",
+        "progress-affliction-incubation",
+        "mark-affliction-stigma",
+        "request-cure-quest",
+    } <= {handler.command_type for handler in dagger.commands.action_handlers}
     assert {
         "InstitutionReputationChangedEvent",
         "LegalReputationChangedEvent",
         "ServiceAccessChangedEvent",
         "PropertyPurchasedEvent",
-    } <= {
-        event.__name__ for event in dagger.commands.typed_events
-    }
+        "InstitutionPromotedEvent",
+        "InstitutionDuesPaidEvent",
+        "QuestRefusedEvent",
+        "QuestAbandonedEvent",
+        "QuestExtendedEvent",
+        "LetterOfCreditIssuedEvent",
+        "CourtSentenceIssuedEvent",
+        "LodgingRentedEvent",
+        "CampMadeEvent",
+        "TravelInterruptionResolvedEvent",
+        "PotionMadeEvent",
+        "IngredientIdentifiedEvent",
+        "AfflictionIncubationProgressedEvent",
+        "AfflictionStigmaMarkedEvent",
+        "CureQuestRequestedEvent",
+    } <= {event.__name__ for event in dagger.commands.typed_events}
 
     void = plugins[VOIDSIM]
     assert {
@@ -748,9 +847,18 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "QuarantineComponent",
         "DiplomaticMissionComponent",
         "AlienArtifactComponent",
-    } <= {
-        component.__name__ for component in void.ecs.components
-    }
+        "DroneComponent",
+        "ShipAIComponent",
+        "AwayTeamComponent",
+        "MoraleComponent",
+        "MutinyComponent",
+        "EmergencyComponent",
+        "ReactorComponent",
+        "PassengerComponent",
+        "SurveySiteComponent",
+        "MiningSiteComponent",
+        "MortgageComponent",
+    } <= {component.__name__ for component in void.ecs.components}
     assert "WorksShift" in {edge.__name__ for edge in void.ecs.edges}
     assert {
         "assign-crew-shift",
@@ -764,9 +872,26 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "quarantine-sample",
         "negotiate-alien",
         "study-alien-artifact",
-    } <= {
-        handler.command_type for handler in void.commands.action_handlers
-    }
+        "deploy-away-team",
+        "boost-morale",
+        "start-mutiny",
+        "command-drone",
+        "hack-ship-ai",
+        "salvage-data",
+        "study-xenobiology",
+        "accept-trade-protocol",
+        "resolve-emergency",
+        "stabilize-reactor",
+        "adjust-gravity",
+        "repel-boarders",
+        "deliver-passenger",
+        "survey-site",
+        "mine-asteroid",
+        "inspect-customs",
+        "search-smuggling-compartment",
+        "claim-insurance",
+        "pay-mortgage",
+    } <= {handler.command_type for handler in void.commands.action_handlers}
     assert {
         "CrewShiftAssignedEvent",
         "CrewDutyChangedEvent",
@@ -779,9 +904,26 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "QuarantineStartedEvent",
         "DiplomacyChangedEvent",
         "AlienArtifactStudiedEvent",
-    } <= {
-        event.__name__ for event in void.commands.typed_events
-    }
+        "AwayTeamDeployedEvent",
+        "MoraleChangedEvent",
+        "MutinyStartedEvent",
+        "DroneCommandedEvent",
+        "ShipAIHackedEvent",
+        "DataSalvagedEvent",
+        "XenobiologyStudiedEvent",
+        "TradeProtocolAcceptedEvent",
+        "EmergencyResolvedEvent",
+        "ReactorStabilizedEvent",
+        "GravityAdjustedEvent",
+        "BoardingRepelledEvent",
+        "PassengerDeliveredEvent",
+        "SurveyCompletedEvent",
+        "MiningCompletedEvent",
+        "CustomsInspectedEvent",
+        "SmugglingCompartmentSearchedEvent",
+        "InsuranceClaimedEvent",
+        "MortgagePaidEvent",
+    } <= {event.__name__ for event in void.commands.typed_events}
 
     nuke = plugins[NUKESIM]
     assert {
@@ -791,9 +933,18 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "SettlementSalvageComponent",
         "WaterPurifierComponent",
         "GeneratorComponent",
-    } <= {
-        component.__name__ for component in nuke.ecs.components
-    }
+        "HotspotMarkerComponent",
+        "SuppressantComponent",
+        "SampleComponent",
+        "LockedCrateComponent",
+        "WastelandArtifactComponent",
+        "FactionSalvageComponent",
+        "SchematicComponent",
+        "ItemModComponent",
+        "BeaconComponent",
+        "RaiderPressureComponent",
+        "TerminalComponent",
+    } <= {component.__name__ for component in nuke.ecs.components}
     assert {
         "identify-tech",
         "restore-tech",
@@ -801,9 +952,21 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "salvage-settlement",
         "build-purifier",
         "power-generator",
-    } <= {
-        handler.command_type for handler in nuke.commands.action_handlers
-    }
+        "mark-hotspot",
+        "use-suppressant",
+        "harvest-sample",
+        "study-sample",
+        "unlock-crate",
+        "study-wasteland-artifact",
+        "claim-faction-salvage",
+        "install-mod",
+        "field-repair",
+        "brew-chem",
+        "activate-beacon",
+        "open-trader-route",
+        "increase-raider-pressure",
+        "boot-terminal",
+    } <= {handler.command_type for handler in nuke.commands.action_handlers}
     assert {
         "OldWorldTechIdentifiedEvent",
         "OldWorldTechRestoredEvent",
@@ -811,18 +974,73 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "SettlementSalvagedEvent",
         "PurifierBuiltEvent",
         "GeneratorPoweredEvent",
-    } <= {
-        event.__name__ for event in nuke.commands.typed_events
-    }
+        "HotspotMarkedEvent",
+        "SuppressantUsedEvent",
+        "SampleHarvestedEvent",
+        "SampleStudiedEvent",
+        "CrateUnlockedEvent",
+        "WastelandArtifactStudiedEvent",
+        "FactionSalvageClaimedEvent",
+        "ModInstalledEvent",
+        "FieldRepairAppliedEvent",
+        "ChemBrewedEvent",
+        "BeaconActivatedEvent",
+        "TraderRouteOpenedEvent",
+        "RaiderPressureChangedEvent",
+        "TerminalBootedEvent",
+    } <= {event.__name__ for event in nuke.commands.typed_events}
 
     dino = plugins[DINOSIM]
-    assert {"TerritoryComponent", "HerdComponent", "NestComponent"} <= {
+    assert {
+        "TerritoryComponent",
+        "HerdComponent",
+        "NestComponent",
+        "FossilSurveyComponent",
+        "LabIncubationComponent",
+        "EggInspectionComponent",
+        "ImprintComponent",
+        "JuvenileCareComponent",
+        "WaterCreatureComponent",
+        "ContainmentPanicComponent",
+    } <= {
         component.__name__ for component in dino.ecs.components
     }
-    assert {"mark-territory", "track-herd", "prepare-nest"} <= {
+    assert {
+        "mark-territory",
+        "track-herd",
+        "prepare-nest",
+        "survey-fossil",
+        "excavate-fossil",
+        "clean-fossil",
+        "stabilize-fossil",
+        "lab-incubate-egg",
+        "inspect-egg",
+        "imprint-creature",
+        "care-for-juvenile",
+        "study-water-creature",
+        "brood-egg",
+        "set-incubation-temperature",
+        "trigger-containment-panic",
+    } <= {
         handler.command_type for handler in dino.commands.action_handlers
     }
-    assert {"TerritoryMarkedEvent", "HerdTrackedEvent", "NestPreparedEvent"} <= {
+    assert {
+        "TerritoryMarkedEvent",
+        "HerdTrackedEvent",
+        "NestPreparedEvent",
+        "FossilSurveyedEvent",
+        "FossilExcavatedEvent",
+        "FossilCleanedEvent",
+        "FossilStabilizedEvent",
+        "LabIncubationStartedEvent",
+        "EggInspectedEvent",
+        "CreatureImprintedEvent",
+        "JuvenileCareGivenEvent",
+        "WaterCreatureStudiedEvent",
+        "BroodingStartedEvent",
+        "IncubationTemperatureSetEvent",
+        "ContainmentPanicStartedEvent",
+    } <= {
         event.__name__ for event in dino.commands.typed_events
     }
 

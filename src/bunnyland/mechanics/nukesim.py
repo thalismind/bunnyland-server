@@ -153,6 +153,89 @@ class WaterPurityComponent(Component):
     purified: bool = False
 
 
+@dataclass(frozen=True)
+class HotspotMarkerComponent(Component):
+    source_id: str
+    marked_by: str
+    label: str = "hotspot"
+
+
+@dataclass(frozen=True)
+class SuppressantComponent(Component):
+    pressure_reduction: float = 1.0
+    uses: int = 1
+
+
+@dataclass(frozen=True)
+class SampleComponent(Component):
+    sample_type: str = "irradiated tissue"
+    studied_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LockedCrateComponent(Component):
+    locked: bool = True
+    key_name: str = ""
+
+
+@dataclass(frozen=True)
+class WastelandArtifactComponent(Component):
+    artifact_type: str = "relic"
+    studied: bool = False
+
+
+@dataclass(frozen=True)
+class FactionSalvageComponent(Component):
+    faction_id: str
+    claimed_by: str | None = None
+
+
+@dataclass(frozen=True)
+class SchematicComponent(Component):
+    mod_name: str
+    resource_inputs: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
+class ItemModComponent(Component):
+    mod_name: str
+    installed: bool = False
+
+
+@dataclass(frozen=True)
+class FieldRepairComponent(Component):
+    repair_amount: float = 1.0
+
+
+@dataclass(frozen=True)
+class ChemRecipeComponent(Component):
+    chem_type: str
+    resource_inputs: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
+class BeaconComponent(Component):
+    message: str = "safe route"
+    active: bool = False
+
+
+@dataclass(frozen=True)
+class TraderRouteComponent(Component):
+    destination: str
+    open: bool = False
+
+
+@dataclass(frozen=True)
+class RaiderPressureComponent(Component):
+    pressure: int = 0
+
+
+@dataclass(frozen=True)
+class TerminalComponent(Component):
+    booted: bool = False
+    access_level: int = 0
+
+
 class RadiationExposureEvent(DomainEvent):
     character_id: str
     source_id: str
@@ -255,6 +338,75 @@ class ContaminatedWaterDrunkEvent(DomainEvent):
     rads: float
 
 
+class HotspotMarkedEvent(DomainEvent):
+    source_id: str
+    marker_id: str
+
+
+class SuppressantUsedEvent(DomainEvent):
+    item_id: str
+    pressure: float
+
+
+class SampleHarvestedEvent(DomainEvent):
+    sample_id: str
+    sample_type: str
+
+
+class SampleStudiedEvent(DomainEvent):
+    sample_id: str
+    sample_type: str
+
+
+class CrateUnlockedEvent(DomainEvent):
+    crate_id: str
+
+
+class WastelandArtifactStudiedEvent(DomainEvent):
+    artifact_id: str
+    artifact_type: str
+
+
+class FactionSalvageClaimedEvent(DomainEvent):
+    salvage_id: str
+    faction_id: str
+
+
+class ModInstalledEvent(DomainEvent):
+    item_id: str
+    mod_name: str
+
+
+class FieldRepairAppliedEvent(DomainEvent):
+    item_id: str
+    durability: float
+
+
+class ChemBrewedEvent(DomainEvent):
+    chem_id: str
+    chem_type: str
+
+
+class BeaconActivatedEvent(DomainEvent):
+    beacon_id: str
+    message: str
+
+
+class TraderRouteOpenedEvent(DomainEvent):
+    route_id: str
+    destination: str
+
+
+class RaiderPressureChangedEvent(DomainEvent):
+    target_id: str
+    pressure: int
+
+
+class TerminalBootedEvent(DomainEvent):
+    terminal_id: str
+    access_level: int
+
+
 def _event_base(epoch: int, **kwargs) -> dict:
     base = {
         "event_id": uuid4().hex,
@@ -316,9 +468,7 @@ def _resource_stack_in_inventory(
     return None
 
 
-def _add_resource_stack(
-    character: Entity, world: World, resource_type: str, quantity: int
-) -> str:
+def _add_resource_stack(character: Entity, world: World, resource_type: str, quantity: int) -> str:
     existing = _resource_stack_in_inventory(character, world, resource_type)
     if existing is not None:
         stack = existing.get_component(ResourceStackComponent)
@@ -424,8 +574,8 @@ def _apply_radiation(
         if character.has_component(MutationResistanceComponent)
         else MutationResistanceComponent()
     )
-    pressure_delta = amount * max(0.0, mutation_pressure_per_rad) * max(
-        0.0, resistance.pressure_multiplier
+    pressure_delta = (
+        amount * max(0.0, mutation_pressure_per_rad) * max(0.0, resistance.pressure_multiplier)
     )
     pressure = _radiation_pressure(character)
     updated_pressure = replace(
@@ -860,9 +1010,7 @@ class TakeChemHandler:
                 ),
             )
         else:
-            character.add_component(
-                AddictionComponent(levels=levels, last_updated_epoch=ctx.epoch)
-            )
+            character.add_component(AddictionComponent(levels=levels, last_updated_epoch=ctx.epoch))
         _remove_from_container(ctx.world, chem_entity.id)
         return ok(
             ChemTakenEvent(
@@ -1116,6 +1264,475 @@ class StabilizeMutationHandler:
                     target_ids=(str(character_id),),
                     character_id=str(character_id),
                     mutation_id=mutation.mutation_id,
+                )
+            )
+        )
+
+
+class MarkHotspotHandler:
+    command_type = "mark-hotspot"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        source, error = _reachable_component(
+            ctx, character_id, command.payload.get("source_id"), RadiationSourceComponent
+        )
+        if source is None:
+            return rejected(error if error else "target is not a radiation source")
+        from ..core.ecs import spawn_entity
+
+        label = str(command.payload.get("label", "hotspot")).strip() or "hotspot"
+        marker = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=f"{label} marker", kind="hotspot-marker"),
+                PortableComponent(can_pick_up=True),
+                HotspotMarkerComponent(
+                    source_id=str(source.id),
+                    marked_by=str(character_id),
+                    label=label,
+                ),
+            ],
+        )
+        ctx.entity(character_id).add_relationship(
+            Contains(mode=ContainmentMode.INVENTORY), marker.id
+        )
+        return ok(
+            HotspotMarkedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(source.id), str(marker.id)),
+                    source_id=str(source.id),
+                    marker_id=str(marker.id),
+                )
+            )
+        )
+
+
+class UseSuppressantHandler:
+    command_type = "use-suppressant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        item, error = _reachable_component(
+            ctx, character_id, command.payload.get("item_id"), SuppressantComponent
+        )
+        if item is None:
+            return rejected(error if error else "target is not a suppressant")
+        character = ctx.entity(character_id)
+        suppressant = item.get_component(SuppressantComponent)
+        pressure = _radiation_pressure(character)
+        updated_pressure = max(0.0, pressure.amount - suppressant.pressure_reduction)
+        replace_component(
+            character,
+            replace(pressure, amount=updated_pressure, last_updated_epoch=ctx.epoch),
+        )
+        replace_component(item, replace(suppressant, uses=max(0, suppressant.uses - 1)))
+        return ok(
+            SuppressantUsedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item.id),),
+                    item_id=str(item.id),
+                    pressure=updated_pressure,
+                )
+            )
+        )
+
+
+class HarvestSampleHandler:
+    command_type = "harvest-sample"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        sample_type = str(command.payload.get("sample_type", "irradiated tissue")).strip()
+        from ..core.ecs import spawn_entity
+
+        sample = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=sample_type, kind="sample"),
+                PortableComponent(can_pick_up=True),
+                SampleComponent(sample_type=sample_type),
+            ],
+        )
+        ctx.entity(character_id).add_relationship(
+            Contains(mode=ContainmentMode.INVENTORY), sample.id
+        )
+        return ok(
+            SampleHarvestedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(sample.id),),
+                    sample_id=str(sample.id),
+                    sample_type=sample_type,
+                )
+            )
+        )
+
+
+class StudySampleHandler:
+    command_type = "study-sample"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        sample, error = _reachable_component(
+            ctx, character_id, command.payload.get("sample_id"), SampleComponent
+        )
+        if sample is None:
+            return rejected(error if error else "target is not a sample")
+        component = sample.get_component(SampleComponent)
+        replace_component(
+            sample,
+            replace(
+                component, studied_by=tuple(sorted((*component.studied_by, str(character_id))))
+            ),
+        )
+        return ok(
+            SampleStudiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(sample.id),),
+                    sample_id=str(sample.id),
+                    sample_type=component.sample_type,
+                )
+            )
+        )
+
+
+class UnlockCrateHandler:
+    command_type = "unlock-crate"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        crate, error = _reachable_component(
+            ctx, character_id, command.payload.get("crate_id"), LockedCrateComponent
+        )
+        if crate is None:
+            return rejected(error if error else "target is not a locked crate")
+        component = crate.get_component(LockedCrateComponent)
+        if not component.locked:
+            return rejected("crate is already unlocked")
+        replace_component(crate, replace(component, locked=False))
+        return ok(
+            CrateUnlockedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(crate.id),),
+                    crate_id=str(crate.id),
+                )
+            )
+        )
+
+
+class StudyWastelandArtifactHandler:
+    command_type = "study-wasteland-artifact"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        artifact, error = _reachable_component(
+            ctx, character_id, command.payload.get("artifact_id"), WastelandArtifactComponent
+        )
+        if artifact is None:
+            return rejected(error if error else "target is not a wasteland artifact")
+        component = artifact.get_component(WastelandArtifactComponent)
+        replace_component(artifact, replace(component, studied=True))
+        return ok(
+            WastelandArtifactStudiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(artifact.id),),
+                    artifact_id=str(artifact.id),
+                    artifact_type=component.artifact_type,
+                )
+            )
+        )
+
+
+class ClaimFactionSalvageHandler:
+    command_type = "claim-faction-salvage"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        salvage, error = _reachable_component(
+            ctx, character_id, command.payload.get("salvage_id"), FactionSalvageComponent
+        )
+        if salvage is None:
+            return rejected(error if error else "target is not faction salvage")
+        component = salvage.get_component(FactionSalvageComponent)
+        if component.claimed_by is not None:
+            return rejected("faction salvage already claimed")
+        replace_component(salvage, replace(component, claimed_by=str(character_id)))
+        return ok(
+            FactionSalvageClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(salvage.id),),
+                    salvage_id=str(salvage.id),
+                    faction_id=component.faction_id,
+                )
+            )
+        )
+
+
+class InstallModHandler:
+    command_type = "install-mod"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if character_id is None or item_id is None or not ctx.world.has_entity(item_id):
+            return rejected("invalid character or item id")
+        character = ctx.entity(character_id)
+        if item_id not in reachable_ids(ctx.world, character):
+            return rejected("item is not reachable")
+        item = ctx.entity(item_id)
+        schematic, error = _reachable_component(
+            ctx, character_id, command.payload.get("schematic_id"), SchematicComponent
+        )
+        if schematic is None:
+            return rejected(error if error else "target is not a schematic")
+        component = schematic.get_component(SchematicComponent)
+        replace_component(item, ItemModComponent(mod_name=component.mod_name, installed=True))
+        return ok(
+            ModInstalledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item_id), str(schematic.id)),
+                    item_id=str(item_id),
+                    mod_name=component.mod_name,
+                )
+            )
+        )
+
+
+class FieldRepairHandler:
+    command_type = "field-repair"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if character_id is None or item_id is None or not ctx.world.has_entity(item_id):
+            return rejected("invalid character or item id")
+        item = ctx.entity(item_id)
+        if not item.has_component(DurabilityComponent):
+            return rejected("target has no durability")
+        kit, error = _reachable_component(
+            ctx, character_id, command.payload.get("kit_id"), FieldRepairComponent
+        )
+        if kit is None:
+            return rejected(error if error else "target is not a repair kit")
+        durability = item.get_component(DurabilityComponent)
+        repair = kit.get_component(FieldRepairComponent)
+        updated = replace(
+            durability,
+            current=min(durability.maximum, durability.current + repair.repair_amount),
+            broken=False,
+        )
+        replace_component(item, updated)
+        return ok(
+            FieldRepairAppliedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item_id), str(kit.id)),
+                    item_id=str(item_id),
+                    durability=updated.current,
+                )
+            )
+        )
+
+
+class BrewChemHandler:
+    command_type = "brew-chem"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        recipe, error = _reachable_component(
+            ctx, character_id, command.payload.get("recipe_id"), ChemRecipeComponent
+        )
+        if recipe is None:
+            return rejected(error if error else "target is not a chem recipe")
+        component = recipe.get_component(ChemRecipeComponent)
+        character = ctx.entity(character_id)
+        for resource, quantity in component.resource_inputs:
+            if not _spend_inventory_resource(character, ctx.world, resource, quantity):
+                return rejected("missing chem ingredients")
+        from ..core.ecs import spawn_entity
+
+        chem = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=component.chem_type, kind="chem"),
+                PortableComponent(can_pick_up=True),
+                ChemComponent(chem_type=component.chem_type),
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), chem.id)
+        return ok(
+            ChemBrewedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(chem.id),),
+                    chem_id=str(chem.id),
+                    chem_type=component.chem_type,
+                )
+            )
+        )
+
+
+class ActivateBeaconHandler:
+    command_type = "activate-beacon"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        beacon, error = _reachable_component(
+            ctx, character_id, command.payload.get("beacon_id"), BeaconComponent
+        )
+        if beacon is None:
+            return rejected(error if error else "target is not a beacon")
+        component = beacon.get_component(BeaconComponent)
+        replace_component(beacon, replace(component, active=True))
+        return ok(
+            BeaconActivatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(beacon.id),),
+                    beacon_id=str(beacon.id),
+                    message=component.message,
+                )
+            )
+        )
+
+
+class OpenTraderRouteHandler:
+    command_type = "open-trader-route"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        route, error = _reachable_component(
+            ctx, character_id, command.payload.get("route_id"), TraderRouteComponent
+        )
+        if route is None:
+            return rejected(error if error else "target is not a trader route")
+        component = route.get_component(TraderRouteComponent)
+        replace_component(route, replace(component, open=True))
+        return ok(
+            TraderRouteOpenedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(route.id),),
+                    route_id=str(route.id),
+                    destination=component.destination,
+                )
+            )
+        )
+
+
+class IncreaseRaiderPressureHandler:
+    command_type = "increase-raider-pressure"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if character_id is None or target_id is None or not ctx.world.has_entity(target_id):
+            return rejected("invalid character or target id")
+        target = ctx.entity(target_id)
+        current = (
+            target.get_component(RaiderPressureComponent)
+            if target.has_component(RaiderPressureComponent)
+            else RaiderPressureComponent()
+        )
+        amount = int(command.payload.get("amount", 1))
+        updated = replace(current, pressure=current.pressure + amount)
+        replace_component(target, updated)
+        return ok(
+            RaiderPressureChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    pressure=updated.pressure,
+                )
+            )
+        )
+
+
+class BootTerminalHandler:
+    command_type = "boot-terminal"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        terminal, error = _reachable_component(
+            ctx, character_id, command.payload.get("terminal_id"), TerminalComponent
+        )
+        if terminal is None:
+            return rejected(error if error else "target is not a terminal")
+        access_level = int(command.payload.get("access_level", 1))
+        replace_component(
+            terminal,
+            replace(
+                terminal.get_component(TerminalComponent),
+                booted=True,
+                access_level=access_level,
+            ),
+        )
+        return ok(
+            TerminalBootedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(terminal.id),),
+                    terminal_id=str(terminal.id),
+                    access_level=access_level,
                 )
             )
         )
@@ -1493,6 +2110,53 @@ def nukesim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(f"Decontamination available: {_name(entity)}.")
         if entity.has_component(RadMedicineComponent):
             lines.append(f"Rad medicine available: {_name(entity)}.")
+        if entity.has_component(SuppressantComponent):
+            lines.append(f"Radiation suppressant available: {_name(entity)}.")
+        if entity.has_component(SampleComponent):
+            sample = entity.get_component(SampleComponent)
+            state = "studied" if str(character.id) in sample.studied_by else "unstudied"
+            lines.append(f"Sample {_name(entity)}: {sample.sample_type} ({state}).")
+        if entity.has_component(HotspotMarkerComponent):
+            marker = entity.get_component(HotspotMarkerComponent)
+            lines.append(f"Hotspot marker: {marker.label}.")
+        if entity.has_component(LockedCrateComponent):
+            crate = entity.get_component(LockedCrateComponent)
+            lines.append(f"Locked crate {_name(entity)}: {'locked' if crate.locked else 'open'}.")
+        if entity.has_component(WastelandArtifactComponent):
+            artifact = entity.get_component(WastelandArtifactComponent)
+            state = "studied" if artifact.studied else "unstudied"
+            lines.append(f"Wasteland artifact {_name(entity)}: {artifact.artifact_type} ({state}).")
+        if entity.has_component(FactionSalvageComponent):
+            salvage = entity.get_component(FactionSalvageComponent)
+            state = "claimed" if salvage.claimed_by else "available"
+            lines.append(f"Faction salvage {_name(entity)}: {salvage.faction_id}, {state}.")
+        if entity.has_component(SchematicComponent):
+            schematic = entity.get_component(SchematicComponent)
+            lines.append(f"Schematic {_name(entity)}: {schematic.mod_name}.")
+        if entity.has_component(ItemModComponent):
+            mod = entity.get_component(ItemModComponent)
+            lines.append(f"Item mod {_name(entity)}: {mod.mod_name}.")
+        if entity.has_component(FieldRepairComponent):
+            repair = entity.get_component(FieldRepairComponent)
+            lines.append(f"Field repair kit {_name(entity)}: +{repair.repair_amount:g}.")
+        if entity.has_component(ChemRecipeComponent):
+            recipe = entity.get_component(ChemRecipeComponent)
+            lines.append(f"Chem recipe {_name(entity)}: {recipe.chem_type}.")
+        if entity.has_component(BeaconComponent):
+            beacon = entity.get_component(BeaconComponent)
+            state = "active" if beacon.active else "inactive"
+            lines.append(f"Beacon {_name(entity)}: {state}.")
+        if entity.has_component(TraderRouteComponent):
+            route = entity.get_component(TraderRouteComponent)
+            state = "open" if route.open else "closed"
+            lines.append(f"Trader route {_name(entity)}: {route.destination} ({state}).")
+        if entity.has_component(RaiderPressureComponent):
+            pressure = entity.get_component(RaiderPressureComponent)
+            lines.append(f"Raider pressure at {_name(entity)}: {pressure.pressure}.")
+        if entity.has_component(TerminalComponent):
+            terminal = entity.get_component(TerminalComponent)
+            state = "booted" if terminal.booted else "offline"
+            lines.append(f"Terminal {_name(entity)}: {state}, access {terminal.access_level}.")
         if entity.has_component(JunkComponent):
             lines.append(f"Scrappable junk: {_name(entity)}.")
         if entity.has_component(OldWorldTechComponent):
@@ -1537,26 +2201,48 @@ def install_nukesim(actor) -> None:
 __all__ = [
     "AddictionComponent",
     "AddictionWithdrawalConsequence",
+    "ActivateBeaconHandler",
+    "BeaconActivatedEvent",
+    "BeaconComponent",
+    "BootTerminalHandler",
+    "BrewChemHandler",
     "BuildPurifierHandler",
     "ChemComponent",
+    "ChemBrewedEvent",
+    "ChemRecipeComponent",
     "ChemTakenEvent",
+    "ClaimFactionSalvageHandler",
     "ContaminatedWaterDrunkEvent",
     "ClaimSettlementHandler",
+    "CrateUnlockedEvent",
     "DecontaminateHandler",
     "DecontaminationAppliedEvent",
     "DecontaminationComponent",
     "DrinkContaminatedWaterHandler",
+    "FactionSalvageClaimedEvent",
+    "FactionSalvageComponent",
+    "FieldRepairAppliedEvent",
+    "FieldRepairComponent",
+    "FieldRepairHandler",
     "GeneratorComponent",
     "GeneratorPoweredEvent",
     "HazardTriggeredEvent",
+    "HarvestSampleHandler",
+    "HotspotMarkedEvent",
+    "HotspotMarkerComponent",
     "IdentifyTechHandler",
+    "IncreaseRaiderPressureHandler",
+    "InstallModHandler",
     "ItemScrappedEvent",
+    "ItemModComponent",
     "JunkComponent",
+    "LockedCrateComponent",
     "LootFoundEvent",
     "LootTableComponent",
     "OldWorldTechComponent",
     "OldWorldTechIdentifiedEvent",
     "OldWorldTechRestoredEvent",
+    "OpenTraderRouteHandler",
     "PowerGeneratorHandler",
     "PurifierBuiltEvent",
     "MutationComponent",
@@ -1567,6 +2253,8 @@ __all__ = [
     "MutationStabilizedEvent",
     "MutationThresholdComponent",
     "PurifyWaterHandler",
+    "RaiderPressureChangedEvent",
+    "RaiderPressureComponent",
     "RadMedicineComponent",
     "RadMedicineUsedEvent",
     "RadProtectionComponent",
@@ -1579,6 +2267,9 @@ __all__ = [
     "RadiationSourceComponent",
     "RadiationSourceSealedEvent",
     "RestoreTechHandler",
+    "SampleComponent",
+    "SampleHarvestedEvent",
+    "SampleStudiedEvent",
     "ScanRadiationHandler",
     "ScavengeHandler",
     "ScavengeSiteComponent",
@@ -1589,11 +2280,24 @@ __all__ = [
     "SettlementComponent",
     "SettlementSalvageComponent",
     "SettlementSalvagedEvent",
+    "SchematicComponent",
     "SiteScavengedEvent",
     "StabilizeMutationHandler",
+    "StudySampleHandler",
+    "StudyWastelandArtifactHandler",
+    "SuppressantComponent",
+    "SuppressantUsedEvent",
     "TakeChemHandler",
+    "TerminalBootedEvent",
+    "TerminalComponent",
     "TechLeadComponent",
+    "TraderRouteComponent",
+    "TraderRouteOpenedEvent",
+    "UnlockCrateHandler",
     "UseRadMedicineHandler",
+    "UseSuppressantHandler",
+    "WastelandArtifactComponent",
+    "WastelandArtifactStudiedEvent",
     "WaterPurifierComponent",
     "WaterPurifiedEvent",
     "WaterPurityComponent",

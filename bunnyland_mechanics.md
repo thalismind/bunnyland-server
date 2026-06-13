@@ -7744,82 +7744,106 @@ processing machines
 
 ## Phase 5 — barbarian sim
 
+Status: implemented for the current parity pass.
+
 ```text
 temperature exposure
 combat
 weapons/armor
 base building
+building decay/upgrade/demolish
 thralls/followers
-purges
-dungeons
-corruption/sorcery
+survival gaps
+purges/siege readiness
+rituals/shrines/blessings/curses
+dungeons/danger zones/bosses/treasure/key loops
+corruption/sorcery hooks
+climbing as a skill or traversal gate only
 PvP policies
 ```
 
 ## Phase 6 — dragon sim
 
+Status: implemented for the current parity pass. Fast travel and richer world-map
+features remain v2.
+
 ```text
-quests
+quest tracking/branching/decline
 factions
 skills-by-use
 perks
-magic
+persuasion/surrender/report-crime
+magicka regen/cooldowns
+fixed magic
 dungeons
-dragons/ancient beasts
+dragons/ancient beasts encounter options
 voice powers
 radiant quests
 crime/bounty
+artifact identification
 ```
 
 ## Phase 7 — dagger sim
+
+Status: implemented for the current parity pass.
 
 ```text
 expandable world frontiers
 regions/settlements
 rumors as expansion seeds
-procedural quests
-institutions/services
+procedural quests/refusal/abandon/extension/lie
+institutions/services/directories/promotion/dues
 regional/institutional reputation
-banks/loans/debt/property
-civic law/courts
-travel logistics
+banks/loans/debt/property/letters of credit/safe storage/debt collectors
+civic law/courts/sentences
+travel logistics/lodging/camping/supplies/interruptions
 procedural dungeons
 custom classes
-custom spells/enchantments/potions
+custom spells/enchantments/potions/recharge/ingredient identification
 etiquette/streetwise
 language skills/pacification
-supernatural afflictions
+supernatural afflictions/incubation/stigma/cure quest hooks
 ```
 
 ## Phase 8 — void sim
+
+Status: implemented for the current parity pass.
 
 ```text
 ships/stations/habitats
 life support/pressure/airlocks
 space travel/orbits/navigation
-crew roles/duty shifts
-technology/research/fabrication
-alien contact/xenobiology
-space hazards/damage control
-contracts/salvage/cargo
-frontier economy
+crew roles/duty shifts/away teams/morale/mutiny
+technology/research/fabrication/drones/ship AI/data salvage
+alien contact/xenobiology/contamination/protocol/trade
+space hazards/damage control/decompression/reactor/gravity/boarding
+contracts/salvage/cargo/passengers/survey/mining
+frontier economy/customs/smuggling/insurance/mortgages
 ```
 
 ## Phase 9 — nuke sim
+
+Status: implemented for the current parity pass.
 
 ```text
 radiation sources/exposure
 rad shielding/decontamination
 mutation pressure/outcomes
+hotspot marking/suppressants
+sample harvesting/study
 wasteland scavenging
 junk/scrap resource chains
-jury-rigged crafting
+locked crates/artifacts/faction salvage
+jury-rigged crafting/schematics/mods/field repair
 rad medicine/dirty water
+chem brewing
 settlement salvage hooks
-old-world tech leads
+old-world tech leads/beacons/trader routes/raider pressure/terminal boot
 ```
 
 ## Phase 10 — neon sim
+
+Status: planned and out of scope for the current parity pass.
 
 ```text
 districts/security zones
@@ -7834,18 +7858,26 @@ city expansion worldgen
 
 ## Phase 11 — dino sim
 
+Status: implemented for the current parity pass.
+
 ```text
 species/ecology/creature needs
-eggs/breeding/hatching
+fossil survey/excavation/cleaning/stabilization
+eggs/inspection/breeding/brooding/incubation/hatching
+lab incubation
+imprinting/juvenile care
+water creature study tracks
 tracking/taming/training
 companions/mounts/guards
-enclosures/containment
+enclosures/containment panic
 escapes/stampedes
 apex predators/kaiju incidents
 ranch production
 ```
 
 ## Phase 12 — fortress sim
+
+Status: planned and out of scope for the current parity pass.
 
 ```text
 deep materials

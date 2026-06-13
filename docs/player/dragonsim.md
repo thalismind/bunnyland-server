@@ -182,8 +182,37 @@ artifact:
 ```text
 !learn-spell spell_id=Spark
 !cast-dragon-spell spell_id=Spark
+!recover-magicka amount=5
 !brew-potion recipe_id="blue tonic recipe"
+!identify-artifact artifact_id="star mirror"
 !use-artifact artifact_id="star mirror"
+```
+
+Spells can have cooldowns, and magicka recovery respects the character's magicka state.
+
+## Quest branches, persuasion, and surrender
+
+Track, decline, or branch a quest:
+
+```text
+!track-quest quest_id="Find the Lost Ring"
+!choose-quest-branch quest_id="Find the Lost Ring" branch="return it to Mara"
+!decline-quest quest_id="Wolf Road Trouble"
+```
+
+Social and crime hooks let you change a nearby character's disposition, surrender to a
+guard, or report a crime:
+
+```text
+!persuade target_id="Moss Guard" amount=2
+!surrender target_id="Moss Guard" reason="stolen ring"
+!report-crime criminal_id="Bandit" faction_id="Moss Wardens" bounty=10
+```
+
+Ancient beasts can be resolved without only fighting:
+
+```text
+!appease-ancient-beast beast_id="Ancient Wyrm" method=parley
 ```
 
 ## Core loop
@@ -195,6 +224,8 @@ A simple adventure loop:
 !mark-map location_id="old watchtower" label="Old Watchtower"
 !trigger-encounter zone_id="wolf road"
 !accept-quest quest_id="Find the Lost Ring"
+!track-quest quest_id="Find the Lost Ring"
+!choose-quest-branch quest_id="Find the Lost Ring" branch="return it to Mara"
 !complete-objective objective_id="lost ring objective"
 !join-faction faction_id="Moss Wardens" rank=scout
 !leave-faction Moss Wardens
@@ -204,4 +235,5 @@ A simple adventure loop:
 !steal ruby ring from Mara
 !pay-bounty faction_id="Moss Wardens"
 !pick-lock lock_id="old chest"
+!recover-magicka amount=5
 ```

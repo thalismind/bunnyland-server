@@ -40,21 +40,35 @@ from bunnyland.core.events import (
 from bunnyland.mechanics.barbariansim import (
     ArmorComponent,
     AttackHandler,
+    BarbarianRaidEnrichment,
     BaseClaimComponent,
     BaseClaimedEvent,
-    BarbarianRaidEnrichment,
+    BlessingComponent,
+    BossComponent,
+    BridgeSurvivalGapHandler,
+    BuildingComponent,
     ChallengeHandler,
     CharacterPoisonedEvent,
     ClaimBaseHandler,
+    ClaimTreasureHandler,
     CleanseCorruptionHandler,
+    ClimbHandler,
+    ClimbingGateComponent,
+    ClimbingSkillComponent,
     CommandFollowerHandler,
     CorruptionCleansedEvent,
     CorruptionComponent,
     CorruptionGainedEvent,
+    CurseComponent,
+    DangerZoneComponent,
+    DecayBuildingHandler,
+    DefeatBossHandler,
     DefendHandler,
     DefendingComponent,
+    DemolishBuildingHandler,
     DisarmTrapHandler,
     DurabilityComponent,
+    ExploreDangerZoneHandler,
     ExposureDamageEvent,
     FollowerComponent,
     FollowerOrderChangedEvent,
@@ -66,31 +80,43 @@ from bunnyland.mechanics.barbariansim import (
     ItemBrokenEvent,
     ItemDamagedEvent,
     ItemRepairedEvent,
+    KeyComponent,
+    PerformRitualHandler,
     PickpocketHandler,
     PlaceTrapHandler,
     PoisonCharacterHandler,
     PoisonComponent,
     PoisonProgressedEvent,
     PoisonTreatedEvent,
+    PrepareSiegeHandler,
+    PurgeWaveComponent,
     RaiderSpawnSpec,
     RaidHandler,
     RecruitFollowerHandler,
     ReleaseThrallHandler,
     RepairItemHandler,
+    RitualComponent,
     ShelterComponent,
+    ShrineComponent,
+    SiegeReadinessComponent,
     SparHandler,
     StaminaChangedEvent,
     StaminaComponent,
+    StartPurgeWaveHandler,
     SubdueHandler,
+    SurvivalGapComponent,
     TemperatureExposureComponent,
     TemperatureResistanceComponent,
     ThrallComponent,
     ThrallReleasedEvent,
     ThrallTakenEvent,
-    TreatPoisonHandler,
     TrapComponent,
     TrapDisarmedEvent,
     TrapPlacedEvent,
+    TreasureComponent,
+    TreatPoisonHandler,
+    UnlockTreasureHandler,
+    UpgradeBuildingHandler,
     WeaponComponent,
     barbariansim_fragments,
     generate_raid_spawn_specs,
@@ -183,6 +209,17 @@ def _target_item(scenario, target, name="Coin"):
     return item.id
 
 
+def _room_entity(scenario, name, kind, components):
+    entity = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name=name, kind=kind), *components],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
+    )
+    return entity
+
+
 def _cmd(scenario, command_type, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),
@@ -205,6 +242,526 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
         lane=Lane.WORLD,
         payload=payload,
     )
+
+
+def test_barbariansim_parity_handlers_mutate_reachable_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(ClimbingSkillComponent(level=2))
+
+    gap = _room_entity(
+        scenario,
+        "no shelter",
+        "survival-gap",
+        [SurvivalGapComponent(gap_type="shelter")],
+    )
+    building = _room_entity(
+        scenario,
+        "log wall",
+        "building",
+        [BuildingComponent(integrity=8.0, maximum_integrity=10.0)],
+    )
+    base = _room_entity(scenario, "river camp", "base", [])
+    shrine = _room_entity(
+        scenario,
+        "stone shrine",
+        "shrine",
+        [ShrineComponent(deity="ember")],
+    )
+    ritual = _room_entity(
+        scenario,
+        "ember blessing",
+        "ritual",
+        [RitualComponent(blessing="ember", curse="ash", corruption_cost=1.0)],
+    )
+    zone = _room_entity(
+        scenario,
+        "serpent pass",
+        "danger-zone",
+        [DangerZoneComponent(zone_type="pass", danger_rating=3.0)],
+    )
+    boss = _room_entity(
+        scenario,
+        "serpent queen",
+        "boss",
+        [BossComponent(name="serpent queen")],
+    )
+    treasure = _room_entity(
+        scenario,
+        "sealed hoard",
+        "treasure",
+        [TreasureComponent(treasure_type="hoard", key_name="serpent")],
+    )
+    gate = _room_entity(
+        scenario,
+        "cliff path",
+        "climbing-gate",
+        [ClimbingGateComponent(required_level=2)],
+    )
+    key = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="serpent key", kind="key"),
+            PortableComponent(can_pick_up=True),
+            KeyComponent(key_name="serpent"),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), key.id)
+
+    calls = [
+        (BridgeSurvivalGapHandler(), "bridge-survival-gap", {"gap_id": str(gap.id)}),
+        (
+            DecayBuildingHandler(),
+            "decay-building",
+            {"building_id": str(building.id), "amount": 2},
+        ),
+        (
+            UpgradeBuildingHandler(),
+            "upgrade-building",
+            {"building_id": str(building.id), "integrity": 4},
+        ),
+        (
+            DemolishBuildingHandler(),
+            "demolish-building",
+            {"building_id": str(building.id)},
+        ),
+        (PrepareSiegeHandler(), "prepare-siege", {"base_id": str(base.id), "score": 3}),
+        (
+            StartPurgeWaveHandler(),
+            "start-purge-wave",
+            {"base_id": str(base.id), "intensity": 4},
+        ),
+        (
+            PerformRitualHandler(),
+            "perform-ritual",
+            {"shrine_id": str(shrine.id), "ritual_id": str(ritual.id)},
+        ),
+        (
+            ExploreDangerZoneHandler(),
+            "explore-danger-zone",
+            {"zone_id": str(zone.id)},
+        ),
+        (DefeatBossHandler(), "defeat-boss", {"boss_id": str(boss.id)}),
+        (
+            UnlockTreasureHandler(),
+            "unlock-treasure",
+            {"treasure_id": str(treasure.id), "key_id": str(key.id)},
+        ),
+        (ClaimTreasureHandler(), "claim-treasure", {"treasure_id": str(treasure.id)}),
+        (ClimbHandler(), "climb", {"gate_id": str(gate.id)}),
+    ]
+
+    for handler, command_type, payload in calls:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert result.ok, (command_type, result.reason)
+
+    assert gap.get_component(SurvivalGapComponent).bridged_by == str(scenario.character)
+    assert building.get_component(BuildingComponent).demolished is True
+    assert base.get_component(SiegeReadinessComponent).score == 3
+    assert base.get_component(PurgeWaveComponent).active is True
+    assert character.has_component(BlessingComponent)
+    assert character.has_component(CurseComponent)
+    assert boss.get_component(BossComponent).defeated is True
+    assert treasure.get_component(TreasureComponent).claimed_by == str(scenario.character)
+    assert gate.get_component(ClimbingGateComponent).opened_by == str(scenario.character)
+    fragments = barbariansim_fragments(scenario.actor.world, character)
+    assert "Blessing: ember." in fragments
+    assert "Curse: ash severity 1." in fragments
+    assert "Climbing skill: 2." in fragments
+    assert "Survival gap: shelter severity 1 (bridged)." in fragments
+    assert "Boss nearby: serpent queen (defeated)." in fragments
+    assert "Treasure nearby: hoard (unlocked)." in fragments
+
+
+def test_barbariansim_parity_handlers_reject_invalid_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    fake = "entity_999999"
+    cases = [
+        (
+            BridgeSurvivalGapHandler(),
+            "bridge-survival-gap",
+            {"gap_id": fake},
+            "invalid character or gap id",
+            "survival gap does not exist",
+        ),
+        (
+            DecayBuildingHandler(),
+            "decay-building",
+            {"building_id": fake},
+            "invalid character or building id",
+            "building does not exist",
+        ),
+        (
+            UpgradeBuildingHandler(),
+            "upgrade-building",
+            {"building_id": fake},
+            "invalid character or building id",
+            "building does not exist",
+        ),
+        (
+            DemolishBuildingHandler(),
+            "demolish-building",
+            {"building_id": fake},
+            "invalid character or building id",
+            "building does not exist",
+        ),
+        (
+            PrepareSiegeHandler(),
+            "prepare-siege",
+            {"base_id": fake},
+            "invalid character id",
+            "base does not exist",
+        ),
+        (
+            StartPurgeWaveHandler(),
+            "start-purge-wave",
+            {"base_id": fake},
+            "invalid character id",
+            "base does not exist",
+        ),
+        (
+            PerformRitualHandler(),
+            "perform-ritual",
+            {"shrine_id": fake, "ritual_id": fake},
+            "invalid character, shrine, or ritual id",
+            "shrine or ritual does not exist",
+        ),
+        (
+            ExploreDangerZoneHandler(),
+            "explore-danger-zone",
+            {"zone_id": fake},
+            "invalid character or zone id",
+            "danger zone does not exist",
+        ),
+        (
+            DefeatBossHandler(),
+            "defeat-boss",
+            {"boss_id": fake},
+            "invalid character or boss id",
+            "boss does not exist",
+        ),
+        (
+            UnlockTreasureHandler(),
+            "unlock-treasure",
+            {"treasure_id": fake, "key_id": fake},
+            "invalid character or treasure id",
+            "treasure does not exist",
+        ),
+        (
+            ClaimTreasureHandler(),
+            "claim-treasure",
+            {"treasure_id": fake},
+            "invalid character or treasure id",
+            "treasure does not exist",
+        ),
+        (
+            ClimbHandler(),
+            "climb",
+            {"gate_id": fake},
+            "invalid character or climbing gate id",
+            "climbing gate does not exist",
+        ),
+    ]
+
+    for handler, command_type, payload, invalid_reason, missing_reason in cases:
+        bad_character = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
+        )
+        assert bad_character.ok is False
+        assert bad_character.reason == invalid_reason
+        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert missing_target.ok is False
+        assert missing_target.reason == missing_reason
+
+
+def test_barbariansim_parity_handlers_reject_wrong_kind_and_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    wrong_kind = _room_entity(scenario, "plain stone", "prop", [])
+    distant_gap = spawn_entity(world, [SurvivalGapComponent()])
+    distant_building = spawn_entity(world, [BuildingComponent()])
+    distant_base = spawn_entity(world, [RoomComponent(title="Far Base")])
+    distant_shrine = spawn_entity(world, [ShrineComponent()])
+    ritual = _room_entity(scenario, "rite", "ritual", [RitualComponent()])
+    shrine = _room_entity(scenario, "shrine", "shrine", [ShrineComponent()])
+    bridged_gap = _room_entity(
+        scenario,
+        "bridged gap",
+        "survival-gap",
+        [SurvivalGapComponent(bridged_by=str(scenario.character))],
+    )
+    building = _room_entity(scenario, "hut", "building", [BuildingComponent()])
+    demolished_building = _room_entity(
+        scenario,
+        "rubble",
+        "building",
+        [BuildingComponent(demolished=True)],
+    )
+    performed_ritual = _room_entity(
+        scenario,
+        "old rite",
+        "ritual",
+        [RitualComponent(performed_by=(str(scenario.character),))],
+    )
+    zone = _room_entity(scenario, "ruin", "danger-zone", [DangerZoneComponent()])
+    distant_zone = spawn_entity(world, [DangerZoneComponent()])
+    boss = _room_entity(scenario, "boss", "boss", [BossComponent(defeated=True)])
+    distant_boss = spawn_entity(world, [BossComponent()])
+    locked_treasure = _room_entity(
+        scenario,
+        "locked cache",
+        "treasure",
+        [TreasureComponent(key_name="serpent")],
+    )
+    unlocked_treasure = _room_entity(
+        scenario,
+        "open cache",
+        "treasure",
+        [TreasureComponent(locked=False)],
+    )
+    claimed_treasure = _room_entity(
+        scenario,
+        "claimed cache",
+        "treasure",
+        [TreasureComponent(locked=False, claimed_by="other")],
+    )
+    wrong_key = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="wrong key", kind="key"),
+            PortableComponent(can_pick_up=True),
+            KeyComponent(key_name="wrong"),
+        ],
+    )
+    world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), wrong_key.id
+    )
+    gate = _room_entity(
+        scenario,
+        "cliff",
+        "climbing-gate",
+        [ClimbingGateComponent(required_level=2)],
+    )
+    distant_gate = spawn_entity(world, [ClimbingGateComponent()])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), distant_base.id)
+
+    cases = [
+        (
+            BridgeSurvivalGapHandler(),
+            _handler_cmd(scenario, "bridge-survival-gap", gap_id=str(distant_gap.id)),
+            "survival gap is not reachable",
+        ),
+        (
+            BridgeSurvivalGapHandler(),
+            _handler_cmd(scenario, "bridge-survival-gap", gap_id=str(wrong_kind.id)),
+            "target is not a survival gap",
+        ),
+        (
+            BridgeSurvivalGapHandler(),
+            _handler_cmd(scenario, "bridge-survival-gap", gap_id=str(bridged_gap.id)),
+            "survival gap is already bridged",
+        ),
+        (
+            DecayBuildingHandler(),
+            _handler_cmd(scenario, "decay-building", building_id=str(distant_building.id)),
+            "building is not reachable",
+        ),
+        (
+            DecayBuildingHandler(),
+            _handler_cmd(scenario, "decay-building", building_id=str(wrong_kind.id)),
+            "target is not a building",
+        ),
+        (
+            DecayBuildingHandler(),
+            _handler_cmd(scenario, "decay-building", building_id=str(demolished_building.id)),
+            "building is demolished",
+        ),
+        (
+            DecayBuildingHandler(),
+            _handler_cmd(scenario, "decay-building", building_id=str(building.id), amount=0),
+            "decay amount must be positive",
+        ),
+        (
+            UpgradeBuildingHandler(),
+            _handler_cmd(scenario, "upgrade-building", building_id=str(wrong_kind.id)),
+            "target is not a building",
+        ),
+        (
+            UpgradeBuildingHandler(),
+            _handler_cmd(scenario, "upgrade-building", building_id=str(demolished_building.id)),
+            "building is demolished",
+        ),
+        (
+            UpgradeBuildingHandler(),
+            _handler_cmd(scenario, "upgrade-building", building_id=str(building.id), integrity=0),
+            "upgrade integrity must be positive",
+        ),
+        (
+            DemolishBuildingHandler(),
+            _handler_cmd(scenario, "demolish-building", building_id=str(wrong_kind.id)),
+            "target is not a building",
+        ),
+        (
+            DemolishBuildingHandler(),
+            _handler_cmd(scenario, "demolish-building", building_id=str(demolished_building.id)),
+            "building is already demolished",
+        ),
+        (
+            PrepareSiegeHandler(),
+            _handler_cmd(scenario, "prepare-siege", base_id=str(distant_base.id), score=0),
+            "siege score must be positive",
+        ),
+        (
+            StartPurgeWaveHandler(),
+            _handler_cmd(scenario, "start-purge-wave", base_id=str(distant_base.id), intensity=0),
+            "purge intensity must be positive",
+        ),
+        (
+            PerformRitualHandler(),
+            _handler_cmd(
+                scenario,
+                "perform-ritual",
+                shrine_id=str(distant_shrine.id),
+                ritual_id=str(ritual.id),
+            ),
+            "shrine or ritual is not reachable",
+        ),
+        (
+            PerformRitualHandler(),
+            _handler_cmd(
+                scenario,
+                "perform-ritual",
+                shrine_id=str(wrong_kind.id),
+                ritual_id=str(ritual.id),
+            ),
+            "target is not a shrine",
+        ),
+        (
+            PerformRitualHandler(),
+            _handler_cmd(
+                scenario,
+                "perform-ritual",
+                shrine_id=str(shrine.id),
+                ritual_id=str(wrong_kind.id),
+            ),
+            "target is not a ritual",
+        ),
+        (
+            PerformRitualHandler(),
+            _handler_cmd(
+                scenario,
+                "perform-ritual",
+                shrine_id=str(shrine.id),
+                ritual_id=str(performed_ritual.id),
+            ),
+            "ritual already performed",
+        ),
+        (
+            ExploreDangerZoneHandler(),
+            _handler_cmd(scenario, "explore-danger-zone", zone_id=str(distant_zone.id)),
+            "danger zone is not reachable",
+        ),
+        (
+            ExploreDangerZoneHandler(),
+            _handler_cmd(scenario, "explore-danger-zone", zone_id=str(wrong_kind.id)),
+            "target is not a danger zone",
+        ),
+        (
+            DefeatBossHandler(),
+            _handler_cmd(scenario, "defeat-boss", boss_id=str(distant_boss.id)),
+            "boss is not reachable",
+        ),
+        (
+            DefeatBossHandler(),
+            _handler_cmd(scenario, "defeat-boss", boss_id=str(wrong_kind.id)),
+            "target is not a boss",
+        ),
+        (
+            DefeatBossHandler(),
+            _handler_cmd(scenario, "defeat-boss", boss_id=str(boss.id)),
+            "boss is already defeated",
+        ),
+        (
+            UnlockTreasureHandler(),
+            _handler_cmd(scenario, "unlock-treasure", treasure_id=str(wrong_kind.id)),
+            "target is not treasure",
+        ),
+        (
+            UnlockTreasureHandler(),
+            _handler_cmd(scenario, "unlock-treasure", treasure_id=str(unlocked_treasure.id)),
+            "treasure is already unlocked",
+        ),
+        (
+            UnlockTreasureHandler(),
+            _handler_cmd(
+                scenario,
+                "unlock-treasure",
+                treasure_id=str(locked_treasure.id),
+                key_id="entity_999",
+            ),
+            "required key is not carried",
+        ),
+        (
+            UnlockTreasureHandler(),
+            _handler_cmd(
+                scenario,
+                "unlock-treasure",
+                treasure_id=str(locked_treasure.id),
+                key_id=str(wrong_key.id),
+            ),
+            "wrong key",
+        ),
+        (
+            ClaimTreasureHandler(),
+            _handler_cmd(scenario, "claim-treasure", treasure_id=str(wrong_kind.id)),
+            "target is not treasure",
+        ),
+        (
+            ClaimTreasureHandler(),
+            _handler_cmd(scenario, "claim-treasure", treasure_id=str(locked_treasure.id)),
+            "treasure is locked",
+        ),
+        (
+            ClaimTreasureHandler(),
+            _handler_cmd(scenario, "claim-treasure", treasure_id=str(claimed_treasure.id)),
+            "treasure is already claimed",
+        ),
+        (
+            ClimbHandler(),
+            _handler_cmd(scenario, "climb", gate_id=str(distant_gate.id)),
+            "climbing gate is not reachable",
+        ),
+        (
+            ClimbHandler(),
+            _handler_cmd(scenario, "climb", gate_id=str(wrong_kind.id)),
+            "target is not a climbing gate",
+        ),
+        (
+            ClimbHandler(),
+            _handler_cmd(scenario, "climb", gate_id=str(gate.id)),
+            "climbing skill is too low",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    assert ExploreDangerZoneHandler().execute(
+        ctx, _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id))
+    ).ok
+    assert ExploreDangerZoneHandler().execute(
+        ctx, _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id))
+    ).ok
 
 
 async def test_attack_is_blocked_when_pvp_not_enabled():

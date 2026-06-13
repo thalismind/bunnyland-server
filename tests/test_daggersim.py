@@ -23,10 +23,14 @@ from bunnyland.core.components import CharacterComponent, HealthComponent
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext, SayHandler, TellHandler
 from bunnyland.mechanics.daggersim import (
+    AbandonGeneratedQuestHandler,
     AcceptGeneratedQuestHandler,
     AccountOpenedEvent,
     AfflictionContractedEvent,
     AfflictionCuredEvent,
+    AfflictionIncubationProgressedEvent,
+    AfflictionStigmaComponent,
+    AfflictionStigmaMarkedEvent,
     AskForWorkHandler,
     AskRumorHandler,
     AttemptPacifyHandler,
@@ -36,12 +40,16 @@ from bunnyland.mechanics.daggersim import (
     BountyComponent,
     BountyPostedEvent,
     BuyPropertyHandler,
+    BuyTravelSuppliesHandler,
+    CampHandler,
+    CampingComponent,
     CastSpellHandler,
     ClassTemplateComponent,
     CommitCrimeHandler,
     CompleteGeneratedQuestHandler,
     ContractAfflictionHandler,
     ConversationToneComponent,
+    CourtSentenceIssuedEvent,
     CreateCustomClassHandler,
     CreateSpellHandler,
     CreatureLanguageComponent,
@@ -49,10 +57,13 @@ from bunnyland.mechanics.daggersim import (
     CrimeCommittedEvent,
     CrimeRecordComponent,
     CureAfflictionHandler,
+    CureQuestHookComponent,
+    CureQuestRequestedEvent,
     CustomClassComponent,
     CustomClassCreatedEvent,
     CustomSpellComponent,
     DaggerQuestRewardComponent,
+    DebtCollectorSentEvent,
     DebtComponent,
     DepositHandler,
     DialogueApproachComponent,
@@ -66,6 +77,7 @@ from bunnyland.mechanics.daggersim import (
     DungeonRoomComponent,
     DungeonRoomDiscoveredEvent,
     EnchantedItemComponent,
+    EnchantedItemRechargedEvent,
     EnchantItemHandler,
     EndTransformationHandler,
     EnterDungeonHandler,
@@ -73,6 +85,7 @@ from bunnyland.mechanics.daggersim import (
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
+    ExtendGeneratedQuestHandler,
     FeedingNeedChangedEvent,
     FeedingNeedComponent,
     FeedingNeedConsequence,
@@ -81,13 +94,20 @@ from bunnyland.mechanics.daggersim import (
     GeneratedQuestComponent,
     GeneratedSiteInstantiatedEvent,
     HostilityComponent,
+    IdentifyIngredientHandler,
+    IngredientComponent,
+    IngredientIdentifiedEvent,
     InstitutionComponent,
+    InstitutionDuesComponent,
+    InstitutionDuesPaidEvent,
     InstitutionJoinedEvent,
+    InstitutionPromotedEvent,
     InstitutionReputationChangedEvent,
     InstitutionReputationComponent,
     InstitutionServiceComponent,
     InstitutionServiceUsedEvent,
     InvestigateRumorHandler,
+    IssueLetterOfCreditHandler,
     ItemEnchantedEvent,
     JoinInstitutionHandler,
     LanguageSkillComponent,
@@ -95,11 +115,17 @@ from bunnyland.mechanics.daggersim import (
     LeaveDungeonHandler,
     LegalReputationChangedEvent,
     LegalReputationComponent,
+    LetterOfCreditIssuedEvent,
+    LieAboutQuestHandler,
     LoanComponent,
     LoanDefaultedEvent,
     LoanDueConsequence,
     LoanIssuedEvent,
     LoanRepaidEvent,
+    LodgingComponent,
+    LodgingRentedEvent,
+    MakePotionHandler,
+    MarkAfflictionStigmaHandler,
     MarkPathHandler,
     MemberOfInstitution,
     OpenBankAccountHandler,
@@ -108,41 +134,62 @@ from bunnyland.mechanics.daggersim import (
     PacificationAttemptedEvent,
     PacifiedComponent,
     PayFineHandler,
+    PayInstitutionDuesHandler,
     PlanTravelHandler,
+    PotionMadeEvent,
+    PotionMakerComponent,
     ProceduralSiteComponent,
+    ProgressAfflictionIncubationHandler,
+    PromoteInstitutionHandler,
     PropertyDeedComponent,
     PropertyPurchasedEvent,
+    QuestAbandonedEvent,
     QuestAcceptedEvent,
     QuestCompletedEvent,
     QuestDeadlineComponent,
     QuestDeadlineConsequence,
+    QuestExtendedEvent,
     QuestFailedEvent,
     QuestGeneratedEvent,
+    QuestLieToldEvent,
+    QuestRefusedEvent,
     QuestTemplateComponent,
     RecallAnchorComponent,
     RecallAnchorSetEvent,
     RecallUsedEvent,
+    RechargeEnchantedItemHandler,
+    RechargeServiceComponent,
+    RefuseGeneratedQuestHandler,
+    RentLodgingHandler,
     RepayLoanHandler,
+    RequestCureQuestHandler,
     RequestDungeonHandler,
+    ResolveTravelInterruptionHandler,
     RestHandler,
     RestRiskComponent,
+    RetrieveSafeItemHandler,
     RumorBecameExpansionEvent,
     RumorComponent,
     RumorHeardEvent,
     RumorReliabilityComponent,
     RumorTargetComponent,
     RumorVerifiedEvent,
+    SafeStorageComponent,
+    SafeStorageUpdatedEvent,
     SearchRoomHandler,
     SecretDoorComponent,
     SecretDoorFoundEvent,
-    SetRecallHandler,
+    SendDebtCollectorHandler,
+    SentenceCrimeHandler,
     ServiceAccessChangedEvent,
     ServiceAccessComponent,
+    SetRecallHandler,
     SocialRegisterComponent,
     SocialRegisterReactor,
     SpellCastEvent,
     SpellCreatedEvent,
     SpellTemplateComponent,
+    StoreSafeItemHandler,
     StreetwiseSkillComponent,
     SupernaturalAfflictionComponent,
     TakeLoanHandler,
@@ -152,10 +199,13 @@ from bunnyland.mechanics.daggersim import (
     TravelCompletedEvent,
     TravelCompletionConsequence,
     TravelHubComponent,
+    TravelInterruptionComponent,
+    TravelInterruptionResolvedEvent,
     TravelModeComponent,
     TravelPlanComponent,
     TravelRoute,
     TravelStartedEvent,
+    TravelSuppliesBoughtEvent,
     UnrealizedLocationComponent,
     UseInstitutionServiceHandler,
     UseRecallHandler,
@@ -246,6 +296,17 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
     )
 
 
+def _dagger_room_entity(scenario, name, kind, components):
+    entity = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name=name, kind=kind), *components],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
+    )
+    return entity
+
+
 def _site(scenario):
     site = spawn_entity(
         scenario.actor.world,
@@ -263,6 +324,912 @@ def _site(scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), site.id
     )
     return site.id
+
+
+def test_daggersim_parity_handlers_mutate_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    institution = _dagger_room_entity(
+        scenario,
+        "Mages Guild",
+        "institution",
+        [
+            InstitutionComponent(name="Mages Guild"),
+            InstitutionDuesComponent(amount_due=25),
+        ],
+    )
+    character.add_relationship(MemberOfInstitution(rank="member"), institution.id)
+    refuse_quest = _dagger_room_entity(
+        scenario,
+        "rat cellar job",
+        "quest",
+        [GeneratedQuestComponent(title="rat cellar job", objective="clear rats")],
+    )
+    abandon_quest = _dagger_room_entity(
+        scenario,
+        "active job",
+        "quest",
+        [
+            GeneratedQuestComponent(
+                title="active job",
+                objective="deliver",
+                status="active",
+                accepted_by=str(scenario.character),
+            )
+        ],
+    )
+    extend_quest = _dagger_room_entity(
+        scenario,
+        "timed job",
+        "quest",
+        [
+            GeneratedQuestComponent(title="timed job", objective="return"),
+            QuestDeadlineComponent(due_at_epoch=100),
+        ],
+    )
+    lie_quest = _dagger_room_entity(
+        scenario,
+        "lie job",
+        "quest",
+        [GeneratedQuestComponent(title="lie job", objective="talk")],
+    )
+    bank = _dagger_room_entity(
+        scenario,
+        "Carrot Factors Bank",
+        "bank",
+        [BankComponent(name="Carrot Factors Bank")],
+    )
+    account = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="account", kind="bank-account"),
+            BankAccountComponent(
+                bank_id=str(bank.id), owner_id=str(scenario.character), balance=100
+            ),
+        ],
+    )
+    storage = _dagger_room_entity(scenario, "bank vault", "safe", [])
+    carried_item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="ruby ring", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried_item.id)
+    debt = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="overdue loan", kind="debt"),
+            DebtComponent(amount=10, defaulted_at_epoch=1),
+        ],
+    )
+    crime = _dagger_room_entity(
+        scenario,
+        "trespass charge",
+        "crime",
+        [CrimeRecordComponent(crime_type="trespass", region_id="moss", fine=5)],
+    )
+    lodging = _dagger_room_entity(
+        scenario,
+        "road inn",
+        "lodging",
+        [LodgingComponent(price=5)],
+    )
+    interruption = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="washed out bridge", kind="travel-interruption"),
+            TravelInterruptionComponent(reason="storm"),
+        ],
+    )
+    maker = _dagger_room_entity(
+        scenario,
+        "guild potionmaker",
+        "service",
+        [PotionMakerComponent(output_item_name="tonic")],
+    )
+    service = _dagger_room_entity(
+        scenario,
+        "guild enchanter",
+        "service",
+        [RechargeServiceComponent(charge_amount=2)],
+    )
+    enchanted = _dagger_room_entity(
+        scenario,
+        "moss charm",
+        "item",
+        [EnchantedItemComponent(spell_name="Mend", effect_type="heal", magnitude=1, cost=5)],
+    )
+    ingredient = _dagger_room_entity(
+        scenario,
+        "moon sugar",
+        "ingredient",
+        [IngredientComponent(ingredient_name="moon sugar", effect="restore")],
+    )
+    character.add_component(
+        SupernaturalAfflictionComponent(
+            affliction_type="moon-form", contracted_at_epoch=scenario.actor.epoch
+        )
+    )
+
+    calls = [
+        (
+            PromoteInstitutionHandler(),
+            "promote-institution",
+            {"institution_id": str(institution.id), "rank": "adept"},
+            InstitutionPromotedEvent,
+        ),
+        (
+            PayInstitutionDuesHandler(),
+            "pay-institution-dues",
+            {"institution_id": str(institution.id)},
+            InstitutionDuesPaidEvent,
+        ),
+        (
+            RefuseGeneratedQuestHandler(),
+            "refuse-generated-quest",
+            {"quest_id": str(refuse_quest.id)},
+            QuestRefusedEvent,
+        ),
+        (
+            AbandonGeneratedQuestHandler(),
+            "abandon-generated-quest",
+            {"quest_id": str(abandon_quest.id)},
+            QuestAbandonedEvent,
+        ),
+        (
+            ExtendGeneratedQuestHandler(),
+            "extend-generated-quest",
+            {"quest_id": str(extend_quest.id), "seconds": 50},
+            QuestExtendedEvent,
+        ),
+        (
+            LieAboutQuestHandler(),
+            "lie-about-quest",
+            {"quest_id": str(lie_quest.id), "lie": "done"},
+            QuestLieToldEvent,
+        ),
+        (
+            IssueLetterOfCreditHandler(),
+            "issue-letter-of-credit",
+            {"bank_id": str(bank.id), "amount": 30},
+            LetterOfCreditIssuedEvent,
+        ),
+        (
+            StoreSafeItemHandler(),
+            "store-safe-item",
+            {"storage_id": str(storage.id), "item_id": str(carried_item.id)},
+            SafeStorageUpdatedEvent,
+        ),
+        (
+            RetrieveSafeItemHandler(),
+            "retrieve-safe-item",
+            {"storage_id": str(storage.id), "item_id": str(carried_item.id)},
+            SafeStorageUpdatedEvent,
+        ),
+        (
+            SendDebtCollectorHandler(),
+            "send-debt-collector",
+            {"debt_id": str(debt.id)},
+            DebtCollectorSentEvent,
+        ),
+        (
+            SentenceCrimeHandler(),
+            "sentence-crime",
+            {"crime_id": str(crime.id), "sentence": "fine"},
+            CourtSentenceIssuedEvent,
+        ),
+        (
+            RentLodgingHandler(),
+            "rent-lodging",
+            {"lodging_id": str(lodging.id), "duration_seconds": 60},
+            LodgingRentedEvent,
+        ),
+        (CampHandler(), "camp", {"risk": "low"}, None),
+        (
+            BuyTravelSuppliesHandler(),
+            "buy-travel-supplies",
+            {"quantity": 3},
+            TravelSuppliesBoughtEvent,
+        ),
+        (
+            ResolveTravelInterruptionHandler(),
+            "resolve-travel-interruption",
+            {"interruption_id": str(interruption.id)},
+            TravelInterruptionResolvedEvent,
+        ),
+        (
+            MakePotionHandler(),
+            "make-potion",
+            {"maker_id": str(maker.id)},
+            PotionMadeEvent,
+        ),
+        (
+            RechargeEnchantedItemHandler(),
+            "recharge-enchanted-item",
+            {"item_id": str(enchanted.id), "service_id": str(service.id)},
+            EnchantedItemRechargedEvent,
+        ),
+        (
+            IdentifyIngredientHandler(),
+            "identify-ingredient",
+            {"ingredient_id": str(ingredient.id)},
+            IngredientIdentifiedEvent,
+        ),
+        (
+            ProgressAfflictionIncubationHandler(),
+            "progress-affliction-incubation",
+            {"stage": "active"},
+            AfflictionIncubationProgressedEvent,
+        ),
+        (
+            MarkAfflictionStigmaHandler(),
+            "mark-affliction-stigma",
+            {"region_id": "moss", "severity": 2},
+            AfflictionStigmaMarkedEvent,
+        ),
+        (
+            RequestCureQuestHandler(),
+            "request-cure-quest",
+            {"quest_id": "moon cure"},
+            CureQuestRequestedEvent,
+        ),
+    ]
+
+    for handler, command_type, payload, event_type in calls:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert result.ok, (command_type, result.reason)
+        if event_type is not None:
+            assert any(isinstance(event, event_type) for event in result.events)
+
+    assert _institution_membership(character, institution.id).rank == "adept"
+    assert str(scenario.character) in institution.get_component(InstitutionDuesComponent).paid_by
+    assert refuse_quest.get_component(GeneratedQuestComponent).status == "refused"
+    assert abandon_quest.get_component(GeneratedQuestComponent).status == "abandoned"
+    assert extend_quest.get_component(QuestDeadlineComponent).due_at_epoch == 150
+    assert lie_quest.get_component(GeneratedQuestComponent).status == "lied"
+    assert account.get_component(BankAccountComponent).balance == 70
+    assert storage.get_component(SafeStorageComponent).item_ids == ()
+    assert crime.get_component(CrimeRecordComponent).status == "sentenced:fine"
+    assert lodging.get_component(LodgingComponent).occupied_by == str(scenario.character)
+    assert scenario.actor.world.get_entity(scenario.room_a).has_component(CampingComponent)
+    assert interruption.get_component(TravelInterruptionComponent).resolved is True
+    assert enchanted.get_component(EnchantedItemComponent).cost == 3
+    assert str(scenario.character) in ingredient.get_component(IngredientComponent).identified_by
+    assert character.get_component(SupernaturalAfflictionComponent).stage == "active"
+    assert character.get_component(AfflictionStigmaComponent).severity == 2
+    assert character.get_component(CureQuestHookComponent).quest_id == "moon cure"
+    fragments = daggersim_fragments(scenario.actor.world, character)
+    assert "Institution nearby: Mages Guild (guild)." in fragments
+    assert "Institution dues: 25 (paid)." in fragments
+    assert "Generated quest: rat cellar job (refused)." in fragments
+    assert "Safe storage: 0 item(s)." in fragments
+    assert "Crime record: trespass (sentenced:fine)." in fragments
+    assert "Camp here: low." in fragments
+    assert "Potionmaker nearby: tonic." in fragments
+    assert "Recharge service nearby: +2." in fragments
+    assert "Ingredient nearby: moon sugar (identified)." in fragments
+    assert "Affliction: moon-form (active)." in fragments
+    assert "Affliction stigma: moss severity 2." in fragments
+    assert "Cure quest hook: moon-form." in fragments
+
+
+def test_daggersim_parity_handlers_reject_invalid_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    fake = "entity_999999"
+    cases = [
+        (
+            PromoteInstitutionHandler(),
+            "promote-institution",
+            {"institution_id": fake},
+            "invalid character or institution id",
+            "institution does not exist",
+        ),
+        (
+            PayInstitutionDuesHandler(),
+            "pay-institution-dues",
+            {"institution_id": fake},
+            "invalid character or institution id",
+            "institution does not exist",
+        ),
+        (
+            RefuseGeneratedQuestHandler(),
+            "refuse-generated-quest",
+            {"quest_id": fake},
+            "invalid character or quest id",
+            "quest does not exist",
+        ),
+        (
+            AbandonGeneratedQuestHandler(),
+            "abandon-generated-quest",
+            {"quest_id": fake},
+            "invalid character or quest id",
+            "quest does not exist",
+        ),
+        (
+            ExtendGeneratedQuestHandler(),
+            "extend-generated-quest",
+            {"quest_id": fake},
+            "invalid character or quest id",
+            "quest does not exist",
+        ),
+        (
+            LieAboutQuestHandler(),
+            "lie-about-quest",
+            {"quest_id": fake, "lie": "done"},
+            "invalid character, quest, or lie",
+            "quest does not exist",
+        ),
+        (
+            IssueLetterOfCreditHandler(),
+            "issue-letter-of-credit",
+            {"bank_id": fake, "amount": 1},
+            "invalid character or bank id",
+            "bank account does not exist",
+        ),
+        (
+            StoreSafeItemHandler(),
+            "store-safe-item",
+            {"storage_id": fake, "item_id": fake},
+            "invalid character, storage, or item id",
+            "storage or item does not exist",
+        ),
+        (
+            RetrieveSafeItemHandler(),
+            "retrieve-safe-item",
+            {"storage_id": fake, "item_id": fake},
+            "invalid character, storage, or item id",
+            "storage or item does not exist",
+        ),
+        (
+            SendDebtCollectorHandler(),
+            "send-debt-collector",
+            {"debt_id": fake},
+            "invalid character or debt id",
+            "debt does not exist",
+        ),
+        (
+            SentenceCrimeHandler(),
+            "sentence-crime",
+            {"crime_id": fake},
+            "invalid character or crime id",
+            "crime record does not exist",
+        ),
+        (
+            RentLodgingHandler(),
+            "rent-lodging",
+            {"lodging_id": fake},
+            "invalid character or lodging id",
+            "lodging does not exist",
+        ),
+        (
+            ResolveTravelInterruptionHandler(),
+            "resolve-travel-interruption",
+            {"interruption_id": fake},
+            "invalid character or interruption id",
+            "travel interruption does not exist",
+        ),
+        (
+            MakePotionHandler(),
+            "make-potion",
+            {"maker_id": fake},
+            "invalid character or potion maker id",
+            "potion maker does not exist",
+        ),
+        (
+            RechargeEnchantedItemHandler(),
+            "recharge-enchanted-item",
+            {"item_id": fake, "service_id": fake},
+            "invalid character, item, or service id",
+            "item or service does not exist",
+        ),
+        (
+            IdentifyIngredientHandler(),
+            "identify-ingredient",
+            {"ingredient_id": fake},
+            "invalid character or ingredient id",
+            "ingredient does not exist",
+        ),
+    ]
+
+    for handler, command_type, payload, invalid_reason, missing_reason in cases:
+        bad_character = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
+        )
+        assert bad_character.ok is False
+        assert bad_character.reason == invalid_reason
+        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert missing_target.ok is False
+        assert missing_target.reason == missing_reason
+
+    character_only_cases = [
+        (CampHandler(), "camp", {}, "invalid character id"),
+        (
+            BuyTravelSuppliesHandler(),
+            "buy-travel-supplies",
+            {"quantity": 1},
+            "invalid character id",
+        ),
+        (
+            ProgressAfflictionIncubationHandler(),
+            "progress-affliction-incubation",
+            {},
+            "invalid character id",
+        ),
+        (
+            MarkAfflictionStigmaHandler(),
+            "mark-affliction-stigma",
+            {"severity": 1},
+            "invalid character id",
+        ),
+        (RequestCureQuestHandler(), "request-cure-quest", {}, "invalid character id"),
+    ]
+    for handler, command_type, payload, reason in character_only_cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
+        )
+        assert result.ok is False
+        assert result.reason == reason
+
+    no_affliction = ProgressAfflictionIncubationHandler().execute(
+        ctx, _handler_cmd(scenario, "progress-affliction-incubation")
+    )
+    assert no_affliction.ok is False
+    assert no_affliction.reason == "character has no supernatural affliction"
+    bad_stigma = MarkAfflictionStigmaHandler().execute(
+        ctx, _handler_cmd(scenario, "mark-affliction-stigma", severity=0)
+    )
+    assert bad_stigma.ok is False
+    assert bad_stigma.reason == "stigma severity must be positive"
+    no_cure = RequestCureQuestHandler().execute(ctx, _handler_cmd(scenario, "request-cure-quest"))
+    assert no_cure.ok is False
+    assert no_cure.reason == "character has no supernatural affliction"
+
+
+def test_daggersim_parity_handlers_reject_wrong_kind_and_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    wrong_kind = spawn_entity(world, [IdentityComponent(name="plain ledger", kind="prop")])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+
+    institution = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Mages Guild", kind="institution"),
+            InstitutionComponent(name="Mages Guild"),
+            InstitutionDuesComponent(amount_due=10),
+        ],
+    )
+    paid_institution = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Paid Guild", kind="institution"),
+            InstitutionComponent(name="Paid Guild"),
+            InstitutionDuesComponent(amount_due=10, paid_by=(str(scenario.character),)),
+        ],
+    )
+    no_dues_institution = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Free Guild", kind="institution"),
+            InstitutionComponent(name="Free Guild"),
+            InstitutionDuesComponent(amount_due=0),
+        ],
+    )
+    for entity in (institution, paid_institution, no_dues_institution):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    character.add_relationship(
+        MemberOfInstitution(rank="member", since_epoch=0), paid_institution.id
+    )
+    character.add_relationship(
+        MemberOfInstitution(rank="member", since_epoch=0), no_dues_institution.id
+    )
+
+    offered_quest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="offered job", kind="quest"),
+            GeneratedQuestComponent(title="job", objective="work"),
+        ],
+    )
+    active_quest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="active job", kind="quest"),
+            GeneratedQuestComponent(
+                title="active job",
+                objective="work",
+                status="active",
+                accepted_by=str(scenario.character),
+            ),
+            QuestDeadlineComponent(due_at_epoch=10),
+        ],
+    )
+    no_deadline_quest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="timeless job", kind="quest"),
+            GeneratedQuestComponent(title="job", objective="work"),
+        ],
+    )
+    for entity in (offered_quest, active_quest, no_deadline_quest):
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), entity.id)
+
+    bank = spawn_entity(
+        world,
+        [IdentityComponent(name="bank", kind="bank"), BankComponent(name="bank")],
+    )
+    poor_account = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="poor account", kind="bank-account"),
+            BankAccountComponent(owner_id=str(scenario.character), bank_id=str(bank.id), balance=1),
+        ],
+    )
+    storage = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="safe", kind="safe"),
+            SafeStorageComponent(owner_id=str(scenario.character)),
+        ],
+    )
+    other_storage = spawn_entity(
+        world,
+        [IdentityComponent(name="other safe", kind="safe"), SafeStorageComponent(owner_id="other")],
+    )
+    carried_item = spawn_entity(
+        world,
+        [IdentityComponent(name="coin", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    loose_item = spawn_entity(
+        world,
+        [IdentityComponent(name="loose coin", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    for entity in (bank, storage, other_storage, loose_item):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried_item.id)
+
+    debt = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="debt", kind="debt"),
+            DebtComponent(amount=5, defaulted_at_epoch=0),
+        ],
+    )
+    crime = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="charge", kind="crime"),
+            CrimeRecordComponent(crime_type="trespass", region_id="moss", fine=5),
+        ],
+    )
+    lodging = spawn_entity(
+        world,
+        [IdentityComponent(name="room", kind="lodging"), LodgingComponent(occupied_by="other")],
+    )
+    distant_lodging = spawn_entity(world, [LodgingComponent()])
+    interruption = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="ambush", kind="travel-interruption"),
+            TravelInterruptionComponent(reason="ambush", resolved=True),
+        ],
+    )
+    maker = spawn_entity(
+        world,
+        [IdentityComponent(name="maker", kind="service"), PotionMakerComponent()],
+    )
+    distant_maker = spawn_entity(world, [PotionMakerComponent()])
+    enchanted = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="wand", kind="item"),
+            EnchantedItemComponent(spell_name="spark", effect_type="harm", magnitude=1, cost=5),
+        ],
+    )
+    service = spawn_entity(
+        world,
+        [IdentityComponent(name="recharge", kind="service"), RechargeServiceComponent()],
+    )
+    distant_service = spawn_entity(world, [RechargeServiceComponent()])
+    ingredient = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="moon sugar", kind="ingredient"),
+            IngredientComponent(ingredient_name="moon sugar"),
+        ],
+    )
+    identified_ingredient = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="known sugar", kind="ingredient"),
+            IngredientComponent(
+                ingredient_name="known sugar",
+                identified_by=(str(scenario.character),),
+            ),
+        ],
+    )
+    distant_ingredient = spawn_entity(world, [IngredientComponent(ingredient_name="far herb")])
+    for entity in (
+        debt,
+        crime,
+        lodging,
+        interruption,
+        maker,
+        enchanted,
+        service,
+        ingredient,
+        identified_ingredient,
+    ):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    cases = [
+        (
+            PromoteInstitutionHandler(),
+            _handler_cmd(scenario, "promote-institution", institution_id=str(institution.id)),
+            "not an institution member",
+        ),
+        (
+            PayInstitutionDuesHandler(),
+            _handler_cmd(scenario, "pay-institution-dues", institution_id=str(institution.id)),
+            "not an institution member",
+        ),
+        (
+            PayInstitutionDuesHandler(),
+            _handler_cmd(
+                scenario,
+                "pay-institution-dues",
+                institution_id=str(no_dues_institution.id),
+            ),
+            "no dues are owed",
+        ),
+        (
+            PayInstitutionDuesHandler(),
+            _handler_cmd(
+                scenario,
+                "pay-institution-dues",
+                institution_id=str(paid_institution.id),
+            ),
+            "dues already paid",
+        ),
+        (
+            RefuseGeneratedQuestHandler(),
+            _handler_cmd(scenario, "refuse-generated-quest", quest_id=str(wrong_kind.id)),
+            "target is not a generated quest",
+        ),
+        (
+            RefuseGeneratedQuestHandler(),
+            _handler_cmd(scenario, "refuse-generated-quest", quest_id=str(active_quest.id)),
+            "quest is not offered",
+        ),
+        (
+            AbandonGeneratedQuestHandler(),
+            _handler_cmd(scenario, "abandon-generated-quest", quest_id=str(wrong_kind.id)),
+            "target is not a generated quest",
+        ),
+        (
+            AbandonGeneratedQuestHandler(),
+            _handler_cmd(scenario, "abandon-generated-quest", quest_id=str(offered_quest.id)),
+            "quest is not active for character",
+        ),
+        (
+            ExtendGeneratedQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "extend-generated-quest",
+                quest_id=str(active_quest.id),
+                seconds=0,
+            ),
+            "extension must be positive",
+        ),
+        (
+            ExtendGeneratedQuestHandler(),
+            _handler_cmd(scenario, "extend-generated-quest", quest_id=str(wrong_kind.id)),
+            "target is not a generated quest",
+        ),
+        (
+            ExtendGeneratedQuestHandler(),
+            _handler_cmd(scenario, "extend-generated-quest", quest_id=str(no_deadline_quest.id)),
+            "quest has no deadline",
+        ),
+        (
+            LieAboutQuestHandler(),
+            _handler_cmd(
+                scenario,
+                "lie-about-quest",
+                quest_id=str(wrong_kind.id),
+                lie="done",
+            ),
+            "target is not a generated quest",
+        ),
+        (
+            IssueLetterOfCreditHandler(),
+            _handler_cmd(scenario, "issue-letter-of-credit", bank_id=str(bank.id), amount=0),
+            "letter amount must be positive",
+        ),
+        (
+            IssueLetterOfCreditHandler(),
+            _handler_cmd(scenario, "issue-letter-of-credit", bank_id=str(bank.id), amount=2),
+            "insufficient bank balance",
+        ),
+        (
+            StoreSafeItemHandler(),
+            _handler_cmd(
+                scenario,
+                "store-safe-item",
+                storage_id=str(storage.id),
+                item_id=str(loose_item.id),
+            ),
+            "item is not carried",
+        ),
+        (
+            StoreSafeItemHandler(),
+            _handler_cmd(
+                scenario,
+                "store-safe-item",
+                storage_id=str(other_storage.id),
+                item_id=str(carried_item.id),
+            ),
+            "safe storage belongs to someone else",
+        ),
+        (
+            RetrieveSafeItemHandler(),
+            _handler_cmd(
+                scenario,
+                "retrieve-safe-item",
+                storage_id=str(wrong_kind.id),
+                item_id=str(loose_item.id),
+            ),
+            "target is not safe storage",
+        ),
+        (
+            RetrieveSafeItemHandler(),
+            _handler_cmd(
+                scenario,
+                "retrieve-safe-item",
+                storage_id=str(other_storage.id),
+                item_id=str(loose_item.id),
+            ),
+            "safe storage belongs to someone else",
+        ),
+        (
+            RetrieveSafeItemHandler(),
+            _handler_cmd(
+                scenario,
+                "retrieve-safe-item",
+                storage_id=str(storage.id),
+                item_id=str(loose_item.id),
+            ),
+            "item is not in safe storage",
+        ),
+        (
+            SendDebtCollectorHandler(),
+            _handler_cmd(scenario, "send-debt-collector", debt_id=str(wrong_kind.id)),
+            "target is not debt",
+        ),
+        (
+            SentenceCrimeHandler(),
+            _handler_cmd(scenario, "sentence-crime", crime_id=str(wrong_kind.id)),
+            "target is not a crime record",
+        ),
+        (
+            RentLodgingHandler(),
+            _handler_cmd(scenario, "rent-lodging", lodging_id=str(lodging.id), duration_seconds=0),
+            "lodging duration must be positive",
+        ),
+        (
+            RentLodgingHandler(),
+            _handler_cmd(scenario, "rent-lodging", lodging_id=str(distant_lodging.id)),
+            "lodging is not reachable",
+        ),
+        (
+            RentLodgingHandler(),
+            _handler_cmd(scenario, "rent-lodging", lodging_id=str(wrong_kind.id)),
+            "target is not lodging",
+        ),
+        (
+            RentLodgingHandler(),
+            _handler_cmd(scenario, "rent-lodging", lodging_id=str(lodging.id)),
+            "lodging is occupied",
+        ),
+        (
+            BuyTravelSuppliesHandler(),
+            _handler_cmd(scenario, "buy-travel-supplies", quantity=0),
+            "supply quantity must be positive",
+        ),
+        (
+            ResolveTravelInterruptionHandler(),
+            _handler_cmd(
+                scenario,
+                "resolve-travel-interruption",
+                interruption_id=str(wrong_kind.id),
+            ),
+            "target is not a travel interruption",
+        ),
+        (
+            ResolveTravelInterruptionHandler(),
+            _handler_cmd(
+                scenario,
+                "resolve-travel-interruption",
+                interruption_id=str(interruption.id),
+            ),
+            "travel interruption is already resolved",
+        ),
+        (
+            MakePotionHandler(),
+            _handler_cmd(scenario, "make-potion", maker_id=str(distant_maker.id)),
+            "potion maker is not reachable",
+        ),
+        (
+            MakePotionHandler(),
+            _handler_cmd(scenario, "make-potion", maker_id=str(wrong_kind.id)),
+            "target is not a potion maker",
+        ),
+        (
+            RechargeEnchantedItemHandler(),
+            _handler_cmd(
+                scenario,
+                "recharge-enchanted-item",
+                item_id=str(enchanted.id),
+                service_id=str(distant_service.id),
+            ),
+            "item or service is not reachable",
+        ),
+        (
+            RechargeEnchantedItemHandler(),
+            _handler_cmd(
+                scenario,
+                "recharge-enchanted-item",
+                item_id=str(wrong_kind.id),
+                service_id=str(service.id),
+            ),
+            "target item is not enchanted",
+        ),
+        (
+            RechargeEnchantedItemHandler(),
+            _handler_cmd(
+                scenario,
+                "recharge-enchanted-item",
+                item_id=str(enchanted.id),
+                service_id=str(wrong_kind.id),
+            ),
+            "target is not a recharge service",
+        ),
+        (
+            IdentifyIngredientHandler(),
+            _handler_cmd(scenario, "identify-ingredient", ingredient_id=str(distant_ingredient.id)),
+            "ingredient is not reachable",
+        ),
+        (
+            IdentifyIngredientHandler(),
+            _handler_cmd(scenario, "identify-ingredient", ingredient_id=str(wrong_kind.id)),
+            "target is not an ingredient",
+        ),
+        (
+            IdentifyIngredientHandler(),
+            _handler_cmd(
+                scenario,
+                "identify-ingredient",
+                ingredient_id=str(identified_ingredient.id),
+            ),
+            "ingredient already identified",
+        ),
+    ]
+
+    assert poor_account.has_component(BankAccountComponent)
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
 
 
 def _rumor(scenario, site_id, *, reliability=1.0):

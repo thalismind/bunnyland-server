@@ -103,6 +103,15 @@ Scrap junk for parts:
 Scrapped output uses the same `ResourceStackComponent` as colony-sim, so recipes can use
 resources found in the wasteland.
 
+Mark a hotspot, use a suppressant, harvest a sample, and study it:
+
+```text
+!mark-hotspot source_id="cracked isotope case" label="hot hallway"
+!use-suppressant item_id="rad foam"
+!harvest-sample sample_type="glowing moss"
+!study-sample sample_id="glowing moss sample"
+```
+
 ## Old-world tech
 
 The wasteland is littered with ruined pre-war devices. Scavengers can recover them in two
@@ -150,6 +159,26 @@ settlement salvage:
 !power-generator generator_id="patched generator"
 ```
 
+Unlock crates, study artifacts, claim faction salvage, and repair field gear:
+
+```text
+!unlock-crate crate_id="sealed ammo crate"
+!study-wasteland-artifact artifact_id="vault relic"
+!claim-faction-salvage salvage_id="Minutemen cache"
+!install-mod item_id="pipe rifle" schematic_id="scope schematic"
+!field-repair item_id="patched rad poncho" kit_id="sewing kit"
+```
+
+Brew chems and activate wasteland infrastructure:
+
+```text
+!brew-chem recipe_id="rad tonic recipe"
+!activate-beacon beacon_id="settlement beacon"
+!open-trader-route route_id="south road caravan"
+!increase-raider-pressure target_id="Red Rocket burrow" amount=2
+!boot-terminal terminal_id="vault terminal" access_level=2
+```
+
 ## Example loop
 
 ```text
@@ -160,6 +189,8 @@ settlement salvage:
 !salvage-settlement settlement_id="Red Rocket burrow"
 !scavenge site_id="pharmacy backroom cache"
 !scrap-item item_id="bent pressure cooker"
+!mark-hotspot source_id="cracked isotope case" label="hot hallway"
+!harvest-sample sample_type="glowing moss"
 !decontaminate target_id="Mara" station_id="decon arch"
 !craft recipe_id=pipe-filter
 ```

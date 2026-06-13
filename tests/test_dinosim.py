@@ -40,10 +40,15 @@ from bunnyland.mechanics.dinosim import (
     BaitComponent,
     BaitSetEvent,
     BoneComponent,
+    BroodEggHandler,
+    BroodingComponent,
+    BroodingStartedEvent,
     BuildEnclosureHandler,
     CallForHelpHandler,
     CalmCreatureHandler,
+    CareForJuvenileHandler,
     ChargeComponent,
+    CleanFossilHandler,
     CloneCandidateComponent,
     CollectEggHandler,
     CommandCompanionHandler,
@@ -51,6 +56,8 @@ from bunnyland.mechanics.dinosim import (
     CommandTrainedEvent,
     CompanionCommandedEvent,
     CompanionComponent,
+    ContainmentPanicComponent,
+    ContainmentPanicStartedEvent,
     ContainmentProtocolComponent,
     ContainmentTriggeredEvent,
     CreatureAttackComponent,
@@ -59,6 +66,7 @@ from bunnyland.mechanics.dinosim import (
     CreatureChargedEvent,
     CreatureEscapedEvent,
     CreatureFedEvent,
+    CreatureImprintedEvent,
     CreatureMilkComponent,
     CreatureMountedEvent,
     CreatureNeedComponent,
@@ -79,12 +87,15 @@ from bunnyland.mechanics.dinosim import (
     DriveOffPredatorHandler,
     EggComponent,
     EggHatchedEvent,
+    EggInspectedEvent,
+    EggInspectionComponent,
     EggLaidEvent,
     EnclosureBuiltEvent,
     EnclosureComponent,
     EscapeRiskComponent,
     EscapeRiskConsequence,
     EvacuateRoomHandler,
+    ExcavateFossilHandler,
     ExtractAncientSampleHandler,
     FeedCreatureHandler,
     FeedingPenComponent,
@@ -95,29 +106,43 @@ from bunnyland.mechanics.dinosim import (
     FertilityComponent,
     FertilizeEggHandler,
     FightCreatureHandler,
+    FossilCleanedEvent,
+    FossilExcavatedEvent,
     FossilFragmentComponent,
     FossilIdentifiedEvent,
+    FossilStabilizedEvent,
+    FossilSurveyComponent,
+    FossilSurveyedEvent,
     GateComponent,
     GateReinforcedEvent,
     GrappleComponent,
     GuardAnimalComponent,
     GuardAssignedEvent,
     GuardBehaviorComponent,
-    HerdComponent,
-    HerdTrackedEvent,
     HarvestProductHandler,
     HatchEggHandler,
+    HerdComponent,
+    HerdTrackedEvent,
     HiddenFromCreatureEvent,
     HideComponent,
     HideFromCreatureHandler,
     HuntBehaviorComponent,
     IdentifyFossilHandler,
+    ImprintComponent,
+    ImprintCreatureHandler,
     IncubateEggHandler,
     IncubationComponent,
     IncubationConsequence,
+    IncubationTemperatureSetEvent,
+    InspectEggHandler,
+    JuvenileCareComponent,
+    JuvenileCareGivenEvent,
     KaijuArrivedEvent,
     KaijuComponent,
     KaijuSpawnSpec,
+    LabIncubateEggHandler,
+    LabIncubationComponent,
+    LabIncubationStartedEvent,
     LayEggHandler,
     LockPenHandler,
     MarkTerritoryHandler,
@@ -147,28 +172,36 @@ from bunnyland.mechanics.dinosim import (
     RoarComponent,
     RoomEvacuatedEvent,
     SetBaitHandler,
+    SetIncubationTemperatureHandler,
     SettlementDamageComponent,
     SettlementDamageRepairedEvent,
     SignalArmyHandler,
     SpeciesComponent,
     SpeciesIdentificationComponent,
+    StabilizeFossilHandler,
     StampedeStartedEvent,
     StockFeedHandler,
+    StudyWaterCreatureHandler,
+    SurveyFossilHandler,
     TameCreatureHandler,
     TamingProgressedEvent,
     TargetWeakPointHandler,
+    TerritoryComponent,
+    TerritoryMarkedEvent,
     ToxinComponent,
     TrackComponent,
     TrackCreatureHandler,
     TrackHerdHandler,
-    TerritoryComponent,
-    TerritoryMarkedEvent,
     TrainCommandHandler,
     TrainingComponent,
     TrampleComponent,
     TranquilizeCreatureHandler,
     TranquilizerComponent,
     TriggerContainmentHandler,
+    TriggerContainmentPanicHandler,
+    WaterCreatureComponent,
+    WaterCreatureStudiedEvent,
+    WaterStudyComponent,
     WeakPointComponent,
     WeakPointHitEvent,
     _consume_inventory_resource,
@@ -277,6 +310,425 @@ def _collect_rejections(actor) -> list[CommandRejectedEvent]:
     rejects: list[CommandRejectedEvent] = []
     actor.bus.subscribe(CommandRejectedEvent, rejects.append)
     return rejects
+
+
+def test_dinosim_parity_handlers_mutate_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    def room_entity(name, kind, components):
+        entity = spawn_entity(
+            scenario.actor.world,
+            [IdentityComponent(name=name, kind=kind), *components],
+        )
+        scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+            Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
+        )
+        return entity
+
+    fossil = room_entity(
+        "amber bone shard",
+        "fossil",
+        [
+            FossilFragmentComponent(species_name="velociraptor"),
+            FossilSurveyComponent(),
+        ],
+    )
+    egg = room_entity(
+        "velociraptor egg",
+        "egg",
+        [
+            EggComponent(
+                species_name="velociraptor",
+                laid_at_epoch=scenario.actor.epoch,
+                fertilized=True,
+            ),
+            IncubationComponent(started_at_epoch=scenario.actor.epoch),
+        ],
+    )
+    creature = room_entity(
+        "clever raptor",
+        "creature",
+        [
+            CharacterComponent(species="velociraptor"),
+            DinosaurComponent(species_name="velociraptor"),
+            WaterCreatureComponent(species_name="velociraptor"),
+        ],
+    )
+    enclosure = room_entity(
+        "Fern Paddock",
+        "enclosure",
+        [EnclosureComponent(name="Fern Paddock")],
+    )
+
+    calls = [
+        (
+            SurveyFossilHandler(),
+            "survey-fossil",
+            {"fossil_id": str(fossil.id)},
+            FossilSurveyedEvent,
+        ),
+        (
+            ExcavateFossilHandler(),
+            "excavate-fossil",
+            {"fossil_id": str(fossil.id), "progress": 0.6},
+            FossilExcavatedEvent,
+        ),
+        (
+            CleanFossilHandler(),
+            "clean-fossil",
+            {"fossil_id": str(fossil.id)},
+            FossilCleanedEvent,
+        ),
+        (
+            StabilizeFossilHandler(),
+            "stabilize-fossil",
+            {"fossil_id": str(fossil.id)},
+            FossilStabilizedEvent,
+        ),
+        (
+            LabIncubateEggHandler(),
+            "lab-incubate-egg",
+            {"egg_id": str(egg.id), "lab_id": "Amber Hatchery Lab"},
+            LabIncubationStartedEvent,
+        ),
+        (
+            InspectEggHandler(),
+            "inspect-egg",
+            {"egg_id": str(egg.id), "viability": 0.9},
+            EggInspectedEvent,
+        ),
+        (
+            ImprintCreatureHandler(),
+            "imprint-creature",
+            {"creature_id": str(creature.id), "bond": 2},
+            CreatureImprintedEvent,
+        ),
+        (
+            CareForJuvenileHandler(),
+            "care-for-juvenile",
+            {"creature_id": str(creature.id), "care": 2},
+            JuvenileCareGivenEvent,
+        ),
+        (
+            StudyWaterCreatureHandler(),
+            "study-water-creature",
+            {"creature_id": str(creature.id)},
+            WaterCreatureStudiedEvent,
+        ),
+        (
+            BroodEggHandler(),
+            "brood-egg",
+            {"egg_id": str(egg.id), "warmth": 2},
+            BroodingStartedEvent,
+        ),
+        (
+            SetIncubationTemperatureHandler(),
+            "set-incubation-temperature",
+            {"egg_id": str(egg.id), "temperature": 31},
+            IncubationTemperatureSetEvent,
+        ),
+        (
+            TriggerContainmentPanicHandler(),
+            "trigger-containment-panic",
+            {"enclosure_id": str(enclosure.id), "severity": 2},
+            ContainmentPanicStartedEvent,
+        ),
+    ]
+
+    for handler, command_type, payload, event_type in calls:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert result.ok, (command_type, result.reason)
+        assert any(isinstance(event, event_type) for event in result.events)
+
+    survey = fossil.get_component(FossilSurveyComponent)
+    assert str(scenario.character) in survey.surveyed_by
+    assert survey.excavation_progress == 0.6
+    assert fossil.get_component(FossilFragmentComponent).cleaned is True
+    assert survey.stabilized is True
+    assert egg.get_component(LabIncubationComponent).active is True
+    assert egg.get_component(EggInspectionComponent).viability == 0.9
+    assert creature.get_component(ImprintComponent).bond == 2
+    assert creature.get_component(JuvenileCareComponent).care_level == 2
+    assert str(scenario.character) in creature.get_component(WaterStudyComponent).studied_by
+    assert egg.get_component(BroodingComponent).warmth == 2
+    assert egg.get_component(IncubationComponent).temperature == 31
+    assert enclosure.get_component(ContainmentPanicComponent).severity == 2
+    fragments = dinosim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+    assert "Fossil survey amber bone shard: stabilized." in fragments
+    assert "Nearby egg: velociraptor egg (velociraptor, incubating, 31 C)." in fragments
+    assert "Lab incubation active for velociraptor egg: Amber Hatchery Lab." in fragments
+    assert "Egg inspection for velociraptor egg: viability 0.9." in fragments
+    assert "Imprinted creature: clever raptor bond 2." in fragments
+    assert "Juvenile care for clever raptor: 2." in fragments
+    assert "Water creature clever raptor: velociraptor in shallows." in fragments
+    assert "Water study clever raptor: studied." in fragments
+    assert "Brooding velociraptor egg: warmth 2." in fragments
+    assert "Fern Paddock containment panic: severity 2." in fragments
+
+
+def test_dinosim_parity_handlers_reject_invalid_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    fake = "entity_999999"
+    cases = [
+        (
+            SurveyFossilHandler(),
+            "survey-fossil",
+            {"fossil_id": fake},
+            "invalid character or fossil id",
+            "fossil is not reachable",
+        ),
+        (
+            ExcavateFossilHandler(),
+            "excavate-fossil",
+            {"fossil_id": fake},
+            "invalid character or fossil id",
+            "fossil is not reachable",
+        ),
+        (
+            CleanFossilHandler(),
+            "clean-fossil",
+            {"fossil_id": fake},
+            "invalid character or fossil id",
+            "fossil is not reachable",
+        ),
+        (
+            StabilizeFossilHandler(),
+            "stabilize-fossil",
+            {"fossil_id": fake},
+            "invalid character or fossil id",
+            "fossil is not reachable",
+        ),
+        (
+            LabIncubateEggHandler(),
+            "lab-incubate-egg",
+            {"egg_id": fake},
+            "invalid character or egg id",
+            "egg does not exist",
+        ),
+        (
+            InspectEggHandler(),
+            "inspect-egg",
+            {"egg_id": fake},
+            "invalid character or egg id",
+            "egg is not reachable",
+        ),
+        (
+            ImprintCreatureHandler(),
+            "imprint-creature",
+            {"creature_id": fake},
+            "invalid character or creature id",
+            "creature is not reachable",
+        ),
+        (
+            CareForJuvenileHandler(),
+            "care-for-juvenile",
+            {"creature_id": fake},
+            "invalid character or creature id",
+            "creature is not reachable",
+        ),
+        (
+            StudyWaterCreatureHandler(),
+            "study-water-creature",
+            {"creature_id": fake},
+            "invalid character or creature id",
+            "water creature is not reachable",
+        ),
+        (
+            BroodEggHandler(),
+            "brood-egg",
+            {"egg_id": fake},
+            "invalid character or egg id",
+            "egg is not reachable",
+        ),
+        (
+            SetIncubationTemperatureHandler(),
+            "set-incubation-temperature",
+            {"egg_id": fake},
+            "invalid character or egg id",
+            "egg is not incubating",
+        ),
+        (
+            TriggerContainmentPanicHandler(),
+            "trigger-containment-panic",
+            {"enclosure_id": fake},
+            "invalid character or enclosure id",
+            "enclosure is not reachable",
+        ),
+    ]
+
+    for handler, command_type, payload, invalid_reason, missing_reason in cases:
+        bad_character = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
+        )
+        assert bad_character.ok is False
+        assert bad_character.reason == invalid_reason
+        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert missing_target.ok is False
+        assert missing_target.reason == missing_reason
+
+
+def test_dinosim_parity_handlers_reject_reachable_wrong_kind_and_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    wrong_kind = spawn_entity(world, [IdentityComponent(name="plain fern", kind="prop")])
+    fossil = spawn_entity(
+        world,
+        [IdentityComponent(name="raw fossil", kind="fossil"), FossilFragmentComponent()],
+    )
+    egg = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="raptor egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True),
+        ],
+    )
+    incubating_egg = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="warm egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True),
+            IncubationComponent(started_at_epoch=0),
+        ],
+    )
+    creature = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="young raptor", kind="creature"),
+            DinosaurComponent(species_name="raptor"),
+            CharacterComponent(species="raptor"),
+        ],
+    )
+    water_creature = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="swimmer", kind="creature"),
+            WaterCreatureComponent(species_name="plesiosaur"),
+        ],
+    )
+    enclosure = spawn_entity(
+        world,
+        [IdentityComponent(name="paddock", kind="enclosure"), EnclosureComponent()],
+    )
+    for entity in (wrong_kind, fossil, egg, incubating_egg, creature, water_creature, enclosure):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    cases = [
+        (
+            SurveyFossilHandler(),
+            _handler_cmd(scenario, "survey-fossil", fossil_id=str(wrong_kind.id)),
+            "fossil is not reachable",
+        ),
+        (
+            ExcavateFossilHandler(),
+            _handler_cmd(scenario, "excavate-fossil", fossil_id=str(wrong_kind.id)),
+            "fossil is not reachable",
+        ),
+        (
+            CleanFossilHandler(),
+            _handler_cmd(scenario, "clean-fossil", fossil_id=str(wrong_kind.id)),
+            "fossil is not reachable",
+        ),
+        (
+            StabilizeFossilHandler(),
+            _handler_cmd(scenario, "stabilize-fossil", fossil_id=str(wrong_kind.id)),
+            "fossil is not reachable",
+        ),
+        (
+            InspectEggHandler(),
+            _handler_cmd(scenario, "inspect-egg", egg_id=str(wrong_kind.id)),
+            "egg is not reachable",
+        ),
+        (
+            ImprintCreatureHandler(),
+            _handler_cmd(scenario, "imprint-creature", creature_id=str(wrong_kind.id)),
+            "creature is not reachable",
+        ),
+        (
+            CareForJuvenileHandler(),
+            _handler_cmd(scenario, "care-for-juvenile", creature_id=str(wrong_kind.id)),
+            "creature is not reachable",
+        ),
+        (
+            StudyWaterCreatureHandler(),
+            _handler_cmd(scenario, "study-water-creature", creature_id=str(creature.id)),
+            "water creature is not reachable",
+        ),
+        (
+            BroodEggHandler(),
+            _handler_cmd(scenario, "brood-egg", egg_id=str(wrong_kind.id)),
+            "egg is not reachable",
+        ),
+        (
+            SetIncubationTemperatureHandler(),
+            _handler_cmd(scenario, "set-incubation-temperature", egg_id=str(egg.id)),
+            "egg is not incubating",
+        ),
+        (
+            TriggerContainmentPanicHandler(),
+            _handler_cmd(scenario, "trigger-containment-panic", enclosure_id=str(wrong_kind.id)),
+            "enclosure is not reachable",
+        ),
+    ]
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+    assert SurveyFossilHandler().execute(
+        ctx, _handler_cmd(scenario, "survey-fossil", fossil_id=str(fossil.id))
+    ).ok
+    fossil.remove_component(FossilSurveyComponent)
+    assert ExcavateFossilHandler().execute(
+        ctx, _handler_cmd(scenario, "excavate-fossil", fossil_id=str(fossil.id))
+    ).ok
+    fossil.remove_component(FossilSurveyComponent)
+    assert StabilizeFossilHandler().execute(
+        ctx, _handler_cmd(scenario, "stabilize-fossil", fossil_id=str(fossil.id))
+    ).ok
+    assert InspectEggHandler().execute(
+        ctx, _handler_cmd(scenario, "inspect-egg", egg_id=str(egg.id), viability=0.5)
+    ).ok
+    assert ImprintCreatureHandler().execute(
+        ctx, _handler_cmd(scenario, "imprint-creature", creature_id=str(creature.id), bond=0.5)
+    ).ok
+    assert CareForJuvenileHandler().execute(
+        ctx, _handler_cmd(scenario, "care-for-juvenile", creature_id=str(creature.id), care=0.5)
+    ).ok
+    assert StudyWaterCreatureHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "study-water-creature", creature_id=str(water_creature.id)),
+    ).ok
+    assert BroodEggHandler().execute(
+        ctx, _handler_cmd(scenario, "brood-egg", egg_id=str(incubating_egg.id), warmth=1)
+    ).ok
+    assert SetIncubationTemperatureHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "set-incubation-temperature",
+            egg_id=str(incubating_egg.id),
+            temperature=29,
+        ),
+    ).ok
+    assert TriggerContainmentPanicHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "trigger-containment-panic",
+            enclosure_id=str(enclosure.id),
+            severity=1,
+        ),
+    ).ok
 
 
 def test_entity_room_id_returns_containing_room_or_none():

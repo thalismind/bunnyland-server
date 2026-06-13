@@ -111,6 +111,12 @@ class InstitutionServiceComponent(Component):
 
 
 @dataclass(frozen=True)
+class InstitutionDuesComponent(Component):
+    amount_due: int = 0
+    paid_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class MemberOfInstitution(Edge):
     rank: str = "member"
     since_epoch: int = 0
@@ -174,6 +180,27 @@ class DebtComponent(Component):
 
 
 @dataclass(frozen=True)
+class LetterOfCreditComponent(Component):
+    bank_id: str
+    owner_id: str
+    amount: int
+    redeemed: bool = False
+
+
+@dataclass(frozen=True)
+class SafeStorageComponent(Component):
+    owner_id: str
+    item_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DebtCollectorComponent(Component):
+    borrower_id: str
+    debt_id: str
+    pressure: int = 1
+
+
+@dataclass(frozen=True)
 class LawRegionComponent(Component):
     region_id: str
     fines: dict[str, int]
@@ -229,6 +256,31 @@ class OwnsProperty(Edge):
 
 
 @dataclass(frozen=True)
+class LodgingComponent(Component):
+    price: int = 5
+    occupied_by: str | None = None
+    paid_until_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class CampingComponent(Component):
+    camped_by: str | None = None
+    risk: str = "low"
+    started_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class TravelSupplyComponent(Component):
+    quantity: int = 0
+
+
+@dataclass(frozen=True)
+class TravelInterruptionComponent(Component):
+    reason: str = "weather"
+    resolved: bool = False
+
+
+@dataclass(frozen=True)
 class ClassTemplateComponent(Component):
     class_name: str
     primary_skills: tuple[str, ...] = ()
@@ -278,6 +330,24 @@ class EnchantedItemComponent(Component):
 
 
 @dataclass(frozen=True)
+class PotionMakerComponent(Component):
+    recipe_name: str = "tonic"
+    output_item_name: str = "tonic"
+
+
+@dataclass(frozen=True)
+class RechargeServiceComponent(Component):
+    charge_amount: int = 1
+
+
+@dataclass(frozen=True)
+class IngredientComponent(Component):
+    ingredient_name: str
+    effect: str = ""
+    identified_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class LanguageSkillComponent(Component):
     languages: dict[str, int]
 
@@ -305,6 +375,19 @@ class SupernaturalAfflictionComponent(Component):
     affliction_type: str
     contracted_at_epoch: int
     stage: str = "incubating"
+    incubation_ends_epoch: int | None = None
+
+
+@dataclass(frozen=True)
+class AfflictionStigmaComponent(Component):
+    region_id: str = ""
+    severity: int = 1
+
+
+@dataclass(frozen=True)
+class CureQuestHookComponent(Component):
+    affliction_type: str
+    quest_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -463,6 +546,16 @@ class InstitutionServiceUsedEvent(DomainEvent):
     output_item_id: str | None = None
 
 
+class InstitutionPromotedEvent(DomainEvent):
+    institution_id: str
+    rank: str
+
+
+class InstitutionDuesPaidEvent(DomainEvent):
+    institution_id: str
+    amount: int
+
+
 class QuestGeneratedEvent(DomainEvent):
     quest_id: str
     title: str
@@ -483,6 +576,26 @@ class QuestCompletedEvent(DomainEvent):
 class QuestFailedEvent(DomainEvent):
     quest_id: str
     title: str
+
+
+class QuestRefusedEvent(DomainEvent):
+    quest_id: str
+    title: str
+
+
+class QuestAbandonedEvent(DomainEvent):
+    quest_id: str
+    title: str
+
+
+class QuestExtendedEvent(DomainEvent):
+    quest_id: str
+    due_at_epoch: int
+
+
+class QuestLieToldEvent(DomainEvent):
+    quest_id: str
+    lie: str
 
 
 class AccountOpenedEvent(DomainEvent):
@@ -521,6 +634,22 @@ class LoanDefaultedEvent(DomainEvent):
     amount: int
 
 
+class LetterOfCreditIssuedEvent(DomainEvent):
+    letter_id: str
+    amount: int
+
+
+class SafeStorageUpdatedEvent(DomainEvent):
+    storage_id: str
+    item_id: str
+    stored: bool
+
+
+class DebtCollectorSentEvent(DomainEvent):
+    collector_id: str
+    borrower_id: str
+
+
 class CrimeCommittedEvent(DomainEvent):
     crime_id: str
     crime_type: str
@@ -535,6 +664,12 @@ class BountyPostedEvent(DomainEvent):
 class FinePaidEvent(DomainEvent):
     crime_id: str
     amount: int
+
+
+class CourtSentenceIssuedEvent(DomainEvent):
+    crime_id: str
+    sentence: str
+    fine: int
 
 
 class InstitutionReputationChangedEvent(DomainEvent):
@@ -558,6 +693,26 @@ class PropertyPurchasedEvent(DomainEvent):
     price: int
 
 
+class LodgingRentedEvent(DomainEvent):
+    lodging_id: str
+    paid_until_epoch: int
+
+
+class CampMadeEvent(DomainEvent):
+    camp_room_id: str
+    risk: str
+
+
+class TravelSuppliesBoughtEvent(DomainEvent):
+    supply_id: str
+    quantity: int
+
+
+class TravelInterruptionResolvedEvent(DomainEvent):
+    interruption_id: str
+    reason: str
+
+
 class CustomClassCreatedEvent(DomainEvent):
     class_name: str
     primary_skills: tuple[str, ...] = ()
@@ -578,6 +733,21 @@ class ItemEnchantedEvent(DomainEvent):
     spell_name: str
     effect_type: str
     magnitude: float
+
+
+class PotionMadeEvent(DomainEvent):
+    potion_id: str
+    potion_name: str
+
+
+class EnchantedItemRechargedEvent(DomainEvent):
+    item_id: str
+    cost: int
+
+
+class IngredientIdentifiedEvent(DomainEvent):
+    ingredient_id: str
+    effect: str
 
 
 class SpellCastEvent(DomainEvent):
@@ -604,6 +774,21 @@ class CreaturePacifiedEvent(DomainEvent):
 
 class AfflictionContractedEvent(DomainEvent):
     affliction_type: str
+
+
+class AfflictionIncubationProgressedEvent(DomainEvent):
+    affliction_type: str
+    stage: str
+
+
+class AfflictionStigmaMarkedEvent(DomainEvent):
+    region_id: str
+    severity: int
+
+
+class CureQuestRequestedEvent(DomainEvent):
+    affliction_type: str
+    quest_id: str | None = None
 
 
 class FeedingNeedChangedEvent(DomainEvent):
@@ -679,9 +864,7 @@ def _name(entity: Entity) -> str:
     return str(entity.id)
 
 
-def _adjust_institution_reputation(
-    character: Entity, institution_id: EntityId, delta: int
-) -> int:
+def _adjust_institution_reputation(character: Entity, institution_id: EntityId, delta: int) -> int:
     current = (
         character.get_component(InstitutionReputationComponent)
         if character.has_component(InstitutionReputationComponent)
@@ -747,12 +930,15 @@ class ExpandSiteHandler:
             if site.has_component(ExpansionHookComponent)
             else None
         )
-        generator_id = str(
-            command.payload.get(
-                "generator_id",
-                hook.generator_plugin_id if hook is not None else procedural.generator_id or "",
-            )
-        ).strip() or None
+        generator_id = (
+            str(
+                command.payload.get(
+                    "generator_id",
+                    hook.generator_plugin_id if hook is not None else procedural.generator_id or "",
+                )
+            ).strip()
+            or None
+        )
         trigger = str(
             command.payload.get("trigger", hook.trigger if hook is not None else "manual")
         )
@@ -1073,7 +1259,7 @@ class JoinInstitutionHandler:
                     institution_id=str(institution_id),
                     score=reputation,
                 )
-            )
+            ),
         )
 
 
@@ -1150,6 +1336,92 @@ class UseInstitutionServiceHandler:
                     target_ids=(str(institution_id),),
                     institution_id=str(institution_id),
                     score=reputation,
+                )
+            ),
+        )
+
+
+class PromoteInstitutionHandler:
+    command_type = "promote-institution"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        institution_id = parse_entity_id(command.payload.get("institution_id"))
+        rank = str(command.payload.get("rank", "adept")).strip() or "adept"
+        if character_id is None or institution_id is None:
+            return rejected("invalid character or institution id")
+        if not ctx.world.has_entity(institution_id):
+            return rejected("institution does not exist")
+        character = ctx.entity(character_id)
+        membership = _institution_membership(character, institution_id)
+        if membership is None:
+            return rejected("not an institution member")
+        character.remove_relationship(MemberOfInstitution, institution_id)
+        character.add_relationship(
+            MemberOfInstitution(rank=rank, since_epoch=membership.since_epoch),
+            institution_id,
+        )
+        reputation = _adjust_institution_reputation(character, institution_id, 2)
+        return ok(
+            InstitutionPromotedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(institution_id),),
+                    institution_id=str(institution_id),
+                    rank=rank,
+                )
+            ),
+            InstitutionReputationChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(institution_id),),
+                    institution_id=str(institution_id),
+                    score=reputation,
+                )
+            ),
+        )
+
+
+class PayInstitutionDuesHandler:
+    command_type = "pay-institution-dues"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        institution_id = parse_entity_id(command.payload.get("institution_id"))
+        if character_id is None or institution_id is None:
+            return rejected("invalid character or institution id")
+        if not ctx.world.has_entity(institution_id):
+            return rejected("institution does not exist")
+        character = ctx.entity(character_id)
+        if _institution_membership(character, institution_id) is None:
+            return rejected("not an institution member")
+        institution = ctx.entity(institution_id)
+        dues = (
+            institution.get_component(InstitutionDuesComponent)
+            if institution.has_component(InstitutionDuesComponent)
+            else InstitutionDuesComponent(amount_due=int(command.payload.get("amount", 0)))
+        )
+        if dues.amount_due <= 0:
+            return rejected("no dues are owed")
+        if str(character_id) in dues.paid_by:
+            return rejected("dues already paid")
+        replace_component(
+            institution,
+            replace(dues, paid_by=tuple(sorted((*dues.paid_by, str(character_id))))),
+        )
+        return ok(
+            InstitutionDuesPaidEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(institution_id),),
+                    institution_id=str(institution_id),
+                    amount=dues.amount_due,
                 )
             )
         )
@@ -1287,6 +1559,133 @@ class CompleteGeneratedQuestHandler:
                     quest_id=str(quest_id),
                     title=component.title,
                     reward_item_id=str(item.id),
+                )
+            )
+        )
+
+
+class RefuseGeneratedQuestHandler:
+    command_type = "refuse-generated-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_id = parse_entity_id(command.payload.get("quest_id"))
+        if character_id is None or quest_id is None:
+            return rejected("invalid character or quest id")
+        if not ctx.world.has_entity(quest_id):
+            return rejected("quest does not exist")
+        quest = ctx.entity(quest_id)
+        if not quest.has_component(GeneratedQuestComponent):
+            return rejected("target is not a generated quest")
+        component = quest.get_component(GeneratedQuestComponent)
+        if component.status != "offered":
+            return rejected("quest is not offered")
+        replace_component(quest, replace(component, status="refused"))
+        return ok(
+            QuestRefusedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id),),
+                    quest_id=str(quest_id),
+                    title=component.title,
+                )
+            )
+        )
+
+
+class AbandonGeneratedQuestHandler:
+    command_type = "abandon-generated-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_id = parse_entity_id(command.payload.get("quest_id"))
+        if character_id is None or quest_id is None:
+            return rejected("invalid character or quest id")
+        if not ctx.world.has_entity(quest_id):
+            return rejected("quest does not exist")
+        quest = ctx.entity(quest_id)
+        if not quest.has_component(GeneratedQuestComponent):
+            return rejected("target is not a generated quest")
+        component = quest.get_component(GeneratedQuestComponent)
+        if component.status != "active" or component.accepted_by != str(character_id):
+            return rejected("quest is not active for character")
+        replace_component(quest, replace(component, status="abandoned"))
+        return ok(
+            QuestAbandonedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id),),
+                    quest_id=str(quest_id),
+                    title=component.title,
+                )
+            )
+        )
+
+
+class ExtendGeneratedQuestHandler:
+    command_type = "extend-generated-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_id = parse_entity_id(command.payload.get("quest_id"))
+        seconds = int(command.payload.get("seconds", 24 * 60 * 60))
+        if character_id is None or quest_id is None:
+            return rejected("invalid character or quest id")
+        if seconds <= 0:
+            return rejected("extension must be positive")
+        if not ctx.world.has_entity(quest_id):
+            return rejected("quest does not exist")
+        quest = ctx.entity(quest_id)
+        if not quest.has_component(GeneratedQuestComponent):
+            return rejected("target is not a generated quest")
+        if not quest.has_component(QuestDeadlineComponent):
+            return rejected("quest has no deadline")
+        deadline = quest.get_component(QuestDeadlineComponent)
+        updated = replace(deadline, due_at_epoch=deadline.due_at_epoch + seconds)
+        replace_component(quest, updated)
+        return ok(
+            QuestExtendedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id),),
+                    quest_id=str(quest_id),
+                    due_at_epoch=updated.due_at_epoch,
+                )
+            )
+        )
+
+
+class LieAboutQuestHandler:
+    command_type = "lie-about-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_id = parse_entity_id(command.payload.get("quest_id"))
+        lie = str(command.payload.get("lie", "")).strip()
+        if character_id is None or quest_id is None or not lie:
+            return rejected("invalid character, quest, or lie")
+        if not ctx.world.has_entity(quest_id):
+            return rejected("quest does not exist")
+        quest = ctx.entity(quest_id)
+        if not quest.has_component(GeneratedQuestComponent):
+            return rejected("target is not a generated quest")
+        component = quest.get_component(GeneratedQuestComponent)
+        replace_component(quest, replace(component, status="lied"))
+        return ok(
+            QuestLieToldEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id),),
+                    quest_id=str(quest_id),
+                    lie=lie,
                 )
             )
         )
@@ -1563,6 +1962,180 @@ class LoanDueConsequence:
         return events
 
 
+class IssueLetterOfCreditHandler:
+    command_type = "issue-letter-of-credit"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        bank_id = parse_entity_id(command.payload.get("bank_id"))
+        amount = int(command.payload.get("amount", 0))
+        if character_id is None or bank_id is None:
+            return rejected("invalid character or bank id")
+        if amount <= 0:
+            return rejected("letter amount must be positive")
+        account = _bank_account(ctx.world, character_id, bank_id)
+        if account is None:
+            return rejected("bank account does not exist")
+        account_component = account.get_component(BankAccountComponent)
+        if account_component.balance < amount:
+            return rejected("insufficient bank balance")
+        replace_component(
+            account, replace(account_component, balance=account_component.balance - amount)
+        )
+        from ..core.ecs import spawn_entity
+
+        letter = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name="letter of credit", kind="letter-of-credit"),
+                PortableComponent(can_pick_up=True),
+                LetterOfCreditComponent(
+                    bank_id=str(bank_id),
+                    owner_id=str(character_id),
+                    amount=amount,
+                ),
+            ],
+        )
+        ctx.entity(character_id).add_relationship(
+            Contains(mode=ContainmentMode.INVENTORY), letter.id
+        )
+        return ok(
+            LetterOfCreditIssuedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(letter.id),),
+                    letter_id=str(letter.id),
+                    amount=amount,
+                )
+            )
+        )
+
+
+class StoreSafeItemHandler:
+    command_type = "store-safe-item"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        storage_id = parse_entity_id(command.payload.get("storage_id"))
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if character_id is None or storage_id is None or item_id is None:
+            return rejected("invalid character, storage, or item id")
+        if not ctx.world.has_entity(storage_id) or not ctx.world.has_entity(item_id):
+            return rejected("storage or item does not exist")
+        character = ctx.entity(character_id)
+        if container_of(ctx.world.get_entity(item_id)) != character_id:
+            return rejected("item is not carried")
+        storage = ctx.entity(storage_id)
+        safe = (
+            storage.get_component(SafeStorageComponent)
+            if storage.has_component(SafeStorageComponent)
+            else SafeStorageComponent(owner_id=str(character_id))
+        )
+        if safe.owner_id != str(character_id):
+            return rejected("safe storage belongs to someone else")
+        character.remove_relationship(Contains, item_id)
+        storage.add_relationship(Contains(mode=ContainmentMode.CONTAINER), item_id)
+        replace_component(
+            storage, replace(safe, item_ids=tuple(sorted((*safe.item_ids, str(item_id)))))
+        )
+        return ok(
+            SafeStorageUpdatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(storage_id), str(item_id)),
+                    storage_id=str(storage_id),
+                    item_id=str(item_id),
+                    stored=True,
+                )
+            )
+        )
+
+
+class RetrieveSafeItemHandler:
+    command_type = "retrieve-safe-item"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        storage_id = parse_entity_id(command.payload.get("storage_id"))
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        if character_id is None or storage_id is None or item_id is None:
+            return rejected("invalid character, storage, or item id")
+        if not ctx.world.has_entity(storage_id) or not ctx.world.has_entity(item_id):
+            return rejected("storage or item does not exist")
+        storage = ctx.entity(storage_id)
+        if not storage.has_component(SafeStorageComponent):
+            return rejected("target is not safe storage")
+        safe = storage.get_component(SafeStorageComponent)
+        if safe.owner_id != str(character_id):
+            return rejected("safe storage belongs to someone else")
+        if str(item_id) not in safe.item_ids:
+            return rejected("item is not in safe storage")
+        storage.remove_relationship(Contains, item_id)
+        ctx.entity(character_id).add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+        replace_component(
+            storage,
+            replace(safe, item_ids=tuple(item for item in safe.item_ids if item != str(item_id))),
+        )
+        return ok(
+            SafeStorageUpdatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(storage_id), str(item_id)),
+                    storage_id=str(storage_id),
+                    item_id=str(item_id),
+                    stored=False,
+                )
+            )
+        )
+
+
+class SendDebtCollectorHandler:
+    command_type = "send-debt-collector"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        debt_id = parse_entity_id(command.payload.get("debt_id"))
+        if character_id is None or debt_id is None:
+            return rejected("invalid character or debt id")
+        if not ctx.world.has_entity(debt_id):
+            return rejected("debt does not exist")
+        debt = ctx.entity(debt_id)
+        if not debt.has_component(DebtComponent):
+            return rejected("target is not debt")
+        from ..core.ecs import spawn_entity
+
+        collector = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name="debt collector", kind="debt-collector"),
+                DebtCollectorComponent(borrower_id=str(character_id), debt_id=str(debt_id)),
+            ],
+        )
+        room_id = container_of(ctx.entity(character_id))
+        if room_id is not None:
+            ctx.entity(room_id).add_relationship(
+                Contains(mode=ContainmentMode.ROOM_CONTENT), collector.id
+            )
+        return ok(
+            DebtCollectorSentEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room_id) if room_id else None,
+                    target_ids=(str(collector.id), str(debt_id)),
+                    collector_id=str(collector.id),
+                    borrower_id=str(character_id),
+                )
+            )
+        )
+
+
 def _bank_account(world: World, owner_id: EntityId, bank_id: EntityId) -> Entity | None:
     for account in world.query().with_all([BankAccountComponent]).execute_entities():
         component = account.get_component(BankAccountComponent)
@@ -1693,6 +2266,178 @@ class PayFineHandler:
                     region_id=crime.region_id,
                     score=legal_score,
                 )
+            ),
+        )
+
+
+class SentenceCrimeHandler:
+    command_type = "sentence-crime"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        crime_id = parse_entity_id(command.payload.get("crime_id"))
+        sentence = str(command.payload.get("sentence", "fine")).strip() or "fine"
+        if character_id is None or crime_id is None:
+            return rejected("invalid character or crime id")
+        if not ctx.world.has_entity(crime_id):
+            return rejected("crime record does not exist")
+        crime_entity = ctx.entity(crime_id)
+        if not crime_entity.has_component(CrimeRecordComponent):
+            return rejected("target is not a crime record")
+        crime = crime_entity.get_component(CrimeRecordComponent)
+        replace_component(crime_entity, replace(crime, status=f"sentenced:{sentence}"))
+        return ok(
+            CourtSentenceIssuedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(crime_id),),
+                    crime_id=str(crime_id),
+                    sentence=sentence,
+                    fine=crime.fine,
+                )
+            )
+        )
+
+
+class RentLodgingHandler:
+    command_type = "rent-lodging"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        lodging_id = parse_entity_id(command.payload.get("lodging_id"))
+        duration_seconds = int(command.payload.get("duration_seconds", 24 * 60 * 60))
+        if character_id is None or lodging_id is None:
+            return rejected("invalid character or lodging id")
+        if duration_seconds <= 0:
+            return rejected("lodging duration must be positive")
+        if not ctx.world.has_entity(lodging_id):
+            return rejected("lodging does not exist")
+        character = ctx.entity(character_id)
+        if lodging_id not in reachable_ids(ctx.world, character):
+            return rejected("lodging is not reachable")
+        lodging_entity = ctx.entity(lodging_id)
+        if not lodging_entity.has_component(LodgingComponent):
+            return rejected("target is not lodging")
+        lodging = lodging_entity.get_component(LodgingComponent)
+        if lodging.occupied_by not in (None, str(character_id)):
+            return rejected("lodging is occupied")
+        updated = replace(
+            lodging,
+            occupied_by=str(character_id),
+            paid_until_epoch=ctx.epoch + duration_seconds,
+        )
+        replace_component(lodging_entity, updated)
+        return ok(
+            LodgingRentedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(lodging_id),),
+                    lodging_id=str(lodging_id),
+                    paid_until_epoch=updated.paid_until_epoch,
+                )
+            )
+        )
+
+
+class CampHandler:
+    command_type = "camp"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        room_id = container_of(character)
+        if room_id is None:
+            return rejected("character is not in a room")
+        risk = str(command.payload.get("risk", "low")).strip() or "low"
+        room = ctx.entity(room_id)
+        replace_component(
+            room,
+            CampingComponent(camped_by=str(character_id), risk=risk, started_at_epoch=ctx.epoch),
+        )
+        return ok(
+            CampMadeEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(room_id),
+                    target_ids=(str(room_id),),
+                    camp_room_id=str(room_id),
+                    risk=risk,
+                )
+            )
+        )
+
+
+class BuyTravelSuppliesHandler:
+    command_type = "buy-travel-supplies"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quantity = int(command.payload.get("quantity", 1))
+        if character_id is None:
+            return rejected("invalid character id")
+        if quantity <= 0:
+            return rejected("supply quantity must be positive")
+        from ..core.ecs import spawn_entity
+
+        supply = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name="travel supplies", kind="travel-supplies"),
+                PortableComponent(can_pick_up=True),
+                TravelSupplyComponent(quantity=quantity),
+            ],
+        )
+        ctx.entity(character_id).add_relationship(
+            Contains(mode=ContainmentMode.INVENTORY), supply.id
+        )
+        return ok(
+            TravelSuppliesBoughtEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(supply.id),),
+                    supply_id=str(supply.id),
+                    quantity=quantity,
+                )
+            )
+        )
+
+
+class ResolveTravelInterruptionHandler:
+    command_type = "resolve-travel-interruption"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        interruption_id = parse_entity_id(command.payload.get("interruption_id"))
+        if character_id is None or interruption_id is None:
+            return rejected("invalid character or interruption id")
+        if not ctx.world.has_entity(interruption_id):
+            return rejected("travel interruption does not exist")
+        interruption_entity = ctx.entity(interruption_id)
+        if not interruption_entity.has_component(TravelInterruptionComponent):
+            return rejected("target is not a travel interruption")
+        interruption = interruption_entity.get_component(TravelInterruptionComponent)
+        if interruption.resolved:
+            return rejected("travel interruption is already resolved")
+        replace_component(interruption_entity, replace(interruption, resolved=True))
+        return ok(
+            TravelInterruptionResolvedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(interruption_id),),
+                    interruption_id=str(interruption_id),
+                    reason=interruption.reason,
+                )
             )
         )
 
@@ -1783,12 +2528,8 @@ class CreateCustomClassHandler:
             primary_skills=_string_tuple(
                 command.payload.get("primary_skills"), template.primary_skills
             ),
-            major_skills=_string_tuple(
-                command.payload.get("major_skills"), template.major_skills
-            ),
-            minor_skills=_string_tuple(
-                command.payload.get("minor_skills"), template.minor_skills
-            ),
+            major_skills=_string_tuple(command.payload.get("major_skills"), template.major_skills),
+            minor_skills=_string_tuple(command.payload.get("minor_skills"), template.minor_skills),
             advantages=_string_tuple(command.payload.get("advantages"), template.advantages),
             disadvantages=_string_tuple(
                 command.payload.get("disadvantages"), template.disadvantages
@@ -1970,6 +2711,123 @@ class EnchantItemHandler:
         )
 
 
+class MakePotionHandler:
+    command_type = "make-potion"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        maker_id = parse_entity_id(command.payload.get("maker_id"))
+        if character_id is None or maker_id is None:
+            return rejected("invalid character or potion maker id")
+        if not ctx.world.has_entity(maker_id):
+            return rejected("potion maker does not exist")
+        character = ctx.entity(character_id)
+        if maker_id not in reachable_ids(ctx.world, character):
+            return rejected("potion maker is not reachable")
+        maker = ctx.entity(maker_id)
+        if not maker.has_component(PotionMakerComponent):
+            return rejected("target is not a potion maker")
+        component = maker.get_component(PotionMakerComponent)
+        item = _spawn_inventory_item(
+            ctx.world,
+            character,
+            component.output_item_name,
+            kind="potion",
+        )
+        return ok(
+            PotionMadeEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(maker_id), str(item.id)),
+                    potion_id=str(item.id),
+                    potion_name=component.output_item_name,
+                )
+            )
+        )
+
+
+class RechargeEnchantedItemHandler:
+    command_type = "recharge-enchanted-item"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        service_id = parse_entity_id(command.payload.get("service_id"))
+        if character_id is None or item_id is None or service_id is None:
+            return rejected("invalid character, item, or service id")
+        if not ctx.world.has_entity(item_id) or not ctx.world.has_entity(service_id):
+            return rejected("item or service does not exist")
+        character = ctx.entity(character_id)
+        reachable = reachable_ids(ctx.world, character)
+        if item_id not in reachable or service_id not in reachable:
+            return rejected("item or service is not reachable")
+        item = ctx.entity(item_id)
+        service = ctx.entity(service_id)
+        if not item.has_component(EnchantedItemComponent):
+            return rejected("target item is not enchanted")
+        if not service.has_component(RechargeServiceComponent):
+            return rejected("target is not a recharge service")
+        enchantment = item.get_component(EnchantedItemComponent)
+        recharge = service.get_component(RechargeServiceComponent)
+        replace_component(
+            item, replace(enchantment, cost=max(1, enchantment.cost - recharge.charge_amount))
+        )
+        return ok(
+            EnchantedItemRechargedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item_id), str(service_id)),
+                    item_id=str(item_id),
+                    cost=item.get_component(EnchantedItemComponent).cost,
+                )
+            )
+        )
+
+
+class IdentifyIngredientHandler:
+    command_type = "identify-ingredient"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        ingredient_id = parse_entity_id(command.payload.get("ingredient_id"))
+        if character_id is None or ingredient_id is None:
+            return rejected("invalid character or ingredient id")
+        if not ctx.world.has_entity(ingredient_id):
+            return rejected("ingredient does not exist")
+        character = ctx.entity(character_id)
+        if ingredient_id not in reachable_ids(ctx.world, character):
+            return rejected("ingredient is not reachable")
+        ingredient_entity = ctx.entity(ingredient_id)
+        if not ingredient_entity.has_component(IngredientComponent):
+            return rejected("target is not an ingredient")
+        ingredient = ingredient_entity.get_component(IngredientComponent)
+        if str(character_id) in ingredient.identified_by:
+            return rejected("ingredient already identified")
+        replace_component(
+            ingredient_entity,
+            replace(
+                ingredient,
+                identified_by=tuple(sorted((*ingredient.identified_by, str(character_id)))),
+            ),
+        )
+        return ok(
+            IngredientIdentifiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(ingredient_id),),
+                    ingredient_id=str(ingredient_id),
+                    effect=ingredient.effect,
+                )
+            )
+        )
+
+
 def _spell_from_entity(entity: Entity) -> CustomSpellComponent | EnchantedItemComponent | None:
     if entity.has_component(CustomSpellComponent):
         return entity.get_component(CustomSpellComponent)
@@ -2095,6 +2953,92 @@ class ContractAfflictionHandler:
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
                     affliction_type=affliction_type,
+                )
+            )
+        )
+
+
+class ProgressAfflictionIncubationHandler:
+    command_type = "progress-affliction-incubation"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        stage = str(command.payload.get("stage", "active")).strip() or "active"
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(SupernaturalAfflictionComponent):
+            return rejected("character has no supernatural affliction")
+        affliction = character.get_component(SupernaturalAfflictionComponent)
+        replace_component(character, replace(affliction, stage=stage))
+        return ok(
+            AfflictionIncubationProgressedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    affliction_type=affliction.affliction_type,
+                    stage=stage,
+                )
+            )
+        )
+
+
+class MarkAfflictionStigmaHandler:
+    command_type = "mark-affliction-stigma"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        region_id = str(command.payload.get("region_id", "")).strip()
+        severity = int(command.payload.get("severity", 1))
+        if character_id is None:
+            return rejected("invalid character id")
+        if severity <= 0:
+            return rejected("stigma severity must be positive")
+        character = ctx.entity(character_id)
+        replace_component(
+            character, AfflictionStigmaComponent(region_id=region_id, severity=severity)
+        )
+        return ok(
+            AfflictionStigmaMarkedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    region_id=region_id,
+                    severity=severity,
+                )
+            )
+        )
+
+
+class RequestCureQuestHandler:
+    command_type = "request-cure-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_id = str(command.payload.get("quest_id", "")).strip() or None
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(SupernaturalAfflictionComponent):
+            return rejected("character has no supernatural affliction")
+        affliction = character.get_component(SupernaturalAfflictionComponent)
+        replace_component(
+            character,
+            CureQuestHookComponent(
+                affliction_type=affliction.affliction_type,
+                quest_id=quest_id,
+            ),
+        )
+        return ok(
+            CureQuestRequestedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    affliction_type=affliction.affliction_type,
+                    quest_id=quest_id,
                 )
             )
         )
@@ -2403,9 +3347,7 @@ class RequestDungeonHandler:
             if dungeon_entity.has_component(ExpansionHookComponent)
             else None
         )
-        generator_id = (
-            hook.generator_plugin_id if hook is not None else None
-        )
+        generator_id = hook.generator_plugin_id if hook is not None else None
         replace_component(dungeon_entity, replace(dungeon, generated=True))
         room_id = _room_id(ctx.world, character_id)
         return ok(
@@ -2588,9 +3530,7 @@ class OpenSecretDoorHandler:
             return rejected("door leads nowhere")
 
         replace_component(door_entity, replace(door, opened=True))
-        ctx.entity(room_id).add_relationship(
-            ExitTo(direction=door.direction), target_room_id
-        )
+        ctx.entity(room_id).add_relationship(ExitTo(direction=door.direction), target_room_id)
         target_room = ctx.entity(target_room_id)
         depth = (
             target_room.get_component(DungeonRoomComponent).depth
@@ -2774,6 +3714,13 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(
                 f"Institution nearby: {institution.name} ({institution.institution_type})."
             )
+        if entity.has_component(InstitutionDuesComponent):
+            dues = entity.get_component(InstitutionDuesComponent)
+            state = "paid" if str(character.id) in dues.paid_by else "due"
+            lines.append(f"Institution dues: {dues.amount_due} ({state}).")
+        if entity.has_component(InstitutionServiceComponent):
+            service = entity.get_component(InstitutionServiceComponent)
+            lines.append(f"Service directory entry: {service.service_name}.")
         if entity.has_component(GeneratedQuestComponent):
             quest = entity.get_component(GeneratedQuestComponent)
             lines.append(f"Generated quest: {quest.title} ({quest.status}).")
@@ -2784,12 +3731,33 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(f"Bank nearby: {entity.get_component(BankComponent).name}.")
         if entity.has_component(LoanComponent):
             loan = entity.get_component(LoanComponent)
-            lines.append(
-                f"Loan: {loan.balance} due at epoch {loan.due_at_epoch} ({loan.status})."
-            )
+            lines.append(f"Loan: {loan.balance} due at epoch {loan.due_at_epoch} ({loan.status}).")
+        if entity.has_component(LetterOfCreditComponent):
+            letter = entity.get_component(LetterOfCreditComponent)
+            letter_state = "redeemed" if letter.redeemed else "active"
+            lines.append(f"Letter of credit: {letter.amount} ({letter_state}).")
+        if entity.has_component(SafeStorageComponent):
+            safe = entity.get_component(SafeStorageComponent)
+            if safe.owner_id == str(character.id):
+                lines.append(f"Safe storage: {len(safe.item_ids)} item(s).")
+        if entity.has_component(DebtCollectorComponent):
+            collector = entity.get_component(DebtCollectorComponent)
+            if collector.borrower_id == str(character.id):
+                lines.append(f"Debt collector pressure: {collector.pressure}.")
         if entity.has_component(CrimeRecordComponent):
             crime = entity.get_component(CrimeRecordComponent)
             lines.append(f"Crime record: {crime.crime_type} ({crime.status}).")
+        if entity.has_component(LodgingComponent):
+            lodging = entity.get_component(LodgingComponent)
+            state = "occupied" if lodging.occupied_by else "available"
+            lines.append(f"Lodging nearby: {state}, {lodging.price} coins.")
+        if entity.has_component(TravelSupplyComponent):
+            supply = entity.get_component(TravelSupplyComponent)
+            lines.append(f"Travel supplies: {supply.quantity}.")
+        if entity.has_component(TravelInterruptionComponent):
+            interruption = entity.get_component(TravelInterruptionComponent)
+            state = "resolved" if interruption.resolved else "unresolved"
+            lines.append(f"Travel interruption: {interruption.reason} ({state}).")
         if entity.has_component(ClassTemplateComponent):
             template = entity.get_component(ClassTemplateComponent)
             lines.append(f"Class template available: {template.class_name}.")
@@ -2802,6 +3770,16 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(EnchantedItemComponent):
             spell = entity.get_component(EnchantedItemComponent)
             lines.append(f"Enchanted item: {spell.spell_name} ({spell.effect_type}).")
+        if entity.has_component(PotionMakerComponent):
+            maker = entity.get_component(PotionMakerComponent)
+            lines.append(f"Potionmaker nearby: {maker.recipe_name}.")
+        if entity.has_component(RechargeServiceComponent):
+            recharge = entity.get_component(RechargeServiceComponent)
+            lines.append(f"Recharge service nearby: +{recharge.charge_amount}.")
+        if entity.has_component(IngredientComponent):
+            ingredient = entity.get_component(IngredientComponent)
+            state = "identified" if str(character.id) in ingredient.identified_by else "unknown"
+            lines.append(f"Ingredient nearby: {ingredient.ingredient_name} ({state}).")
         if entity.has_component(CreatureLanguageComponent):
             language = entity.get_component(CreatureLanguageComponent).language
             state = "hostile"
@@ -2835,12 +3813,13 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         current_room = world.get_entity(current_room_id)
         if current_room.has_component(DungeonRoomComponent):
             dungeon_room = current_room.get_component(DungeonRoomComponent)
-            lines.append(
-                f"In dungeon {dungeon_room.dungeon_id} at depth {dungeon_room.depth}."
-            )
+            lines.append(f"In dungeon {dungeon_room.dungeon_id} at depth {dungeon_room.depth}.")
         if current_room.has_component(RestRiskComponent):
             risk = current_room.get_component(RestRiskComponent)
             lines.append(f"Rest risk here: {risk.band}.")
+        if current_room.has_component(CampingComponent):
+            camp = current_room.get_component(CampingComponent)
+            lines.append(f"Camp here: {camp.risk}.")
     if character.has_component(AutomapComponent):
         automap = character.get_component(AutomapComponent)
         lines.append(f"Automap: {len(automap.discovered_rooms)} room(s) discovered.")
@@ -2848,9 +3827,7 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         anchor_id = character.get_component(RecallAnchorComponent).room_id
         lines.append(f"Recall anchor set at room {anchor_id}.")
     if character.has_component(EtiquetteSkillComponent):
-        lines.append(
-            f"Etiquette skill: {character.get_component(EtiquetteSkillComponent).level}."
-        )
+        lines.append(f"Etiquette skill: {character.get_component(EtiquetteSkillComponent).level}.")
     if character.has_component(StreetwiseSkillComponent):
         lines.append(
             f"Streetwise skill: {character.get_component(StreetwiseSkillComponent).level}."
@@ -2861,6 +3838,14 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(SupernaturalAfflictionComponent):
         affliction = character.get_component(SupernaturalAfflictionComponent)
         lines.append(f"Affliction: {affliction.affliction_type} ({affliction.stage}).")
+    if character.has_component(AfflictionStigmaComponent):
+        stigma = character.get_component(AfflictionStigmaComponent)
+        lines.append(
+            f"Affliction stigma: {stigma.region_id or 'local'} severity {stigma.severity}."
+        )
+    if character.has_component(CureQuestHookComponent):
+        cure = character.get_component(CureQuestHookComponent)
+        lines.append(f"Cure quest hook: {cure.affliction_type}.")
     if character.has_component(FeedingNeedComponent):
         need = character.get_component(FeedingNeedComponent)
         lines.append(f"Feeding need: {need.current:.1f}/{need.maximum:.1f}.")
@@ -2881,14 +3866,10 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         if access.service_ids:
             lines.append(f"Unlocked institution services: {len(access.service_ids)}.")
     if character.has_component(WereformComponent):
-        lines.append(
-            f"Transformed into {character.get_component(WereformComponent).form_name}."
-        )
+        lines.append(f"Transformed into {character.get_component(WereformComponent).form_name}.")
     if character.has_component(TravelPlanComponent):
         plan = character.get_component(TravelPlanComponent)
-        lines.append(
-            f"Traveling by {plan.mode}; arrival due at epoch {plan.arrive_at_epoch}."
-        )
+        lines.append(f"Traveling by {plan.mode}; arrival due at epoch {plan.arrive_at_epoch}.")
     for edge, institution_id in character.get_relationships(MemberOfInstitution):
         if world.has_entity(institution_id):
             institution = world.get_entity(institution_id)
@@ -2977,9 +3958,7 @@ class SocialRegisterReactor:
             tone, reaction = "cool", "faux-pas"
         replace_component(
             listener,
-            ConversationToneComponent(
-                tone=tone, last_reaction=reaction, last_approach=approach
-            ),
+            ConversationToneComponent(tone=tone, last_reaction=reaction, last_approach=approach),
         )
 
 
@@ -2998,16 +3977,27 @@ __all__ = [
     "AccountOpenedEvent",
     "AfflictionContractedEvent",
     "AfflictionCuredEvent",
+    "AfflictionIncubationProgressedEvent",
+    "AfflictionStigmaComponent",
+    "AfflictionStigmaMarkedEvent",
     "AskForWorkHandler",
     "BankAccountComponent",
     "BankComponent",
     "BountyComponent",
     "BountyPostedEvent",
+    "AbandonGeneratedQuestHandler",
     "AttemptPacifyHandler",
+    "BuyTravelSuppliesHandler",
     "BuyPropertyHandler",
+    "CampHandler",
+    "CampMadeEvent",
+    "CampingComponent",
     "CompleteGeneratedQuestHandler",
     "CommitCrimeHandler",
     "ContractAfflictionHandler",
+    "CourtSentenceIssuedEvent",
+    "CureQuestHookComponent",
+    "CureQuestRequestedEvent",
     "CureAfflictionHandler",
     "CastSpellHandler",
     "ClassTemplateComponent",
@@ -3021,14 +4011,18 @@ __all__ = [
     "CustomClassCreatedEvent",
     "CustomSpellComponent",
     "DaggerQuestRewardComponent",
+    "DebtCollectorComponent",
+    "DebtCollectorSentEvent",
     "DebtComponent",
     "DepositHandler",
     "DepositMadeEvent",
     "EnchantItemHandler",
+    "EnchantedItemRechargedEvent",
     "EnchantedItemComponent",
     "ExpandSiteHandler",
     "ExpansionHookComponent",
     "ExpansionRequestedEvent",
+    "ExtendGeneratedQuestHandler",
     "FinePaidEvent",
     "FeedingNeedChangedEvent",
     "EndTransformationHandler",
@@ -3037,44 +4031,73 @@ __all__ = [
     "FeedingNeedConsequence",
     "GeneratedSiteInstantiatedEvent",
     "HostilityComponent",
+    "IdentifyIngredientHandler",
+    "IngredientComponent",
+    "IngredientIdentifiedEvent",
     "InvestigateRumorHandler",
     "InstitutionComponent",
+    "InstitutionDuesComponent",
+    "InstitutionDuesPaidEvent",
     "InstitutionJoinedEvent",
+    "InstitutionPromotedEvent",
     "InstitutionReputationChangedEvent",
     "InstitutionReputationComponent",
     "InstitutionServiceComponent",
     "InstitutionServiceUsedEvent",
     "ItemEnchantedEvent",
+    "IssueLetterOfCreditHandler",
     "JoinInstitutionHandler",
     "LawRegionComponent",
     "LegalReputationChangedEvent",
     "LegalReputationComponent",
     "LanguageSkillComponent",
+    "LetterOfCreditComponent",
+    "LetterOfCreditIssuedEvent",
+    "LieAboutQuestHandler",
+    "LodgingComponent",
+    "LodgingRentedEvent",
     "LoanComponent",
     "LoanDefaultedEvent",
     "LoanDueConsequence",
     "LoanIssuedEvent",
     "LoanRepaidEvent",
     "MemberOfInstitution",
+    "MakePotionHandler",
+    "MarkAfflictionStigmaHandler",
     "OpenBankAccountHandler",
     "OwnsProperty",
     "PayFineHandler",
+    "PayInstitutionDuesHandler",
     "PacificationAttemptedEvent",
     "PacifiedComponent",
     "PlanTravelHandler",
     "ProceduralSiteComponent",
     "PropertyDeedComponent",
     "PropertyPurchasedEvent",
+    "ProgressAfflictionIncubationHandler",
+    "PromoteInstitutionHandler",
+    "PotionMakerComponent",
+    "PotionMadeEvent",
     "RegionalReputationComponent",
+    "RechargeEnchantedItemHandler",
+    "RechargeServiceComponent",
+    "RefuseGeneratedQuestHandler",
     "GeneratedQuestComponent",
+    "QuestAbandonedEvent",
     "QuestAcceptedEvent",
     "QuestCompletedEvent",
     "QuestDeadlineComponent",
     "QuestDeadlineConsequence",
     "QuestFailedEvent",
     "QuestGeneratedEvent",
+    "QuestExtendedEvent",
+    "QuestLieToldEvent",
+    "QuestRefusedEvent",
     "QuestTemplateComponent",
     "RepayLoanHandler",
+    "RequestCureQuestHandler",
+    "ResolveTravelInterruptionHandler",
+    "RetrieveSafeItemHandler",
     "RumorBecameExpansionEvent",
     "RumorComponent",
     "RumorDisprovenEvent",
@@ -3086,13 +4109,22 @@ __all__ = [
     "SpellCastEvent",
     "SpellCreatedEvent",
     "SpellTemplateComponent",
+    "SafeStorageComponent",
+    "SafeStorageUpdatedEvent",
+    "SendDebtCollectorHandler",
+    "SentenceCrimeHandler",
+    "StoreSafeItemHandler",
     "SupernaturalAfflictionComponent",
     "TravelCompletedEvent",
     "TravelCompletionConsequence",
     "TravelHubComponent",
+    "TravelInterruptionComponent",
+    "TravelInterruptionResolvedEvent",
     "TravelModeComponent",
     "TravelPlanComponent",
     "TravelRoute",
+    "TravelSupplyComponent",
+    "TravelSuppliesBoughtEvent",
     "TravelStartedEvent",
     "TransformHandler",
     "TransformationEndedEvent",

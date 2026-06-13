@@ -260,3 +260,52 @@ Mutation outcomes are intentionally not active yet. Void-sim records chaos mutat
 pressure using the shared source-specific pressure components, so nuke-sim radiation,
 chaos, and future augmentation pressure can accumulate independently before any package
 decides when outcomes occur.
+
+## Crew pressure, drones, and emergencies
+
+Deploy an away team, adjust morale, and handle mutiny pressure:
+
+```text
+!deploy-away-team team_id="survey team"
+!boost-morale amount=2
+!start-mutiny
+```
+
+Drone, ship AI, and data salvage hooks support light technical play:
+
+```text
+!command-drone drone_id="repair drone" task="patch conduit"
+!hack-ship-ai ai_id="ship mind"
+!salvage-data data_id="black box"
+```
+
+Resolve ship emergencies and system threats:
+
+```text
+!resolve-emergency emergency_id="decompression alarm"
+!stabilize-reactor reactor_id="main reactor" amount=10
+!adjust-gravity gravity_id="hab ring gravity" enabled=true strength=1
+!repel-boarders threat_id="boarding party"
+```
+
+## Frontier economy
+
+Study xenobiology and accept alien trade protocols:
+
+```text
+!study-xenobiology sample_id="glowing spore"
+!accept-trade-protocol protocol_id="choir exchange code"
+```
+
+Passengers, surveys, mining, customs, smuggling, insurance, and mortgages extend the
+contract economy:
+
+```text
+!deliver-passenger passenger_id="quiet scientist"
+!survey-site site_id="ice moon ridge"
+!mine-asteroid site_id="nickel rock" quantity=3
+!inspect-customs hold_id="cargo hold" contraband_found=false
+!search-smuggling-compartment compartment_id="false panel"
+!claim-insurance policy_id="hull policy"
+!pay-mortgage mortgage_id="ship lien" amount=100
+```

@@ -23,6 +23,8 @@ from bunnyland.mechanics.barbariansim import CorruptionComponent, CorruptionGain
 from bunnyland.mechanics.colonysim import ResourceStackComponent, TechUnlockComponent
 from bunnyland.mechanics.voidsim import (
     AcceptContractHandler,
+    AcceptTradeProtocolHandler,
+    AdjustGravityHandler,
     AirlockComponent,
     AirlockCycledEvent,
     AlienArtifactComponent,
@@ -32,7 +34,12 @@ from bunnyland.mechanics.voidsim import (
     AssignCrewShiftHandler,
     AstrogationComponent,
     AttemptTranslationHandler,
+    AwayTeamComponent,
+    AwayTeamDeployedEvent,
     BlueprintComponent,
+    BoardingRepelledEvent,
+    BoardingThreatComponent,
+    BoostMoraleHandler,
     BulkheadComponent,
     CargoComponent,
     CargoDeliveredEvent,
@@ -42,7 +49,9 @@ from bunnyland.mechanics.voidsim import (
     ChaosInfluenceConsequence,
     ChaosMutationPressureComponent,
     ChaosWardComponent,
+    ClaimInsuranceHandler,
     ClaimSalvageHandler,
+    CommandDroneHandler,
     ContractAcceptedEvent,
     ContractCompletedEvent,
     ContractComponent,
@@ -52,16 +61,26 @@ from bunnyland.mechanics.voidsim import (
     CrewDutyStatusComponent,
     CrewShiftAssignedEvent,
     CrewShiftRelievedEvent,
+    CustomsHoldComponent,
+    CustomsInspectedEvent,
     CyberneticMutationPressureComponent,
     CycleAirlockHandler,
+    DataSalvageComponent,
+    DataSalvagedEvent,
     DeliverCargoHandler,
+    DeliverPassengerHandler,
+    DeployAwayTeamHandler,
     DiplomacyChangedEvent,
     DiplomaticMissionComponent,
     DistressSignalComponent,
     DockedTo,
     DockHandler,
     DockingCompletedEvent,
+    DroneCommandedEvent,
+    DroneComponent,
     DutyShiftComponent,
+    EmergencyComponent,
+    EmergencyResolvedEvent,
     EnterOrbitHandler,
     EvacuateModuleHandler,
     FabricateHandler,
@@ -70,10 +89,16 @@ from bunnyland.mechanics.voidsim import (
     FirstContactEvent,
     FuelChangedEvent,
     FuelComponent,
+    GravityAdjustedEvent,
+    GravityComponent,
     HabitatModuleComponent,
+    HackShipAIHandler,
     InitiateContactHandler,
+    InspectCustomsHandler,
     InspectShipSystemHandler,
     InstallUpgradeHandler,
+    InsuranceClaimedEvent,
+    InsurancePolicyComponent,
     ItemFabricatedEvent,
     JumpCompletedEvent,
     JumpDriveComponent,
@@ -89,7 +114,16 @@ from bunnyland.mechanics.voidsim import (
     LifeSupportConsequence,
     LifeSupportFailedEvent,
     LoadCargoHandler,
+    MineAsteroidHandler,
+    MiningCompletedEvent,
+    MiningSiteComponent,
     ModuleEvacuatedEvent,
+    MoraleChangedEvent,
+    MoraleComponent,
+    MortgageComponent,
+    MortgagePaidEvent,
+    MutinyComponent,
+    MutinyStartedEvent,
     NavigationHazardEncounteredEvent,
     NavigationRouteComponent,
     NegotiateAlienHandler,
@@ -98,6 +132,9 @@ from bunnyland.mechanics.voidsim import (
     OrbitComponent,
     OrbitEnteredEvent,
     OxygenComponent,
+    PassengerComponent,
+    PassengerDeliveredEvent,
+    PayMortgageHandler,
     PlotCourseHandler,
     PowerGridComponent,
     PowerReroutedEvent,
@@ -108,29 +145,49 @@ from bunnyland.mechanics.voidsim import (
     QuarantineStartedEvent,
     RadiationMutationPressureComponent,
     RadiationShieldComponent,
+    ReactorComponent,
+    ReactorStabilizedEvent,
     RefuelHandler,
     RelieveCrewShiftHandler,
     RepairSystemHandler,
+    RepelBoardersHandler,
     ReroutePowerHandler,
+    ResolveEmergencyHandler,
     SalvageClaimComponent,
     SalvageClaimedEvent,
+    SalvageDataHandler,
     ScanHandler,
     SealBulkheadHandler,
+    SearchSmugglingCompartmentHandler,
     SensorComponent,
+    ShipAIComponent,
+    ShipAIHackedEvent,
     ShipComponent,
     ShipSystemComponent,
     ShipSystemDamagedEvent,
     ShipSystemRepairedEvent,
     ShipUpgradeComponent,
     SignalDetectedEvent,
+    SmugglingCompartmentComponent,
+    SmugglingCompartmentSearchedEvent,
+    StabilizeReactorHandler,
     StarSystemComponent,
+    StartMutinyHandler,
     StationComponent,
     StudyAlienArtifactHandler,
+    StudyXenobiologyHandler,
+    SurveyCompletedEvent,
+    SurveySiteComponent,
+    SurveySiteHandler,
+    TradeProtocolAcceptedEvent,
+    TradeProtocolComponent,
     TranslationMatrixComponent,
     TranslationProgressedEvent,
     UndockHandler,
     UpgradeInstalledEvent,
     WorksShift,
+    XenobiologySampleComponent,
+    XenobiologyStudiedEvent,
     _spend_inventory_resources,
     install_voidsim,
     voidsim_fragments,
@@ -214,6 +271,284 @@ def _make_module(scenario, **overrides):
     room.add_component(HabitatModuleComponent(module_type=overrides.get("module_type", "bridge")))
     room.add_component(PressurizedComponent(pressure=overrides.get("pressure", 1.0)))
     return scenario.room_a
+
+
+def test_voidsim_parity_handlers_mutate_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    def entity(entity_id):
+        return scenario.actor.world.get_entity(entity_id)
+
+    team_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="survey team", kind="team"), AwayTeamComponent()],
+    )
+    drone_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="repair drone", kind="drone"), DroneComponent()],
+    )
+    ai_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="ship mind", kind="ai"), ShipAIComponent(trust=1)],
+    )
+    data_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="black box", kind="data"), DataSalvageComponent()],
+    )
+    sample_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="glowing spore", kind="sample"),
+            XenobiologySampleComponent(contamination=0.5),
+        ],
+    )
+    protocol_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="trade code", kind="protocol"), TradeProtocolComponent()],
+    )
+    emergency_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="decompression", kind="emergency"), EmergencyComponent()],
+    )
+    reactor_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="main reactor", kind="reactor"),
+            ReactorComponent(stability=40, online=False),
+        ],
+    )
+    gravity_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="hab gravity", kind="gravity"), GravityComponent()],
+    )
+    threat_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="boarding party", kind="threat"),
+            BoardingThreatComponent(threat_level=3),
+        ],
+    )
+    passenger_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="scientist", kind="passenger"), PassengerComponent()],
+    )
+    survey_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="ice ridge", kind="survey"), SurveySiteComponent(resource="ice")],
+    )
+    mining_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="nickel rock", kind="mine"), MiningSiteComponent(remaining=5)],
+    )
+    hold_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="cargo hold", kind="hold"), CustomsHoldComponent()],
+    )
+    compartment_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="false panel", kind="compartment"),
+            SmugglingCompartmentComponent(),
+        ],
+    )
+    policy_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="hull policy", kind="policy"), InsurancePolicyComponent()],
+    )
+    mortgage_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="ship lien", kind="mortgage"),
+            MortgageComponent(principal=100, balance=100),
+        ],
+    )
+
+    calls = [
+        (
+            DeployAwayTeamHandler(),
+            "deploy-away-team",
+            {"team_id": str(team_id)},
+            AwayTeamDeployedEvent,
+        ),
+        (BoostMoraleHandler(), "boost-morale", {"amount": 2}, MoraleChangedEvent),
+        (StartMutinyHandler(), "start-mutiny", {}, MutinyStartedEvent),
+        (
+            CommandDroneHandler(),
+            "command-drone",
+            {"drone_id": str(drone_id), "task": "patch"},
+            DroneCommandedEvent,
+        ),
+        (HackShipAIHandler(), "hack-ship-ai", {"ai_id": str(ai_id)}, ShipAIHackedEvent),
+        (SalvageDataHandler(), "salvage-data", {"data_id": str(data_id)}, DataSalvagedEvent),
+        (
+            StudyXenobiologyHandler(),
+            "study-xenobiology",
+            {"sample_id": str(sample_id)},
+            XenobiologyStudiedEvent,
+        ),
+        (
+            AcceptTradeProtocolHandler(),
+            "accept-trade-protocol",
+            {"protocol_id": str(protocol_id)},
+            TradeProtocolAcceptedEvent,
+        ),
+        (
+            ResolveEmergencyHandler(),
+            "resolve-emergency",
+            {"emergency_id": str(emergency_id)},
+            EmergencyResolvedEvent,
+        ),
+        (
+            StabilizeReactorHandler(),
+            "stabilize-reactor",
+            {"reactor_id": str(reactor_id), "amount": 10},
+            ReactorStabilizedEvent,
+        ),
+        (
+            AdjustGravityHandler(),
+            "adjust-gravity",
+            {"gravity_id": str(gravity_id), "enabled": False, "strength": 0.5},
+            GravityAdjustedEvent,
+        ),
+        (
+            RepelBoardersHandler(),
+            "repel-boarders",
+            {"threat_id": str(threat_id)},
+            BoardingRepelledEvent,
+        ),
+        (
+            DeliverPassengerHandler(),
+            "deliver-passenger",
+            {"passenger_id": str(passenger_id)},
+            PassengerDeliveredEvent,
+        ),
+        (SurveySiteHandler(), "survey-site", {"site_id": str(survey_id)}, SurveyCompletedEvent),
+        (
+            MineAsteroidHandler(),
+            "mine-asteroid",
+            {"site_id": str(mining_id), "quantity": 3},
+            MiningCompletedEvent,
+        ),
+        (
+            InspectCustomsHandler(),
+            "inspect-customs",
+            {"hold_id": str(hold_id), "contraband_found": True},
+            CustomsInspectedEvent,
+        ),
+        (
+            SearchSmugglingCompartmentHandler(),
+            "search-smuggling-compartment",
+            {"compartment_id": str(compartment_id)},
+            SmugglingCompartmentSearchedEvent,
+        ),
+        (
+            ClaimInsuranceHandler(),
+            "claim-insurance",
+            {"policy_id": str(policy_id)},
+            InsuranceClaimedEvent,
+        ),
+        (
+            PayMortgageHandler(),
+            "pay-mortgage",
+            {"mortgage_id": str(mortgage_id), "amount": 40},
+            MortgagePaidEvent,
+        ),
+    ]
+
+    for handler, command_type, payload, event_type in calls:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert result.ok, (command_type, result.reason)
+        assert any(isinstance(event, event_type) for event in result.events)
+
+    assert entity(team_id).get_component(AwayTeamComponent).deployed is True
+    assert character.get_component(MoraleComponent).value == 2
+    assert character.get_component(MutinyComponent).active is True
+    assert entity(drone_id).get_component(DroneComponent).assigned_task == "patch"
+    assert entity(ai_id).get_component(ShipAIComponent).hacked is True
+    assert entity(data_id).get_component(DataSalvageComponent).encrypted is False
+    assert str(scenario.character) in entity(sample_id).get_component(
+        XenobiologySampleComponent
+    ).studied_by
+    assert entity(protocol_id).get_component(TradeProtocolComponent).accepted is True
+    assert entity(emergency_id).get_component(EmergencyComponent).resolved is True
+    assert entity(reactor_id).get_component(ReactorComponent).stability == 50
+    assert entity(gravity_id).get_component(GravityComponent).enabled is False
+    assert entity(threat_id).get_component(BoardingThreatComponent).repelled is True
+    assert entity(passenger_id).get_component(PassengerComponent).delivered is True
+    assert str(scenario.character) in entity(survey_id).get_component(
+        SurveySiteComponent
+    ).surveyed_by
+    assert entity(mining_id).get_component(MiningSiteComponent).remaining == 2
+    assert entity(hold_id).get_component(CustomsHoldComponent).contraband_found is True
+    assert entity(compartment_id).get_component(SmugglingCompartmentComponent).discovered is True
+    assert entity(policy_id).get_component(InsurancePolicyComponent).claimed is True
+    assert entity(mortgage_id).get_component(MortgageComponent).balance == 60
+    fragments = voidsim_fragments(scenario.actor.world, character)
+    assert "Away team survey team: survey, deployed." in fragments
+    assert "Drone repair drone: active patch." in fragments
+    assert "Ship AI ship AI: trust 2, hacked." in fragments
+    assert "Data salvage black box: logs, recovered." in fragments
+    assert "Trade protocol trade code: accepted, cautious exchange." in fragments
+    assert "Emergency decompression: decompression, resolved." in fragments
+    assert "Reactor main reactor: stability 50." in fragments
+    assert "Customs hold cargo hold: inspected." in fragments
+    assert "Mortgage ship lien: balance 60." in fragments
+
+
+def test_voidsim_parity_handlers_reject_invalid_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    fake = "entity_999999"
+    cases = [
+        (DeployAwayTeamHandler(), "deploy-away-team", {"team_id": fake}),
+        (CommandDroneHandler(), "command-drone", {"drone_id": fake}),
+        (HackShipAIHandler(), "hack-ship-ai", {"ai_id": fake}),
+        (SalvageDataHandler(), "salvage-data", {"data_id": fake}),
+        (StudyXenobiologyHandler(), "study-xenobiology", {"sample_id": fake}),
+        (AcceptTradeProtocolHandler(), "accept-trade-protocol", {"protocol_id": fake}),
+        (ResolveEmergencyHandler(), "resolve-emergency", {"emergency_id": fake}),
+        (StabilizeReactorHandler(), "stabilize-reactor", {"reactor_id": fake}),
+        (AdjustGravityHandler(), "adjust-gravity", {"gravity_id": fake}),
+        (RepelBoardersHandler(), "repel-boarders", {"threat_id": fake}),
+        (DeliverPassengerHandler(), "deliver-passenger", {"passenger_id": fake}),
+        (SurveySiteHandler(), "survey-site", {"site_id": fake}),
+        (MineAsteroidHandler(), "mine-asteroid", {"site_id": fake}),
+        (InspectCustomsHandler(), "inspect-customs", {"hold_id": fake}),
+        (
+            SearchSmugglingCompartmentHandler(),
+            "search-smuggling-compartment",
+            {"compartment_id": fake},
+        ),
+        (ClaimInsuranceHandler(), "claim-insurance", {"policy_id": fake}),
+        (PayMortgageHandler(), "pay-mortgage", {"mortgage_id": fake, "amount": 1}),
+    ]
+
+    for handler, command_type, payload in cases:
+        bad_character = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
+        )
+        assert bad_character.ok is False
+        assert bad_character.reason == "invalid character id"
+        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert missing_target.ok is False
+        assert missing_target.reason == "target does not exist"
+
+    character_only_cases = [
+        (BoostMoraleHandler(), "boost-morale", {"amount": 1}),
+        (StartMutinyHandler(), "start-mutiny", {}),
+    ]
+    for handler, command_type, payload in character_only_cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
+        )
+        assert result.ok is False
+        assert result.reason == "invalid character id"
 
 
 async def test_open_airlock_to_vacuum_decompresses_module():

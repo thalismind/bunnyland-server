@@ -240,6 +240,126 @@ class AlienArtifactComponent(Component):
     insight: str = ""
 
 
+@dataclass(frozen=True)
+class XenobiologySampleComponent(Component):
+    species_id: str = ""
+    contamination: float = 0.0
+    studied_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TradeProtocolComponent(Component):
+    species_id: str = ""
+    terms: str = "cautious exchange"
+    accepted: bool = False
+
+
+@dataclass(frozen=True)
+class DroneComponent(Component):
+    drone_type: str = "utility"
+    assigned_task: str = ""
+    active: bool = False
+
+
+@dataclass(frozen=True)
+class ShipAIComponent(Component):
+    name: str = "ship AI"
+    trust: int = 0
+    hacked: bool = False
+
+
+@dataclass(frozen=True)
+class DataSalvageComponent(Component):
+    data_type: str = "logs"
+    encrypted: bool = True
+    recovered_by: str | None = None
+
+
+@dataclass(frozen=True)
+class AwayTeamComponent(Component):
+    mission: str = "survey"
+    member_ids: tuple[str, ...] = ()
+    deployed: bool = False
+
+
+@dataclass(frozen=True)
+class MoraleComponent(Component):
+    value: int = 0
+
+
+@dataclass(frozen=True)
+class MutinyComponent(Component):
+    active: bool = False
+    ringleader_id: str | None = None
+
+
+@dataclass(frozen=True)
+class EmergencyComponent(Component):
+    emergency_type: str = "decompression"
+    resolved: bool = False
+
+
+@dataclass(frozen=True)
+class ReactorComponent(Component):
+    stability: float = 100.0
+    online: bool = True
+
+
+@dataclass(frozen=True)
+class GravityComponent(Component):
+    enabled: bool = True
+    strength: float = 1.0
+
+
+@dataclass(frozen=True)
+class BoardingThreatComponent(Component):
+    threat_level: int = 1
+    repelled: bool = False
+
+
+@dataclass(frozen=True)
+class PassengerComponent(Component):
+    destination_id: str = ""
+    delivered: bool = False
+
+
+@dataclass(frozen=True)
+class SurveySiteComponent(Component):
+    resource: str = ""
+    surveyed_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MiningSiteComponent(Component):
+    resource_type: str = "ore"
+    remaining: int = 0
+
+
+@dataclass(frozen=True)
+class CustomsHoldComponent(Component):
+    inspected: bool = False
+    contraband_found: bool = False
+
+
+@dataclass(frozen=True)
+class SmugglingCompartmentComponent(Component):
+    hidden: bool = True
+    discovered: bool = False
+
+
+@dataclass(frozen=True)
+class InsurancePolicyComponent(Component):
+    insured_entity_id: str = ""
+    premium: int = 0
+    claimed: bool = False
+
+
+@dataclass(frozen=True)
+class MortgageComponent(Component):
+    principal: int = 0
+    balance: int = 0
+
+
 # --- 8.2 Space travel, orbits, and navigation -----------------------------------------
 
 
@@ -717,9 +837,7 @@ def _tech_unlocked(world: World, tech_id: str) -> bool:
     return False
 
 
-def _inventory_resource_stack(
-    character: Entity, world: World, resource_type: str
-) -> Entity | None:
+def _inventory_resource_stack(character: Entity, world: World, resource_type: str) -> Entity | None:
     for _edge, item_id in character.get_relationships(Contains):
         if not world.has_entity(item_id):
             continue
@@ -792,9 +910,7 @@ class FabricateHandler:
         if not _tech_unlocked(ctx.world, blueprint.required_tech):
             return rejected("required technology has not been researched")
         character = ctx.entity(character_id)
-        if not _spend_inventory_resources(
-            character, ctx.world, blueprint.resource_inputs
-        ):
+        if not _spend_inventory_resources(character, ctx.world, blueprint.resource_inputs):
             return rejected("not enough resources to fabricate")
 
         part = spawn_entity(
@@ -1070,8 +1186,7 @@ class ClaimSalvageHandler:
             contract = _active_contract_for(contract_entity, character_id, "salvage")
             if contract is None and (
                 not contract_entity.has_component(ContractComponent)
-                or contract_entity.get_component(ContractComponent).accepted_by
-                != str(character_id)
+                or contract_entity.get_component(ContractComponent).accepted_by != str(character_id)
             ):
                 return rejected("salvage rights are not held")
         character = ctx.entity(character_id)
@@ -1373,9 +1488,7 @@ class EvacuateModuleHandler:
             if not occupant.has_component(CharacterComponent):
                 continue
             module.remove_relationship(Contains, occupant_id)
-            destination.add_relationship(
-                Contains(mode=ContainmentMode.ROOM_CONTENT), occupant_id
-            )
+            destination.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), occupant_id)
             evacuees.append(str(occupant_id))
         if not evacuees:
             return rejected("no one to evacuate")
@@ -1474,9 +1587,10 @@ class JumpHandler:
         route = ship.get_component(NavigationRouteComponent)
         if route.status == "jumping":
             return rejected("ship is already jumping")
-        if not ship.has_component(JumpDriveComponent) or not ship.get_component(
-            JumpDriveComponent
-        ).charged:
+        if (
+            not ship.has_component(JumpDriveComponent)
+            or not ship.get_component(JumpDriveComponent).charged
+        ):
             return rejected("jump drive is not charged")
         if not ship.has_component(FuelComponent):
             return rejected("ship has no fuel tank")
@@ -1711,9 +1825,10 @@ class LandHandler:
         if body_id is None or not ctx.world.has_entity(body_id):
             return rejected("orbital body no longer exists")
         body = ctx.entity(body_id)
-        if body.has_component(OrbitalBodyComponent) and not body.get_component(
-            OrbitalBodyComponent
-        ).landable:
+        if (
+            body.has_component(OrbitalBodyComponent)
+            and not body.get_component(OrbitalBodyComponent).landable
+        ):
             return rejected("body cannot be landed on")
 
         replace_component(ship, replace(orbit, altitude="surface"))
@@ -2019,6 +2134,100 @@ class CrewDutyChangedEvent(DomainEvent):
     on_duty: bool
 
 
+class AwayTeamDeployedEvent(DomainEvent):
+    team_id: str
+    mission: str
+
+
+class MoraleChangedEvent(DomainEvent):
+    character_id: str
+    value: int
+
+
+class MutinyStartedEvent(DomainEvent):
+    character_id: str
+
+
+class DroneCommandedEvent(DomainEvent):
+    drone_id: str
+    task: str
+
+
+class ShipAIHackedEvent(DomainEvent):
+    ai_id: str
+    trust: int
+
+
+class DataSalvagedEvent(DomainEvent):
+    data_id: str
+    data_type: str
+
+
+class XenobiologyStudiedEvent(DomainEvent):
+    sample_id: str
+    contamination: float
+
+
+class TradeProtocolAcceptedEvent(DomainEvent):
+    protocol_id: str
+    terms: str
+
+
+class EmergencyResolvedEvent(DomainEvent):
+    emergency_id: str
+    emergency_type: str
+
+
+class ReactorStabilizedEvent(DomainEvent):
+    reactor_id: str
+    stability: float
+
+
+class GravityAdjustedEvent(DomainEvent):
+    gravity_id: str
+    enabled: bool
+    strength: float
+
+
+class BoardingRepelledEvent(DomainEvent):
+    threat_id: str
+    threat_level: int
+
+
+class PassengerDeliveredEvent(DomainEvent):
+    passenger_id: str
+
+
+class SurveyCompletedEvent(DomainEvent):
+    site_id: str
+    resource: str
+
+
+class MiningCompletedEvent(DomainEvent):
+    site_id: str
+    resource_type: str
+    quantity: int
+
+
+class CustomsInspectedEvent(DomainEvent):
+    hold_id: str
+    contraband_found: bool
+
+
+class SmugglingCompartmentSearchedEvent(DomainEvent):
+    compartment_id: str
+    discovered: bool
+
+
+class InsuranceClaimedEvent(DomainEvent):
+    policy_id: str
+
+
+class MortgagePaidEvent(DomainEvent):
+    mortgage_id: str
+    balance: int
+
+
 def _hour_of_day(epoch: int) -> int:
     return (epoch % SECONDS_PER_DAY) // SECONDS_PER_HOUR
 
@@ -2101,6 +2310,625 @@ class RelieveCrewShiftHandler:
                     character_id=str(character_id),
                     shift_id=str(shift_id),
                     shift_name=shift_name,
+                )
+            )
+        )
+
+
+def _reachable_entity_with(ctx: HandlerContext, character_id: EntityId, raw_id, component):
+    target_id = parse_entity_id(raw_id)
+    if target_id is None:
+        return None, rejected("invalid target id")
+    if not ctx.world.has_entity(target_id):
+        return None, rejected("target does not exist")
+    character = ctx.entity(character_id)
+    if target_id not in reachable_ids(ctx.world, character):
+        return None, rejected("target is not reachable")
+    entity = ctx.entity(target_id)
+    if not entity.has_component(component):
+        return None, rejected("target has wrong component")
+    return entity, None
+
+
+class DeployAwayTeamHandler:
+    command_type = "deploy-away-team"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        team, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("team_id"), AwayTeamComponent
+        )
+        if error is not None:
+            return error
+        component = team.get_component(AwayTeamComponent)
+        if component.deployed:
+            return rejected("away team already deployed")
+        updated = replace(component, deployed=True)
+        replace_component(team, updated)
+        return ok(
+            AwayTeamDeployedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(team.id),),
+                    team_id=str(team.id),
+                    mission=updated.mission,
+                )
+            )
+        )
+
+
+class BoostMoraleHandler:
+    command_type = "boost-morale"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        amount = int(command.payload.get("amount", 1))
+        current = (
+            character.get_component(MoraleComponent)
+            if character.has_component(MoraleComponent)
+            else MoraleComponent()
+        )
+        updated = replace(current, value=current.value + amount)
+        replace_component(character, updated)
+        return ok(
+            MoraleChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(character_id),),
+                    character_id=str(character_id),
+                    value=updated.value,
+                )
+            )
+        )
+
+
+class StartMutinyHandler:
+    command_type = "start-mutiny"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        replace_component(character, MutinyComponent(active=True, ringleader_id=str(character_id)))
+        return ok(
+            MutinyStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(character_id),),
+                    character_id=str(character_id),
+                )
+            )
+        )
+
+
+class CommandDroneHandler:
+    command_type = "command-drone"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        drone, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("drone_id"), DroneComponent
+        )
+        if error is not None:
+            return error
+        task = str(command.payload.get("task", "assist")).strip() or "assist"
+        updated = replace(drone.get_component(DroneComponent), assigned_task=task, active=True)
+        replace_component(drone, updated)
+        return ok(
+            DroneCommandedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(drone.id),),
+                    drone_id=str(drone.id),
+                    task=task,
+                )
+            )
+        )
+
+
+class HackShipAIHandler:
+    command_type = "hack-ship-ai"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        ai, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("ai_id"), ShipAIComponent
+        )
+        if error is not None:
+            return error
+        ai_state = ai.get_component(ShipAIComponent)
+        updated = replace(ai_state, hacked=True, trust=ai_state.trust + 1)
+        replace_component(ai, updated)
+        return ok(
+            ShipAIHackedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(ai.id),),
+                    ai_id=str(ai.id),
+                    trust=updated.trust,
+                )
+            )
+        )
+
+
+class SalvageDataHandler:
+    command_type = "salvage-data"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        data, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("data_id"), DataSalvageComponent
+        )
+        if error is not None:
+            return error
+        component = data.get_component(DataSalvageComponent)
+        replace_component(data, replace(component, encrypted=False, recovered_by=str(character_id)))
+        return ok(
+            DataSalvagedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(data.id),),
+                    data_id=str(data.id),
+                    data_type=component.data_type,
+                )
+            )
+        )
+
+
+class StudyXenobiologyHandler:
+    command_type = "study-xenobiology"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        sample, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("sample_id"), XenobiologySampleComponent
+        )
+        if error is not None:
+            return error
+        component = sample.get_component(XenobiologySampleComponent)
+        updated = replace(
+            component,
+            studied_by=tuple(sorted((*component.studied_by, str(character_id)))),
+        )
+        replace_component(sample, updated)
+        return ok(
+            XenobiologyStudiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(sample.id),),
+                    sample_id=str(sample.id),
+                    contamination=updated.contamination,
+                )
+            )
+        )
+
+
+class AcceptTradeProtocolHandler:
+    command_type = "accept-trade-protocol"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        protocol, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("protocol_id"), TradeProtocolComponent
+        )
+        if error is not None:
+            return error
+        component = protocol.get_component(TradeProtocolComponent)
+        replace_component(protocol, replace(component, accepted=True))
+        return ok(
+            TradeProtocolAcceptedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(protocol.id),),
+                    protocol_id=str(protocol.id),
+                    terms=component.terms,
+                )
+            )
+        )
+
+
+class ResolveEmergencyHandler:
+    command_type = "resolve-emergency"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        emergency, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("emergency_id"), EmergencyComponent
+        )
+        if error is not None:
+            return error
+        component = emergency.get_component(EmergencyComponent)
+        replace_component(emergency, replace(component, resolved=True))
+        return ok(
+            EmergencyResolvedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(emergency.id),),
+                    emergency_id=str(emergency.id),
+                    emergency_type=component.emergency_type,
+                )
+            )
+        )
+
+
+class StabilizeReactorHandler:
+    command_type = "stabilize-reactor"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        reactor, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("reactor_id"), ReactorComponent
+        )
+        if error is not None:
+            return error
+        component = reactor.get_component(ReactorComponent)
+        amount = float(command.payload.get("amount", 10.0))
+        updated = replace(
+            component, stability=min(100.0, component.stability + amount), online=True
+        )
+        replace_component(reactor, updated)
+        return ok(
+            ReactorStabilizedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(reactor.id),),
+                    reactor_id=str(reactor.id),
+                    stability=updated.stability,
+                )
+            )
+        )
+
+
+class AdjustGravityHandler:
+    command_type = "adjust-gravity"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        gravity, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("gravity_id"), GravityComponent
+        )
+        if error is not None:
+            return error
+        enabled = bool(command.payload.get("enabled", True))
+        strength = float(command.payload.get("strength", 1.0))
+        updated = replace(
+            gravity.get_component(GravityComponent), enabled=enabled, strength=strength
+        )
+        replace_component(gravity, updated)
+        return ok(
+            GravityAdjustedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(gravity.id),),
+                    gravity_id=str(gravity.id),
+                    enabled=enabled,
+                    strength=strength,
+                )
+            )
+        )
+
+
+class RepelBoardersHandler:
+    command_type = "repel-boarders"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        threat, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("threat_id"), BoardingThreatComponent
+        )
+        if error is not None:
+            return error
+        component = threat.get_component(BoardingThreatComponent)
+        replace_component(threat, replace(component, repelled=True))
+        return ok(
+            BoardingRepelledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(threat.id),),
+                    threat_id=str(threat.id),
+                    threat_level=component.threat_level,
+                )
+            )
+        )
+
+
+class DeliverPassengerHandler:
+    command_type = "deliver-passenger"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        passenger, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("passenger_id"), PassengerComponent
+        )
+        if error is not None:
+            return error
+        component = passenger.get_component(PassengerComponent)
+        replace_component(passenger, replace(component, delivered=True))
+        return ok(
+            PassengerDeliveredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(passenger.id),),
+                    passenger_id=str(passenger.id),
+                )
+            )
+        )
+
+
+class SurveySiteHandler:
+    command_type = "survey-site"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        site, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("site_id"), SurveySiteComponent
+        )
+        if error is not None:
+            return error
+        component = site.get_component(SurveySiteComponent)
+        replace_component(
+            site,
+            replace(
+                component, surveyed_by=tuple(sorted((*component.surveyed_by, str(character_id))))
+            ),
+        )
+        return ok(
+            SurveyCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(site.id),),
+                    site_id=str(site.id),
+                    resource=component.resource,
+                )
+            )
+        )
+
+
+class MineAsteroidHandler:
+    command_type = "mine-asteroid"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        site, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("site_id"), MiningSiteComponent
+        )
+        if error is not None:
+            return error
+        component = site.get_component(MiningSiteComponent)
+        if component.remaining <= 0:
+            return rejected("mining site is depleted")
+        quantity = min(int(command.payload.get("quantity", 1)), component.remaining)
+        replace_component(site, replace(component, remaining=component.remaining - quantity))
+        output = _spawn_inventory_resource(
+            ctx.world, ctx.entity(character_id), component.resource_type, quantity
+        )
+        return ok(
+            MiningCompletedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(site.id), str(output.id)),
+                    site_id=str(site.id),
+                    resource_type=component.resource_type,
+                    quantity=quantity,
+                )
+            )
+        )
+
+
+class InspectCustomsHandler:
+    command_type = "inspect-customs"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        hold, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("hold_id"), CustomsHoldComponent
+        )
+        if error is not None:
+            return error
+        contraband = bool(command.payload.get("contraband_found", False))
+        replace_component(
+            hold,
+            replace(
+                hold.get_component(CustomsHoldComponent),
+                inspected=True,
+                contraband_found=contraband,
+            ),
+        )
+        return ok(
+            CustomsInspectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(hold.id),),
+                    hold_id=str(hold.id),
+                    contraband_found=contraband,
+                )
+            )
+        )
+
+
+class SearchSmugglingCompartmentHandler:
+    command_type = "search-smuggling-compartment"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        compartment, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("compartment_id"), SmugglingCompartmentComponent
+        )
+        if error is not None:
+            return error
+        component = compartment.get_component(SmugglingCompartmentComponent)
+        discovered = component.hidden
+        replace_component(compartment, replace(component, discovered=discovered))
+        return ok(
+            SmugglingCompartmentSearchedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(compartment.id),),
+                    compartment_id=str(compartment.id),
+                    discovered=discovered,
+                )
+            )
+        )
+
+
+class ClaimInsuranceHandler:
+    command_type = "claim-insurance"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        policy, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("policy_id"), InsurancePolicyComponent
+        )
+        if error is not None:
+            return error
+        component = policy.get_component(InsurancePolicyComponent)
+        if component.claimed:
+            return rejected("insurance already claimed")
+        replace_component(policy, replace(component, claimed=True))
+        return ok(
+            InsuranceClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(policy.id),),
+                    policy_id=str(policy.id),
+                )
+            )
+        )
+
+
+class PayMortgageHandler:
+    command_type = "pay-mortgage"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        mortgage, error = _reachable_entity_with(
+            ctx, character_id, command.payload.get("mortgage_id"), MortgageComponent
+        )
+        if error is not None:
+            return error
+        amount = int(command.payload.get("amount", 0))
+        if amount <= 0:
+            return rejected("mortgage payment must be positive")
+        component = mortgage.get_component(MortgageComponent)
+        updated = replace(component, balance=max(0, component.balance - amount))
+        replace_component(mortgage, updated)
+        return ok(
+            MortgagePaidEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=str(container_of(ctx.entity(character_id)))
+                    if container_of(ctx.entity(character_id))
+                    else None,
+                    target_ids=(str(mortgage.id),),
+                    mortgage_id=str(mortgage.id),
+                    balance=updated.balance,
                 )
             )
         )
@@ -2203,9 +3031,7 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
         if entity.has_component(ShipSystemComponent):
             system = entity.get_component(ShipSystemComponent)
             status = "online" if system.online else "offline"
-            lines.append(
-                f"Ship system {system.system_type}: {system.integrity:.0f}% ({status})."
-            )
+            lines.append(f"Ship system {system.system_type}: {system.integrity:.0f}% ({status}).")
         if entity.has_component(FabricatorComponent):
             online = entity.get_component(FabricatorComponent).online
             lines.append(f"Fabricator {_name(entity)}: {'online' if online else 'offline'}.")
@@ -2227,8 +3053,7 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
                 )
             elif contract.accepted_by == str(character.id):
                 lines.append(
-                    f"{contract.contract_type.title()} contract {_name(entity)}: "
-                    f"{contract.status}."
+                    f"{contract.contract_type.title()} contract {_name(entity)}: {contract.status}."
                 )
         if entity.has_component(CargoComponent):
             cargo = entity.get_component(CargoComponent)
@@ -2264,14 +3089,77 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
             artifact = entity.get_component(AlienArtifactComponent)
             if str(character.id) not in artifact.studied_by:
                 lines.append(f"Alien artifact ready for study: {_name(entity)}.")
+        if entity.has_component(XenobiologySampleComponent):
+            sample = entity.get_component(XenobiologySampleComponent)
+            lines.append(
+                f"Xenobiology sample {_name(entity)}: contamination {sample.contamination:g}."
+            )
+        if entity.has_component(TradeProtocolComponent):
+            protocol = entity.get_component(TradeProtocolComponent)
+            state = "accepted" if protocol.accepted else "pending"
+            lines.append(f"Trade protocol {_name(entity)}: {state}, {protocol.terms}.")
+        if entity.has_component(DroneComponent):
+            drone = entity.get_component(DroneComponent)
+            state = "active" if drone.active else "idle"
+            lines.append(f"Drone {_name(entity)}: {state} {drone.assigned_task}.")
+        if entity.has_component(ShipAIComponent):
+            ai = entity.get_component(ShipAIComponent)
+            state = "hacked" if ai.hacked else "locked"
+            lines.append(f"Ship AI {ai.name}: trust {ai.trust}, {state}.")
+        if entity.has_component(DataSalvageComponent):
+            data = entity.get_component(DataSalvageComponent)
+            state = "encrypted" if data.encrypted else "recovered"
+            lines.append(f"Data salvage {_name(entity)}: {data.data_type}, {state}.")
+        if entity.has_component(AwayTeamComponent):
+            team = entity.get_component(AwayTeamComponent)
+            state = "deployed" if team.deployed else "standing by"
+            lines.append(f"Away team {_name(entity)}: {team.mission}, {state}.")
+        if entity.has_component(EmergencyComponent):
+            emergency = entity.get_component(EmergencyComponent)
+            state = "resolved" if emergency.resolved else "active"
+            lines.append(f"Emergency {_name(entity)}: {emergency.emergency_type}, {state}.")
+        if entity.has_component(ReactorComponent):
+            reactor = entity.get_component(ReactorComponent)
+            lines.append(f"Reactor {_name(entity)}: stability {reactor.stability:g}.")
+        if entity.has_component(GravityComponent):
+            gravity = entity.get_component(GravityComponent)
+            state = "enabled" if gravity.enabled else "disabled"
+            lines.append(f"Gravity {_name(entity)}: {state} {gravity.strength:g}g.")
+        if entity.has_component(BoardingThreatComponent):
+            threat = entity.get_component(BoardingThreatComponent)
+            state = "repelled" if threat.repelled else "boarding"
+            lines.append(f"Boarding threat {_name(entity)}: level {threat.threat_level}, {state}.")
+        if entity.has_component(PassengerComponent):
+            passenger = entity.get_component(PassengerComponent)
+            state = "delivered" if passenger.delivered else "aboard"
+            lines.append(f"Passenger {_name(entity)}: {state}.")
+        if entity.has_component(SurveySiteComponent):
+            survey = entity.get_component(SurveySiteComponent)
+            lines.append(f"Survey site {_name(entity)}: {survey.resource}.")
+        if entity.has_component(MiningSiteComponent):
+            mining = entity.get_component(MiningSiteComponent)
+            lines.append(f"Mining site {_name(entity)}: {mining.remaining} {mining.resource_type}.")
+        if entity.has_component(CustomsHoldComponent):
+            hold = entity.get_component(CustomsHoldComponent)
+            state = "inspected" if hold.inspected else "pending"
+            lines.append(f"Customs hold {_name(entity)}: {state}.")
+        if entity.has_component(SmugglingCompartmentComponent):
+            compartment = entity.get_component(SmugglingCompartmentComponent)
+            state = "discovered" if compartment.discovered else "hidden"
+            lines.append(f"Smuggling compartment {_name(entity)}: {state}.")
+        if entity.has_component(InsurancePolicyComponent):
+            policy = entity.get_component(InsurancePolicyComponent)
+            state = "claimed" if policy.claimed else "active"
+            lines.append(f"Insurance policy {_name(entity)}: {state}.")
+        if entity.has_component(MortgageComponent):
+            mortgage = entity.get_component(MortgageComponent)
+            lines.append(f"Mortgage {_name(entity)}: balance {mortgage.balance}.")
         if entity.has_component(AirlockComponent):
             airlock = entity.get_component(AirlockComponent)
             lines.append(f"Airlock {_name(entity)}: {airlock.state}.")
         if entity.has_component(PowerGridComponent):
             grid = entity.get_component(PowerGridComponent)
-            lines.append(
-                f"Power grid: {grid.available:.0f}/{grid.capacity:.0f} available."
-            )
+            lines.append(f"Power grid: {grid.available:.0f}/{grid.capacity:.0f} available.")
         if entity.has_component(ShipComponent):
             for _edge, station_id in entity.get_relationships(DockedTo):
                 if world.has_entity(station_id):
@@ -2317,6 +3205,12 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
         pressure = character.get_component(CyberneticMutationPressureComponent)
         if pressure.amount > 0.0:
             lines.append(f"Cybernetic mutation pressure: {pressure.amount:g}.")
+    if character.has_component(MoraleComponent):
+        lines.append(f"Crew morale: {character.get_component(MoraleComponent).value}.")
+    if character.has_component(MutinyComponent):
+        mutiny = character.get_component(MutinyComponent)
+        if mutiny.active:
+            lines.append("Mutiny is active.")
     for edge, shift_id in character.get_relationships(WorksShift):
         if not world.has_entity(shift_id):
             continue
@@ -2350,11 +3244,16 @@ __all__ = [
     "AlienArtifactComponent",
     "AlienArtifactStudiedEvent",
     "AlienSpeciesComponent",
+    "AcceptTradeProtocolHandler",
     "AnswerDistressSignalHandler",
     "AttemptTranslationHandler",
     "AssignCrewShiftHandler",
     "AstrogationComponent",
+    "AwayTeamComponent",
+    "AwayTeamDeployedEvent",
     "BlueprintComponent",
+    "BoardingRepelledEvent",
+    "BoardingThreatComponent",
     "BulkheadComponent",
     "AcceptContractHandler",
     "CargoComponent",
@@ -2375,8 +3274,15 @@ __all__ = [
     "CrewDutyStatusComponent",
     "CrewShiftAssignedEvent",
     "CrewShiftRelievedEvent",
+    "CommandDroneHandler",
+    "CustomsHoldComponent",
+    "CustomsInspectedEvent",
     "CycleAirlockHandler",
+    "DataSalvageComponent",
+    "DataSalvagedEvent",
     "DeliverCargoHandler",
+    "DeliverPassengerHandler",
+    "DeployAwayTeamHandler",
     "DistressSignalComponent",
     "DiplomacyChangedEvent",
     "DiplomaticMissionComponent",
@@ -2385,6 +3291,8 @@ __all__ = [
     "DockedTo",
     "DockingCompletedEvent",
     "EnterOrbitHandler",
+    "EmergencyComponent",
+    "EmergencyResolvedEvent",
     "EvacuateModuleHandler",
     "FabricateHandler",
     "FabricatorComponent",
@@ -2392,8 +3300,14 @@ __all__ = [
     "FuelComponent",
     "FirstContactComponent",
     "FirstContactEvent",
+    "GravityAdjustedEvent",
+    "GravityComponent",
     "HabitatModuleComponent",
+    "HackShipAIHandler",
+    "InsuranceClaimedEvent",
+    "InsurancePolicyComponent",
     "InspectShipSystemHandler",
+    "InspectCustomsHandler",
     "InstallUpgradeHandler",
     "InitiateContactHandler",
     "ItemFabricatedEvent",
@@ -2412,6 +3326,12 @@ __all__ = [
     "LifeSupportFailedEvent",
     "LoadCargoHandler",
     "ModuleEvacuatedEvent",
+    "MortgageComponent",
+    "MortgagePaidEvent",
+    "MoraleChangedEvent",
+    "MoraleComponent",
+    "MutinyComponent",
+    "MutinyStartedEvent",
     "CyberneticMutationPressureComponent",
     "NegotiateAlienHandler",
     "NavigationHazardEncounteredEvent",
@@ -2426,6 +3346,9 @@ __all__ = [
     "PowerReroutedEvent",
     "PressureChangedEvent",
     "PressurizedComponent",
+    "PassengerComponent",
+    "PassengerDeliveredEvent",
+    "PayMortgageHandler",
     "QuarantineComponent",
     "QuarantineSampleHandler",
     "QuarantineStartedEvent",
@@ -2434,26 +3357,48 @@ __all__ = [
     "RefuelHandler",
     "RelieveCrewShiftHandler",
     "RepairSystemHandler",
+    "ReactorComponent",
+    "ReactorStabilizedEvent",
+    "RepelBoardersHandler",
+    "ResolveEmergencyHandler",
     "ReroutePowerHandler",
+    "SalvageDataHandler",
     "ScanHandler",
     "SealBulkheadHandler",
     "SensorComponent",
     "SalvageClaimComponent",
     "SalvageClaimedEvent",
+    "SearchSmugglingCompartmentHandler",
     "ShipComponent",
+    "ShipAIComponent",
+    "ShipAIHackedEvent",
     "ShipSystemComponent",
     "ShipSystemDamagedEvent",
     "ShipSystemRepairedEvent",
     "ShipUpgradeComponent",
     "SignalDetectedEvent",
+    "SmugglingCompartmentComponent",
+    "SmugglingCompartmentSearchedEvent",
     "StarSystemComponent",
     "StationComponent",
+    "StabilizeReactorHandler",
     "StudyAlienArtifactHandler",
+    "StudyXenobiologyHandler",
+    "SurveyCompletedEvent",
+    "SurveySiteComponent",
+    "SurveySiteHandler",
+    "MineAsteroidHandler",
+    "MiningCompletedEvent",
+    "MiningSiteComponent",
     "TranslationMatrixComponent",
     "TranslationProgressedEvent",
+    "TradeProtocolAcceptedEvent",
+    "TradeProtocolComponent",
     "UndockHandler",
     "UpgradeInstalledEvent",
     "WorksShift",
+    "XenobiologySampleComponent",
+    "XenobiologyStudiedEvent",
     "install_voidsim",
     "voidsim_fragments",
 ]

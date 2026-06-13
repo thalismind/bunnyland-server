@@ -74,6 +74,8 @@ class QuestComponent(Component):
 class QuestStageComponent(Component):
     quest_id: str
     stage: int = 0
+    tracked_by: tuple[str, ...] = ()
+    branch: str = ""
 
 
 @dataclass(frozen=True)
@@ -207,6 +209,27 @@ class LoreBookComponent(Component):
 class MagickaComponent(Component):
     current: int = 10
     maximum: int = 10
+    regen_per_hour: int = 2
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class SpellCooldownComponent(Component):
+    cooldown_seconds: int = 0
+    ready_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class PersuasionComponent(Component):
+    disposition: int = 0
+    persuaded_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SurrenderComponent(Component):
+    surrendered_to: str | None = None
+    reason: str = ""
+    at_epoch: int = 0
 
 
 @dataclass(frozen=True)
@@ -299,6 +322,21 @@ class QuestCompletedEvent(DomainEvent):
     title: str
 
 
+class QuestTrackedEvent(DomainEvent):
+    quest_id: str
+    title: str
+
+
+class QuestDeclinedEvent(DomainEvent):
+    quest_id: str
+    title: str
+
+
+class QuestBranchChosenEvent(DomainEvent):
+    quest_id: str
+    branch: str
+
+
 class FactionJoinedEvent(DomainEvent):
     faction_id: str
     faction_name: str
@@ -349,6 +387,13 @@ class CrimeWitnessedEvent(DomainEvent):
     faction_name: str
     bounty: int
     witness_ids: tuple[str, ...] = ()
+
+
+class CrimeReportedEvent(DomainEvent):
+    criminal_id: str
+    faction_id: str
+    reporter_id: str
+    bounty: int
 
 
 class BountyPaidEvent(DomainEvent):
@@ -409,6 +454,33 @@ class ArtifactUsedEvent(DomainEvent):
     artifact_id: str
     artifact_name: str
     remaining_charges: int
+
+
+class ArtifactIdentifiedEvent(DomainEvent):
+    artifact_id: str
+    artifact_name: str
+
+
+class MagickaRecoveredEvent(DomainEvent):
+    character_id: str
+    current: int
+    maximum: int
+
+
+class PersuasionAttemptedEvent(DomainEvent):
+    target_id: str
+    disposition: int
+
+
+class SurrenderedEvent(DomainEvent):
+    character_id: str
+    surrendered_to: str
+
+
+class AncientBeastAppeasedEvent(DomainEvent):
+    beast_id: str
+    beast_name: str
+    method: str
 
 
 class VoicePhraseInscribedEvent(DomainEvent):
@@ -753,6 +825,122 @@ class CompleteObjectiveHandler:
                 )
             )
         return ok(*events)
+
+
+class TrackQuestHandler:
+    command_type = "track-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_key = str(command.payload.get("quest_id", "")).strip()
+        if character_id is None or not quest_key:
+            return rejected("invalid character or quest id")
+        result = _quest_by_key(ctx.world, quest_key)
+        if result is None:
+            return rejected("quest does not exist")
+        quest_id, quest_entity = result
+        quest = quest_entity.get_component(QuestComponent)
+        if not _accepted_by(quest, character_id):
+            return rejected("quest is not accepted")
+        stages = [
+            entity
+            for entity in ctx.world.query().with_all([QuestStageComponent]).execute_entities()
+            if entity.get_component(QuestStageComponent).quest_id == quest.quest_id
+        ]
+        stage_entity = stages[0] if stages else quest_entity
+        stage = (
+            stage_entity.get_component(QuestStageComponent)
+            if stage_entity.has_component(QuestStageComponent)
+            else QuestStageComponent(quest_id=quest.quest_id)
+        )
+        tracked_by = tuple(sorted((*stage.tracked_by, str(character_id))))
+        replace_component(stage_entity, replace(stage, tracked_by=tracked_by))
+        return ok(
+            QuestTrackedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id),),
+                    quest_id=str(quest_id),
+                    title=quest.title,
+                )
+            )
+        )
+
+
+class DeclineQuestHandler:
+    command_type = "decline-quest"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_key = str(command.payload.get("quest_id", "")).strip()
+        if character_id is None or not quest_key:
+            return rejected("invalid character or quest id")
+        result = _quest_by_key(ctx.world, quest_key)
+        if result is None:
+            return rejected("quest does not exist")
+        quest_id, quest_entity = result
+        quest = quest_entity.get_component(QuestComponent)
+        if quest.status == "completed":
+            return rejected("quest is already complete")
+        if _accepted_by(quest, character_id):
+            return rejected("accepted quest cannot be declined")
+        replace_component(quest_entity, replace(quest, status="declined"))
+        return ok(
+            QuestDeclinedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id),),
+                    quest_id=str(quest_id),
+                    title=quest.title,
+                )
+            )
+        )
+
+
+class ChooseQuestBranchHandler:
+    command_type = "choose-quest-branch"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        quest_key = str(command.payload.get("quest_id", "")).strip()
+        branch = str(command.payload.get("branch", "")).strip()
+        if character_id is None or not quest_key or not branch:
+            return rejected("invalid character, quest, or branch")
+        result = _quest_by_key(ctx.world, quest_key)
+        if result is None:
+            return rejected("quest does not exist")
+        quest_id, quest_entity = result
+        quest = quest_entity.get_component(QuestComponent)
+        if not _accepted_by(quest, character_id):
+            return rejected("quest is not accepted")
+        stages = [
+            entity
+            for entity in ctx.world.query().with_all([QuestStageComponent]).execute_entities()
+            if entity.get_component(QuestStageComponent).quest_id == quest.quest_id
+        ]
+        stage_entity = stages[0] if stages else quest_entity
+        stage = (
+            stage_entity.get_component(QuestStageComponent)
+            if stage_entity.has_component(QuestStageComponent)
+            else QuestStageComponent(quest_id=quest.quest_id)
+        )
+        replace_component(stage_entity, replace(stage, branch=branch))
+        return ok(
+            QuestBranchChosenEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(quest_id),),
+                    quest_id=str(quest_id),
+                    branch=branch,
+                )
+            )
+        )
 
 
 class JoinFactionHandler:
@@ -1287,6 +1475,125 @@ class ServeJailTimeHandler:
         )
 
 
+class PersuadeHandler:
+    command_type = "persuade"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if character_id is None or target_id is None:
+            return rejected("invalid character or target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        character = ctx.entity(character_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("target is not reachable")
+        target = ctx.entity(target_id)
+        amount = int(command.payload.get("amount", 1))
+        current = (
+            target.get_component(PersuasionComponent)
+            if target.has_component(PersuasionComponent)
+            else PersuasionComponent()
+        )
+        updated = replace(
+            current,
+            disposition=current.disposition + amount,
+            persuaded_by=tuple(sorted((*current.persuaded_by, str(character_id)))),
+        )
+        replace_component(target, updated)
+        return ok(
+            PersuasionAttemptedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
+                    target_id=str(target_id),
+                    disposition=updated.disposition,
+                )
+            )
+        )
+
+
+class SurrenderHandler:
+    command_type = "surrender"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if target_id is not None and not ctx.world.has_entity(target_id):
+            return rejected("target does not exist")
+        surrendered_to = str(target_id) if target_id is not None else ""
+        reason = str(command.payload.get("reason", "")).strip()
+        replace_component(
+            character,
+            SurrenderComponent(
+                surrendered_to=surrendered_to or None,
+                reason=reason,
+                at_epoch=ctx.epoch,
+            ),
+        )
+        return ok(
+            SurrenderedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(surrendered_to,) if surrendered_to else (),
+                    character_id=str(character_id),
+                    surrendered_to=surrendered_to,
+                )
+            )
+        )
+
+
+class ReportCrimeHandler:
+    command_type = "report-crime"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        reporter_id = parse_entity_id(command.character_id)
+        criminal_id = parse_entity_id(command.payload.get("criminal_id"))
+        faction_id = parse_entity_id(command.payload.get("faction_id"))
+        if reporter_id is None or criminal_id is None or faction_id is None:
+            return rejected("invalid reporter, criminal, or faction id")
+        if not ctx.world.has_entity(criminal_id) or not ctx.world.has_entity(faction_id):
+            return rejected("criminal or faction does not exist")
+        reporter = ctx.entity(reporter_id)
+        if criminal_id not in reachable_ids(ctx.world, reporter):
+            return rejected("criminal is not reachable")
+        faction = ctx.entity(faction_id)
+        if not faction.has_component(FactionComponent):
+            return rejected("target is not a faction")
+        bounty = int(command.payload.get("bounty", 5))
+        if bounty <= 0:
+            return rejected("bounty must be positive")
+        criminal = ctx.entity(criminal_id)
+        wanted = (
+            dict(criminal.get_component(WantedComponent).amounts)
+            if criminal.has_component(WantedComponent)
+            else {}
+        )
+        wanted[str(faction_id)] = wanted.get(str(faction_id), 0) + bounty
+        replace_component(criminal, WantedComponent(amounts=wanted))
+        return ok(
+            CrimeReportedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(reporter_id),
+                    room_id=_room_id(ctx.world, reporter_id),
+                    target_ids=(str(criminal_id), str(faction_id)),
+                    criminal_id=str(criminal_id),
+                    faction_id=str(faction_id),
+                    reporter_id=str(reporter_id),
+                    bounty=bounty,
+                )
+            )
+        )
+
+
 class PickLockHandler:
     command_type = "pick-lock"
 
@@ -1442,6 +1749,10 @@ class CastDragonSpellHandler:
         if not spell_entity.has_component(SpellComponent):
             return rejected("target is not a spell")
         spell = spell_entity.get_component(SpellComponent)
+        if spell_entity.has_component(SpellCooldownComponent):
+            cooldown = spell_entity.get_component(SpellCooldownComponent)
+            if cooldown.ready_at_epoch > ctx.epoch:
+                return rejected("spell is on cooldown")
         magicka = (
             character.get_component(MagickaComponent)
             if character.has_component(MagickaComponent)
@@ -1451,6 +1762,12 @@ class CastDragonSpellHandler:
             return rejected("not enough magicka")
 
         replace_component(character, replace(magicka, current=magicka.current - spell.magicka_cost))
+        if spell_entity.has_component(SpellCooldownComponent):
+            cooldown = spell_entity.get_component(SpellCooldownComponent)
+            replace_component(
+                spell_entity,
+                replace(cooldown, ready_at_epoch=ctx.epoch + cooldown.cooldown_seconds),
+            )
         events: list[DomainEvent] = [
             DragonSpellCastEvent(
                 **ctx.event_base(
@@ -1505,6 +1822,7 @@ class BrewPotionHandler:
             ingredient_id = parse_entity_id(raw_id)
             if (
                 ingredient_id is None
+                or not ctx.world.has_entity(ingredient_id)
                 or container_of(ctx.world.get_entity(ingredient_id)) != character_id
             ):
                 return rejected("required ingredient is not carried")
@@ -1586,6 +1904,114 @@ class UseArtifactHandler:
         )
 
 
+class RecoverMagickaHandler:
+    command_type = "recover-magicka"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        magicka = (
+            character.get_component(MagickaComponent)
+            if character.has_component(MagickaComponent)
+            else MagickaComponent()
+        )
+        amount = int(command.payload.get("amount", magicka.regen_per_hour))
+        if amount <= 0:
+            return rejected("recovery amount must be positive")
+        updated = replace(
+            magicka,
+            current=min(magicka.maximum, magicka.current + amount),
+            last_updated_epoch=ctx.epoch,
+        )
+        replace_component(character, updated)
+        return ok(
+            MagickaRecoveredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(character_id),),
+                    character_id=str(character_id),
+                    current=updated.current,
+                    maximum=updated.maximum,
+                )
+            )
+        )
+
+
+class IdentifyArtifactHandler:
+    command_type = "identify-artifact"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        artifact_id = parse_entity_id(command.payload.get("artifact_id"))
+        if character_id is None or artifact_id is None:
+            return rejected("invalid character or artifact id")
+        if not ctx.world.has_entity(artifact_id):
+            return rejected("artifact does not exist")
+        character = ctx.entity(character_id)
+        if artifact_id not in reachable_ids(ctx.world, character):
+            return rejected("artifact is not reachable")
+        artifact_entity = ctx.entity(artifact_id)
+        if not artifact_entity.has_component(ArtifactComponent):
+            return rejected("target is not an artifact")
+        artifact = artifact_entity.get_component(ArtifactComponent)
+        if str(character_id) in artifact.identified_by:
+            return rejected("artifact already identified")
+        updated = replace(
+            artifact,
+            identified_by=tuple(sorted((*artifact.identified_by, str(character_id)))),
+        )
+        replace_component(artifact_entity, updated)
+        return ok(
+            ArtifactIdentifiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(artifact_id),),
+                    artifact_id=str(artifact_id),
+                    artifact_name=artifact.name,
+                )
+            )
+        )
+
+
+class AppeaseAncientBeastHandler:
+    command_type = "appease-ancient-beast"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        beast_id = parse_entity_id(command.payload.get("beast_id"))
+        if character_id is None or beast_id is None:
+            return rejected("invalid character or beast id")
+        if not ctx.world.has_entity(beast_id):
+            return rejected("ancient beast does not exist")
+        character = ctx.entity(character_id)
+        if beast_id not in reachable_ids(ctx.world, character):
+            return rejected("ancient beast is not reachable")
+        beast_entity = ctx.entity(beast_id)
+        if not beast_entity.has_component(AncientBeastComponent):
+            return rejected("target is not an ancient beast")
+        beast = beast_entity.get_component(AncientBeastComponent)
+        method = str(command.payload.get("method", "parley")).strip() or "parley"
+        return ok(
+            AncientBeastAppeasedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(beast_id),),
+                    beast_id=str(beast_id),
+                    beast_name=beast.name,
+                    method=method,
+                )
+            )
+        )
+
+
 class InscribeVoicePhraseHandler:
     command_type = "inscribe-voice-phrase"
 
@@ -1618,9 +2044,7 @@ class InscribeVoicePhraseHandler:
         )
         if writable is None and carvable is None:
             return rejected("target is not writable or carvable")
-        remaining = (
-            writable.remaining_space if writable is not None else carvable.remaining_space
-        )
+        remaining = writable.remaining_space if writable is not None else carvable.remaining_space
         if remaining is not None and len(phrase) > remaining:
             return rejected("not enough room to inscribe that")
         word = ctx.entity(word_id)
@@ -1724,6 +2148,14 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         component = quest.get_component(QuestComponent)
         if component.status == "active" and str(character.id) in component.accepted_by:
             lines.append(f"Active quest: {component.title}.")
+        if component.status == "declined":
+            lines.append(f"Declined quest: {component.title}.")
+
+    for stage_entity in world.query().with_all([QuestStageComponent]).execute_entities():
+        stage = stage_entity.get_component(QuestStageComponent)
+        if str(character.id) in stage.tracked_by:
+            branch = f", branch {stage.branch}" if stage.branch else ""
+            lines.append(f"Tracked quest stage {stage.stage} for {stage.quest_id}{branch}.")
 
     for _perk_edge, perk_id in character.get_relationships(HasPerk):
         if not world.has_entity(perk_id):
@@ -1751,6 +2183,10 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(MagickaComponent):
         magicka = character.get_component(MagickaComponent)
         lines.append(f"Magicka: {magicka.current}/{magicka.maximum}.")
+    if character.has_component(SurrenderComponent):
+        surrender = character.get_component(SurrenderComponent)
+        target = surrender.surrendered_to or "no one"
+        lines.append(f"Surrendered to {target}.")
     if character.has_component(JailComponent):
         sentence = character.get_component(JailComponent)
         lines.append(f"Serving jail time for {sentence.faction_id} until {sentence.release_epoch}.")
@@ -1781,16 +2217,13 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
             zone = entity.get_component(EncounterZoneComponent)
             if zone.active:
                 lines.append(
-                    f"Encounter zone nearby: {zone.zone_type} "
-                    f"(danger {zone.danger_rating})."
+                    f"Encounter zone nearby: {zone.zone_type} (danger {zone.danger_rating})."
                 )
         if entity.has_component(LoreBookComponent):
             book = entity.get_component(LoreBookComponent)
             if str(character.id) not in book.read_by:
                 if book.skill_name:
-                    lines.append(
-                        f"Unread skill book nearby: {book.title} ({book.skill_name})."
-                    )
+                    lines.append(f"Unread skill book nearby: {book.title} ({book.skill_name}).")
                 else:
                     lines.append(f"Unread lore book nearby: {book.title}.")
         if entity.has_component(LockDifficultyComponent):
@@ -1809,7 +2242,19 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
             )
         if entity.has_component(ArtifactComponent):
             artifact = entity.get_component(ArtifactComponent)
-            lines.append(f"Artifact nearby: {artifact.name} ({artifact.charges} charges).")
+            state = "identified" if str(character.id) in artifact.identified_by else "unidentified"
+            lines.append(f"Artifact nearby: {artifact.name} ({artifact.charges} charges, {state}).")
+        if entity.has_component(SpellCooldownComponent):
+            cooldown = entity.get_component(SpellCooldownComponent)
+            if cooldown.ready_at_epoch > 0:
+                lines.append(f"Spell cooldown nearby: ready at epoch {cooldown.ready_at_epoch}.")
+        if entity.has_component(AncientBeastComponent):
+            beast = entity.get_component(AncientBeastComponent)
+            state = "soul absorbed" if beast.soul_absorbed else "active"
+            lines.append(f"Ancient beast nearby: {beast.name} ({state}).")
+        if entity.has_component(PersuasionComponent):
+            persuasion = entity.get_component(PersuasionComponent)
+            lines.append(f"{_name(entity)} disposition: {persuasion.disposition}.")
         if entity.has_component(VoiceInscriptionComponent):
             inscription = entity.get_component(VoiceInscriptionComponent)
             if str(character.id) not in inscription.studied_by:
@@ -1821,7 +2266,11 @@ __all__ = [
     "AbsorbGreatSoulHandler",
     "AcceptQuestHandler",
     "AncientBeastComponent",
+    "AncientBeastAppeasedEvent",
+    "AppeaseAncientBeastHandler",
     "ArtifactComponent",
+    "ArtifactIdentifiedEvent",
+    "IdentifyArtifactHandler",
     "ArtifactUsedEvent",
     "BrewPotionHandler",
     "BribeGuardHandler",
@@ -1829,8 +2278,11 @@ __all__ = [
     "BountyPaidEvent",
     "CastDragonSpellHandler",
     "ChangeFactionRankHandler",
+    "ChooseQuestBranchHandler",
     "CompleteObjectiveHandler",
+    "CrimeReportedEvent",
     "CrimeWitnessedEvent",
+    "DeclineQuestHandler",
     "DiscoverLocationHandler",
     "DiscoveryComponent",
     "DragonSpellCastEvent",
@@ -1859,6 +2311,7 @@ __all__ = [
     "LoreBookComponent",
     "LoreBookReadEvent",
     "MagickaComponent",
+    "MagickaRecoveredEvent",
     "LocationDiscoveredEvent",
     "MapMarkerAddedEvent",
     "MapMarkerComponent",
@@ -1867,23 +2320,35 @@ __all__ = [
     "PayBountyHandler",
     "PerkComponent",
     "PerkUnlockedEvent",
+    "PersuadeHandler",
+    "PersuasionAttemptedEvent",
+    "PersuasionComponent",
     "PickLockHandler",
     "PointOfInterestComponent",
     "PotionBrewedEvent",
     "PotionComponent",
     "PotionRecipeComponent",
     "QuestAcceptedEvent",
+    "QuestBranchChosenEvent",
     "QuestComponent",
     "QuestCompletedEvent",
+    "QuestDeclinedEvent",
     "QuestObjectiveCompletedEvent",
     "QuestObjectiveComponent",
     "QuestRewardComponent",
     "QuestStageComponent",
+    "QuestTrackedEvent",
     "ReadLoreBookHandler",
+    "RecoverMagickaHandler",
+    "ReportCrimeHandler",
     "SneakHandler",
+    "SpellCooldownComponent",
     "SpeakWordOfPowerHandler",
     "SpellComponent",
     "SpellLearnedEvent",
+    "SurrenderComponent",
+    "SurrenderedEvent",
+    "SurrenderHandler",
     "StealHandler",
     "StealthChangedEvent",
     "StealthComponent",
@@ -1891,6 +2356,7 @@ __all__ = [
     "InscribeVoicePhraseHandler",
     "StudyVoiceInscriptionHandler",
     "TheftCommittedEvent",
+    "TrackQuestHandler",
     "TriggerEncounterHandler",
     "UnlockPerkHandler",
     "UseArtifactHandler",

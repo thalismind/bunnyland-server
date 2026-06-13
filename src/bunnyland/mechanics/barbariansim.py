@@ -188,6 +188,104 @@ class FollowerComponent(Component):
     since_epoch: int = 0
 
 
+@dataclass(frozen=True)
+class SurvivalGapComponent(Component):
+    gap_type: str = "water"
+    severity: float = 1.0
+    required_resource: str = ""
+    bridged_by: str | None = None
+
+
+@dataclass(frozen=True)
+class BuildingComponent(Component):
+    level: int = 1
+    integrity: float = 10.0
+    maximum_integrity: float = 10.0
+    demolished: bool = False
+
+
+@dataclass(frozen=True)
+class SiegeReadinessComponent(Component):
+    score: float = 0.0
+    prepared_by: str | None = None
+    prepared_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class PurgeWaveComponent(Component):
+    wave: int = 0
+    intensity: float = 1.0
+    active: bool = False
+    started_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class ShrineComponent(Component):
+    deity: str = "the wild"
+    attunement: float = 0.0
+
+
+@dataclass(frozen=True)
+class RitualComponent(Component):
+    ritual_type: str = "blessing"
+    blessing: str = ""
+    curse: str = ""
+    corruption_cost: float = 0.0
+    performed_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BlessingComponent(Component):
+    name: str
+    source_id: str = ""
+    expires_at_epoch: int | None = None
+
+
+@dataclass(frozen=True)
+class CurseComponent(Component):
+    name: str
+    source_id: str = ""
+    severity: float = 1.0
+
+
+@dataclass(frozen=True)
+class DangerZoneComponent(Component):
+    zone_type: str = "ruin"
+    danger_rating: float = 1.0
+    explored_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BossComponent(Component):
+    name: str = "world boss"
+    defeated: bool = False
+    defeated_by: str | None = None
+
+
+@dataclass(frozen=True)
+class KeyComponent(Component):
+    key_name: str
+
+
+@dataclass(frozen=True)
+class TreasureComponent(Component):
+    treasure_type: str = "cache"
+    locked: bool = True
+    key_name: str = ""
+    claimed_by: str | None = None
+
+
+@dataclass(frozen=True)
+class ClimbingSkillComponent(Component):
+    level: int = 0
+
+
+@dataclass(frozen=True)
+class ClimbingGateComponent(Component):
+    required_level: int = 1
+    opened_by: str | None = None
+
+
 class StaminaChangedEvent(DomainEvent):
     current: float
     maximum: float
@@ -295,10 +393,88 @@ class ThrallReleasedEvent(DomainEvent):
     subordinate_id: str
 
 
+class SurvivalGapBridgedEvent(DomainEvent):
+    gap_id: str
+    gap_type: str
+
+
+class BuildingDecayedEvent(DomainEvent):
+    building_id: str
+    integrity: float
+    maximum_integrity: float
+
+
+class BuildingUpgradedEvent(DomainEvent):
+    building_id: str
+    level: int
+    integrity: float
+
+
+class BuildingDemolishedEvent(DomainEvent):
+    building_id: str
+
+
+class SiegePreparedEvent(DomainEvent):
+    base_id: str
+    score: float
+
+
+class PurgeWaveStartedEvent(DomainEvent):
+    base_id: str
+    wave: int
+    intensity: float
+
+
+class RitualPerformedEvent(DomainEvent):
+    shrine_id: str
+    ritual_id: str
+    ritual_type: str
+
+
+class BlessingReceivedEvent(DomainEvent):
+    blessing: str
+
+
+class CurseReceivedEvent(DomainEvent):
+    curse: str
+
+
+class DangerZoneExploredEvent(DomainEvent):
+    zone_id: str
+    zone_type: str
+    danger_rating: float
+
+
+class BossDefeatedEvent(DomainEvent):
+    boss_id: str
+    boss_name: str
+
+
+class TreasureUnlockedEvent(DomainEvent):
+    treasure_id: str
+    key_name: str
+
+
+class TreasureClaimedEvent(DomainEvent):
+    treasure_id: str
+    treasure_type: str
+
+
+class ClimbingGatePassedEvent(DomainEvent):
+    gate_id: str
+    required_level: int
+
+
 def _barbarian_event_base(epoch: int, **kwargs) -> dict:
     base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
     base.update(kwargs)
     return base
+
+
+def _name(entity) -> str:
+    if entity.has_component(IdentityComponent):
+        return entity.get_component(IdentityComponent).name
+    return str(entity.id)
 
 
 class StaminaRegenSystem(System):
@@ -363,9 +539,10 @@ def _weapon_damage(ctx: HandlerContext, actor_id: EntityId, weapon_id: EntityId 
     weapon = ctx.entity(weapon_id)
     if not weapon.has_component(WeaponComponent):
         return -1.0
-    if weapon.has_component(DurabilityComponent) and weapon.get_component(
-        DurabilityComponent
-    ).broken:
+    if (
+        weapon.has_component(DurabilityComponent)
+        and weapon.get_component(DurabilityComponent).broken
+    ):
         return -1.0
     return weapon.get_component(WeaponComponent).damage
 
@@ -373,9 +550,7 @@ def _weapon_damage(ctx: HandlerContext, actor_id: EntityId, weapon_id: EntityId 
 def _armor_rating(ctx: HandlerContext, target_id: EntityId) -> float:
     target = ctx.entity(target_id)
     rating = (
-        target.get_component(ArmorComponent).rating
-        if target.has_component(ArmorComponent)
-        else 0.0
+        target.get_component(ArmorComponent).rating if target.has_component(ArmorComponent) else 0.0
     )
     for _edge, item_id in target.get_relationships(Wearing):
         item = ctx.entity(item_id)
@@ -1038,6 +1213,533 @@ class RaidHandler:
         )
 
 
+class BridgeSurvivalGapHandler:
+    command_type = "bridge-survival-gap"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        gap_id = parse_entity_id(command.payload.get("gap_id"))
+        if actor_id is None or gap_id is None:
+            return rejected("invalid character or gap id")
+        if not ctx.world.has_entity(gap_id):
+            return rejected("survival gap does not exist")
+        character = ctx.entity(actor_id)
+        if gap_id not in reachable_ids(ctx.world, character):
+            return rejected("survival gap is not reachable")
+        gap_entity = ctx.entity(gap_id)
+        if not gap_entity.has_component(SurvivalGapComponent):
+            return rejected("target is not a survival gap")
+        gap = gap_entity.get_component(SurvivalGapComponent)
+        if gap.bridged_by is not None:
+            return rejected("survival gap is already bridged")
+        replace_component(gap_entity, replace(gap, bridged_by=str(actor_id)))
+        return ok(
+            SurvivalGapBridgedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(gap_id),),
+                    gap_id=str(gap_id),
+                    gap_type=gap.gap_type,
+                )
+            )
+        )
+
+
+class DecayBuildingHandler:
+    command_type = "decay-building"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        building_id = parse_entity_id(command.payload.get("building_id"))
+        if actor_id is None or building_id is None:
+            return rejected("invalid character or building id")
+        if not ctx.world.has_entity(building_id):
+            return rejected("building does not exist")
+        character = ctx.entity(actor_id)
+        if building_id not in reachable_ids(ctx.world, character):
+            return rejected("building is not reachable")
+        building_entity = ctx.entity(building_id)
+        if not building_entity.has_component(BuildingComponent):
+            return rejected("target is not a building")
+        building = building_entity.get_component(BuildingComponent)
+        if building.demolished:
+            return rejected("building is demolished")
+        amount = float(command.payload.get("amount", 1.0))
+        if amount <= 0:
+            return rejected("decay amount must be positive")
+        updated = replace(building, integrity=max(0.0, building.integrity - amount))
+        replace_component(building_entity, updated)
+        return ok(
+            BuildingDecayedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(building_id),),
+                    building_id=str(building_id),
+                    integrity=updated.integrity,
+                    maximum_integrity=updated.maximum_integrity,
+                )
+            )
+        )
+
+
+class UpgradeBuildingHandler:
+    command_type = "upgrade-building"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        building_id = parse_entity_id(command.payload.get("building_id"))
+        if actor_id is None or building_id is None:
+            return rejected("invalid character or building id")
+        if not ctx.world.has_entity(building_id):
+            return rejected("building does not exist")
+        character = ctx.entity(actor_id)
+        if building_id not in reachable_ids(ctx.world, character):
+            return rejected("building is not reachable")
+        building_entity = ctx.entity(building_id)
+        if not building_entity.has_component(BuildingComponent):
+            return rejected("target is not a building")
+        building = building_entity.get_component(BuildingComponent)
+        if building.demolished:
+            return rejected("building is demolished")
+        added_integrity = float(command.payload.get("integrity", 5.0))
+        if added_integrity <= 0:
+            return rejected("upgrade integrity must be positive")
+        maximum = building.maximum_integrity + added_integrity
+        updated = replace(
+            building,
+            level=building.level + 1,
+            maximum_integrity=maximum,
+            integrity=maximum,
+        )
+        replace_component(building_entity, updated)
+        return ok(
+            BuildingUpgradedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(building_id),),
+                    building_id=str(building_id),
+                    level=updated.level,
+                    integrity=updated.integrity,
+                )
+            )
+        )
+
+
+class DemolishBuildingHandler:
+    command_type = "demolish-building"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        building_id = parse_entity_id(command.payload.get("building_id"))
+        if actor_id is None or building_id is None:
+            return rejected("invalid character or building id")
+        if not ctx.world.has_entity(building_id):
+            return rejected("building does not exist")
+        character = ctx.entity(actor_id)
+        if building_id not in reachable_ids(ctx.world, character):
+            return rejected("building is not reachable")
+        building_entity = ctx.entity(building_id)
+        if not building_entity.has_component(BuildingComponent):
+            return rejected("target is not a building")
+        building = building_entity.get_component(BuildingComponent)
+        if building.demolished:
+            return rejected("building is already demolished")
+        replace_component(building_entity, replace(building, integrity=0.0, demolished=True))
+        return ok(
+            BuildingDemolishedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(building_id),),
+                    building_id=str(building_id),
+                )
+            )
+        )
+
+
+class PrepareSiegeHandler:
+    command_type = "prepare-siege"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        base_id = parse_entity_id(command.payload.get("base_id"))
+        if actor_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(actor_id)
+        if base_id is None:
+            base_id = container_of(character)
+        if base_id is None or not ctx.world.has_entity(base_id):
+            return rejected("base does not exist")
+        if base_id not in reachable_ids(ctx.world, character):
+            return rejected("base is not reachable")
+        base = ctx.entity(base_id)
+        score = float(command.payload.get("score", 1.0))
+        if score <= 0:
+            return rejected("siege score must be positive")
+        current = (
+            base.get_component(SiegeReadinessComponent)
+            if base.has_component(SiegeReadinessComponent)
+            else SiegeReadinessComponent()
+        )
+        updated = replace(
+            current,
+            score=current.score + score,
+            prepared_by=str(actor_id),
+            prepared_at_epoch=ctx.epoch,
+        )
+        replace_component(base, updated)
+        return ok(
+            SiegePreparedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(base_id),),
+                    base_id=str(base_id),
+                    score=updated.score,
+                )
+            )
+        )
+
+
+class StartPurgeWaveHandler:
+    command_type = "start-purge-wave"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        base_id = parse_entity_id(command.payload.get("base_id"))
+        if actor_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(actor_id)
+        if base_id is None:
+            base_id = container_of(character)
+        if base_id is None or not ctx.world.has_entity(base_id):
+            return rejected("base does not exist")
+        if base_id not in reachable_ids(ctx.world, character):
+            return rejected("base is not reachable")
+        base = ctx.entity(base_id)
+        current = (
+            base.get_component(PurgeWaveComponent)
+            if base.has_component(PurgeWaveComponent)
+            else PurgeWaveComponent()
+        )
+        intensity = float(command.payload.get("intensity", current.intensity))
+        if intensity <= 0:
+            return rejected("purge intensity must be positive")
+        updated = replace(
+            current,
+            wave=current.wave + 1,
+            intensity=intensity,
+            active=True,
+            started_at_epoch=ctx.epoch,
+        )
+        replace_component(base, updated)
+        return ok(
+            PurgeWaveStartedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(base_id),),
+                    base_id=str(base_id),
+                    wave=updated.wave,
+                    intensity=updated.intensity,
+                )
+            )
+        )
+
+
+class PerformRitualHandler:
+    command_type = "perform-ritual"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        shrine_id = parse_entity_id(command.payload.get("shrine_id"))
+        ritual_id = parse_entity_id(command.payload.get("ritual_id"))
+        if actor_id is None or shrine_id is None or ritual_id is None:
+            return rejected("invalid character, shrine, or ritual id")
+        if not ctx.world.has_entity(shrine_id) or not ctx.world.has_entity(ritual_id):
+            return rejected("shrine or ritual does not exist")
+        character = ctx.entity(actor_id)
+        reachable = reachable_ids(ctx.world, character)
+        if shrine_id not in reachable or ritual_id not in reachable:
+            return rejected("shrine or ritual is not reachable")
+        shrine = ctx.entity(shrine_id)
+        ritual_entity = ctx.entity(ritual_id)
+        if not shrine.has_component(ShrineComponent):
+            return rejected("target is not a shrine")
+        if not ritual_entity.has_component(RitualComponent):
+            return rejected("target is not a ritual")
+        ritual = ritual_entity.get_component(RitualComponent)
+        if str(actor_id) in ritual.performed_by:
+            return rejected("ritual already performed")
+
+        replace_component(
+            ritual_entity,
+            replace(ritual, performed_by=tuple(sorted((*ritual.performed_by, str(actor_id))))),
+        )
+        if ritual.corruption_cost > 0:
+            current = (
+                character.get_component(CorruptionComponent)
+                if character.has_component(CorruptionComponent)
+                else CorruptionComponent()
+            )
+            replace_component(
+                character,
+                replace(
+                    current,
+                    amount=current.amount + ritual.corruption_cost,
+                    last_updated_epoch=ctx.epoch,
+                ),
+            )
+        events: list[DomainEvent] = [
+            RitualPerformedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(shrine_id), str(ritual_id)),
+                    shrine_id=str(shrine_id),
+                    ritual_id=str(ritual_id),
+                    ritual_type=ritual.ritual_type,
+                )
+            )
+        ]
+        if ritual.blessing:
+            character.add_component(
+                BlessingComponent(name=ritual.blessing, source_id=str(ritual_id))
+            )
+            events.append(
+                BlessingReceivedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(actor_id),
+                        room_id=str(container_of(character)) if container_of(character) else None,
+                        target_ids=(str(ritual_id),),
+                        blessing=ritual.blessing,
+                    )
+                )
+            )
+        if ritual.curse:
+            character.add_component(CurseComponent(name=ritual.curse, source_id=str(ritual_id)))
+            events.append(
+                CurseReceivedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(actor_id),
+                        room_id=str(container_of(character)) if container_of(character) else None,
+                        target_ids=(str(ritual_id),),
+                        curse=ritual.curse,
+                    )
+                )
+            )
+        return ok(*events)
+
+
+class ExploreDangerZoneHandler:
+    command_type = "explore-danger-zone"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        zone_id = parse_entity_id(command.payload.get("zone_id"))
+        if actor_id is None or zone_id is None:
+            return rejected("invalid character or zone id")
+        if not ctx.world.has_entity(zone_id):
+            return rejected("danger zone does not exist")
+        character = ctx.entity(actor_id)
+        if zone_id not in reachable_ids(ctx.world, character):
+            return rejected("danger zone is not reachable")
+        zone_entity = ctx.entity(zone_id)
+        if not zone_entity.has_component(DangerZoneComponent):
+            return rejected("target is not a danger zone")
+        zone = zone_entity.get_component(DangerZoneComponent)
+        if str(actor_id) not in zone.explored_by:
+            replace_component(
+                zone_entity,
+                replace(zone, explored_by=tuple(sorted((*zone.explored_by, str(actor_id))))),
+            )
+        return ok(
+            DangerZoneExploredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(zone_id),),
+                    zone_id=str(zone_id),
+                    zone_type=zone.zone_type,
+                    danger_rating=zone.danger_rating,
+                )
+            )
+        )
+
+
+class DefeatBossHandler:
+    command_type = "defeat-boss"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        boss_id = parse_entity_id(command.payload.get("boss_id"))
+        if actor_id is None or boss_id is None:
+            return rejected("invalid character or boss id")
+        if not ctx.world.has_entity(boss_id):
+            return rejected("boss does not exist")
+        character = ctx.entity(actor_id)
+        if boss_id not in reachable_ids(ctx.world, character):
+            return rejected("boss is not reachable")
+        boss_entity = ctx.entity(boss_id)
+        if not boss_entity.has_component(BossComponent):
+            return rejected("target is not a boss")
+        boss = boss_entity.get_component(BossComponent)
+        if boss.defeated:
+            return rejected("boss is already defeated")
+        updated = replace(boss, defeated=True, defeated_by=str(actor_id))
+        replace_component(boss_entity, updated)
+        return ok(
+            BossDefeatedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(boss_id),),
+                    boss_id=str(boss_id),
+                    boss_name=updated.name,
+                )
+            )
+        )
+
+
+class UnlockTreasureHandler:
+    command_type = "unlock-treasure"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        treasure_id = parse_entity_id(command.payload.get("treasure_id"))
+        key_id = parse_entity_id(command.payload.get("key_id"))
+        if actor_id is None or treasure_id is None:
+            return rejected("invalid character or treasure id")
+        if not ctx.world.has_entity(treasure_id):
+            return rejected("treasure does not exist")
+        character = ctx.entity(actor_id)
+        if treasure_id not in reachable_ids(ctx.world, character):
+            return rejected("treasure is not reachable")
+        treasure_entity = ctx.entity(treasure_id)
+        if not treasure_entity.has_component(TreasureComponent):
+            return rejected("target is not treasure")
+        treasure = treasure_entity.get_component(TreasureComponent)
+        if not treasure.locked:
+            return rejected("treasure is already unlocked")
+        if treasure.key_name:
+            if (
+                key_id is None
+                or not ctx.world.has_entity(key_id)
+                or container_of(ctx.world.get_entity(key_id)) != actor_id
+            ):
+                return rejected("required key is not carried")
+            key = ctx.entity(key_id)
+            if (
+                not key.has_component(KeyComponent)
+                or key.get_component(KeyComponent).key_name != treasure.key_name
+            ):
+                return rejected("wrong key")
+        updated = replace(treasure, locked=False)
+        replace_component(treasure_entity, updated)
+        return ok(
+            TreasureUnlockedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(treasure_id),),
+                    treasure_id=str(treasure_id),
+                    key_name=treasure.key_name,
+                )
+            )
+        )
+
+
+class ClaimTreasureHandler:
+    command_type = "claim-treasure"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        treasure_id = parse_entity_id(command.payload.get("treasure_id"))
+        if actor_id is None or treasure_id is None:
+            return rejected("invalid character or treasure id")
+        if not ctx.world.has_entity(treasure_id):
+            return rejected("treasure does not exist")
+        character = ctx.entity(actor_id)
+        if treasure_id not in reachable_ids(ctx.world, character):
+            return rejected("treasure is not reachable")
+        treasure_entity = ctx.entity(treasure_id)
+        if not treasure_entity.has_component(TreasureComponent):
+            return rejected("target is not treasure")
+        treasure = treasure_entity.get_component(TreasureComponent)
+        if treasure.locked:
+            return rejected("treasure is locked")
+        if treasure.claimed_by is not None:
+            return rejected("treasure is already claimed")
+        updated = replace(treasure, claimed_by=str(actor_id))
+        replace_component(treasure_entity, updated)
+        return ok(
+            TreasureClaimedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(treasure_id),),
+                    treasure_id=str(treasure_id),
+                    treasure_type=treasure.treasure_type,
+                )
+            )
+        )
+
+
+class ClimbHandler:
+    command_type = "climb"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        gate_id = parse_entity_id(command.payload.get("gate_id"))
+        if actor_id is None or gate_id is None:
+            return rejected("invalid character or climbing gate id")
+        if not ctx.world.has_entity(gate_id):
+            return rejected("climbing gate does not exist")
+        character = ctx.entity(actor_id)
+        if gate_id not in reachable_ids(ctx.world, character):
+            return rejected("climbing gate is not reachable")
+        gate_entity = ctx.entity(gate_id)
+        if not gate_entity.has_component(ClimbingGateComponent):
+            return rejected("target is not a climbing gate")
+        gate = gate_entity.get_component(ClimbingGateComponent)
+        level = (
+            character.get_component(ClimbingSkillComponent).level
+            if character.has_component(ClimbingSkillComponent)
+            else 0
+        )
+        if level < gate.required_level:
+            return rejected("climbing skill is too low")
+        replace_component(gate_entity, replace(gate, opened_by=str(actor_id)))
+        return ok(
+            ClimbingGatePassedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(actor_id),
+                    room_id=str(container_of(character)) if container_of(character) else None,
+                    target_ids=(str(gate_id),),
+                    gate_id=str(gate_id),
+                    required_level=gate.required_level,
+                )
+            )
+        )
+
+
 class RepairItemHandler:
     command_type = "repair-item"
 
@@ -1220,9 +1922,10 @@ class PickpocketHandler:
             return rejected("target is not present")
         if container_of(item) != target_id:
             return rejected("item is not in target inventory")
-        if not item.has_component(PortableComponent) or not item.get_component(
-            PortableComponent
-        ).can_pick_up:
+        if (
+            not item.has_component(PortableComponent)
+            or not item.get_component(PortableComponent).can_pick_up
+        ):
             return rejected("item cannot be taken")
 
         target.remove_relationship(Contains, item_id)
@@ -1315,9 +2018,7 @@ class RecruitFollowerHandler:
         if not _same_room(ctx.world, actor_id, target_id):
             return rejected("target is not present")
 
-        target.add_component(
-            FollowerComponent(master_id=str(actor_id), since_epoch=ctx.epoch)
-        )
+        target.add_component(FollowerComponent(master_id=str(actor_id), since_epoch=ctx.epoch))
         return ok(
             FollowerRecruitedEvent(
                 **ctx.event_base(
@@ -1354,9 +2055,7 @@ class CommandFollowerHandler:
                 target, replace(target.get_component(FollowerComponent), orders=orders)
             )
         else:
-            replace_component(
-                target, replace(target.get_component(ThrallComponent), task=orders)
-            )
+            replace_component(target, replace(target.get_component(ThrallComponent), task=orders))
         return ok(
             FollowerOrderChangedEvent(
                 **ctx.event_base(
@@ -1543,6 +2242,13 @@ def barbariansim_fragments(world: World, character) -> list[str]:
     if character.has_component(FollowerComponent):
         orders = character.get_component(FollowerComponent).orders
         lines.append(f"You follow a leader (orders: {orders}).")
+    if character.has_component(BlessingComponent):
+        lines.append(f"Blessing: {character.get_component(BlessingComponent).name}.")
+    if character.has_component(CurseComponent):
+        curse = character.get_component(CurseComponent)
+        lines.append(f"Curse: {curse.name} severity {curse.severity:g}.")
+    if character.has_component(ClimbingSkillComponent):
+        lines.append(f"Climbing skill: {character.get_component(ClimbingSkillComponent).level}.")
     character_id = str(character.id)
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
@@ -1587,6 +2293,46 @@ def barbariansim_fragments(world: World, character) -> list[str]:
                 else str(entity.id)
             )
             lines.append(f"Trap {trap_name}: {state}, {trap.damage:g} damage.")
+        if entity.has_component(SurvivalGapComponent):
+            gap = entity.get_component(SurvivalGapComponent)
+            state = "bridged" if gap.bridged_by else "open"
+            lines.append(f"Survival gap: {gap.gap_type} severity {gap.severity:g} ({state}).")
+        if entity.has_component(BuildingComponent):
+            building = entity.get_component(BuildingComponent)
+            state = "demolished" if building.demolished else "standing"
+            lines.append(
+                f"Building {_name(entity)}: level {building.level}, "
+                f"integrity {building.integrity:g}/{building.maximum_integrity:g}, {state}."
+            )
+        if entity.has_component(SiegeReadinessComponent):
+            readiness = entity.get_component(SiegeReadinessComponent)
+            lines.append(f"Siege readiness at {_name(entity)}: {readiness.score:g}.")
+        if entity.has_component(PurgeWaveComponent):
+            purge = entity.get_component(PurgeWaveComponent)
+            state = "active" if purge.active else "quiet"
+            lines.append(f"Purge wave at {_name(entity)}: wave {purge.wave}, {state}.")
+        if entity.has_component(ShrineComponent):
+            shrine = entity.get_component(ShrineComponent)
+            lines.append(f"Shrine nearby: {shrine.deity} attunement {shrine.attunement:g}.")
+        if entity.has_component(RitualComponent):
+            ritual = entity.get_component(RitualComponent)
+            lines.append(f"Ritual nearby: {ritual.ritual_type}.")
+        if entity.has_component(DangerZoneComponent):
+            zone = entity.get_component(DangerZoneComponent)
+            lines.append(f"Danger zone: {zone.zone_type} rating {zone.danger_rating:g}.")
+        if entity.has_component(BossComponent):
+            boss = entity.get_component(BossComponent)
+            state = "defeated" if boss.defeated else "undefeated"
+            lines.append(f"Boss nearby: {boss.name} ({state}).")
+        if entity.has_component(TreasureComponent):
+            treasure = entity.get_component(TreasureComponent)
+            state = "locked" if treasure.locked else "unlocked"
+            lines.append(f"Treasure nearby: {treasure.treasure_type} ({state}).")
+        if entity.has_component(KeyComponent):
+            lines.append(f"Key nearby: {entity.get_component(KeyComponent).key_name}.")
+        if entity.has_component(ClimbingGateComponent):
+            gate = entity.get_component(ClimbingGateComponent)
+            lines.append(f"Climbing gate nearby: requires level {gate.required_level}.")
     return sorted(lines)
 
 
@@ -1594,9 +2340,7 @@ def install_barbariansim(actor) -> None:
     actor.world.register_system(StaminaRegenSystem())
     actor.register_consequence(TemperatureExposureConsequence())
     actor.register_consequence(PoisonConsequence())
-    actor.register_gate(
-        PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier))
-    )
+    actor.register_gate(PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier)))
     ensure_barbariansim_policy(actor)
     BarbarianRaidEnrichment(actor.world).subscribe(actor.bus)
 
@@ -1608,18 +2352,40 @@ __all__ = [
     "BarbarianSimPolicyComponent",
     "BaseClaimComponent",
     "BaseClaimedEvent",
+    "BlessingComponent",
+    "BlessingReceivedEvent",
+    "BossComponent",
+    "BossDefeatedEvent",
+    "BridgeSurvivalGapHandler",
+    "BuildingComponent",
+    "BuildingDecayedEvent",
+    "BuildingDemolishedEvent",
+    "BuildingUpgradedEvent",
     "CharacterPoisonedEvent",
     "ChallengeHandler",
     "ClaimBaseHandler",
+    "ClaimTreasureHandler",
     "CleanseCorruptionHandler",
+    "ClimbHandler",
+    "ClimbingGateComponent",
+    "ClimbingGatePassedEvent",
+    "ClimbingSkillComponent",
     "CorruptionCleansedEvent",
     "CorruptionComponent",
     "CorruptionGainedEvent",
+    "CurseComponent",
+    "CurseReceivedEvent",
+    "DangerZoneComponent",
+    "DangerZoneExploredEvent",
+    "DecayBuildingHandler",
     "DefendHandler",
     "DefendingComponent",
+    "DefeatBossHandler",
+    "DemolishBuildingHandler",
     "CommandFollowerHandler",
     "DisarmTrapHandler",
     "DurabilityComponent",
+    "ExploreDangerZoneHandler",
     "ExposureChangedEvent",
     "ExposureDamageEvent",
     "FollowerComponent",
@@ -1632,6 +2398,7 @@ __all__ = [
     "ItemBrokenEvent",
     "ItemDamagedEvent",
     "ItemRepairedEvent",
+    "KeyComponent",
     "PlaceTrapHandler",
     "PickpocketHandler",
     "PoisonCharacterHandler",
@@ -1644,15 +2411,30 @@ __all__ = [
     "RecruitFollowerHandler",
     "ReleaseThrallHandler",
     "RepairItemHandler",
+    "PerformRitualHandler",
+    "PrepareSiegeHandler",
+    "PurgeWaveComponent",
+    "PurgeWaveStartedEvent",
+    "RitualComponent",
+    "RitualPerformedEvent",
     "ShelterComponent",
+    "ShrineComponent",
+    "SiegePreparedEvent",
+    "SiegeReadinessComponent",
     "SparHandler",
+    "StartPurgeWaveHandler",
     "SubdueHandler",
     "StaminaChangedEvent",
     "StaminaComponent",
     "StaminaRegenSystem",
+    "SurvivalGapBridgedEvent",
+    "SurvivalGapComponent",
     "TemperatureExposureComponent",
     "TemperatureExposureConsequence",
     "TemperatureResistanceComponent",
+    "TreasureClaimedEvent",
+    "TreasureComponent",
+    "TreasureUnlockedEvent",
     "ThrallComponent",
     "ThrallReleasedEvent",
     "ThrallTakenEvent",
@@ -1660,6 +2442,8 @@ __all__ = [
     "TrapComponent",
     "TrapDisarmedEvent",
     "TrapPlacedEvent",
+    "UnlockTreasureHandler",
+    "UpgradeBuildingHandler",
     "WeaponComponent",
     "barbariansim_fragments",
     "ensure_barbariansim_policy",

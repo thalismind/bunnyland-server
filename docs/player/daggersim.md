@@ -122,6 +122,21 @@ Buying property spends from your bank account, marks the deed as owned by you, a
 ownership relationship that appears in character context. See the civic guide for the
 full property purchase loop.
 
+Issue a letter of credit, store valuables, and escalate an unpaid debt:
+
+```text
+!issue-letter-of-credit bank_id="Carrot Factors Bank" amount=50
+!store-safe-item storage_id="bank vault" item_id="ruby ring"
+!retrieve-safe-item storage_id="bank vault" item_id="ruby ring"
+!send-debt-collector debt_id="overdue loan"
+```
+
+Courts can sentence an active crime:
+
+```text
+!sentence-crime crime_id="trespass charge" sentence=fine
+```
+
 ## Classes, spells, pacification, and afflictions
 
 Create a custom class from a reachable template:
@@ -164,6 +179,9 @@ Contract an affliction and transform:
 
 ```text
 !contract-affliction affliction_type="moon-form"
+!progress-affliction-incubation target_id=Mara
+!mark-affliction-stigma target_id=Mara region_id="Moss Coast" severity=2
+!request-cure-quest quest_id="moon cure lead"
 !transform form_name="moon hare"
 ```
 
@@ -213,3 +231,38 @@ Set a recall anchor, rest, and leave:
 
 Dungeon exploration records discovered rooms, secret doors, objectives, map marks, and
 recall anchors.
+
+## Institutions, travel, and services
+
+Institutions can promote you and collect dues:
+
+```text
+!promote-institution institution_id="Mages Guild" rank=adept
+!pay-institution-dues institution_id="Mages Guild" amount=25
+```
+
+Generated quests can be refused, abandoned, extended, or lied about:
+
+```text
+!refuse-generated-quest quest_id="rat cellar job"
+!abandon-generated-quest quest_id="rat cellar job"
+!extend-generated-quest quest_id="rat cellar job" seconds=86400
+!lie-about-quest quest_id="rat cellar job" lie="the rats are gone"
+```
+
+Use lodging, camping, supplies, and interruptions while traveling:
+
+```text
+!rent-lodging lodging_id="road inn" duration_seconds=86400
+!camp risk=low
+!buy-travel-supplies quantity=3
+!resolve-travel-interruption interruption_id="washed out bridge"
+```
+
+Magic services can make potions, recharge enchanted items, and identify ingredients:
+
+```text
+!make-potion maker_id="guild potionmaker"
+!recharge-enchanted-item item_id="moss charm" service_id="guild enchanter"
+!identify-ingredient ingredient_id="moon sugar"
+```

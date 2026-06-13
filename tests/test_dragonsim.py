@@ -27,7 +27,9 @@ from bunnyland.mechanics.dragonsim import (
     AbsorbGreatSoulHandler,
     AcceptQuestHandler,
     AncientBeastComponent,
+    AppeaseAncientBeastHandler,
     ArtifactComponent,
+    ArtifactIdentifiedEvent,
     ArtifactUsedEvent,
     BountyPaidEvent,
     BrewPotionHandler,
@@ -35,8 +37,11 @@ from bunnyland.mechanics.dragonsim import (
     CarvableComponent,
     CastDragonSpellHandler,
     ChangeFactionRankHandler,
+    ChooseQuestBranchHandler,
     CompleteObjectiveHandler,
+    CrimeReportedEvent,
     CrimeWitnessedEvent,
+    DeclineQuestHandler,
     DiscoverLocationHandler,
     DiscoveryComponent,
     DragonSpellCastEvent,
@@ -51,6 +56,7 @@ from bunnyland.mechanics.dragonsim import (
     GuardBribedEvent,
     GuardComponent,
     HasPerk,
+    IdentifyArtifactHandler,
     InscribeVoicePhraseHandler,
     JailComponent,
     JailSentenceServedEvent,
@@ -66,6 +72,7 @@ from bunnyland.mechanics.dragonsim import (
     LoreBookComponent,
     LoreBookReadEvent,
     MagickaComponent,
+    MagickaRecoveredEvent,
     MapMarkerAddedEvent,
     MapMarkerComponent,
     MarkMapHandler,
@@ -73,28 +80,42 @@ from bunnyland.mechanics.dragonsim import (
     PayBountyHandler,
     PerkComponent,
     PerkUnlockedEvent,
+    PersuadeHandler,
+    PersuasionAttemptedEvent,
+    PersuasionComponent,
     PickLockHandler,
     PointOfInterestComponent,
     PotionBrewedEvent,
     PotionComponent,
     PotionRecipeComponent,
     QuestAcceptedEvent,
+    QuestBranchChosenEvent,
     QuestCompletedEvent,
     QuestComponent,
+    QuestDeclinedEvent,
     QuestObjectiveCompletedEvent,
     QuestObjectiveComponent,
     QuestRewardComponent,
+    QuestStageComponent,
+    QuestTrackedEvent,
     ReadLoreBookHandler,
+    RecoverMagickaHandler,
+    ReportCrimeHandler,
     ServeJailTimeHandler,
     SneakHandler,
     SpeakWordOfPowerHandler,
     SpellComponent,
+    SpellCooldownComponent,
     SpellLearnedEvent,
     StealHandler,
     StealthChangedEvent,
     StealthComponent,
     StudyVoiceInscriptionHandler,
+    SurrenderComponent,
+    SurrenderedEvent,
+    SurrenderHandler,
     TheftCommittedEvent,
+    TrackQuestHandler,
     TriggerEncounterHandler,
     UnlockPerkHandler,
     UseArtifactHandler,
@@ -164,6 +185,17 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
     )
 
 
+def _dragon_room_entity(scenario, name, kind, components):
+    entity = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name=name, kind=kind), *components],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
+    )
+    return entity
+
+
 def _poi(scenario):
     poi = spawn_entity(
         scenario.actor.world,
@@ -176,6 +208,579 @@ def _poi(scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), poi.id
     )
     return poi.id
+
+
+def test_dragonsim_parity_handlers_mutate_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MagickaComponent(current=1, maximum=10, regen_per_hour=3))
+
+    accepted_quest = _dragon_room_entity(
+        scenario,
+        "Find the Lost Ring",
+        "quest",
+        [
+            QuestComponent(
+                quest_id="lost-ring",
+                title="Find the Lost Ring",
+                status="active",
+                accepted_by=(str(scenario.character),),
+            ),
+            QuestStageComponent(quest_id="lost-ring"),
+        ],
+    )
+    declined_quest = _dragon_room_entity(
+        scenario,
+        "Wolf Road Trouble",
+        "quest",
+        [QuestComponent(quest_id="wolf-road", title="Wolf Road Trouble")],
+    )
+    target = _dragon_room_entity(
+        scenario,
+        "Moss Guard",
+        "character",
+        [CharacterComponent(species="bunny")],
+    )
+    criminal = _dragon_room_entity(
+        scenario,
+        "Bandit",
+        "character",
+        [CharacterComponent(species="bunny")],
+    )
+    faction = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Moss Wardens", kind="faction"), FactionComponent(name="Moss")],
+    )
+    artifact = _dragon_room_entity(
+        scenario,
+        "star mirror",
+        "artifact",
+        [ArtifactComponent(name="star mirror", charges=1)],
+    )
+    beast = _dragon_room_entity(
+        scenario,
+        "Ancient Wyrm",
+        "beast",
+        [AncientBeastComponent(name="Ancient Wyrm")],
+    )
+
+    calls = [
+        (
+            TrackQuestHandler(),
+            "track-quest",
+            {"quest_id": "lost-ring"},
+            QuestTrackedEvent,
+        ),
+        (
+            ChooseQuestBranchHandler(),
+            "choose-quest-branch",
+            {"quest_id": "lost-ring", "branch": "return"},
+            QuestBranchChosenEvent,
+        ),
+        (
+            DeclineQuestHandler(),
+            "decline-quest",
+            {"quest_id": "wolf-road"},
+            QuestDeclinedEvent,
+        ),
+        (
+            PersuadeHandler(),
+            "persuade",
+            {"target_id": str(target.id), "amount": 2},
+            PersuasionAttemptedEvent,
+        ),
+        (
+            SurrenderHandler(),
+            "surrender",
+            {"target_id": str(target.id), "reason": "fine"},
+            SurrenderedEvent,
+        ),
+        (
+            ReportCrimeHandler(),
+            "report-crime",
+            {
+                "criminal_id": str(criminal.id),
+                "faction_id": str(faction.id),
+                "bounty": 7,
+            },
+            CrimeReportedEvent,
+        ),
+        (
+            RecoverMagickaHandler(),
+            "recover-magicka",
+            {"amount": 3},
+            MagickaRecoveredEvent,
+        ),
+        (
+            IdentifyArtifactHandler(),
+            "identify-artifact",
+            {"artifact_id": str(artifact.id)},
+            ArtifactIdentifiedEvent,
+        ),
+        (
+            AppeaseAncientBeastHandler(),
+            "appease-ancient-beast",
+            {"beast_id": str(beast.id), "method": "parley"},
+            None,
+        ),
+    ]
+
+    for handler, command_type, payload, event_type in calls:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert result.ok, (command_type, result.reason)
+        if event_type is not None:
+            assert any(isinstance(event, event_type) for event in result.events)
+
+    stage = accepted_quest.get_component(QuestStageComponent)
+    assert str(scenario.character) in stage.tracked_by
+    assert stage.branch == "return"
+    assert declined_quest.get_component(QuestComponent).status == "declined"
+    assert target.get_component(PersuasionComponent).disposition == 2
+    assert character.get_component(SurrenderComponent).reason == "fine"
+    assert criminal.get_component(WantedComponent).amounts[str(faction.id)] == 7
+    assert character.get_component(MagickaComponent).current == 4
+    assert str(scenario.character) in artifact.get_component(ArtifactComponent).identified_by
+    fragments = dragonsim_fragments(scenario.actor.world, character)
+    assert "Declined quest: Wolf Road Trouble." in fragments
+    assert "Tracked quest stage 0 for lost-ring, branch return." in fragments
+    assert "Magicka: 4/10." in fragments
+    assert f"Surrendered to {target.id}." in fragments
+    assert "Artifact nearby: star mirror (1 charges, identified)." in fragments
+    assert "Moss Guard disposition: 2." in fragments
+
+
+def test_dragonsim_parity_handlers_reject_invalid_targets_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    fake = "entity_999999"
+    cases = [
+        (
+            TrackQuestHandler(),
+            "track-quest",
+            {"quest_id": "missing"},
+            "invalid character or quest id",
+            "quest does not exist",
+        ),
+        (
+            DeclineQuestHandler(),
+            "decline-quest",
+            {"quest_id": "missing"},
+            "invalid character or quest id",
+            "quest does not exist",
+        ),
+        (
+            ChooseQuestBranchHandler(),
+            "choose-quest-branch",
+            {"quest_id": "missing", "branch": "left"},
+            "invalid character, quest, or branch",
+            "quest does not exist",
+        ),
+        (
+            PersuadeHandler(),
+            "persuade",
+            {"target_id": fake},
+            "invalid character or target id",
+            "target does not exist",
+        ),
+        (
+            SurrenderHandler(),
+            "surrender",
+            {"target_id": fake},
+            "invalid character id",
+            "target does not exist",
+        ),
+        (
+            ReportCrimeHandler(),
+            "report-crime",
+            {"criminal_id": fake, "faction_id": fake},
+            "invalid reporter, criminal, or faction id",
+            "criminal or faction does not exist",
+        ),
+        (
+            IdentifyArtifactHandler(),
+            "identify-artifact",
+            {"artifact_id": fake},
+            "invalid character or artifact id",
+            "artifact does not exist",
+        ),
+        (
+            AppeaseAncientBeastHandler(),
+            "appease-ancient-beast",
+            {"beast_id": fake},
+            "invalid character or beast id",
+            "ancient beast does not exist",
+        ),
+    ]
+
+    for handler, command_type, payload, invalid_reason, missing_reason in cases:
+        bad_character = handler.execute(
+            ctx,
+            _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
+        )
+        assert bad_character.ok is False
+        assert bad_character.reason == invalid_reason
+        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert missing_target.ok is False
+        assert missing_target.reason == missing_reason
+
+    result = RecoverMagickaHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "recover-magicka", character_id="not-an-id"),
+    )
+    assert result.ok is False
+    assert result.reason == "invalid character id"
+
+
+def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    wrong_kind = spawn_entity(world, [IdentityComponent(name="plain stone", kind="prop")])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id)
+    distant_npc = spawn_entity(
+        world,
+        [IdentityComponent(name="distant guard", kind="character"), CharacterComponent()],
+    )
+    faction = _faction(scenario)
+
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), wrong_kind.id)
+    cooldown_spell = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Slow Spark", kind="spell"),
+            SpellComponent(name="Slow Spark", magicka_cost=1),
+            SpellCooldownComponent(cooldown_seconds=10, ready_at_epoch=ctx.epoch + 10),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), cooldown_spell.id)
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), cooldown_spell.id)
+    expensive_spell = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Meteor", kind="spell"),
+            SpellComponent(name="Meteor", magicka_cost=5, skill_name=""),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), expensive_spell.id)
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), expensive_spell.id)
+    character.add_component(MagickaComponent(current=0, maximum=5))
+
+    locked_chest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="open chest", kind="container"),
+            LockDifficultyComponent(locked=False),
+        ],
+    )
+    hard_lock = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="hard chest", kind="container"),
+            LockDifficultyComponent(difficulty=3),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), locked_chest.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), hard_lock.id)
+    skill_spell = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Skill Spark", kind="spell"),
+            SpellComponent(name="Skill Spark", skill_name="destruction", min_skill_level=2),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), skill_spell.id)
+    distant_spell = spawn_entity(
+        world,
+        [IdentityComponent(name="Far Spark", kind="spell"), SpellComponent(name="Far Spark")],
+    )
+    recipe = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="hard recipe", kind="recipe"),
+            PotionRecipeComponent(
+                name="hard recipe",
+                potion_name="Hard Tonic",
+                min_skill_level=2,
+            ),
+        ],
+    )
+    missing_ingredient_recipe = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="missing recipe", kind="recipe"),
+            PotionRecipeComponent(
+                name="missing recipe",
+                potion_name="Missing Tonic",
+                skill_name="",
+                ingredient_ids=("entity_999",),
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), recipe.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), missing_ingredient_recipe.id)
+    empty_artifact = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="spent mirror", kind="artifact"),
+            ArtifactComponent(name="Spent Mirror", charges=0),
+        ],
+    )
+    identified_artifact = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="known mirror", kind="artifact"),
+            ArtifactComponent(name="Known Mirror", identified_by=(str(scenario.character),)),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), empty_artifact.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), identified_artifact.id)
+    beast = spawn_entity(
+        world,
+        [IdentityComponent(name="wyrm", kind="character"), AncientBeastComponent(name="wyrm")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), beast.id)
+    word = _word(scenario, min_souls=0)
+    paper = spawn_entity(
+        world,
+        [IdentityComponent(name="tiny paper", kind="item"), WritableComponent(remaining_space=2)],
+    )
+    studied_slate = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="studied slate", kind="prop"),
+            VoiceInscriptionComponent(word_id=str(word), studied_by=(str(scenario.character),)),
+        ],
+    )
+    broken_slate = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="broken slate", kind="prop"),
+            VoiceInscriptionComponent(word_id="not-an-id"),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), paper.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), studied_slate.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), broken_slate.id)
+
+    cases = [
+        (
+            ChangeFactionRankHandler(),
+            _handler_cmd(scenario, "change-faction-rank", faction_id=str(wrong_kind.id), rank="x"),
+            "target is not a faction",
+        ),
+        (
+            ChangeFactionRankHandler(),
+            _handler_cmd(scenario, "change-faction-rank", faction_id=str(faction), rank="x"),
+            "not a faction member",
+        ),
+        (
+            BribeGuardHandler(),
+            _handler_cmd(scenario, "bribe-guard", guard_id=str(distant_npc.id)),
+            "guard is not reachable",
+        ),
+        (
+            BribeGuardHandler(),
+            _handler_cmd(scenario, "bribe-guard", guard_id=str(wrong_kind.id)),
+            "target is not a guard",
+        ),
+        (ServeJailTimeHandler(), _handler_cmd(scenario, "serve-jail-time"), "not jailed"),
+        (
+            PickLockHandler(),
+            _handler_cmd(scenario, "pick-lock", lock_id=str(wrong_kind.id)),
+            "target is not locked",
+        ),
+        (
+            PickLockHandler(),
+            _handler_cmd(scenario, "pick-lock", lock_id=str(locked_chest.id)),
+            "lock is already open",
+        ),
+        (
+            PickLockHandler(),
+            _handler_cmd(scenario, "pick-lock", lock_id=str(hard_lock.id)),
+            "lockpicking skill too low",
+        ),
+        (
+            LearnSpellHandler(),
+            _handler_cmd(scenario, "learn-spell", spell_id=str(distant_spell.id)),
+            "spell is not reachable",
+        ),
+        (
+            LearnSpellHandler(),
+            _handler_cmd(scenario, "learn-spell", spell_id=str(wrong_kind.id)),
+            "target is not a spell",
+        ),
+        (
+            LearnSpellHandler(),
+            _handler_cmd(scenario, "learn-spell", spell_id=str(skill_spell.id)),
+            "skill level too low for this spell",
+        ),
+        (
+            CastDragonSpellHandler(),
+            _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(wrong_kind.id)),
+            "target is not a spell",
+        ),
+        (
+            CastDragonSpellHandler(),
+            _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(cooldown_spell.id)),
+            "spell is on cooldown",
+        ),
+        (
+            CastDragonSpellHandler(),
+            _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(expensive_spell.id)),
+            "not enough magicka",
+        ),
+        (
+            BrewPotionHandler(),
+            _handler_cmd(scenario, "brew-potion", recipe_id=str(wrong_kind.id)),
+            "target is not a potion recipe",
+        ),
+        (
+            BrewPotionHandler(),
+            _handler_cmd(scenario, "brew-potion", recipe_id=str(recipe.id)),
+            "skill level too low for this recipe",
+        ),
+        (
+            BrewPotionHandler(),
+            _handler_cmd(scenario, "brew-potion", recipe_id=str(missing_ingredient_recipe.id)),
+            "required ingredient is not carried",
+        ),
+        (
+            UseArtifactHandler(),
+            _handler_cmd(scenario, "use-artifact", artifact_id=str(wrong_kind.id)),
+            "target is not an artifact",
+        ),
+        (
+            UseArtifactHandler(),
+            _handler_cmd(scenario, "use-artifact", artifact_id=str(empty_artifact.id)),
+            "artifact has no charges",
+        ),
+        (
+            RecoverMagickaHandler(),
+            _handler_cmd(scenario, "recover-magicka", amount=0),
+            "recovery amount must be positive",
+        ),
+        (
+            IdentifyArtifactHandler(),
+            _handler_cmd(scenario, "identify-artifact", artifact_id=str(wrong_kind.id)),
+            "target is not an artifact",
+        ),
+        (
+            IdentifyArtifactHandler(),
+            _handler_cmd(scenario, "identify-artifact", artifact_id=str(identified_artifact.id)),
+            "artifact already identified",
+        ),
+        (
+            AppeaseAncientBeastHandler(),
+            _handler_cmd(scenario, "appease-ancient-beast", beast_id=str(wrong_kind.id)),
+            "target is not an ancient beast",
+        ),
+        (
+            InscribeVoicePhraseHandler(),
+            _handler_cmd(
+                scenario,
+                "inscribe-voice-phrase",
+                target_id=str(paper.id),
+                word_id=str(word),
+                phrase="",
+            ),
+            "nothing to inscribe",
+        ),
+        (
+            InscribeVoicePhraseHandler(),
+            _handler_cmd(
+                scenario,
+                "inscribe-voice-phrase",
+                target_id=str(wrong_kind.id),
+                word_id=str(word),
+                phrase="shout",
+            ),
+            "target is not writable or carvable",
+        ),
+        (
+            InscribeVoicePhraseHandler(),
+            _handler_cmd(
+                scenario,
+                "inscribe-voice-phrase",
+                target_id=str(paper.id),
+                word_id=str(word),
+                phrase="shout",
+            ),
+            "not enough room to inscribe that",
+        ),
+        (
+            InscribeVoicePhraseHandler(),
+            _handler_cmd(
+                scenario,
+                "inscribe-voice-phrase",
+                target_id=str(paper.id),
+                word_id=str(wrong_kind.id),
+                phrase="ok",
+            ),
+            "target word is not a word of power",
+        ),
+        (
+            StudyVoiceInscriptionHandler(),
+            _handler_cmd(scenario, "study-voice-inscription", target_id=str(wrong_kind.id)),
+            "target has no voice inscription",
+        ),
+        (
+            StudyVoiceInscriptionHandler(),
+            _handler_cmd(scenario, "study-voice-inscription", target_id=str(broken_slate.id)),
+            "voice inscription has no valid word",
+        ),
+        (
+            StudyVoiceInscriptionHandler(),
+            _handler_cmd(scenario, "study-voice-inscription", target_id=str(studied_slate.id)),
+            "voice inscription already studied",
+        ),
+        (
+            PersuadeHandler(),
+            _handler_cmd(scenario, "persuade", target_id=str(distant_npc.id)),
+            "target is not reachable",
+        ),
+        (
+            ReportCrimeHandler(),
+            _handler_cmd(
+                scenario,
+                "report-crime",
+                criminal_id=str(distant_npc.id),
+                faction_id=str(faction),
+            ),
+            "criminal is not reachable",
+        ),
+        (
+            ReportCrimeHandler(),
+            _handler_cmd(
+                scenario,
+                "report-crime",
+                criminal_id=str(beast.id),
+                faction_id=str(wrong_kind.id),
+            ),
+            "target is not a faction",
+        ),
+        (
+            ReportCrimeHandler(),
+            _handler_cmd(
+                scenario,
+                "report-crime",
+                criminal_id=str(beast.id),
+                faction_id=str(faction),
+                bounty=0,
+            ),
+            "bounty must be positive",
+        ),
+    ]
+
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
 
 
 def _encounter_zone(scenario):
