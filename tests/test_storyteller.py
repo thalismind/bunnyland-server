@@ -51,6 +51,7 @@ from bunnyland.mechanics.storyteller import (
     install_storyteller,
     storyteller_fragments,
 )
+from bunnyland.prompts import ComponentPromptContext
 
 HOUR = 3600.0
 
@@ -451,3 +452,22 @@ def test_storyteller_fragments_ignore_missing_room_contents_and_resolved_inciden
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), resolved.id)
     assert storyteller_fragments(world, character) == []
+
+
+def test_incident_component_prompt_fragments_describe_active_incidents(scenario):
+    world = scenario.actor.world
+    incident = spawn_entity(
+        world,
+        [IncidentComponent(kind="resource_drop", budget_spent=2, started_at_epoch=0)],
+    )
+    ctx = ComponentPromptContext.for_entity(world, incident)
+
+    assert incident.get_component(IncidentComponent).prompt_fragments(ctx) == (
+        "Active incident: resource drop.",
+    )
+    assert (
+        IncidentComponent(
+            kind="done", budget_spent=0, started_at_epoch=0, resolved_at_epoch=1
+        ).prompt_fragments(ctx)
+        == ()
+    )

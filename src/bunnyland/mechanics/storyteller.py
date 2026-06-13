@@ -24,6 +24,7 @@ from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_e
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility, event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..prompts import ComponentPromptContext
 from .barbariansim import BarbarianSimPolicyComponent
 from .colonysim import ColonySimComponent, PrisonerComponent
 from .daggersim import GeneratedQuestComponent, PacifiedComponent
@@ -74,6 +75,11 @@ class IncidentComponent(Component):
     started_at_epoch: int
     room_id: str | None = None
     resolved_at_epoch: int | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.resolved_at_epoch is not None:
+            return ()
+        return (f"Active incident: {self.kind.replace('_', ' ')}.",)
 
 
 @dataclass(frozen=True)
@@ -544,18 +550,15 @@ class ResolveIncidentHandler:
 
 
 def storyteller_fragments(world: World, character) -> list[str]:
-    room_id = container_of(character)
-    if room_id is None or not world.has_entity(room_id):
+    ctx = ComponentPromptContext.for_entity(world, character)
+    if ctx.room is None:
         return []
     lines = []
-    for _edge, entity_id in world.get_entity(room_id).get_relationships(Contains):
-        if not world.has_entity(entity_id):
-            continue
-        entity = world.get_entity(entity_id)
-        if entity.has_component(IncidentComponent):
-            incident = entity.get_component(IncidentComponent)
-            if incident.resolved_at_epoch is None:
-                lines.append(f"Active incident: {incident.kind.replace('_', ' ')}.")
+    for entity in ctx.room_siblings(IncidentComponent):
+        incident_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room
+        )
+        lines.extend(entity.get_component(IncidentComponent).prompt_fragments(incident_ctx))
     return sorted(lines)
 
 
