@@ -14,6 +14,7 @@ from bunnyland.core.components import (
     LightComponent,
     ReadableComponent,
     RoomComponent,
+    TemperatureComponent,
 )
 from bunnyland.mechanics.barbariansim import WeaponComponent
 from bunnyland.mechanics.colonysim import (
@@ -60,6 +61,7 @@ from bunnyland.mechanics.environment import (
 )
 from bunnyland.mechanics.gardensim import (
     CropComponent,
+    CropGrowthComponent,
     CropQualityComponent,
     FarmQuestComponent,
     GeodeComponent,
@@ -94,6 +96,7 @@ from bunnyland.worldgen.examples import (
     DINOSIM_DEMO,
     DRAGONSIM_DEMO,
     DUNGEON_DEMOS,
+    FROZEN_GREENHOUSE_DEMO,
     GARDENSIM_DEMO,
     LIFESIM_DEMO,
     MAPLE_FARM_DEMO,
@@ -351,6 +354,27 @@ async def test_vacancy_motel_demo_room_six_is_a_night_gated_secret():
     install_environment(actor)
     await actor.tick(5 * 3600)  # 16:00 -> 21:00
     assert clock.get_component(TimeOfDayComponent).phase == "night"
+
+
+async def test_frozen_greenhouse_demo_grows_crops_against_the_cold():
+    actor = WorldActor()
+
+    world = await FROZEN_GREENHOUSE_DEMO.generate(actor, "frozen-greenhouse-demo", GenOptions())
+
+    # Crops to tend and a boiler to stoke against the freeze.
+    assert _has(actor, CropComponent)
+    assert _has(actor, WorkstationComponent)
+    assert actor.world.get_entity(world.rooms["tundra"]).get_component(
+        TemperatureComponent
+    ).celsius <= -10.0
+
+    # The unnatural specimen grows far faster than the ordinary winter crop.
+    growths = [
+        entity.get_component(CropGrowthComponent).required_days
+        for entity in actor.world.query().with_all([CropGrowthComponent]).execute_entities()
+    ]
+    assert any(required <= 1.0 for required in growths)
+    assert actor.world.get_entity(world.rooms["dome"]).has_component(PointOfInterestComponent)
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)
