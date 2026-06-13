@@ -172,7 +172,7 @@ from bunnyland.mechanics.neonsim import (
     neonsim_fragments,
 )
 from bunnyland.mechanics.voidsim import DroneComponent
-from bunnyland.prompts import ComponentPromptContext
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 
 def _install(actor):
@@ -885,6 +885,73 @@ def test_component_prompt_fragments_cover_site_device_and_implant_context():
     assert implant.get_component(ImplantComponent).prompt_fragments(implant_ctx) == (
         "Implant wire reflex: reflex booster (body, overclocked, illegal).",
     )
+
+
+def test_component_prompt_fragments_cover_suppressed_and_alternate_neon_branches():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    plain_site_id = _room_entity(
+        scenario, "alley", "site", [CyberpunkSiteComponent(site_type="back alley")]
+    )
+    watched_device_id = _room_entity(
+        scenario,
+        "watcher",
+        "device",
+        [DeviceComponent(device_type="sensor"), SurveillanceCoverageComponent()],
+    )
+    secured_device_id = _room_entity(
+        scenario,
+        "terminal",
+        "device",
+        [
+            DeviceComponent(device_type="terminal", powered=False, disabled=True),
+            HackableComponent(security=5, backdoored=True),
+        ],
+    )
+    wiped_evidence_id = _room_entity(
+        scenario,
+        "old tape",
+        "evidence",
+        [RecordedEvidenceComponent(subject_id=str(character.id), device_id="device", wiped=True)],
+    )
+    sale_implant_id = _room_entity(
+        scenario,
+        "optic",
+        "implant",
+        [ImplantComponent(implant_type="optic", legal=True)],
+    )
+
+    plain_site = world.get_entity(plain_site_id)
+    watched_device = world.get_entity(watched_device_id)
+    secured_device = world.get_entity(secured_device_id)
+    wiped_evidence = world.get_entity(wiped_evidence_id)
+    sale_implant = world.get_entity(sale_implant_id)
+    third_person = ComponentPromptContext.for_entity(
+        world, character, perspective=PromptPerspective(viewer=plain_site)
+    )
+    entity_ctx = ComponentPromptContext.for_entity(world, plain_site, target=character)
+
+    assert AccessLevelComponent().prompt_fragments(entity_ctx) == ()
+    assert plain_site.get_component(CyberpunkSiteComponent).prompt_fragments(entity_ctx) == (
+        "Site alley: back alley.",
+    )
+    assert watched_device.get_component(DeviceComponent).prompt_fragments(
+        ComponentPromptContext.for_entity(world, watched_device, target=character)
+    ) == ("Device watcher: sensor (watching).",)
+    assert secured_device.get_component(DeviceComponent).prompt_fragments(
+        ComponentPromptContext.for_entity(world, secured_device, target=character)
+    ) == ("Device terminal: terminal (unpowered, disabled, security 5, backdoored).",)
+    assert wiped_evidence.get_component(RecordedEvidenceComponent).prompt_fragments(
+        ComponentPromptContext.for_entity(world, wiped_evidence, target=character)
+    ) == ()
+    assert sale_implant.get_component(ImplantComponent).prompt_fragments(
+        ComponentPromptContext.for_entity(world, sale_implant, target=character)
+    ) == ("Implant for sale: optic (optic, legal).",)
+    assert HeatComponent(amount=0.0).prompt_fragments(entity_ctx) == ()
+    assert TraceTimerComponent(remaining=30.0).prompt_fragments(third_person) == ()
+    assert WantedLevelComponent(level=2).prompt_fragments(third_person) == ()
 
 
 # --- error paths: invalid / missing / unreachable / wrong-kind ----------------------

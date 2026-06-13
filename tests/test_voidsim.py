@@ -1840,6 +1840,94 @@ def test_voidsim_component_prompt_fragments_cover_module_and_target_state():
     )
 
 
+def test_voidsim_component_prompt_fragments_cover_alternate_branches():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    def room_entity(name, kind, component):
+        entity_id = _spawn_in_room_a(scenario, [IdentityComponent(name=name, kind=kind), component])
+        entity = world.get_entity(entity_id)
+        return entity, ComponentPromptContext.for_entity(world, entity, target=character)
+
+    source, source_ctx = room_entity(
+        "warp crack", "hazard", ChaosInfluenceComponent(source_type="warp crack")
+    )
+    upgrade, upgrade_ctx = room_entity(
+        "installed kit", "upgrade", ShipUpgradeComponent(system_type="engines", installed=True)
+    )
+    active_contract, active_contract_ctx = room_entity(
+        "cargo run",
+        "contract",
+        ContractComponent(contract_type="cargo", status="active", accepted_by=str(character.id)),
+    )
+    other_contract, other_contract_ctx = room_entity(
+        "other run",
+        "contract",
+        ContractComponent(contract_type="cargo", status="active", accepted_by="someone_else"),
+    )
+    delivered_cargo, delivered_cargo_ctx = room_entity(
+        "ore crates", "cargo", CargoComponent(delivered=True)
+    )
+    loaded_cargo, loaded_cargo_ctx = room_entity(
+        "med crates", "cargo", CargoComponent(loaded_on="ship_1")
+    )
+    claimed_salvage, claimed_salvage_ctx = room_entity(
+        "wreck claim", "salvage", SalvageClaimComponent(site_id="site_1", claimed=True)
+    )
+    contacted, contacted_ctx = room_entity(
+        "envoy",
+        "contact",
+        FirstContactComponent(species_id="sp", contacted_by=(str(character.id),)),
+    )
+    complete_matrix, complete_matrix_ctx = room_entity(
+        "lexicon", "matrix", TranslationMatrixComponent(species_id="sp", complete=True)
+    )
+    inactive_quarantine, inactive_quarantine_ctx = room_entity(
+        "sample", "sample", QuarantineComponent(active=False)
+    )
+    artifact, artifact_ctx = room_entity(
+        "idol", "artifact", AlienArtifactComponent(studied_by=())
+    )
+
+    assert source.get_component(ChaosInfluenceComponent).prompt_fragments(source_ctx) == (
+        "Chaos source warp crack: warp crack (1/hour).",
+    )
+    assert upgrade.get_component(ShipUpgradeComponent).prompt_fragments(upgrade_ctx) == ()
+    assert active_contract.get_component(ContractComponent).prompt_fragments(
+        active_contract_ctx
+    ) == ("Cargo contract cargo run: active.",)
+    assert (
+        other_contract.get_component(ContractComponent).prompt_fragments(other_contract_ctx)
+        == ()
+    )
+    assert delivered_cargo.get_component(CargoComponent).prompt_fragments(
+        delivered_cargo_ctx
+    ) == ("Cargo delivered: ore crates.",)
+    assert loaded_cargo.get_component(CargoComponent).prompt_fragments(loaded_cargo_ctx) == (
+        "Cargo loaded on ship_1: med crates.",
+    )
+    assert (
+        claimed_salvage.get_component(SalvageClaimComponent).prompt_fragments(
+            claimed_salvage_ctx
+        )
+        == ()
+    )
+    assert contacted.get_component(FirstContactComponent).prompt_fragments(contacted_ctx) == ()
+    assert complete_matrix.get_component(TranslationMatrixComponent).prompt_fragments(
+        complete_matrix_ctx
+    ) == ("Translation matrix lexicon: complete.",)
+    assert (
+        inactive_quarantine.get_component(QuarantineComponent).prompt_fragments(
+            inactive_quarantine_ctx
+        )
+        == ()
+    )
+    assert artifact.get_component(AlienArtifactComponent).prompt_fragments(artifact_ctx) == (
+        "Alien artifact ready for study: idol.",
+    )
+
+
 def test_voidsim_fragments_describe_chaos_wards_and_mutation_pressure():
     scenario = build_scenario()
     _make_module(scenario, module_type="sanctum")
