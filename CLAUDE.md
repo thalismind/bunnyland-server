@@ -1,93 +1,175 @@
-# CLAUDE.md
+# Agentic Developer Guide
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
-
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+This guide is for agentic developers working in Bunnyland. It combines general LLM
+coding discipline with the project-specific patterns that keep Bunnyland changes small,
+testable, and compatible with the existing Relics ECS engine.
 
 ## 1. Think Before Coding
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+**Do not assume. Do not hide confusion. Surface tradeoffs.**
 
 Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+- State important assumptions explicitly. If an answer cannot be discovered locally and a
+  reasonable assumption would be risky, ask.
+- If multiple interpretations exist, name them before choosing.
+- If a simpler approach solves the request, prefer it and explain the tradeoff.
+- If something is unclear enough to affect correctness, stop and clarify.
 
-## 2. Simplicity First
+For multi-step work, use a short goal-driven plan:
 
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-- When fixing a bug or regression, add a regression test that fails before the fix and passes after it, unless the change is too trivial or impossible to test directly.
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
+```text
+1. [Step] -> verify: [check]
+2. [Step] -> verify: [check]
+3. [Step] -> verify: [check]
 ```
 
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+## 2. Keep Changes Surgical
 
-## 5. Relics ECS Modeling
+Every changed line should trace to the user request.
 
-**One entity can have only one component of each type.**
+- Match existing style, naming, and test layout.
+- Do not refactor neighboring code unless the requested change requires it.
+- Do not add speculative flexibility, configuration, or abstractions.
+- Remove imports, variables, and helpers made unused by your own changes.
+- Leave unrelated user or generated work alone. Mention unrelated issues; do not clean
+  them up unless asked.
+
+## 3. Relics ECS Modeling
+
+One entity can have only one component of each type.
 
 - Use components for singleton state on an entity.
 - Use edges for repeatable relationships or multi-instance state.
-- If a character can have multiple instances of something, model it as an edge with properties, or as separate entities linked by edges.
-- Example: multiple jealousies must be represented as relationship edges between the relevant characters with properties like `intensity`, not as one `JealousyComponent` on the character.
+- If a character can have multiple instances of something, model it as relationship
+  edges with properties, or as separate entities linked by edges.
+- Do not add a second component of the same type to represent another instance.
 
-## 6. Documentation Roles
+Handler state updates should use the existing ECS helpers:
+- Parse ids with `parse_entity_id`.
+- Check `world.has_entity(...)` before `ctx.entity(...)` or `world.get_entity(...)` when
+  the id came from a command payload or component string.
+- Check reachability with `reachable_ids(...)` for player-facing target interactions.
+- Update frozen components with `replace_component(entity, replace(component, ...))`.
+- Use `spawn_entity(...)` for newly created inventory, quest, event, or resource objects.
 
-**Put new docs under the audience that will use them.**
+## 4. Mechanics And Plugins
 
-- `docs/player/` is for player-facing guides and gameplay workflows.
-- `docs/admin/` is for server operation, setup, deployment, moderation, and controller handoff.
-- `docs/developer/` is for engine concepts, architecture, persistence, scripting, world generation, and design notes.
-- Keep root-level docs for project entry points only, such as `README.md`, `PLAN.md`, and broad specifications.
+Mechanics packs live under `src/bunnyland/mechanics/`; built-in plugin surfaces are wired
+in `src/bunnyland/plugins/builtin.py`; player-visible command metadata lives in
+`src/bunnyland/core/actions.py`.
+
+When adding or changing mechanics:
+- Register every public component, handler, event, consequence, and prompt fragment in
+  the relevant built-in plugin.
+- Add every player-facing command type to `DEFAULT_ACTION_DEFINITIONS`.
+- Keep plugin dependencies acyclic. Core/base packs may depend on `core_verbs`,
+  `lifesim`, `colonysim`, or `gardensim` only when they actually reuse those mechanics.
+- Preserve catalogue numbering and update `bunnyland_mechanics.md` when implementation
+  status changes.
+- Keep planned or out-of-scope packages/features documented as planned rather than
+  quietly implying they exist.
+
+Handler rejection style matters:
+- Return `rejected("specific reason")`; tests usually assert exact reason strings.
+- Validate invalid ids first, missing entities next, reachability next, then wrong-kind
+  and invalid-state checks.
+- Cover missing entity guards before dereferencing ids from payloads or component fields.
+
+Prompt fragments should expose newly visible state succinctly and deterministically.
+Existing fragments usually collect human-readable lines and return them sorted.
+
+## 5. Documentation Roles
+
+Put documentation where its audience will use it:
+
+- `docs/player/`: player-facing guides, gameplay workflows, and command examples.
+- `docs/admin/`: server operation, setup, deployment, moderation, controller handoff.
+- `docs/developer/`: engine concepts, architecture, persistence, scripting, worldgen.
+- Root docs: project entry points and broad catalogues such as `README.md`, `PLAN.md`,
+  `bunnyland_mechanics.md`, and `bunnyland_specification.md`.
+
+When adding or changing player-facing verbs:
+- Update the relevant player guide with short command examples.
+- Update README status tables when package status changes.
+- Update `bunnyland_mechanics.md` if the catalogue is behind the implementation.
+
+## 6. Testing Strategy
+
+Bunnyland uses several test layers. Pick the narrowest layer that proves the behavior,
+then add broader tests only when the behavior is actually cross-system.
+
+- **Unit/direct handler tests**: default for mechanics. Use the matching
+  `tests/test_*sim.py` file. Follow existing patterns with `build_scenario()`,
+  `HandlerContext`, `_handler_cmd(...)`, direct `handler.execute(...)`, exact rejection
+  reasons, and direct component/event assertions.
+- **Prompt-fragment tests**: add when new state should be visible to agents or players.
+  Assert concise text appears in the fragment list.
+- **Plugin/catalogue tests**: use `tests/test_plugins.py` for built-in registration,
+  dependency hierarchy, action catalogue parity, and dependency-cycle regressions.
+- **E2E tests**: use `tests/test_e2e.py` when the behavior requires world generation,
+  controller/agent lifecycle, prompt construction, or multiple actor ticks.
+- **Discord/playtest tests**: use `tests/test_discord_playtest.py` and
+  `examples/playtests/*.json` for larger player-command loops and Discord-facing
+  workflows.
+- **Live LLM tests**: marked `live_llm`; they are optional and skipped unless explicitly
+  enabled with credentials.
+
+For rejection coverage, follow earlier module patterns:
+- Prefer table-driven direct handler tests.
+- Cover invalid ids, missing entities, unreachable targets, wrong-kind targets, and
+  invalid state transitions.
+- If enough rejection paths are covered directly, the coverage gate should pass; do not
+  run the full gate repeatedly as a progress meter.
 
 ## 7. Test Commands
 
-**Use the README's module-form pytest command.**
+Use module-form pytest:
 
-- Run the default suite with `scripts/test-all`.
-- Run focused tests with `uv run -m pytest ...`, not `uv run pytest ...`.
-- The console `pytest` entrypoint can miss the uv import path and fail to import dependencies such as `relics`.
-- Do not run `uv sync` unless the user explicitly asks for dependency syncing.
+```bash
+uv run -m pytest tests/test_barbariansim.py
+uv run -m pytest tests/test_plugins.py
+```
 
----
+Do not use `uv run pytest`; the console entrypoint can miss the `uv` import path and
+fail to import dependencies such as `relics`.
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+Default verification:
+
+```bash
+scripts/test-all
+uv run ruff check src tests
+git diff --check
+```
+
+`scripts/test-all` delegates to `scripts/test-coverage`, runs `uv run -m pytest` with
+branch coverage, writes coverage artifacts, and enforces the project coverage threshold
+from `pyproject.toml` (`fail_under = 97`). It also fails if e2e or Discord playtest tests
+are skipped.
+
+Do not run `uv sync` unless the user explicitly asks for dependency syncing.
+
+## 8. Generated And Dirty Files
+
+The worktree may already be dirty.
+
+- Do not revert changes you did not make.
+- Do not stage untracked generated work unless it is part of the request.
+- Coverage runs may update `coverage.xml`, `htmlcov/`, or `artifacts/coverage/`; check
+  `git status --short` before committing.
+- Before finalizing code changes, report any untracked or unrelated files left alone.
+
+## 9. Success Criteria
+
+For a completed Bunnyland code change, aim to have:
+
+- Focused tests proving the changed behavior.
+- Rejection-path tests for new handlers or bug fixes.
+- Prompt-fragment tests when visible state changed.
+- Plugin/action catalogue parity when new public surfaces were added.
+- Relevant docs updated for player-visible commands or catalogue status.
+- `scripts/test-all`, Ruff, and `git diff --check` passing before a final handoff or
+  commit, unless you clearly explain why a check could not be run.
+
+These guidelines are working if diffs stay focused, implementation follows existing
+mechanics patterns, and test failures point to real behavior rather than avoidable
+fixture or command mistakes.
