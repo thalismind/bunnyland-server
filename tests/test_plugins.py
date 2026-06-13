@@ -59,6 +59,7 @@ from bunnyland.plugins.builtin import (
     MCP,
     MECHANISMS,
     MEMORY,
+    NEONSIM,
     NUKESIM,
     PERSONA,
     POLICY,
@@ -94,6 +95,7 @@ def test_builtin_plugins_declared():
         MCP,
         VOIDSIM,
         NUKESIM,
+        NEONSIM,
         TOONSIM,
         STORYTELLER,
     }
@@ -101,7 +103,7 @@ def test_builtin_plugins_declared():
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 19
+    assert len(select(plugins, None)) == 20
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
 
 
@@ -1043,6 +1045,33 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     } <= {
         event.__name__ for event in dino.commands.typed_events
     }
+
+    neon = plugins[NEONSIM]
+    assert {
+        "CyberpunkSiteComponent",
+        "SecurityZoneComponent",
+        "AccessLevelComponent",
+        "CheckpointComponent",
+        "SafehouseComponent",
+        "RestrictedAreaComponent",
+    } <= {component.__name__ for component in neon.ecs.components}
+    assert "InsideZone" in {edge.__name__ for edge in neon.ecs.edges}
+    assert {
+        "enter-district",
+        "show-credentials",
+        "bribe-checkpoint",
+        "sneak-through-checkpoint",
+        "claim-safehouse",
+        "case-location",
+    } <= {handler.command_type for handler in neon.commands.action_handlers}
+    assert {
+        "DistrictEnteredEvent",
+        "AccessGrantedEvent",
+        "AccessDeniedEvent",
+        "CheckpointPassedEvent",
+        "TrespassDetectedEvent",
+        "SafehouseClaimedEvent",
+    } <= {event.__name__ for event in neon.commands.typed_events}
 
 
 def test_ecs_systems_can_be_instances_or_classes():

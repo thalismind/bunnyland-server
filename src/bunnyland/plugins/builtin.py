@@ -1005,6 +1005,31 @@ from ..mechanics.needs import (
     ThirstSystem,
     need_fragments,
 )
+from ..mechanics.neonsim import (
+    AccessDeniedEvent,
+    AccessGrantedEvent,
+    AccessLevelComponent,
+    BribeCheckpointHandler,
+    CaseLocationHandler,
+    CheckpointComponent,
+    CheckpointPassedEvent,
+    ClaimSafehouseHandler,
+    CyberpunkSiteComponent,
+    DistrictEnteredEvent,
+    EnterDistrictHandler,
+    InsideZone,
+    LocationCasedEvent,
+    PublicAccessComponent,
+    RestrictedAreaComponent,
+    SafehouseClaimedEvent,
+    SafehouseComponent,
+    SecurityZoneComponent,
+    ShowCredentialsHandler,
+    SneakCheckpointHandler,
+    TrespassDetectedEvent,
+    install_neonsim,
+    neonsim_fragments,
+)
 from ..mechanics.nukesim import (
     ActivateBeaconHandler,
     AddictionComponent,
@@ -1377,6 +1402,7 @@ DRAGONSIM = "bunnyland.dragonsim"
 DAGGERSIM = "bunnyland.daggersim"
 VOIDSIM = "bunnyland.voidsim"
 NUKESIM = "bunnyland.nukesim"
+NEONSIM = "bunnyland.neonsim"
 TOONSIM = "bunnyland.toonsim"
 STORYTELLER = "bunnyland.storyteller"
 MCP = "bunnyland.mcp"
@@ -3003,6 +3029,51 @@ def nukesim_plugin() -> Plugin:
     )
 
 
+def neonsim_plugin() -> Plugin:
+    return Plugin(
+        id=NEONSIM,
+        name="Neon Sim",
+        dependencies=DependencyContribution(
+            requires=(CORE_VERBS, COLONYSIM),
+        ),
+        ecs=EcsContribution(
+            components=(
+                CyberpunkSiteComponent,
+                SecurityZoneComponent,
+                AccessLevelComponent,
+                CheckpointComponent,
+                SafehouseComponent,
+                PublicAccessComponent,
+                RestrictedAreaComponent,
+            ),
+            edges=(InsideZone,),
+        ),
+        commands=CommandContribution(
+            action_handlers=(
+                EnterDistrictHandler,
+                ShowCredentialsHandler,
+                BribeCheckpointHandler,
+                SneakCheckpointHandler,
+                ClaimSafehouseHandler,
+                CaseLocationHandler,
+            ),
+            typed_events=(
+                DistrictEnteredEvent,
+                AccessGrantedEvent,
+                AccessDeniedEvent,
+                CheckpointPassedEvent,
+                TrespassDetectedEvent,
+                SafehouseClaimedEvent,
+                LocationCasedEvent,
+            ),
+        ),
+        runtime=RuntimeContribution(service_factories=(install_neonsim,)),
+        content=ContentContribution(
+            prompt_fragments=(neonsim_fragments,),
+        ),
+    )
+
+
 def storyteller_plugin() -> Plugin:
     return Plugin(
         id=STORYTELLER,
@@ -3061,6 +3132,7 @@ def bunnyland_plugins() -> list[Plugin]:
         daggersim_plugin(),
         voidsim_plugin(),
         nukesim_plugin(),
+        neonsim_plugin(),
         storyteller_plugin(),
         mcp_plugin(),
     ]
@@ -3079,6 +3151,7 @@ __all__ = [
     "MCP",
     "MECHANISMS",
     "MEMORY",
+    "NEONSIM",
     "NUKESIM",
     "PERSONA",
     "POLICY",
@@ -3101,6 +3174,7 @@ __all__ = [
     "mechanisms_plugin",
     "memory_plugin",
     "mcp_plugin",
+    "neonsim_plugin",
     "nukesim_plugin",
     "persona_plugin",
     "policy_plugin",
