@@ -44,8 +44,8 @@ The inspirations break down cleanly:
 | Daggerfall     | `dagger-sim`      | procedural realm expands through rumors, guilds, banks, law, travel, and dungeons   |
 | FTL            | `void-sim`        | crews survive ships, stations, planets, alien contact, tech, contracts, and hazards |
 | Fallout        | `nuke-sim`        | wasteland survival, radiation, mutation, scavenging, settlement salvage, jury-rigged crafting |
-| Deus Ex / Watch Dogs / Cyberpunk 2077 | `neon-sim` | hackers, surveillance, street economies, corporate intrigue, cybernetics, reputation |
-| Jurassic Park / ARK / Dino Crisis | `dino-sim` | fossil and species identification, cloning, egg handling, reptile procreation, hatching, and kaiju storyteller incidents |
+| Deus Ex / Watch Dogs / Cyberpunk 2077 / Blade Runner / Shadows of Doubt | `neon-sim` | hackers, surveillance, street economies, corporate intrigue, cybernetics, reputation |
+| Jurassic Park / ARK / Dino Crisis / Pacific Rim | `dino-sim` | fossil and species identification, cloning, egg handling, reptile procreation, hatching, and kaiju storyteller incidents |
 | Dwarf Fortress | `fortress-sim`    | deep settlement simulation, materials, history, disasters, artifacts, absurd detail |
 
 For source grounding: The Sims uses traits, emotions, whims, aspirations, skills, careers, crafting hobbies, and life-state systems; RimWorld centers on colonist moods, needs, wounds, illnesses, addictions, social bonds, storyteller incidents, work priorities, and mental breaks; Conan Exiles emphasizes survival, building, thralls, weather, temperature, hunger/thirst, PvP/siege, mounts, pets, purges, and world bosses; Stardew Valley revolves around seasonal crops, fertilizer, skills, villagers, gifts, friendship, farming, fishing, mining, and festivals; Skyrim’s replay loop is open-world exploration, factions, skills, combat, magic, stealth, followers, crafting, dragons, and shouts; Daggerfall contributes procedural scale, guilds, banks, services, law, travel, generated quests, and generated dungeons; FTL contributes crewed-ship pressure, subsystem damage, sector travel, distress signals, resource scarcity, and cascading emergencies; Dwarf Fortress goes deeper than all of these with generated worlds, histories, fortress management, geology, migrants, nobles, justice, strange moods, artifacts, tantrum spirals, and many more systems; Deus Ex, Watch Dogs, and Cyberpunk 2077 contribute cyberpunk infiltration, hacking, surveillance, corporate power, street economies, cybernetics, and reputation pressure; Jurassic Park, ARK, and Dino Crisis contribute dangerous animals, eggs, taming, escapes, containment failure, and monster-scale emergency response. ([Electronic Arts Inc.][1])
@@ -5533,13 +5533,14 @@ use found scrap.
 
 ---
 
-# 10. `neonsim` package — Deus Ex / Watch Dogs / Cyberpunk 2077-inspired cyberpunk mechanics
+# 10. `neonsim` package — Deus Ex / Watch Dogs / Cyberpunk 2077 / Blade Runner / Shadows of Doubt-inspired cyberpunk mechanics
 
 `neon-sim` is the cyberpunk city package. The internal package name should be `neonsim`,
 matching the existing no-hyphen Python package style while the public-facing package label
 uses the same hyphenated style as `void-sim`, `dragon-sim`, and `dagger-sim`.
 
-Its main inspirations are **Deus Ex**, **Watch Dogs**, and **Cyberpunk 2077**: corporate
+Its main inspirations are **Deus Ex**, **Watch Dogs**, **Cyberpunk 2077**, **Blade Runner**,
+and **Shadows of Doubt**: corporate
 systems, surveillance, street-level access, hacking as actionable interaction with devices,
 consequences for being seen, cybernetics, fixers, gangs, and missions that can be solved
 through infiltration, social pressure, economics, violence, or data. The tone should land
@@ -6041,13 +6042,13 @@ data leak -> generated shell company -> terminal network -> blackmail file -> fa
 
 ---
 
-# 11. `dinosim` package — Jurassic Park / ARK / Dino Crisis-inspired creature lifecycle
+# 11. `dinosim` package — Jurassic Park / ARK / Dino Crisis / Pacific Rim-inspired creature lifecycle
 
 `dino-sim` is the prehistoric creature lifecycle package. The internal package name should
 be `dinosim`, matching the existing no-hyphen Python package style while the public-facing
 package label uses the same hyphenated style as `garden-sim`, `void-sim`, and `neon-sim`.
 
-Its main inspirations are **Jurassic Park**, **ARK**, and **Dino Crisis**: fossils, eggs,
+Its main inspirations are **Jurassic Park**, **ARK**, **Dino Crisis**, and **Pacific Rim**: fossils, eggs,
 taming, training, caretaking, tracking, dangerous escapes, and the moment when a managed
 animal becomes an emergency. This is not a park-management package and should not introduce
 Zoo Tycoon-style guest attraction, ticketing, visitor happiness, shops, tours, or exhibit
