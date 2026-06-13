@@ -5,6 +5,7 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    CharacterComponent,
     CommandCost,
     ContainmentMode,
     Contains,
@@ -23,24 +24,43 @@ from bunnyland.mechanics.neonsim import (
     AccessDeniedEvent,
     AccessGrantedEvent,
     AccessLevelComponent,
+    BlindSpotComponent,
     BribeCheckpointHandler,
+    CameraComponent,
+    CameraDisabledEvent,
+    CameraLoopedEvent,
     CaseLocationHandler,
     CheckpointComponent,
     CheckpointPassedEvent,
     ClaimSafehouseHandler,
     CyberpunkSiteComponent,
+    DeployDroneHandler,
+    DeviceComponent,
+    DeviceInspectedEvent,
+    DisableCameraHandler,
     DistrictEnteredEvent,
+    DroneComponent,
+    DroneDeployedEvent,
     EnterDistrictHandler,
+    EvidenceRecordedEvent,
+    EvidenceWipedEvent,
     InsideZone,
+    InspectDeviceHandler,
+    JamSensorHandler,
     LocationCasedEvent,
+    LoopCameraHandler,
     PublicAccessComponent,
+    RecordedEvidenceComponent,
     RestrictedAreaComponent,
     SafehouseClaimedEvent,
     SafehouseComponent,
     SecurityZoneComponent,
+    SensorJammedEvent,
     ShowCredentialsHandler,
     SneakCheckpointHandler,
+    SurveillanceCoverageComponent,
     TrespassDetectedEvent,
+    WipeEvidenceHandler,
     install_neonsim,
     neonsim_fragments,
 )
@@ -53,7 +73,43 @@ def _install(actor):
     actor.register_handler(SneakCheckpointHandler())
     actor.register_handler(ClaimSafehouseHandler())
     actor.register_handler(CaseLocationHandler())
+    actor.register_handler(InspectDeviceHandler())
+    actor.register_handler(DisableCameraHandler())
+    actor.register_handler(LoopCameraHandler())
+    actor.register_handler(JamSensorHandler())
+    actor.register_handler(DeployDroneHandler())
+    actor.register_handler(WipeEvidenceHandler())
     install_neonsim(actor)
+
+
+def _camera(scenario, name="cam", *, looped=False, disabled=False, powered=True):
+    return _room_entity(
+        scenario,
+        name,
+        "device",
+        [
+            DeviceComponent(device_type="camera", powered=powered, disabled=disabled),
+            CameraComponent(looped=looped),
+            SurveillanceCoverageComponent(),
+        ],
+    )
+
+
+def _intruder_site(scenario, name="vault", components=()):
+    site = _room_entity(scenario, name, "site", [CyberpunkSiteComponent(), *components])
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        InsideZone(authorized=False), site
+    )
+    return site
+
+
+def _evidence_in_room(scenario):
+    return [
+        record
+        for record in scenario.actor.world.query()
+        .with_all([RecordedEvidenceComponent])
+        .execute_entities()
+    ]
 
 
 def _cmd(scenario, command_type, *, character_id=None, **payload):
@@ -787,3 +843,419 @@ def test_fragments_handle_site_without_identity():
     )
 
     assert f"Site {site.id}: back alley." in joined
+
+
+# --- devices & surveillance (10.2) ---------------------------------------------------
+
+
+async def test_inspect_device_reports_state():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "lobby cam")
+    seen: list[DeviceInspectedEvent] = []
+    scenario.actor.bus.subscribe(DeviceInspectedEvent, seen.append)
+
+    await scenario.actor.submit(_cmd(scenario, "inspect-device", target_id=str(cam)))
+    await scenario.actor.tick(1.0)
+
+    assert seen[0].device_type == "camera"
+    assert seen[0].powered is True
+    assert seen[0].disabled is False
+
+
+async def test_disable_camera_stops_recording():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "lobby cam")
+    _intruder_site(scenario)
+    disabled: list[CameraDisabledEvent] = []
+    recorded: list[EvidenceRecordedEvent] = []
+    scenario.actor.bus.subscribe(CameraDisabledEvent, disabled.append)
+    scenario.actor.bus.subscribe(EvidenceRecordedEvent, recorded.append)
+
+    await scenario.actor.submit(_cmd(scenario, "disable-camera", target_id=str(cam)))
+    await scenario.actor.tick(1.0)
+
+    assert disabled[0].device_id == str(cam)
+    assert scenario.actor.world.get_entity(cam).get_component(DeviceComponent).disabled is True
+    assert recorded == []
+    assert _evidence_in_room(scenario) == []
+
+
+async def test_loop_camera_stops_recording():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "lobby cam")
+    _intruder_site(scenario)
+    looped: list[CameraLoopedEvent] = []
+    recorded: list[EvidenceRecordedEvent] = []
+    scenario.actor.bus.subscribe(CameraLoopedEvent, looped.append)
+    scenario.actor.bus.subscribe(EvidenceRecordedEvent, recorded.append)
+
+    await scenario.actor.submit(_cmd(scenario, "loop-camera", target_id=str(cam)))
+    await scenario.actor.tick(1.0)
+
+    assert looped[0].device_id == str(cam)
+    assert scenario.actor.world.get_entity(cam).get_component(CameraComponent).looped is True
+    assert recorded == []
+
+
+async def test_jam_sensor_disables_it():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    sensor = _room_entity(
+        scenario, "motion sensor", "device", [DeviceComponent(device_type="sensor")]
+    )
+    jammed: list[SensorJammedEvent] = []
+    scenario.actor.bus.subscribe(SensorJammedEvent, jammed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "jam-sensor", target_id=str(sensor)))
+    await scenario.actor.tick(1.0)
+
+    assert jammed[0].device_id == str(sensor)
+    assert scenario.actor.world.get_entity(sensor).get_component(DeviceComponent).disabled is True
+
+
+async def test_deploy_drone_activates_and_powers_it():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    drone = _room_entity(
+        scenario,
+        "recon drone",
+        "device",
+        [DeviceComponent(device_type="drone", powered=False), DroneComponent()],
+    )
+    deployed: list[DroneDeployedEvent] = []
+    scenario.actor.bus.subscribe(DroneDeployedEvent, deployed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "deploy-drone", target_id=str(drone)))
+    await scenario.actor.tick(1.0)
+
+    assert deployed[0].device_id == str(drone)
+    entity = scenario.actor.world.get_entity(drone)
+    assert entity.get_component(DroneComponent).deployed is True
+    assert entity.get_component(DeviceComponent).powered is True
+
+
+async def test_camera_records_evidence_of_intruder():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "lobby cam")
+    _intruder_site(scenario)
+    recorded: list[EvidenceRecordedEvent] = []
+    scenario.actor.bus.subscribe(EvidenceRecordedEvent, recorded.append)
+
+    await scenario.actor.tick(1.0)
+
+    assert len(recorded) == 1
+    assert recorded[0].character_id == str(scenario.character)
+    assert recorded[0].device_id == str(cam)
+    evidence = _evidence_in_room(scenario)
+    assert len(evidence) == 1
+    subject = evidence[0].get_component(RecordedEvidenceComponent).subject_id
+    assert subject == str(scenario.character)
+
+
+async def test_camera_does_not_record_authorized_presence():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _camera(scenario, "lobby cam")
+    site = _room_entity(scenario, "vault", "site", [CyberpunkSiteComponent()])
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        InsideZone(authorized=True), site
+    )
+    recorded: list[EvidenceRecordedEvent] = []
+    scenario.actor.bus.subscribe(EvidenceRecordedEvent, recorded.append)
+
+    await scenario.actor.tick(1.0)
+
+    assert recorded == []
+
+
+async def test_unpowered_camera_does_not_record():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _camera(scenario, "dead cam", powered=False)
+    _intruder_site(scenario)
+    recorded: list[EvidenceRecordedEvent] = []
+    scenario.actor.bus.subscribe(EvidenceRecordedEvent, recorded.append)
+
+    await scenario.actor.tick(1.0)
+
+    assert recorded == []
+
+
+async def test_blind_spot_site_shelters_intruder():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _camera(scenario, "lobby cam")
+    _intruder_site(scenario, "maintenance crawlspace", [BlindSpotComponent()])
+    recorded: list[EvidenceRecordedEvent] = []
+    scenario.actor.bus.subscribe(EvidenceRecordedEvent, recorded.append)
+
+    await scenario.actor.tick(1.0)
+
+    assert recorded == []
+
+
+async def test_camera_records_each_intruder_only_once():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _camera(scenario, "lobby cam")
+    # No RestrictedAreaComponent, so trespass detection leaves the edge in place and the
+    # camera sees the intruder across multiple ticks; dedup must still record once.
+    _intruder_site(scenario)
+    recorded: list[EvidenceRecordedEvent] = []
+    scenario.actor.bus.subscribe(EvidenceRecordedEvent, recorded.append)
+
+    await scenario.actor.tick(1.0)
+    await scenario.actor.tick(1.0)
+
+    assert len(recorded) == 1
+    assert len(_evidence_in_room(scenario)) == 1
+
+
+async def test_wipe_evidence_removes_the_record():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _camera(scenario, "lobby cam")
+    _intruder_site(scenario)
+    await scenario.actor.tick(1.0)
+    evidence = _evidence_in_room(scenario)[0]
+    wiped: list[EvidenceWipedEvent] = []
+    scenario.actor.bus.subscribe(EvidenceWipedEvent, wiped.append)
+
+    await scenario.actor.submit(_cmd(scenario, "wipe-evidence", target_id=str(evidence.id)))
+    await scenario.actor.tick(1.0)
+
+    assert wiped[0].evidence_id == str(evidence.id)
+    assert not scenario.actor.world.has_entity(evidence.id)
+
+
+def test_device_fragments_describe_devices_and_evidence():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _camera(scenario, "lobby cam", looped=True)
+    _room_entity(
+        scenario,
+        "motion sensor",
+        "device",
+        [DeviceComponent(device_type="sensor"), SurveillanceCoverageComponent()],
+    )
+    _room_entity(
+        scenario,
+        "footage",
+        "evidence",
+        [RecordedEvidenceComponent(subject_id="x", device_id="y", device_type="camera")],
+    )
+
+    joined = "\n".join(
+        neonsim_fragments(scenario.actor.world, scenario.actor.world.get_entity(scenario.character))
+    )
+
+    assert "Device lobby cam: camera (looped)." in joined
+    assert "Device motion sensor: sensor (watching)." in joined
+    assert "Recorded evidence: footage (camera)." in joined
+
+
+# --- error paths: devices ------------------------------------------------------------
+
+
+def test_device_handlers_reject_invalid_character_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = str(scenario.room_a)
+    cases = [
+        (InspectDeviceHandler(), "inspect-device"),
+        (DisableCameraHandler(), "disable-camera"),
+        (LoopCameraHandler(), "loop-camera"),
+        (JamSensorHandler(), "jam-sensor"),
+        (DeployDroneHandler(), "deploy-drone"),
+        (WipeEvidenceHandler(), "wipe-evidence"),
+    ]
+    for handler, command_type in cases:
+        result = handler.execute(
+            ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
+        )
+        assert result.ok is False
+        assert result.reason == "invalid character id"
+
+
+async def test_inspect_device_rejects_non_device():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
+    rejects = await _reject(scenario, _cmd(scenario, "inspect-device", target_id=str(site)))
+    assert any("wrong kind" in event.reason for event in rejects)
+
+
+async def test_disable_camera_rejects_non_camera():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    sensor = _room_entity(scenario, "sensor", "device", [DeviceComponent(device_type="sensor")])
+    rejects = await _reject(scenario, _cmd(scenario, "disable-camera", target_id=str(sensor)))
+    assert any("wrong kind" in event.reason for event in rejects)
+
+
+async def test_disable_camera_rejects_when_already_disabled():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "cam", disabled=True)
+    rejects = await _reject(scenario, _cmd(scenario, "disable-camera", target_id=str(cam)))
+    assert any("already disabled" in event.reason for event in rejects)
+
+
+async def test_loop_camera_rejects_offline_camera():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "cam", disabled=True)
+    rejects = await _reject(scenario, _cmd(scenario, "loop-camera", target_id=str(cam)))
+    assert any("offline" in event.reason for event in rejects)
+
+
+async def test_loop_camera_rejects_when_already_looped():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "cam", looped=True)
+    rejects = await _reject(scenario, _cmd(scenario, "loop-camera", target_id=str(cam)))
+    assert any("already looped" in event.reason for event in rejects)
+
+
+async def test_jam_sensor_rejects_non_sensor():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "cam")
+    rejects = await _reject(scenario, _cmd(scenario, "jam-sensor", target_id=str(cam)))
+    assert any("not a sensor" in event.reason for event in rejects)
+
+
+async def test_jam_sensor_rejects_when_already_jammed():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    sensor = _room_entity(
+        scenario, "sensor", "device", [DeviceComponent(device_type="sensor", disabled=True)]
+    )
+    rejects = await _reject(scenario, _cmd(scenario, "jam-sensor", target_id=str(sensor)))
+    assert any("already jammed" in event.reason for event in rejects)
+
+
+async def test_deploy_drone_rejects_non_drone():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "cam")
+    rejects = await _reject(scenario, _cmd(scenario, "deploy-drone", target_id=str(cam)))
+    assert any("wrong kind" in event.reason for event in rejects)
+
+
+async def test_deploy_drone_rejects_when_already_deployed():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    drone = _room_entity(
+        scenario,
+        "drone",
+        "device",
+        [DeviceComponent(device_type="drone"), DroneComponent(deployed=True)],
+    )
+    rejects = await _reject(scenario, _cmd(scenario, "deploy-drone", target_id=str(drone)))
+    assert any("already deployed" in event.reason for event in rejects)
+
+
+async def test_wipe_evidence_rejects_non_evidence():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    cam = _camera(scenario, "cam")
+    rejects = await _reject(scenario, _cmd(scenario, "wipe-evidence", target_id=str(cam)))
+    assert any("wrong kind" in event.reason for event in rejects)
+
+
+async def test_wipe_evidence_rejects_when_already_wiped():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    record = _room_entity(
+        scenario,
+        "old footage",
+        "evidence",
+        [RecordedEvidenceComponent(subject_id="x", device_id="y", wiped=True)],
+    )
+    rejects = await _reject(scenario, _cmd(scenario, "wipe-evidence", target_id=str(record)))
+    assert any("already wiped" in event.reason for event in rejects)
+
+
+# --- coverage: device fragment states, orphan camera, off-room characters ------------
+
+
+def test_device_fragments_report_unpowered_and_disabled():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _room_entity(
+        scenario,
+        "broken cam",
+        "device",
+        [DeviceComponent(device_type="camera", powered=False, disabled=True)],
+    )
+    _room_entity(
+        scenario,
+        "wiped footage",
+        "evidence",
+        [RecordedEvidenceComponent(subject_id="x", device_id="y", wiped=True)],
+    )
+
+    joined = "\n".join(
+        neonsim_fragments(scenario.actor.world, scenario.actor.world.get_entity(scenario.character))
+    )
+
+    assert "Device broken cam: camera (unpowered, disabled)." in joined
+    assert "wiped footage" not in joined
+
+
+async def test_disable_camera_without_device_component_is_rejected():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    bare = _room_entity(scenario, "phantom cam", "device", [CameraComponent()])
+    rejects = await _reject(scenario, _cmd(scenario, "disable-camera", target_id=str(bare)))
+    assert any("not a camera" in event.reason for event in rejects)
+
+
+async def test_loop_camera_without_device_component_succeeds():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    bare = _room_entity(scenario, "phantom cam", "device", [CameraComponent()])
+    looped: list[CameraLoopedEvent] = []
+    scenario.actor.bus.subscribe(CameraLoopedEvent, looped.append)
+
+    await scenario.actor.submit(_cmd(scenario, "loop-camera", target_id=str(bare)))
+    await scenario.actor.tick(1.0)
+
+    assert looped[0].device_id == str(bare)
+
+
+async def test_orphan_camera_and_off_room_intruder_are_skipped():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    # Camera with surveillance coverage but no room: must be skipped, not crash.
+    spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="loose cam", kind="device"),
+            DeviceComponent(device_type="camera"),
+            SurveillanceCoverageComponent(),
+        ],
+    )
+    # A real camera in room_a, but the only intruder sits in room_b out of view.
+    _camera(scenario, "lobby cam")
+    far_site = _far_entity(scenario, "far vault", "site", [CyberpunkSiteComponent()])
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Mox", kind="character"), CharacterComponent(species="bunny")],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
+    )
+    other.add_relationship(InsideZone(authorized=False), far_site)
+    recorded: list[EvidenceRecordedEvent] = []
+    scenario.actor.bus.subscribe(EvidenceRecordedEvent, recorded.append)
+
+    await scenario.actor.tick(1.0)
+
+    assert recorded == []

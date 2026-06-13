@@ -1054,6 +1054,12 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "CheckpointComponent",
         "SafehouseComponent",
         "RestrictedAreaComponent",
+        "DeviceComponent",
+        "CameraComponent",
+        "SurveillanceCoverageComponent",
+        "DroneComponent",
+        "RecordedEvidenceComponent",
+        "BlindSpotComponent",
     } <= {component.__name__ for component in neon.ecs.components}
     assert "InsideZone" in {edge.__name__ for edge in neon.ecs.edges}
     assert {
@@ -1063,6 +1069,12 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "sneak-through-checkpoint",
         "claim-safehouse",
         "case-location",
+        "inspect-device",
+        "disable-camera",
+        "loop-camera",
+        "jam-sensor",
+        "deploy-drone",
+        "wipe-evidence",
     } <= {handler.command_type for handler in neon.commands.action_handlers}
     assert {
         "DistrictEnteredEvent",
@@ -1071,6 +1083,13 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "CheckpointPassedEvent",
         "TrespassDetectedEvent",
         "SafehouseClaimedEvent",
+        "DeviceInspectedEvent",
+        "CameraDisabledEvent",
+        "CameraLoopedEvent",
+        "SensorJammedEvent",
+        "DroneDeployedEvent",
+        "EvidenceRecordedEvent",
+        "EvidenceWipedEvent",
     } <= {event.__name__ for event in neon.commands.typed_events}
 
 

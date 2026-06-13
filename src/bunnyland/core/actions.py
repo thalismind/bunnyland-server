@@ -1609,6 +1609,37 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="case_location",
         patterns=("case {target_id}", "scope out {target_id}"),
     ),
+    _definition("inspect-device", ("target_id",), tool_name="inspect_device"),
+    _definition(
+        "disable-camera",
+        ("target_id",),
+        tool_name="disable_camera",
+        patterns=("disable camera {target_id}",),
+    ),
+    _definition(
+        "loop-camera",
+        ("target_id",),
+        tool_name="loop_camera",
+        patterns=("loop camera {target_id}", "loop the feed on {target_id}"),
+    ),
+    _definition(
+        "jam-sensor",
+        ("target_id",),
+        tool_name="jam_sensor",
+        patterns=("jam sensor {target_id}",),
+    ),
+    _definition(
+        "deploy-drone",
+        ("target_id",),
+        tool_name="deploy_drone",
+        patterns=("deploy drone {target_id}",),
+    ),
+    _definition(
+        "wipe-evidence",
+        ("target_id",),
+        tool_name="wipe_evidence",
+        patterns=("wipe evidence {target_id}", "erase the footage {target_id}"),
+    ),
 )
 
 

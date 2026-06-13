@@ -2,9 +2,10 @@
 
 This package leans on existing systems instead of becoming a second core: districts are
 modelled with the core ``RegionComponent`` rather than a bespoke district type, and later
-slices reuse dagger-sim law/reputation/debt and void-sim sensors. This first slice covers
-cyberpunk sites, security zones, access control, checkpoints, safehouses, and deterministic
-trespass detection (catalogue 10.1).
+slices reuse dagger-sim law/reputation/debt. Implemented so far: cyberpunk sites, security
+zones, access control, checkpoints, safehouses, and deterministic trespass detection
+(catalogue 10.1); networked devices, cameras, drones, surveillance, recorded evidence, and
+blind spots (catalogue 10.2).
 """
 
 from __future__ import annotations
@@ -29,8 +30,9 @@ from ..core.ecs import (
     parse_entity_id,
     reachable_ids,
     replace_component,
+    spawn_entity,
 )
-from ..core.edges import Contains
+from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .colonysim import ResourceStackComponent
@@ -587,6 +589,400 @@ class CaseLocationHandler:
         )
 
 
+# --- Components (catalogue 10.2: devices, networks, surveillance) --------------------
+
+
+@dataclass(frozen=True)
+class DeviceComponent(Component):
+    """A networked device. ``device_type`` covers camera/sensor/drone/terminal/etc."""
+
+    device_type: str = "device"
+    powered: bool = True
+    disabled: bool = False
+    owner: str = ""
+
+
+@dataclass(frozen=True)
+class CameraComponent(Component):
+    """Camera-specific state. ``looped`` feeds a fake signal so it records nothing."""
+
+    looped: bool = False
+
+
+@dataclass(frozen=True)
+class SurveillanceCoverageComponent(Component):
+    """Marks a device as actively watching its room and able to record evidence."""
+
+    coverage: float = 1.0
+
+
+@dataclass(frozen=True)
+class DroneComponent(Component):
+    deployed: bool = False
+
+
+@dataclass(frozen=True)
+class RecordedEvidenceComponent(Component):
+    subject_id: str
+    device_id: str
+    device_type: str = "camera"
+    wiped: bool = False
+
+
+@dataclass(frozen=True)
+class BlindSpotComponent(Component):
+    """Marker on a site: cameras cannot record intruders sheltering inside it."""
+
+
+# --- Events (catalogue 10.2) ---------------------------------------------------------
+
+
+class DeviceInspectedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+    device_type: str
+    powered: bool
+    disabled: bool
+
+
+class CameraDisabledEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class CameraLoopedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class SensorJammedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class DroneDeployedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+
+
+class EvidenceRecordedEvent(DomainEvent):
+    character_id: str
+    device_id: str
+    evidence_id: str
+
+
+class EvidenceWipedEvent(DomainEvent):
+    character_id: str
+    evidence_id: str
+
+
+# --- Device helpers ------------------------------------------------------------------
+
+
+def _reachable_device(ctx: HandlerContext, character_id: EntityId, target_id, device_type=None):
+    entity, error = _reachable_component(ctx, character_id, target_id, DeviceComponent)
+    if entity is None:
+        return None, error
+    if device_type is not None and entity.get_component(DeviceComponent).device_type != device_type:
+        return None, f"target is not a {device_type}"
+    return entity, None
+
+
+def _device(entity: Entity) -> DeviceComponent | None:
+    return entity.get_component(DeviceComponent) if entity.has_component(DeviceComponent) else None
+
+
+def _evidence_for(world: World, subject_id: str, device_id: str) -> Entity | None:
+    for record in world.query().with_all([RecordedEvidenceComponent]).execute_entities():
+        component = record.get_component(RecordedEvidenceComponent)
+        if (
+            not component.wiped
+            and component.subject_id == subject_id
+            and component.device_id == device_id
+        ):
+            return record
+    return None
+
+
+def _unauthorized_sites(character: Entity) -> list[EntityId]:
+    return [
+        site_id
+        for edge, site_id in character.get_relationships(InsideZone)
+        if not edge.authorized
+    ]
+
+
+# --- Consequences (catalogue 10.2 systems) -------------------------------------------
+
+
+class SurveillanceConsequence:
+    """Active cameras and drones record evidence of unauthorized intruders nearby.
+
+    Registered before :class:`TrespassDetectionConsequence` so a covert intruder is
+    filmed on the same tick they are caught. Looping, disabling, or jamming a device
+    first, or sheltering in a blind-spot site, prevents the recording.
+    """
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for device in (
+            world.query()
+            .with_all([DeviceComponent, SurveillanceCoverageComponent])
+            .execute_entities()
+        ):
+            dev = device.get_component(DeviceComponent)
+            if not dev.powered or dev.disabled:
+                continue
+            if device.has_component(CameraComponent):
+                if device.get_component(CameraComponent).looped:
+                    continue
+            room_id = container_of(device)
+            if room_id is None or not world.has_entity(room_id):
+                continue
+            for character in (
+                world.query()
+                .with_all([CharacterComponent])
+                .with_none([DeadComponent, SuspendedComponent])
+                .execute_entities()
+            ):
+                if container_of(character) != room_id:
+                    continue
+                sites = _unauthorized_sites(character)
+                if not sites:
+                    continue
+                if any(
+                    world.has_entity(site_id)
+                    and world.get_entity(site_id).has_component(BlindSpotComponent)
+                    for site_id in sites
+                ):
+                    continue
+                if _evidence_for(world, str(character.id), str(device.id)) is not None:
+                    continue
+                evidence = spawn_entity(
+                    world,
+                    [
+                        IdentityComponent(name=f"footage of {_name(character)}", kind="evidence"),
+                        RecordedEvidenceComponent(
+                            subject_id=str(character.id),
+                            device_id=str(device.id),
+                            device_type=dev.device_type,
+                        ),
+                    ],
+                )
+                world.get_entity(room_id).add_relationship(
+                    Contains(mode=ContainmentMode.ROOM_CONTENT), evidence.id
+                )
+                events.append(
+                    EvidenceRecordedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(device.id),
+                            room_id=str(room_id),
+                            target_ids=(str(character.id), str(evidence.id)),
+                            character_id=str(character.id),
+                            device_id=str(device.id),
+                            evidence_id=str(evidence.id),
+                        )
+                    )
+                )
+        return events
+
+
+# --- Handlers (catalogue 10.2 actions) -----------------------------------------------
+
+
+class InspectDeviceHandler:
+    command_type = "inspect-device"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_device(ctx, character_id, command.payload.get("target_id"))
+        if device is None:
+            return rejected(error if error else "target is not a device")
+        dev = device.get_component(DeviceComponent)
+        return ok(
+            DeviceInspectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                    device_type=dev.device_type,
+                    powered=dev.powered,
+                    disabled=dev.disabled,
+                )
+            )
+        )
+
+
+class DisableCameraHandler:
+    command_type = "disable-camera"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), CameraComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a camera")
+        dev = _device(device)
+        if dev is None:
+            return rejected("target is not a camera")
+        if dev.disabled:
+            return rejected("camera is already disabled")
+        replace_component(device, replace(dev, disabled=True))
+        return ok(
+            CameraDisabledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            )
+        )
+
+
+class LoopCameraHandler:
+    command_type = "loop-camera"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), CameraComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a camera")
+        camera = device.get_component(CameraComponent)
+        dev = _device(device)
+        if dev is not None and (not dev.powered or dev.disabled):
+            return rejected("camera is offline")
+        if camera.looped:
+            return rejected("camera is already looped")
+        replace_component(device, replace(camera, looped=True))
+        return ok(
+            CameraLoopedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            )
+        )
+
+
+class JamSensorHandler:
+    command_type = "jam-sensor"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_device(
+            ctx, character_id, command.payload.get("target_id"), device_type="sensor"
+        )
+        if device is None:
+            return rejected(error if error else "target is not a sensor")
+        dev = device.get_component(DeviceComponent)
+        if dev.disabled:
+            return rejected("sensor is already jammed")
+        replace_component(device, replace(dev, disabled=True))
+        return ok(
+            SensorJammedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            )
+        )
+
+
+class DeployDroneHandler:
+    command_type = "deploy-drone"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        device, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), DroneComponent
+        )
+        if device is None:
+            return rejected(error if error else "target is not a drone")
+        drone = device.get_component(DroneComponent)
+        if drone.deployed:
+            return rejected("drone is already deployed")
+        replace_component(device, replace(drone, deployed=True))
+        if device.has_component(DeviceComponent):
+            dev = device.get_component(DeviceComponent)
+            if not dev.powered:
+                replace_component(device, replace(dev, powered=True))
+        return ok(
+            DroneDeployedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(device.id),),
+                    character_id=str(character_id),
+                    device_id=str(device.id),
+                )
+            )
+        )
+
+
+class WipeEvidenceHandler:
+    command_type = "wipe-evidence"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        record, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), RecordedEvidenceComponent
+        )
+        if record is None:
+            return rejected(error if error else "target is not recorded evidence")
+        component = record.get_component(RecordedEvidenceComponent)
+        if component.wiped:
+            return rejected("evidence is already wiped")
+        evidence_id = str(record.id)
+        parent_id = container_of(record)
+        if parent_id is not None and ctx.world.has_entity(parent_id):
+            ctx.world.get_entity(parent_id).remove_relationship(Contains, record.id)
+        ctx.world.remove(record.id)
+        return ok(
+            EvidenceWipedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(evidence_id,),
+                    character_id=str(character_id),
+                    evidence_id=evidence_id,
+                )
+            )
+        )
+
+
 # --- Prompt fragments ----------------------------------------------------------------
 
 
@@ -631,6 +1027,24 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
             owner = entity.get_component(SafehouseComponent).claimed_by
             state = "unclaimed" if owner is None else "claimed"
             lines.append(f"Safehouse {_name(entity)}: {state}.")
+        if entity.has_component(DeviceComponent):
+            dev = entity.get_component(DeviceComponent)
+            states = []
+            if not dev.powered:
+                states.append("unpowered")
+            if dev.disabled:
+                states.append("disabled")
+            if entity.has_component(CameraComponent):
+                if entity.get_component(CameraComponent).looped:
+                    states.append("looped")
+            if entity.has_component(SurveillanceCoverageComponent) and not states:
+                states.append("watching")
+            suffix = f" ({', '.join(states)})" if states else ""
+            lines.append(f"Device {_name(entity)}: {dev.device_type}{suffix}.")
+        if entity.has_component(RecordedEvidenceComponent):
+            record = entity.get_component(RecordedEvidenceComponent)
+            if not record.wiped:
+                lines.append(f"Recorded evidence: {_name(entity)} ({record.device_type}).")
     return sorted(lines)
 
 
@@ -638,6 +1052,9 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
 
 
 def install_neonsim(actor) -> None:
+    # Surveillance runs before trespass detection so a covert intruder is filmed on the
+    # same tick they are caught and ejected.
+    actor.register_consequence(SurveillanceConsequence())
     actor.register_consequence(TrespassDetectionConsequence())
 
 
@@ -645,25 +1062,45 @@ __all__ = [
     "AccessDeniedEvent",
     "AccessGrantedEvent",
     "AccessLevelComponent",
+    "BlindSpotComponent",
     "BribeCheckpointHandler",
+    "CameraComponent",
+    "CameraDisabledEvent",
+    "CameraLoopedEvent",
     "CaseLocationHandler",
     "CheckpointComponent",
     "CheckpointPassedEvent",
     "ClaimSafehouseHandler",
     "CyberpunkSiteComponent",
+    "DeviceComponent",
+    "DeviceInspectedEvent",
+    "DisableCameraHandler",
+    "DeployDroneHandler",
     "DistrictEnteredEvent",
+    "DroneComponent",
+    "DroneDeployedEvent",
     "EnterDistrictHandler",
+    "EvidenceRecordedEvent",
+    "EvidenceWipedEvent",
     "InsideZone",
+    "InspectDeviceHandler",
+    "JamSensorHandler",
     "LocationCasedEvent",
+    "LoopCameraHandler",
     "PublicAccessComponent",
+    "RecordedEvidenceComponent",
     "RestrictedAreaComponent",
     "SafehouseClaimedEvent",
     "SafehouseComponent",
     "SecurityZoneComponent",
+    "SensorJammedEvent",
     "ShowCredentialsHandler",
     "SneakCheckpointHandler",
+    "SurveillanceConsequence",
+    "SurveillanceCoverageComponent",
     "TrespassDetectedEvent",
     "TrespassDetectionConsequence",
+    "WipeEvidenceHandler",
     "install_neonsim",
     "neonsim_fragments",
 ]
