@@ -6,7 +6,9 @@ slices reuse dagger-sim law/reputation/debt. Implemented so far: cyberpunk sites
 zones, access control, checkpoints, safehouses, and deterministic trespass detection
 (catalogue 10.1); networked devices, cameras, drones, surveillance, recorded evidence, and
 blind spots (catalogue 10.2); hacking, credentials, exploits, backdoors, data exfiltration,
-sabotage, and a counter-intrusion trace timer (catalogue 10.3).
+sabotage, and a counter-intrusion trace timer (catalogue 10.3); and a street economy with
+contraband, data fencing, favors, informants, debt, bounties, and a heat/wanted/law-response
+loop that reuses dagger-sim debt and bounty state (catalogue 10.5).
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from ..core.components import (
     DeadComponent,
     IdentityComponent,
     LockableComponent,
+    PortableComponent,
     RegionComponent,
     SuspendedComponent,
 )
@@ -38,8 +41,10 @@ from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .colonysim import ResourceStackComponent
+from .daggersim import BountyComponent, BountyPostedEvent, DebtComponent
 
 SCRIP_RESOURCE = "scrip"
+SECONDS_PER_HOUR = 60 * 60
 
 
 # --- Edges ---------------------------------------------------------------------------
@@ -1658,6 +1663,561 @@ class SpoofIdentityHandler:
         )
 
 
+# --- Components (catalogue 10.5: street economy, reputation, heat, wanted) -----------
+
+
+@dataclass(frozen=True)
+class BlackMarketComponent(Component):
+    """A street vendor that sells one contraband line and buys it back."""
+
+    price: int = 20
+    contraband_name: str = "contraband"
+    contraband_value: int = 10
+    contraband_heat: float = 2.0
+
+
+@dataclass(frozen=True)
+class DataBrokerComponent(Component):
+    """A fence that buys exfiltrated data payloads for scrip."""
+
+    rate: int = 50
+
+
+@dataclass(frozen=True)
+class ContrabandComponent(Component):
+    value: int = 10
+    heat: float = 2.0
+
+
+@dataclass(frozen=True)
+class HeatComponent(Component):
+    """Accumulated police attention on a character; decays over time."""
+
+    amount: float = 0.0
+    last_updated_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class WantedLevelComponent(Component):
+    level: int = 0
+
+
+@dataclass(frozen=True)
+class InformantComponent(Component):
+    faction: str = "police"
+    flip_cost: int = 30
+    flipped: bool = False
+
+
+@dataclass(frozen=True)
+class OwesFavor(Edge):
+    """contact -> character: the contact owes the character a callable favor."""
+
+    reason: str = ""
+
+
+# --- Events (catalogue 10.5) ---------------------------------------------------------
+
+
+class ContrabandBoughtEvent(DomainEvent):
+    character_id: str
+    item_id: str
+    price: int
+
+
+class DataSoldEvent(DomainEvent):
+    character_id: str
+    data_id: str
+    price: int
+
+
+class FavorCalledEvent(DomainEvent):
+    character_id: str
+    contact_id: str
+
+
+class DebtPaidEvent(DomainEvent):
+    character_id: str
+    amount: int
+    remaining: int
+
+
+class HeatChangedEvent(DomainEvent):
+    character_id: str
+    amount: float
+
+
+class WantedLevelChangedEvent(DomainEvent):
+    character_id: str
+    level: int
+
+
+class WarrantClearedEvent(DomainEvent):
+    character_id: str
+
+
+class InformantTurnedEvent(DomainEvent):
+    character_id: str
+    informant_id: str
+
+
+class LawResponseEvent(DomainEvent):
+    character_id: str
+    level: int
+
+
+WANTED_THRESHOLDS = (10.0, 25.0, 50.0)
+HEAT_DECAY_PER_HOUR = 1.0
+HIDE_HEAT_REDUCTION = 8.0
+CLEAR_WARRANT_COST_PER_LEVEL = 40
+
+
+# --- Street-economy helpers ----------------------------------------------------------
+
+
+def _wanted_for_heat(amount: float) -> int:
+    return sum(1 for threshold in WANTED_THRESHOLDS if amount >= threshold)
+
+
+def _heat_component(character: Entity) -> HeatComponent:
+    if character.has_component(HeatComponent):
+        return character.get_component(HeatComponent)
+    return HeatComponent()
+
+
+def _add_heat(character: Entity, epoch: int, delta: float) -> float:
+    heat = _heat_component(character)
+    amount = max(0.0, heat.amount + delta)
+    replace_component(character, HeatComponent(amount=amount, last_updated_epoch=epoch))
+    return amount
+
+
+def _scrip_stack(character: Entity, world: World) -> Entity | None:
+    for edge, item_id in character.get_relationships(Contains):
+        if edge.mode != ContainmentMode.INVENTORY or not world.has_entity(item_id):
+            continue
+        item = world.get_entity(item_id)
+        if (
+            item.has_component(ResourceStackComponent)
+            and item.get_component(ResourceStackComponent).resource_type == SCRIP_RESOURCE
+        ):
+            return item
+    return None
+
+
+def _add_scrip(character: Entity, world: World, amount: int) -> None:
+    if amount <= 0:
+        return
+    existing = _scrip_stack(character, world)
+    if existing is not None:
+        stack = existing.get_component(ResourceStackComponent)
+        total = stack.quantity + amount
+        replace_component(existing, replace(stack, quantity=total))
+        replace_component(
+            existing, IdentityComponent(name=f"{SCRIP_RESOURCE} x{total}", kind="resource")
+        )
+        return
+    item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name=f"{SCRIP_RESOURCE} x{amount}", kind="resource"),
+            ResourceStackComponent(resource_type=SCRIP_RESOURCE, quantity=amount),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+
+
+def _inventory_item(character: Entity, world: World, target_id, component):
+    parsed = parse_entity_id(target_id)
+    if parsed is None or not world.has_entity(parsed):
+        return None
+    if not character.has_relationship(Contains, parsed):
+        return None
+    item = world.get_entity(parsed)
+    return item if item.has_component(component) else None
+
+
+def _remove_item(world: World, item_id: EntityId) -> None:
+    entity = world.get_entity(item_id)
+    parent_id = container_of(entity)
+    if parent_id is not None and world.has_entity(parent_id):
+        world.get_entity(parent_id).remove_relationship(Contains, item_id)
+    world.remove(item_id)
+
+
+# --- Consequences (catalogue 10.5 systems) -------------------------------------------
+
+
+class HeatConsequence:
+    """Decays heat over time and recomputes the wanted level, triggering law response."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for character in (
+            world.query()
+            .with_all([CharacterComponent, HeatComponent])
+            .with_none([DeadComponent])
+            .execute_entities()
+        ):
+            heat = character.get_component(HeatComponent)
+            elapsed = max(0, epoch - heat.last_updated_epoch)
+            amount = heat.amount
+            if elapsed > 0:
+                amount = max(0.0, heat.amount - HEAT_DECAY_PER_HOUR * (elapsed / SECONDS_PER_HOUR))
+                replace_component(
+                    character, HeatComponent(amount=amount, last_updated_epoch=epoch)
+                )
+            old_level = (
+                character.get_component(WantedLevelComponent).level
+                if character.has_component(WantedLevelComponent)
+                else 0
+            )
+            new_level = _wanted_for_heat(amount)
+            if new_level == old_level:
+                continue
+            if new_level > 0:
+                replace_component(character, WantedLevelComponent(level=new_level))
+            elif character.has_component(WantedLevelComponent):
+                character.remove_component(WantedLevelComponent)
+            events.append(
+                WantedLevelChangedEvent(
+                    **_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character.id),
+                        room_id=_room_id(world, character.id),
+                        character_id=str(character.id),
+                        level=new_level,
+                    )
+                )
+            )
+            if new_level > old_level:
+                _raise_local_alarm(world, character.id)
+                events.append(
+                    LawResponseEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.ROOM,
+                            actor_id=str(character.id),
+                            room_id=_room_id(world, character.id),
+                            character_id=str(character.id),
+                            level=new_level,
+                        )
+                    )
+                )
+        return events
+
+
+# --- Handlers (catalogue 10.5 actions) -----------------------------------------------
+
+
+class BuyContrabandHandler:
+    command_type = "buy-contraband"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        vendor, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), BlackMarketComponent
+        )
+        if vendor is None:
+            return rejected(error if error else "target is not a black-market vendor")
+        market = vendor.get_component(BlackMarketComponent)
+        character = ctx.entity(character_id)
+        if not _spend_scrip(character, ctx.world, market.price):
+            return rejected("not enough scrip for the contraband")
+        item = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=market.contraband_name, kind="contraband"),
+                ContrabandComponent(value=market.contraband_value, heat=market.contraband_heat),
+                PortableComponent(can_pick_up=True),
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+        heat = _add_heat(character, ctx.epoch, market.contraband_heat)
+        return ok(
+            ContrabandBoughtEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(vendor.id), str(item.id)),
+                    character_id=str(character_id),
+                    item_id=str(item.id),
+                    price=market.price,
+                )
+            ),
+            HeatChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                    amount=heat,
+                )
+            ),
+        )
+
+
+class SellDataHandler:
+    command_type = "sell-data"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        broker, error = _reachable_component(
+            ctx, character_id, command.payload.get("broker_id"), DataBrokerComponent
+        )
+        if broker is None:
+            return rejected(error if error else "target is not a data broker")
+        character = ctx.entity(character_id)
+        data = _inventory_item(
+            character, ctx.world, command.payload.get("data_id"), DataPayloadComponent
+        )
+        if data is None:
+            return rejected("you are not carrying that data")
+        payload = data.get_component(DataPayloadComponent)
+        price = broker.get_component(DataBrokerComponent).rate * (2 if payload.sensitive else 1)
+        data_id = str(data.id)
+        _remove_item(ctx.world, data.id)
+        _add_scrip(character, ctx.world, price)
+        return ok(
+            DataSoldEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(broker.id),),
+                    character_id=str(character_id),
+                    data_id=data_id,
+                    price=price,
+                )
+            )
+        )
+
+
+class CallFavorHandler:
+    command_type = "call-favor"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        contact, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), CharacterComponent
+        )
+        if contact is None:
+            return rejected(error if error else "target is not a contact")
+        if not contact.has_relationship(OwesFavor, character_id):
+            return rejected("they owe you no favor")
+        contact.remove_relationship(OwesFavor, character_id)
+        return ok(
+            FavorCalledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(contact.id),),
+                    character_id=str(character_id),
+                    contact_id=str(contact.id),
+                )
+            )
+        )
+
+
+class PayDebtHandler:
+    command_type = "pay-debt"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(DebtComponent):
+            return rejected("you have no debt")
+        debt = character.get_component(DebtComponent)
+        scrip = _scrip_stack(character, ctx.world)
+        available = scrip.get_component(ResourceStackComponent).quantity if scrip else 0
+        if available <= 0:
+            return rejected("not enough scrip to pay the debt")
+        payment = min(available, debt.amount)
+        if not _spend_scrip(character, ctx.world, payment):
+            return rejected("not enough scrip to pay the debt")
+        remaining = debt.amount - payment
+        if remaining > 0:
+            replace_component(character, replace(debt, amount=remaining))
+        else:
+            character.remove_component(DebtComponent)
+        return ok(
+            DebtPaidEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                    amount=payment,
+                    remaining=remaining,
+                )
+            )
+        )
+
+
+class PostBountyHandler:
+    command_type = "post-bounty"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        target, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), CharacterComponent
+        )
+        if target is None:
+            return rejected(error if error else "target is not a person")
+        try:
+            amount = int(command.payload.get("amount", 0))
+        except (TypeError, ValueError):
+            return rejected("invalid bounty amount")
+        if amount <= 0:
+            return rejected("bounty amount must be positive")
+        character = ctx.entity(character_id)
+        if not _spend_scrip(character, ctx.world, amount):
+            return rejected("not enough scrip to post the bounty")
+        existing = (
+            target.get_component(BountyComponent).amount
+            if target.has_component(BountyComponent)
+            else 0
+        )
+        region = _district_name(ctx.world, target.id)
+        replace_component(target, BountyComponent(amount=existing + amount, region_id=region))
+        # Reuse dagger-sim's bounty event/state; a street bounty is the same record placed
+        # deliberately by a runner rather than generated by a crime, so crime_id is empty.
+        return ok(
+            BountyPostedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target.id),),
+                    crime_id="",
+                    amount=amount,
+                )
+            )
+        )
+
+
+class TurnInformantHandler:
+    command_type = "turn-informant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        informant, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), InformantComponent
+        )
+        if informant is None:
+            return rejected(error if error else "target is not an informant")
+        component = informant.get_component(InformantComponent)
+        if component.flipped:
+            return rejected("informant is already turned")
+        character = ctx.entity(character_id)
+        if not _spend_scrip(character, ctx.world, component.flip_cost):
+            return rejected("not enough scrip to turn the informant")
+        replace_component(informant, replace(component, flipped=True))
+        return ok(
+            InformantTurnedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(informant.id),),
+                    character_id=str(character_id),
+                    informant_id=str(informant.id),
+                )
+            )
+        )
+
+
+class HideFromLawHandler:
+    command_type = "hide-from-law"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if _heat_component(character).amount <= 0.0:
+            return rejected("you are not being hunted")
+        if not _in_claimed_safehouse(ctx.world, character_id):
+            return rejected("lay low in a safehouse you have claimed")
+        heat = _add_heat(character, ctx.epoch, -HIDE_HEAT_REDUCTION)
+        return ok(
+            HeatChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                    amount=heat,
+                )
+            )
+        )
+
+
+class ClearWarrantHandler:
+    command_type = "clear-warrant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(WantedLevelComponent):
+            return rejected("you have no warrant")
+        level = character.get_component(WantedLevelComponent).level
+        cost = level * CLEAR_WARRANT_COST_PER_LEVEL
+        if not _spend_scrip(character, ctx.world, cost):
+            return rejected("not enough scrip to clear the warrant")
+        character.remove_component(WantedLevelComponent)
+        replace_component(character, HeatComponent(amount=0.0, last_updated_epoch=ctx.epoch))
+        return ok(
+            WarrantClearedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                )
+            ),
+            WantedLevelChangedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    character_id=str(character_id),
+                    level=0,
+                )
+            ),
+        )
+
+
+def _in_claimed_safehouse(world: World, character_id: EntityId) -> bool:
+    character = world.get_entity(character_id)
+    for entity_id in reachable_ids(world, character):
+        if not world.has_entity(entity_id):
+            continue
+        entity = world.get_entity(entity_id)
+        if entity.has_component(SafehouseComponent):
+            if entity.get_component(SafehouseComponent).claimed_by == str(character_id):
+                return True
+    return False
+
+
 # --- Prompt fragments ----------------------------------------------------------------
 
 
@@ -1728,9 +2288,30 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
             record = entity.get_component(RecordedEvidenceComponent)
             if not record.wiped:
                 lines.append(f"Recorded evidence: {_name(entity)} ({record.device_type}).")
+        if entity.has_component(BlackMarketComponent):
+            market = entity.get_component(BlackMarketComponent)
+            lines.append(
+                f"Black market {_name(entity)}: {market.contraband_name} for {market.price} scrip."
+            )
+        if entity.has_component(DataBrokerComponent):
+            lines.append(f"Data broker {_name(entity)} buying data here.")
+        if entity.has_component(InformantComponent):
+            informant = entity.get_component(InformantComponent)
+            state = "turned" if informant.flipped else "available"
+            lines.append(f"Informant {_name(entity)} ({informant.faction}): {state}.")
+        if entity.has_component(ContrabandComponent):
+            lines.append(f"Contraband: {_name(entity)}.")
     if character.has_component(TraceTimerComponent):
         timer = character.get_component(TraceTimerComponent)
         lines.append(f"Counter-intrusion trace closing in: {timer.remaining:g}s left.")
+    if character.has_component(HeatComponent):
+        heat = character.get_component(HeatComponent)
+        if heat.amount > 0.0:
+            lines.append(f"Police heat: {heat.amount:g}.")
+    if character.has_component(WantedLevelComponent):
+        lines.append(f"Wanted level: {character.get_component(WantedLevelComponent).level}.")
+    if character.has_component(DebtComponent):
+        lines.append(f"Outstanding debt: {character.get_component(DebtComponent).amount} scrip.")
     return sorted(lines)
 
 
@@ -1743,6 +2324,7 @@ def install_neonsim(actor) -> None:
     actor.register_consequence(SurveillanceConsequence())
     actor.register_consequence(TrespassDetectionConsequence())
     actor.register_consequence(TraceTimerConsequence())
+    actor.register_consequence(HeatConsequence())
 
 
 __all__ = [
@@ -1752,8 +2334,11 @@ __all__ = [
     "AccessTerminalHandler",
     "AlarmRaisedEvent",
     "BackdoorInstalledEvent",
+    "BlackMarketComponent",
     "BlindSpotComponent",
     "BribeCheckpointHandler",
+    "BuyContrabandHandler",
+    "CallFavorHandler",
     "CameraComponent",
     "CameraDisabledEvent",
     "CameraLoopedEvent",
@@ -1761,11 +2346,17 @@ __all__ = [
     "CheckpointComponent",
     "CheckpointPassedEvent",
     "ClaimSafehouseHandler",
+    "ClearWarrantHandler",
+    "ContrabandBoughtEvent",
+    "ContrabandComponent",
     "CredentialComponent",
     "CredentialUsedEvent",
     "CyberpunkSiteComponent",
+    "DataBrokerComponent",
     "DataExfiltratedEvent",
     "DataPayloadComponent",
+    "DataSoldEvent",
+    "DebtPaidEvent",
     "DeployDroneHandler",
     "DeviceComponent",
     "DeviceInspectedEvent",
@@ -1781,18 +2372,29 @@ __all__ = [
     "EvidenceWipedEvent",
     "ExfiltrateDataHandler",
     "ExploitComponent",
+    "FavorCalledEvent",
     "HackFailedEvent",
     "HackSucceededEvent",
     "HackableComponent",
+    "HeatChangedEvent",
+    "HeatComponent",
+    "HeatConsequence",
+    "HideFromLawHandler",
     "IdentitySpoofedEvent",
+    "InformantComponent",
+    "InformantTurnedEvent",
     "InsideZone",
     "InspectDeviceHandler",
     "InstallBackdoorHandler",
     "JamSensorHandler",
+    "LawResponseEvent",
     "LocationCasedEvent",
     "LoopCameraHandler",
     "NetworkScannedEvent",
     "NetworkTracedEvent",
+    "OwesFavor",
+    "PayDebtHandler",
+    "PostBountyHandler",
     "PrivilegesEscalatedEvent",
     "PublicAccessComponent",
     "RecordedEvidenceComponent",
@@ -1803,6 +2405,7 @@ __all__ = [
     "SafehouseComponent",
     "ScanNetworkHandler",
     "SecurityZoneComponent",
+    "SellDataHandler",
     "SensorJammedEvent",
     "ShowCredentialsHandler",
     "SneakCheckpointHandler",
@@ -1818,8 +2421,12 @@ __all__ = [
     "TraceTimerConsequence",
     "TrespassDetectedEvent",
     "TrespassDetectionConsequence",
+    "TurnInformantHandler",
     "UnlockDoorHandler",
     "UseCredentialHandler",
+    "WantedLevelChangedEvent",
+    "WantedLevelComponent",
+    "WarrantClearedEvent",
     "WipeEvidenceHandler",
     "install_neonsim",
     "neonsim_fragments",
