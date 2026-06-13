@@ -43,6 +43,7 @@ from bunnyland.mechanics.environment import (
     time_of_day,
     weather_for,
 )
+from bunnyland.prompts import ComponentPromptContext
 
 HOUR = 3600.0
 DAY = HOUR * 24
@@ -142,6 +143,37 @@ async def test_environment_fragment_describes_the_time():
 def test_fragment_is_empty_before_first_tick():
     actor = _world()  # consequence has not run yet
     assert environment_fragments(actor.world, character=None) == []
+
+
+def test_environment_component_fragments_describe_clock_and_fire():
+    actor = _world()
+    clock = spawn_entity(
+        actor.world,
+        [
+            CalendarComponent(day=3, season="spring"),
+            TimeOfDayComponent(phase="dusk"),
+            WeatherComponent(condition="rain", intensity=0.7),
+        ],
+    )
+    room = spawn_entity(
+        actor.world,
+        [RoomComponent(title="Kitchen"), FireComponent(intensity=1.0)],
+    )
+    character = spawn_entity(actor.world, [CharacterComponent(), FireComponent(intensity=1.0)])
+
+    clock_ctx = ComponentPromptContext.for_entity(actor.world, clock)
+    room_ctx = ComponentPromptContext.for_entity(actor.world, room)
+    character_ctx = ComponentPromptContext.for_entity(actor.world, character)
+
+    assert clock.get_component(TimeOfDayComponent).prompt_fragments(clock_ctx) == (
+        "It is rain dusk (day 3, spring).",
+    )
+    assert room.get_component(FireComponent).prompt_fragments(room_ctx) == (
+        "There is a fire here.",
+    )
+    assert character.get_component(FireComponent).prompt_fragments(character_ctx) == (
+        "You are on fire.",
+    )
 
 
 # -- weather ----------------------------------------------------------------------------

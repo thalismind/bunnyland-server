@@ -30,6 +30,7 @@ from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_com
 from ..core.edges import Contains
 from ..core.events import DomainEvent, EventVisibility, event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
+from ..prompts import ComponentPromptContext
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -72,6 +73,22 @@ class CalendarComponent(Component):
 class TimeOfDayComponent(Component):
     phase: str = "day"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        calendar = (
+            ctx.entity.get_component(CalendarComponent)
+            if ctx.entity.has_component(CalendarComponent)
+            else None
+        )
+        weather = (
+            ctx.entity.get_component(WeatherComponent).condition
+            if ctx.entity.has_component(WeatherComponent)
+            else None
+        )
+        sky = f"{weather} {self.phase}" if weather and weather != "clear" else self.phase
+        if calendar is None:
+            return (f"It is {sky}.",)
+        return (f"It is {sky} (day {calendar.day}, {calendar.season}).",)
+
 
 @pydantic_dataclass(frozen=True)
 class WeatherComponent(Component):
@@ -89,6 +106,13 @@ class FireComponent(Component):
     intensity: float = 1.0
     fuel: float = 4.0
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.entity.has_component(RoomComponent):
+            return ("There is a fire here.",)
+        if ctx.is_first_person and ctx.entity.has_component(CharacterComponent):
+            return ("You are on fire.",)
+        return ()
 
 
 class TimeOfDayChangedEvent(DomainEvent):
@@ -398,30 +422,17 @@ def environment_fragments(world: World, character) -> list[str]:
     clocks = list(query.execute_entities())
     if clocks:
         clock = clocks[0]
-        calendar = (
-            clock.get_component(CalendarComponent)
-            if clock.has_component(CalendarComponent)
-            else None
-        )
-        phase = clock.get_component(TimeOfDayComponent).phase
-        weather = (
-            clock.get_component(WeatherComponent).condition
-            if clock.has_component(WeatherComponent)
-            else None
-        )
-        sky = f"{weather} {phase}" if weather and weather != "clear" else phase
-        if calendar is None:
-            lines.append(f"It is {sky}.")
-        else:
-            lines.append(f"It is {sky} (day {calendar.day}, {calendar.season}).")
+        ctx = ComponentPromptContext.for_entity(world, clock)
+        lines.extend(clock.get_component(TimeOfDayComponent).prompt_fragments(ctx))
     if character is not None:
-        room_id = container_of(character)
-        if room_id is not None and world.has_entity(room_id):
-            room = world.get_entity(room_id)
-            if room.has_component(FireComponent):
-                lines.append("There is a fire here.")
+        ctx = ComponentPromptContext.for_entity(world, character)
+        if ctx.room is not None and ctx.room.has_component(FireComponent):
+            room_ctx = ComponentPromptContext.for_entity(
+                world, ctx.room, perspective=ctx.perspective, room=ctx.room
+            )
+            lines.extend(ctx.room.get_component(FireComponent).prompt_fragments(room_ctx))
         if character.has_component(FireComponent):
-            lines.append("You are on fire.")
+            lines.extend(character.get_component(FireComponent).prompt_fragments(ctx))
     return lines
 
 
