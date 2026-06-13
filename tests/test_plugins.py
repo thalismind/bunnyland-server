@@ -1073,6 +1073,10 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "ImplantComponent",
         "AugmentationSlotsComponent",
         "ClinicComponent",
+        "FixerComponent",
+        "RunnerContractComponent",
+        "BlackmailFileComponent",
+        "AssetExtractionComponent",
     } <= {component.__name__ for component in neon.ecs.components}
     assert {"InsideZone", "OwesFavor", "HasImplant"} <= {
         edge.__name__ for edge in neon.ecs.edges
@@ -1117,6 +1121,15 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "license-implant",
         "scan-implant",
         "exploit-implant",
+        "take-fixer-job",
+        "meet-handler",
+        "deliver-data",
+        "collect-payout",
+        "burn-contact",
+        "plant-evidence",
+        "blackmail-target",
+        "leak-file",
+        "extract-asset",
     } <= {handler.command_type for handler in neon.commands.action_handlers}
     assert {
         "DistrictEnteredEvent",
@@ -1156,6 +1169,16 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "ImplantServicedEvent",
         "ImplantExploitedEvent",
         "SideEffectTriggeredEvent",
+        "FixerJobAcceptedEvent",
+        "HandlerMetEvent",
+        "DataDeliveredEvent",
+        "PayoutCollectedEvent",
+        "DoubleCrossRevealedEvent",
+        "ContactBurnedEvent",
+        "EvidencePlantedEvent",
+        "BlackmailAppliedEvent",
+        "FileLeakedEvent",
+        "AssetExtractedEvent",
     } <= {event.__name__ for event in neon.commands.typed_events}
 
 

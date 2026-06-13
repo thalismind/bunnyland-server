@@ -10,7 +10,9 @@ sabotage, and a counter-intrusion trace timer (catalogue 10.3); and a street eco
 contraband, data fencing, favors, informants, debt, bounties, and a heat/wanted/law-response
 loop that reuses dagger-sim debt and bounty state (catalogue 10.5); and cybernetic implants
 with augmentation slots, clinics/street surgeons, maintenance, overclocking, legality, and
-hacking vulnerability that reuses the hacking and heat systems (catalogue 10.6).
+hacking vulnerability that reuses the hacking and heat systems (catalogue 10.6); and fixers,
+runner contracts, handlers, data delivery, payouts, double-crosses, blackmail, leaks, and
+asset extraction (catalogue 10.4).
 """
 
 from __future__ import annotations
@@ -2726,6 +2728,446 @@ class ExploitImplantHandler:
         )
 
 
+# --- Components (catalogue 10.4: fixers, missions, corporate intrigue) ----------------
+
+
+@dataclass(frozen=True)
+class FixerComponent(Component):
+    name: str = "fixer"
+    burned: bool = False
+
+
+@dataclass(frozen=True)
+class HandlerComponent(Component):
+    contract_id: str = ""
+
+
+@dataclass(frozen=True)
+class RunnerContractComponent(Component):
+    objective: str = "courier"
+    payout: int = 100
+    status: str = "offered"
+    accepted_by: str | None = None
+    double_cross: bool = False
+
+
+@dataclass(frozen=True)
+class CorporationComponent(Component):
+    name: str = "corp"
+
+
+@dataclass(frozen=True)
+class BlackmailFileComponent(Component):
+    target_id: str = ""
+    leaked: bool = False
+    used: bool = False
+
+
+@dataclass(frozen=True)
+class AssetExtractionComponent(Component):
+    extracted: bool = False
+
+
+DOUBLE_CROSS_HEAT = 5.0
+LEAK_HEAT = 4.0
+
+
+# --- Events (catalogue 10.4) ---------------------------------------------------------
+
+
+class FixerJobAcceptedEvent(DomainEvent):
+    character_id: str
+    contract_id: str
+    objective: str
+    payout: int
+
+
+class HandlerMetEvent(DomainEvent):
+    character_id: str
+    handler_id: str
+
+
+class DataDeliveredEvent(DomainEvent):
+    character_id: str
+    contract_id: str
+    data_id: str
+
+
+class PayoutCollectedEvent(DomainEvent):
+    character_id: str
+    contract_id: str
+    amount: int
+
+
+class DoubleCrossRevealedEvent(DomainEvent):
+    character_id: str
+    contract_id: str
+
+
+class ContactBurnedEvent(DomainEvent):
+    character_id: str
+    contact_id: str
+
+
+class EvidencePlantedEvent(DomainEvent):
+    character_id: str
+    target_id: str
+    file_id: str
+
+
+class BlackmailAppliedEvent(DomainEvent):
+    character_id: str
+    target_id: str
+
+
+class FileLeakedEvent(DomainEvent):
+    character_id: str
+    file_id: str
+
+
+class AssetExtractedEvent(DomainEvent):
+    character_id: str
+    asset_id: str
+
+
+# --- Handlers (catalogue 10.4 actions) -----------------------------------------------
+
+
+class TakeFixerJobHandler:
+    command_type = "take-fixer-job"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        contract, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), RunnerContractComponent
+        )
+        if contract is None:
+            return rejected(error if error else "target is not a contract")
+        component = contract.get_component(RunnerContractComponent)
+        if component.status != "offered":
+            return rejected("this job is no longer available")
+        replace_component(
+            contract, replace(component, status="accepted", accepted_by=str(character_id))
+        )
+        return ok(
+            FixerJobAcceptedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(contract.id),),
+                    character_id=str(character_id),
+                    contract_id=str(contract.id),
+                    objective=component.objective,
+                    payout=component.payout,
+                )
+            )
+        )
+
+
+class MeetHandlerHandler:
+    command_type = "meet-handler"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        handler, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), HandlerComponent
+        )
+        if handler is None:
+            return rejected(error if error else "target is not a handler")
+        return ok(
+            HandlerMetEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(handler.id),),
+                    character_id=str(character_id),
+                    handler_id=str(handler.id),
+                )
+            )
+        )
+
+
+class DeliverDataHandler:
+    command_type = "deliver-data"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        contract, error = _reachable_component(
+            ctx, character_id, command.payload.get("contract_id"), RunnerContractComponent
+        )
+        if contract is None:
+            return rejected(error if error else "target is not a contract")
+        component = contract.get_component(RunnerContractComponent)
+        if component.accepted_by != str(character_id):
+            return rejected("you did not take this job")
+        if component.status != "accepted":
+            return rejected("this job is not awaiting delivery")
+        character = ctx.entity(character_id)
+        data = _inventory_item(
+            character, ctx.world, command.payload.get("data_id"), DataPayloadComponent
+        )
+        if data is None:
+            return rejected("you are not carrying that data")
+        data_id = str(data.id)
+        _remove_item(ctx.world, data.id)
+        replace_component(contract, replace(component, status="delivered"))
+        return ok(
+            DataDeliveredEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(contract.id),),
+                    character_id=str(character_id),
+                    contract_id=str(contract.id),
+                    data_id=data_id,
+                )
+            )
+        )
+
+
+class CollectPayoutHandler:
+    command_type = "collect-payout"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        contract, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), RunnerContractComponent
+        )
+        if contract is None:
+            return rejected(error if error else "target is not a contract")
+        component = contract.get_component(RunnerContractComponent)
+        if component.accepted_by != str(character_id):
+            return rejected("this is not your job")
+        if component.status != "delivered":
+            return rejected("nothing to collect yet")
+        character = ctx.entity(character_id)
+        if component.double_cross:
+            replace_component(contract, replace(component, status="burned"))
+            heat = _add_heat(character, ctx.epoch, DOUBLE_CROSS_HEAT)
+            return ok(
+                DoubleCrossRevealedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(contract.id),),
+                        character_id=str(character_id),
+                        contract_id=str(contract.id),
+                    )
+                ),
+                HeatChangedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        character_id=str(character_id),
+                        amount=heat,
+                    )
+                ),
+            )
+        replace_component(contract, replace(component, status="paid"))
+        _add_scrip(character, ctx.world, component.payout)
+        return ok(
+            PayoutCollectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(contract.id),),
+                    character_id=str(character_id),
+                    contract_id=str(contract.id),
+                    amount=component.payout,
+                )
+            )
+        )
+
+
+class BurnContactHandler:
+    command_type = "burn-contact"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        fixer, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), FixerComponent
+        )
+        if fixer is None:
+            return rejected(error if error else "target is not a contact")
+        component = fixer.get_component(FixerComponent)
+        if component.burned:
+            return rejected("contact is already burned")
+        replace_component(fixer, replace(component, burned=True))
+        return ok(
+            ContactBurnedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(fixer.id),),
+                    character_id=str(character_id),
+                    contact_id=str(fixer.id),
+                )
+            )
+        )
+
+
+class PlantEvidenceHandler:
+    command_type = "plant-evidence"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        target, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), CharacterComponent
+        )
+        if target is None:
+            return rejected(error if error else "target is not a person")
+        room_id = container_of(ctx.entity(character_id))
+        file_entity = spawn_entity(
+            ctx.world,
+            [
+                IdentityComponent(name=f"evidence on {_name(target)}", kind="evidence"),
+                BlackmailFileComponent(target_id=str(target.id)),
+            ],
+        )
+        if room_id is not None and ctx.world.has_entity(room_id):
+            ctx.world.get_entity(room_id).add_relationship(
+                Contains(mode=ContainmentMode.ROOM_CONTENT), file_entity.id
+            )
+        return ok(
+            EvidencePlantedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target.id), str(file_entity.id)),
+                    character_id=str(character_id),
+                    target_id=str(target.id),
+                    file_id=str(file_entity.id),
+                )
+            )
+        )
+
+
+class BlackmailTargetHandler:
+    command_type = "blackmail-target"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        target, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), CharacterComponent
+        )
+        if target is None:
+            return rejected(error if error else "target is not a person")
+        character = ctx.entity(character_id)
+        file = _inventory_item(
+            character, ctx.world, command.payload.get("file_id"), BlackmailFileComponent
+        )
+        if file is None:
+            return rejected("you are not holding that file")
+        component = file.get_component(BlackmailFileComponent)
+        if component.used:
+            return rejected("that leverage is already spent")
+        if component.target_id != str(target.id):
+            return rejected("that file is not about them")
+        replace_component(file, replace(component, used=True))
+        target.add_relationship(OwesFavor(reason="blackmail"), character_id)
+        return ok(
+            BlackmailAppliedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target.id),),
+                    character_id=str(character_id),
+                    target_id=str(target.id),
+                )
+            )
+        )
+
+
+class LeakFileHandler:
+    command_type = "leak-file"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        file, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), BlackmailFileComponent
+        )
+        if file is None:
+            return rejected(error if error else "target is not a file")
+        component = file.get_component(BlackmailFileComponent)
+        if component.leaked:
+            return rejected("file is already leaked")
+        replace_component(file, replace(component, leaked=True))
+        subject_id = parse_entity_id(component.target_id)
+        if (
+            subject_id is not None
+            and ctx.world.has_entity(subject_id)
+            and ctx.world.get_entity(subject_id).has_component(CharacterComponent)
+        ):
+            _add_heat(ctx.world.get_entity(subject_id), ctx.epoch, LEAK_HEAT)
+        return ok(
+            FileLeakedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(file.id),),
+                    character_id=str(character_id),
+                    file_id=str(file.id),
+                )
+            )
+        )
+
+
+class ExtractAssetHandler:
+    command_type = "extract-asset"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        asset, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), AssetExtractionComponent
+        )
+        if asset is None:
+            return rejected(error if error else "target is not an extractable asset")
+        component = asset.get_component(AssetExtractionComponent)
+        if component.extracted:
+            return rejected("asset is already extracted")
+        replace_component(asset, replace(component, extracted=True))
+        return ok(
+            AssetExtractedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(asset.id),),
+                    character_id=str(character_id),
+                    asset_id=str(asset.id),
+                )
+            )
+        )
+
+
 # --- Prompt fragments ----------------------------------------------------------------
 
 
@@ -2819,6 +3261,26 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
             implant = entity.get_component(ImplantComponent)
             legality = "legal" if implant.legal else "ILLEGAL"
             lines.append(f"Implant for sale: {_name(entity)} ({implant.implant_type}, {legality}).")
+        if entity.has_component(FixerComponent):
+            fixer = entity.get_component(FixerComponent)
+            state = "burned" if fixer.burned else "open for work"
+            lines.append(f"Fixer {_name(entity)}: {state}.")
+        if entity.has_component(HandlerComponent):
+            lines.append(f"Handler {_name(entity)} waiting for a hand-off.")
+        if entity.has_component(RunnerContractComponent):
+            contract = entity.get_component(RunnerContractComponent)
+            lines.append(
+                f"Contract {_name(entity)}: {contract.objective}, "
+                f"{contract.payout} scrip ({contract.status})."
+            )
+        if entity.has_component(BlackmailFileComponent):
+            blackmail = entity.get_component(BlackmailFileComponent)
+            state = "leaked" if blackmail.leaked else "leverage"
+            lines.append(f"Blackmail file {_name(entity)}: {state}.")
+        if entity.has_component(AssetExtractionComponent):
+            asset = entity.get_component(AssetExtractionComponent)
+            state = "extracted" if asset.extracted else "awaiting extraction"
+            lines.append(f"Asset {_name(entity)}: {state}.")
     for _edge, implant in _installed_implants(character, world):
         comp = implant.get_component(ImplantComponent)
         tags = [comp.slot]
@@ -2979,6 +3441,31 @@ __all__ = [
     "ScanImplantHandler",
     "ServiceImplantHandler",
     "SideEffectTriggeredEvent",
+    "AssetExtractedEvent",
+    "AssetExtractionComponent",
+    "BlackmailAppliedEvent",
+    "BlackmailFileComponent",
+    "BlackmailTargetHandler",
+    "BurnContactHandler",
+    "CollectPayoutHandler",
+    "ContactBurnedEvent",
+    "CorporationComponent",
+    "DataDeliveredEvent",
+    "DeliverDataHandler",
+    "DoubleCrossRevealedEvent",
+    "EvidencePlantedEvent",
+    "ExtractAssetHandler",
+    "FileLeakedEvent",
+    "FixerComponent",
+    "FixerJobAcceptedEvent",
+    "HandlerComponent",
+    "HandlerMetEvent",
+    "LeakFileHandler",
+    "MeetHandlerHandler",
+    "PayoutCollectedEvent",
+    "PlantEvidenceHandler",
+    "RunnerContractComponent",
+    "TakeFixerJobHandler",
     "install_neonsim",
     "neonsim_fragments",
 ]

@@ -1758,6 +1758,60 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="exploit_implant",
         patterns=("exploit the implants of {target_id}",),
     ),
+    _definition(
+        "take-fixer-job",
+        ("target_id",),
+        tool_name="take_fixer_job",
+        patterns=("take the job {target_id}",),
+    ),
+    _definition(
+        "meet-handler",
+        ("target_id",),
+        tool_name="meet_handler",
+        patterns=("meet handler {target_id}",),
+    ),
+    _definition(
+        "deliver-data",
+        ("contract_id", "data_id"),
+        tool_name="deliver_data",
+        patterns=("deliver {data_id} for {contract_id}",),
+    ),
+    _definition(
+        "collect-payout",
+        ("target_id",),
+        tool_name="collect_payout",
+        patterns=("collect payout for {target_id}",),
+    ),
+    _definition(
+        "burn-contact",
+        ("target_id",),
+        tool_name="burn_contact",
+        patterns=("burn {target_id}",),
+    ),
+    _definition(
+        "plant-evidence",
+        ("target_id",),
+        tool_name="plant_evidence",
+        patterns=("plant evidence on {target_id}",),
+    ),
+    _definition(
+        "blackmail-target",
+        ("target_id", "file_id"),
+        tool_name="blackmail_target",
+        patterns=("blackmail {target_id} with {file_id}",),
+    ),
+    _definition(
+        "leak-file",
+        ("target_id",),
+        tool_name="leak_file",
+        patterns=("leak {target_id}",),
+    ),
+    _definition(
+        "extract-asset",
+        ("target_id",),
+        tool_name="extract_asset",
+        patterns=("extract {target_id}",),
+    ),
 )
 
 
