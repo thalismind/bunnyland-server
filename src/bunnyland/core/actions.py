@@ -1577,6 +1577,38 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("power-generator", ("generator_id",), tool_name="power_generator"),
     _definition("resolve-colony-incident", ("incident_id",), tool_name="resolve_colony_incident"),
     _definition("resolve-incident", ("incident_id",), tool_name="resolve_incident"),
+    # Neon sim.
+    _definition(
+        "enter-district",
+        ("target_id",),
+        tool_name="enter_district",
+        patterns=("enter {target_id}", "sneak into {target_id}"),
+    ),
+    _definition(
+        "show-credentials",
+        ("target_id",),
+        tool_name="show_credentials",
+        patterns=("show credentials at {target_id}",),
+    ),
+    _definition(
+        "bribe-checkpoint",
+        ("target_id",),
+        tool_name="bribe_checkpoint",
+        patterns=("bribe the guard at {target_id}",),
+    ),
+    _definition(
+        "sneak-through-checkpoint",
+        ("target_id",),
+        tool_name="sneak_through_checkpoint",
+        patterns=("sneak through {target_id}",),
+    ),
+    _definition("claim-safehouse", ("target_id",), tool_name="claim_safehouse"),
+    _definition(
+        "case-location",
+        ("target_id",),
+        tool_name="case_location",
+        patterns=("case {target_id}", "scope out {target_id}"),
+    ),
 )
 
 
