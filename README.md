@@ -242,7 +242,8 @@ or `dungeon-crypt-demo`. These are small deterministic crawls with room maps, se
 readable clues, food, water, and dungeon objectives.
 For atmospheric scene vignettes that lean on the shared environment and weather mechanics,
 the worldgen plugin ships `storm-lighthouse-demo` (a coastal lighthouse in an autumn squall
-with a beacon to keep fueled and a wrecker's secret under the lens).
+with a beacon to keep fueled and a wrecker's secret under the lens) and `vacancy-motel-demo`
+(a roadside motel where Room 6 only opens after dark and the night clerk gets hungry).
 The `fortresssim` package is a planned catalogue package and does not have a plugin or demo
 generator yet.
 

@@ -2053,6 +2053,109 @@ async def storm_lighthouse_example(actor, seed: str, options: GenOptions) -> Ins
     return world
 
 
+async def vacancy_motel_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A roadside motel where Room 6 only opens after dark, and the clerk gets hungry."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.daggersim import (
+        FeedingNeedComponent,
+        SecretDoorComponent,
+        SupernaturalAfflictionComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="lot", title="Gravel Lot Under the Vacancy Sign", biome="roadside",
+                     light=0.2, celsius=15.0),
+            RoomSpec(key="office", title="Wood-Paneled Front Office", biome="motel",
+                     indoor=True, light=0.5, celsius=22.0),
+            RoomSpec(key="corridor", title="Carpeted Motel Corridor", biome="motel",
+                     indoor=True, light=0.35, celsius=20.0),
+            RoomSpec(key="room6", title="Room 6", biome="motel",
+                     indoor=True, light=0.05, celsius=12.0),
+        ],
+        exits=[
+            ExitSpec(from_key="lot", direction="in", to_key="office"),
+            ExitSpec(from_key="office", direction="out", to_key="lot"),
+            ExitSpec(from_key="office", direction="inside", to_key="corridor"),
+            ExitSpec(from_key="corridor", direction="lobby", to_key="office"),
+            ExitSpec(from_key="room6", direction="out", to_key="corridor"),
+        ],
+        objects=[
+            ObjectSpec(key="vending", room_key="corridor", name="a humming vending machine",
+                       kind="food", nutrition=3.0, satiety=9.0, portable=False),
+            ObjectSpec(key="ice", room_key="corridor", name="a cloudy ice machine",
+                       kind="water", hydration=12.0, portable=False),
+            ObjectSpec(key="register", room_key="office", name="the guest register",
+                       kind="paper", writable=True, portable=False),
+            ObjectSpec(key="key6", room_key="office", name="a brass key on a Room 6 fob",
+                       kind="item", portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="guest", name="Nadia Frost", room_key="office",
+                          controller="suspended", traits=("road-weary", "skeptical", "tired"),
+                          goals=("sleep off the drive", "check out by morning")),
+            CharacterSpec(key="clerk", name="Vernon Pike", room_key="office",
+                          species="nightfolk", controller="llm", llm_profile="night-clerk",
+                          traits=("courteous", "unblinking", "hungry-after-dark"),
+                          goals=("keep guests in their rooms after midnight",
+                                 "never rent out Room 6")),
+            CharacterSpec(key="maid", name="Lupe Ramos", room_key="corridor",
+                          controller="llm", llm_profile="frightened-housekeeper",
+                          traits=("kind", "frightened"),
+                          goals=("warn Nadia off Room 6 without naming what is in it",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        # The motel checks in by daylight; the cycle rolls it into the dangerous small hours.
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=16 * 3600))
+            clock[0].add_component(TimeOfDayComponent(phase="day"))
+            clock[0].add_component(CalendarComponent(day=1, season="summer", hour=16))
+
+        corridor, room6 = world.rooms["corridor"], world.rooms["room6"]
+        _augment(actor, room6,
+                 PointOfInterestComponent(location_type="sealed room", region="Route 9"),
+                 DiscoveryComponent())
+        _augment(actor, world.characters["clerk"],
+                 SupernaturalAfflictionComponent(affliction_type="after-dark hunger",
+                                                 contracted_at_epoch=0,
+                                                 stage="mastered"),
+                 FeedingNeedComponent(current=7.0, maximum=10.0))
+        _add(actor, corridor, [
+            IdentityComponent(name="a door numbered 6 that is not on the daytime map",
+                              kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(room6), direction="end of the corridor",
+                                hint="The corridor has five doors by day and six after dark."),
+        ])
+        _add(actor, room6, [
+            IdentityComponent(name="a warped drawer hymnal", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Drawer Hymnal",
+                              text="Margins full of names and dates in different hands, each one "
+                                   "checked in after midnight and never checked out."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["register"]),
+            ReadableComponent(title="Guest Register",
+                              text="House rule, underlined twice: do not assign Room 6, and do "
+                                   "not let a guest wander the corridor after midnight."),
+        )
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -2138,6 +2241,11 @@ STORM_LIGHTHOUSE_DEMO = WorldGenerator(
     description="A coastal lighthouse in an autumn squall, with a beacon to keep fueled, a "
                 "stranded sailor, and a wrecker's secret hidden under the lens.",
     uses_seed=False)
+VACANCY_MOTEL_DEMO = WorldGenerator(
+    name="vacancy-motel-demo", generate=vacancy_motel_example,
+    description="A roadside motel that checks in by day and rolls into night, where Room 6 "
+                "only opens after dark and the night clerk gets hungry.",
+    uses_seed=False)
 
 POP_CULTURE_DEMOS = (
     CLUE_SNACK_DEMO,
@@ -2155,6 +2263,7 @@ DUNGEON_DEMOS = (
 
 SCENE_DEMOS = (
     STORM_LIGHTHOUSE_DEMO,
+    VACANCY_MOTEL_DEMO,
 )
 
 
@@ -2181,6 +2290,7 @@ __all__ = [
     "SCENE_DEMOS",
     "STAR_OPERA_DEMO",
     "STORM_LIGHTHOUSE_DEMO",
+    "VACANCY_MOTEL_DEMO",
     "VOIDSIM_DEMO",
     "barbariansim_example",
     "clue_snack_example",
@@ -2201,5 +2311,6 @@ __all__ = [
     "nukesim_example",
     "star_opera_example",
     "storm_lighthouse_example",
+    "vacancy_motel_example",
     "voidsim_example",
 ]
