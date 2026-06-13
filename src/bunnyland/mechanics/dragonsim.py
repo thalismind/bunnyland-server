@@ -35,6 +35,7 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_entity
+from ..prompts import ComponentPromptContext
 from .lifesim import SkillSetComponent, _add_skill_xp
 
 
@@ -43,6 +44,11 @@ class PointOfInterestComponent(Component):
     location_type: str = "landmark"
     region: str = ""
     discovered: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.discovered:
+            return ()
+        return (f"Nearby undiscovered {self.location_type}: {_name(ctx.entity)}.",)
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,11 @@ class MapMarkerComponent(Component):
     marked_by: tuple[str, ...] = ()
     marked_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or str(ctx.target.id) not in self.marked_by:
+            return ()
+        return (f"Map marker: {self.label} ({self.marker_type}).",)
+
 
 @dataclass(frozen=True)
 class EncounterZoneComponent(Component):
@@ -65,6 +76,12 @@ class EncounterZoneComponent(Component):
     danger_rating: int = 1
     active: bool = True
     last_triggered_at_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if not self.active:
+            return ()
+        return (f"Encounter zone nearby: {self.zone_type} (danger {self.danger_rating}).",)
 
 
 @dataclass(frozen=True)
@@ -75,6 +92,17 @@ class QuestComponent(Component):
     accepted_by: tuple[str, ...] = ()
     completed_at_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if (
+            self.status == "active"
+            and ctx.target is not None
+            and str(ctx.target.id) in self.accepted_by
+        ):
+            return (f"Active quest: {self.title}.",)
+        if self.status == "declined":
+            return (f"Declined quest: {self.title}.",)
+        return ()
+
 
 @dataclass(frozen=True)
 class QuestStageComponent(Component):
@@ -82,6 +110,12 @@ class QuestStageComponent(Component):
     stage: int = 0
     tracked_by: tuple[str, ...] = ()
     branch: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or str(ctx.target.id) not in self.tracked_by:
+            return ()
+        branch = f", branch {self.branch}" if self.branch else ""
+        return (f"Tracked quest stage {self.stage} for {self.quest_id}{branch}.",)
 
 
 @dataclass(frozen=True)
@@ -124,6 +158,11 @@ class JailComponent(Component):
     release_epoch: int
     reason: str = "sentence"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Serving jail time for {self.faction_id} until {self.release_epoch}.",)
+
 
 @dataclass(frozen=True)
 class PerkComponent(Component):
@@ -133,11 +172,25 @@ class PerkComponent(Component):
     skill_name: str
     min_level: int = 2
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Perk unlocked: {self.name}.",)
+
 
 @dataclass(frozen=True)
 class MemberOf(Edge):
     rank: str = "member"
     since_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None:
+            return ()
+        faction_name = (
+            ctx.target.get_component(FactionComponent).name
+            if ctx.target.has_component(FactionComponent)
+            else _name(ctx.target)
+        )
+        return (f"You are a {self.rank} of {faction_name}.",)
 
 
 @dataclass(frozen=True)
@@ -154,12 +207,22 @@ class AncientBeastComponent(Component):
     name: str
     soul_absorbed: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "soul absorbed" if self.soul_absorbed else "active"
+        return (f"Ancient beast nearby: {self.name} ({state}).",)
+
 
 @dataclass(frozen=True)
 class GreatSoulComponent(Component):
     """Count of great souls a character has absorbed from slain ancient beasts."""
 
     souls: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or self.souls <= 0:
+            return ()
+        return (f"Great souls absorbed: {self.souls}.",)
 
 
 @dataclass(frozen=True)
@@ -170,6 +233,10 @@ class WordOfPowerComponent(Component):
     min_souls: int = 1
     skill_name: str = ""
     min_skill_level: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Word of power known: {self.name}.",)
 
 
 @dataclass(frozen=True)
@@ -193,11 +260,24 @@ class WantedComponent(Component):
 
     amounts: dict[str, int]
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return tuple(
+            f"Bounty of {amount} with {faction_name}."
+            for faction_name, amount in sorted(self.amounts.items())
+        )
+
 
 @dataclass(frozen=True)
 class LockDifficultyComponent(Component):
     difficulty: int = 1
     locked: bool = True
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.locked:
+            return ()
+        return (f"Locked target nearby: {_name(ctx.entity)} (difficulty {self.difficulty}).",)
 
 
 @dataclass(frozen=True)
@@ -210,6 +290,13 @@ class LoreBookComponent(Component):
     skill_xp: float = 0.0
     read_by: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and str(ctx.target.id) in self.read_by:
+            return ()
+        if self.skill_name:
+            return (f"Unread skill book nearby: {self.title} ({self.skill_name}).",)
+        return (f"Unread lore book nearby: {self.title}.",)
+
 
 @dataclass(frozen=True)
 class MagickaComponent(Component):
@@ -218,11 +305,22 @@ class MagickaComponent(Component):
     regen_per_hour: int = 2
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Magicka: {self.current}/{self.maximum}.",)
+
 
 @dataclass(frozen=True)
 class SpellCooldownComponent(Component):
     cooldown_seconds: int = 0
     ready_at_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.ready_at_epoch <= 0:
+            return ()
+        return (f"Spell cooldown nearby: ready at epoch {self.ready_at_epoch}.",)
 
 
 @dataclass(frozen=True)
@@ -230,12 +328,21 @@ class PersuasionComponent(Component):
     disposition: int = 0
     persuaded_by: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"{_name(ctx.entity)} disposition: {self.disposition}.",)
+
 
 @dataclass(frozen=True)
 class SurrenderComponent(Component):
     surrendered_to: str | None = None
     reason: str = ""
     at_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        target = self.surrendered_to or "no one"
+        return (f"Surrendered to {target}.",)
 
 
 @dataclass(frozen=True)
@@ -248,6 +355,13 @@ class SpellComponent(Component):
     effect: str = ""
     magnitude: int = 1
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None:
+            if ctx.target.has_relationship(KnowsSpell, ctx.entity.id):
+                return ()
+            return (f"Learnable spell nearby: {self.name}.",)
+        return (f"Spell learned: {self.name}.",)
+
 
 @dataclass(frozen=True)
 class PotionRecipeComponent(Component):
@@ -258,6 +372,10 @@ class PotionRecipeComponent(Component):
     min_skill_level: int = 0
     ingredient_ids: tuple[str, ...] = ()
     effect: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Potion recipe nearby: {self.name}.",)
 
 
 @dataclass(frozen=True)
@@ -274,6 +392,11 @@ class ArtifactComponent(Component):
     charges: int = 1
     identified_by: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        identified = ctx.target is not None and str(ctx.target.id) in self.identified_by
+        state = "identified" if identified else "unidentified"
+        return (f"Artifact nearby: {self.name} ({self.charges} charges, {state}).",)
+
 
 @dataclass(frozen=True)
 class CarvableComponent(Component):
@@ -285,6 +408,11 @@ class VoiceInscriptionComponent(Component):
     word_id: str
     phrase: str = ""
     studied_by: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and str(ctx.target.id) in self.studied_by:
+            return ()
+        return (f"Voice inscription nearby: {_name(ctx.entity)}.",)
 
 
 @dataclass(frozen=True)
@@ -2153,61 +2281,64 @@ class StudyVoiceInscriptionHandler:
 
 def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
+    ctx = ComponentPromptContext.for_entity(world, character)
     for edge, faction_id in character.get_relationships(MemberOf):
+        if not world.has_entity(faction_id):
+            continue
         faction = world.get_entity(faction_id)
-        faction_name = (
-            faction.get_component(FactionComponent).name
-            if faction.has_component(FactionComponent)
-            else _name(faction)
+        edge_ctx = ComponentPromptContext.for_entity(
+            world, character, perspective=ctx.perspective, target=faction
         )
-        lines.append(f"You are a {edge.rank} of {faction_name}.")
+        lines.extend(edge.prompt_fragments(edge_ctx))
 
     for quest in world.query().with_all([QuestComponent]).execute_entities():
-        component = quest.get_component(QuestComponent)
-        if component.status == "active" and str(character.id) in component.accepted_by:
-            lines.append(f"Active quest: {component.title}.")
-        if component.status == "declined":
-            lines.append(f"Declined quest: {component.title}.")
+        quest_ctx = ComponentPromptContext.for_entity(
+            world, quest, perspective=ctx.perspective, target=character
+        )
+        lines.extend(quest.get_component(QuestComponent).prompt_fragments(quest_ctx))
 
     for stage_entity in world.query().with_all([QuestStageComponent]).execute_entities():
-        stage = stage_entity.get_component(QuestStageComponent)
-        if str(character.id) in stage.tracked_by:
-            branch = f", branch {stage.branch}" if stage.branch else ""
-            lines.append(f"Tracked quest stage {stage.stage} for {stage.quest_id}{branch}.")
+        stage_ctx = ComponentPromptContext.for_entity(
+            world, stage_entity, perspective=ctx.perspective, target=character
+        )
+        lines.extend(stage_entity.get_component(QuestStageComponent).prompt_fragments(stage_ctx))
 
     for _perk_edge, perk_id in character.get_relationships(HasPerk):
         if not world.has_entity(perk_id):
             continue
         perk = world.get_entity(perk_id)
         if perk.has_component(PerkComponent):
-            lines.append(f"Perk unlocked: {perk.get_component(PerkComponent).name}.")
+            perk_ctx = ComponentPromptContext.for_entity(
+                world, perk, perspective=ctx.perspective, target=character
+            )
+            lines.extend(perk.get_component(PerkComponent).prompt_fragments(perk_ctx))
 
     if character.has_component(GreatSoulComponent):
-        souls = character.get_component(GreatSoulComponent).souls
-        if souls > 0:
-            lines.append(f"Great souls absorbed: {souls}.")
+        lines.extend(character.get_component(GreatSoulComponent).prompt_fragments(ctx))
     for _word_edge, word_id in character.get_relationships(KnowsWord):
         if not world.has_entity(word_id):
             continue
         word = world.get_entity(word_id)
         if word.has_component(WordOfPowerComponent):
-            lines.append(f"Word of power known: {word.get_component(WordOfPowerComponent).name}.")
+            word_ctx = ComponentPromptContext.for_entity(
+                world, word, perspective=ctx.perspective, target=character
+            )
+            lines.extend(word.get_component(WordOfPowerComponent).prompt_fragments(word_ctx))
     for _spell_edge, spell_id in character.get_relationships(KnowsSpell):
         if not world.has_entity(spell_id):
             continue
         spell = world.get_entity(spell_id)
         if spell.has_component(SpellComponent):
-            lines.append(f"Spell learned: {spell.get_component(SpellComponent).name}.")
+            spell_ctx = ComponentPromptContext.for_entity(
+                world, spell, perspective=ctx.perspective
+            )
+            lines.extend(spell.get_component(SpellComponent).prompt_fragments(spell_ctx))
     if character.has_component(MagickaComponent):
-        magicka = character.get_component(MagickaComponent)
-        lines.append(f"Magicka: {magicka.current}/{magicka.maximum}.")
+        lines.extend(character.get_component(MagickaComponent).prompt_fragments(ctx))
     if character.has_component(SurrenderComponent):
-        surrender = character.get_component(SurrenderComponent)
-        target = surrender.surrendered_to or "no one"
-        lines.append(f"Surrendered to {target}.")
+        lines.extend(character.get_component(SurrenderComponent).prompt_fragments(ctx))
     if character.has_component(JailComponent):
-        sentence = character.get_component(JailComponent)
-        lines.append(f"Serving jail time for {sentence.faction_id} until {sentence.release_epoch}.")
+        lines.extend(character.get_component(JailComponent).prompt_fragments(ctx))
 
     if _is_sneaking(character):
         lines.append("You are sneaking.")
@@ -2223,60 +2354,25 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
 
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        if entity.has_component(PointOfInterestComponent):
-            poi = entity.get_component(PointOfInterestComponent)
-            if not poi.discovered:
-                lines.append(f"Nearby undiscovered {poi.location_type}: {_name(entity)}.")
-        if entity.has_component(MapMarkerComponent):
-            marker = entity.get_component(MapMarkerComponent)
-            if str(character.id) in marker.marked_by:
-                lines.append(f"Map marker: {marker.label} ({marker.marker_type}).")
-        if entity.has_component(EncounterZoneComponent):
-            zone = entity.get_component(EncounterZoneComponent)
-            if zone.active:
-                lines.append(
-                    f"Encounter zone nearby: {zone.zone_type} (danger {zone.danger_rating})."
-                )
-        if entity.has_component(LoreBookComponent):
-            book = entity.get_component(LoreBookComponent)
-            if str(character.id) not in book.read_by:
-                if book.skill_name:
-                    lines.append(f"Unread skill book nearby: {book.title} ({book.skill_name}).")
-                else:
-                    lines.append(f"Unread lore book nearby: {book.title}.")
-        if entity.has_component(LockDifficultyComponent):
-            lock = entity.get_component(LockDifficultyComponent)
-            if lock.locked:
-                lines.append(
-                    f"Locked target nearby: {_name(entity)} (difficulty {lock.difficulty})."
-                )
-        if entity.has_component(SpellComponent) and not character.has_relationship(
-            KnowsSpell, entity_id
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        for component_type in (
+            PointOfInterestComponent,
+            MapMarkerComponent,
+            EncounterZoneComponent,
+            LoreBookComponent,
+            LockDifficultyComponent,
+            SpellComponent,
+            PotionRecipeComponent,
+            ArtifactComponent,
+            SpellCooldownComponent,
+            AncientBeastComponent,
+            PersuasionComponent,
+            VoiceInscriptionComponent,
         ):
-            lines.append(f"Learnable spell nearby: {entity.get_component(SpellComponent).name}.")
-        if entity.has_component(PotionRecipeComponent):
-            lines.append(
-                f"Potion recipe nearby: {entity.get_component(PotionRecipeComponent).name}."
-            )
-        if entity.has_component(ArtifactComponent):
-            artifact = entity.get_component(ArtifactComponent)
-            state = "identified" if str(character.id) in artifact.identified_by else "unidentified"
-            lines.append(f"Artifact nearby: {artifact.name} ({artifact.charges} charges, {state}).")
-        if entity.has_component(SpellCooldownComponent):
-            cooldown = entity.get_component(SpellCooldownComponent)
-            if cooldown.ready_at_epoch > 0:
-                lines.append(f"Spell cooldown nearby: ready at epoch {cooldown.ready_at_epoch}.")
-        if entity.has_component(AncientBeastComponent):
-            beast = entity.get_component(AncientBeastComponent)
-            state = "soul absorbed" if beast.soul_absorbed else "active"
-            lines.append(f"Ancient beast nearby: {beast.name} ({state}).")
-        if entity.has_component(PersuasionComponent):
-            persuasion = entity.get_component(PersuasionComponent)
-            lines.append(f"{_name(entity)} disposition: {persuasion.disposition}.")
-        if entity.has_component(VoiceInscriptionComponent):
-            inscription = entity.get_component(VoiceInscriptionComponent)
-            if str(character.id) not in inscription.studied_by:
-                lines.append(f"Voice inscription nearby: {_name(entity)}.")
+            if entity.has_component(component_type):
+                lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     return sorted(lines)
 
 

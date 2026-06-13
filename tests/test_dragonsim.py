@@ -129,6 +129,7 @@ from bunnyland.mechanics.dragonsim import (
     dragonsim_fragments,
 )
 from bunnyland.mechanics.lifesim import SkillSetComponent
+from bunnyland.prompts import ComponentPromptContext
 
 HOUR = 60 * 60
 
@@ -1586,6 +1587,44 @@ def test_dragonsim_fragments_show_quests_factions_and_nearby_locations():
     assert any("old watchtower" in line for line in fragments)
     assert any("Manual of Quiet Feet" in line and "stealth" in line for line in fragments)
     assert scenario.actor.world.get_entity(book).has_component(LoreBookComponent)
+
+
+def test_dragonsim_component_prompt_fragments_use_target_context():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    quest = spawn_entity(
+        world,
+        [
+            QuestComponent(
+                quest_id="lost-ring",
+                title="Find the Lost Ring",
+                status="active",
+                accepted_by=(str(character.id),),
+            )
+        ],
+    )
+    spell = spawn_entity(world, [SpellComponent(name="Oakflesh")])
+    artifact = spawn_entity(
+        world,
+        [ArtifactComponent(name="Moon Amulet", charges=2, identified_by=(str(character.id),))],
+    )
+    character.add_relationship(KnowsSpell(), spell.id)
+    target_ctx = ComponentPromptContext.for_entity(world, quest, target=character)
+    learned_ctx = ComponentPromptContext.for_entity(world, spell)
+    reachable_spell_ctx = ComponentPromptContext.for_entity(world, spell, target=character)
+    artifact_ctx = ComponentPromptContext.for_entity(world, artifact, target=character)
+
+    assert quest.get_component(QuestComponent).prompt_fragments(target_ctx) == (
+        "Active quest: Find the Lost Ring.",
+    )
+    assert spell.get_component(SpellComponent).prompt_fragments(learned_ctx) == (
+        "Spell learned: Oakflesh.",
+    )
+    assert spell.get_component(SpellComponent).prompt_fragments(reachable_spell_ctx) == ()
+    assert artifact.get_component(ArtifactComponent).prompt_fragments(artifact_ctx) == (
+        "Artifact nearby: Moon Amulet (2 charges, identified).",
+    )
 
 
 def _set_skill_level(scenario, skill_name, level):
