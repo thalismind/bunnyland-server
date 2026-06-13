@@ -52,7 +52,10 @@ from bunnyland.mechanics.dinosim import (
 from bunnyland.mechanics.dragonsim import PointOfInterestComponent, QuestComponent
 from bunnyland.mechanics.environment import (
     CalendarComponent,
+    FireComponent,
+    FlammableComponent,
     TimeOfDayComponent,
+    WeatherComponent,
     install_environment,
 )
 from bunnyland.mechanics.gardensim import (
@@ -98,6 +101,8 @@ from bunnyland.worldgen.examples import (
     NEONSIM_DEMO,
     NUKESIM_DEMO,
     POP_CULTURE_DEMOS,
+    SCENE_DEMOS,
+    STORM_LIGHTHOUSE_DEMO,
     VOIDSIM_DEMO,
 )
 from bunnyland.worldgen.generators import GenOptions, collect_generators
@@ -114,7 +119,9 @@ PACKAGE_DEMOS = [
     NEONSIM_DEMO,
     DINOSIM_DEMO,
 ]
-ALL_DEMOS = [*PACKAGE_DEMOS, MAPLE_FARM_DEMO, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS]
+ALL_DEMOS = [
+    *PACKAGE_DEMOS, MAPLE_FARM_DEMO, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS, *SCENE_DEMOS,
+]
 
 # Each demo's hallmark component — proof its package's mechanics are present.
 HALLMARKS = {
@@ -295,6 +302,26 @@ async def test_midnight_burger_demo_secret_is_gated_by_a_running_night_cycle():
     install_environment(actor)
     await actor.tick(3 * 3600)  # 17:00 -> 20:00
     assert clock.get_component(TimeOfDayComponent).phase == "night"
+
+
+async def test_storm_lighthouse_demo_keeps_a_beacon_burning_through_a_squall():
+    actor = WorldActor()
+
+    world = await STORM_LIGHTHOUSE_DEMO.generate(actor, "storm-lighthouse-demo", GenOptions())
+
+    # A lit beacon that burns its own fuel down — something to keep feeding.
+    assert _has(actor, FireComponent)
+    assert _has(actor, FlammableComponent)
+    # The buried sin: a wrecker's niche behind a secret hatch under the lens.
+    assert _has(actor, SecretDoorComponent)
+    assert actor.world.get_entity(world.rooms["niche"]).has_component(PointOfInterestComponent)
+
+    # The deterministic weather cycle keeps the squall blowing and the jetty dim as it ticks.
+    install_environment(actor)
+    await actor.tick(3600)  # day 61, 18:00 -> 19:00, still a rain day
+    clock = list(actor.world.query().with_all([WeatherComponent]).execute_entities())[0]
+    assert clock.get_component(WeatherComponent).condition == "rain"
+    assert actor.world.get_entity(world.rooms["jetty"]).get_component(LightComponent).level <= 0.25
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)
