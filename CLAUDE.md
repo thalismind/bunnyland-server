@@ -58,6 +58,14 @@ Mechanics packs live under `src/bunnyland/mechanics/`; built-in plugin surfaces 
 in `src/bunnyland/plugins/builtin.py`; player-visible command metadata lives in
 `src/bunnyland/core/actions.py`.
 
+Official package-ring terminology:
+- **Core verbs** are the shared action surface available across normal worlds.
+- **Inner ring** packages are `colonysim`, `gardensim`, and `lifesim`.
+- **Outer ring** packages are implemented genre packs outside the inner ring, such as
+  `barbariansim`, `daggersim`, `dinosim`, `dragonsim`, `neonsim`, `nukesim`, `toonsim`,
+  and `voidsim`.
+- **Planned** packages sit outside the metaphorical solar system until implemented.
+
 When adding or changing mechanics:
 - Register every public component, handler, event, consequence, and prompt fragment in
   the relevant built-in plugin.
