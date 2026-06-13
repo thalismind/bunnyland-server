@@ -1948,6 +1948,111 @@ async def dungeon_crypt_example(actor, seed: str, options: GenOptions) -> Instan
     return world
 
 
+# --------------------------------------------------------------------------------------
+# scene vignettes — original atmospheric one-room dramas that lean on the shared
+# environment, weather, and cross-package mechanics rather than a single sim pack
+# --------------------------------------------------------------------------------------
+
+
+async def storm_lighthouse_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A coastal lighthouse riding out a squall, with a beacon to feed and a buried sin."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.daggersim import SecretDoorComponent
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import (
+        CalendarComponent,
+        FireComponent,
+        FlammableComponent,
+        TimeOfDayComponent,
+        WeatherComponent,
+    )
+
+    # Day 61 at 18:00 is an autumn rain day, so the deterministic weather cycle keeps the
+    # squall blowing and the outdoor jetty dim as the demo ticks forward.
+    storm_dusk_seconds = 60 * 24 * 3600 + 18 * 3600
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="jetty", title="Spray-Lashed Jetty", biome="coast",
+                     light=0.2, celsius=7.0),
+            RoomSpec(key="watch", title="Keeper's Watch Room", biome="lighthouse",
+                     indoor=True, light=0.45, celsius=14.0),
+            RoomSpec(key="lamp", title="Lantern Room", biome="lighthouse",
+                     indoor=True, light=0.6, celsius=9.0),
+            RoomSpec(key="niche", title="Below the Lens", biome="lighthouse",
+                     indoor=True, light=0.05, celsius=8.0),
+        ],
+        exits=[
+            ExitSpec(from_key="jetty", direction="in", to_key="watch"),
+            ExitSpec(from_key="watch", direction="out", to_key="jetty"),
+            ExitSpec(from_key="watch", direction="up", to_key="lamp"),
+            ExitSpec(from_key="lamp", direction="down", to_key="watch"),
+            ExitSpec(from_key="niche", direction="up", to_key="lamp"),
+        ],
+        objects=[
+            ObjectSpec(key="stew", room_key="watch", name="a dented pot of fish stew",
+                       kind="food", nutrition=5.0, satiety=18.0, portable=False),
+            ObjectSpec(key="kettle", room_key="watch", name="a kettle of rainwater tea",
+                       kind="water", hydration=14.0, portable=False),
+            ObjectSpec(key="oil_can", room_key="lamp", name="a heavy can of lamp oil",
+                       kind="item", portable=True),
+            ObjectSpec(key="logbook", room_key="watch", name="the keeper's logbook",
+                       kind="paper", writable=True, portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="keeper", name="Edda Voss", room_key="watch",
+                          controller="suspended", traits=("dutiful", "weathered", "haunted"),
+                          goals=("keep the beacon burning", "ride out the squall")),
+            CharacterSpec(key="sailor", name="Cole Renner", room_key="watch",
+                          controller="llm", llm_profile="stranded-sailor",
+                          traits=("soaked", "grateful", "curious"),
+                          goals=("get warm", "learn why ships keep wrecking on this point")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=storm_dusk_seconds))
+            clock[0].add_component(TimeOfDayComponent(phase="dusk"))
+            clock[0].add_component(CalendarComponent(day=61, season="autumn", hour=18))
+            clock[0].add_component(WeatherComponent(condition="rain", intensity=0.7))
+
+        lamp, niche = world.rooms["lamp"], world.rooms["niche"]
+        # The beacon is lit but burns its own fuel down — feed it or it dies before dawn.
+        _add(actor, lamp, [
+            IdentityComponent(name="the great lamp", kind="beacon"),
+            FlammableComponent(fuel=6.0),
+            FireComponent(intensity=0.6, fuel=6.0, last_updated_epoch=0),
+        ])
+        # The buried sin: a wrecker's niche hidden beneath the lens.
+        _augment(actor, niche,
+                 PointOfInterestComponent(location_type="wrecker's niche", region="Gallows Point"),
+                 DiscoveryComponent())
+        _add(actor, lamp, [
+            IdentityComponent(name="a hatch under the lens pedestal", kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(niche), direction="under the pedestal",
+                                hint="The brass pedestal sits a finger's width off the floor."),
+        ])
+        _add(actor, niche, [
+            IdentityComponent(name="a salt-stiff wrecking ledger", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Wrecking Ledger",
+                              text="When the lamp goes dark on a bad night, the rocks do the "
+                                   "rest, and whatever washes up on Gallows Point is ours."),
+        ])
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -2028,6 +2133,11 @@ DUNGEON_CRYPT_DEMO = WorldGenerator(
     name="dungeon-crypt-demo", generate=dungeon_crypt_example,
     description="A chapel crypt with locked passages, readable clues, and a reliquary.",
     uses_seed=False)
+STORM_LIGHTHOUSE_DEMO = WorldGenerator(
+    name="storm-lighthouse-demo", generate=storm_lighthouse_example,
+    description="A coastal lighthouse in an autumn squall, with a beacon to keep fueled, a "
+                "stranded sailor, and a wrecker's secret hidden under the lens.",
+    uses_seed=False)
 
 POP_CULTURE_DEMOS = (
     CLUE_SNACK_DEMO,
@@ -2041,6 +2151,10 @@ DUNGEON_DEMOS = (
     DUNGEON_VAULT_DEMO,
     DUNGEON_MAZE_DEMO,
     DUNGEON_CRYPT_DEMO,
+)
+
+SCENE_DEMOS = (
+    STORM_LIGHTHOUSE_DEMO,
 )
 
 
@@ -2064,7 +2178,9 @@ __all__ = [
     "NEONSIM_DEMO",
     "NUKESIM_DEMO",
     "POP_CULTURE_DEMOS",
+    "SCENE_DEMOS",
     "STAR_OPERA_DEMO",
+    "STORM_LIGHTHOUSE_DEMO",
     "VOIDSIM_DEMO",
     "barbariansim_example",
     "clue_snack_example",
@@ -2084,5 +2200,6 @@ __all__ = [
     "neonsim_example",
     "nukesim_example",
     "star_opera_example",
+    "storm_lighthouse_example",
     "voidsim_example",
 ]
