@@ -30,6 +30,7 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility, SpeechSaidEvent, SpeechToldEvent
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
+from ..prompts import ComponentPromptContext
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,16 @@ class UnrealizedLocationComponent(Component):
     region_id: str
     detail_level: str = "stub"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.detail_level == "instantiated":
+            return ()
+        site_type = (
+            ctx.entity.get_component(ProceduralSiteComponent).site_type
+            if ctx.entity.has_component(ProceduralSiteComponent)
+            else "site"
+        )
+        return (f"Nearby unrealized {site_type}: {_name(ctx.entity)} ({self.summary}).",)
+
 
 @dataclass(frozen=True)
 class ExpansionHookComponent(Component):
@@ -59,6 +70,11 @@ class RumorComponent(Component):
     text: str
     heard_by: tuple[str, ...] = ()
     state: str = "unverified"
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or str(ctx.target.id) not in self.heard_by:
+            return ()
+        return (f"Rumor: {self.text} ({self.state}).",)
 
 
 @dataclass(frozen=True)
@@ -81,6 +97,11 @@ class TravelHubComponent(Component):
     name: str
     region_id: str = ""
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and ctx.entity.id == ctx.target.id:
+            return ()
+        return (f"Travel destination: {self.name}.",)
+
 
 @dataclass(frozen=True)
 class TravelModeComponent(Component):
@@ -96,6 +117,11 @@ class TravelPlanComponent(Component):
     mode: str = "foot"
     route_label: str = ""
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Traveling by {self.mode}; arrival due at epoch {self.arrive_at_epoch}.",)
+
 
 @dataclass(frozen=True)
 class TravelRoute(Edge):
@@ -108,6 +134,10 @@ class InstitutionComponent(Component):
     name: str
     institution_type: str = "guild"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Institution nearby: {self.name} ({self.institution_type}).",)
+
 
 @dataclass(frozen=True)
 class InstitutionServiceComponent(Component):
@@ -115,17 +145,32 @@ class InstitutionServiceComponent(Component):
     required_rank: str = "member"
     output_item_name: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Service directory entry: {self.service_name}.",)
+
 
 @dataclass(frozen=True)
 class InstitutionDuesComponent(Component):
     amount_due: int = 0
     paid_by: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        paid = ctx.target is not None and str(ctx.target.id) in self.paid_by
+        state = "paid" if paid else "due"
+        return (f"Institution dues: {self.amount_due} ({state}).",)
+
 
 @dataclass(frozen=True)
 class MemberOfInstitution(Edge):
     rank: str = "member"
     since_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or not ctx.target.has_component(InstitutionComponent):
+            return ()
+        institution = ctx.target.get_component(InstitutionComponent)
+        return (f"Institution membership: {institution.name} ({self.rank}).",)
 
 
 @dataclass(frozen=True)
@@ -135,6 +180,10 @@ class QuestTemplateComponent(Component):
     reward_item_name: str
     duration_seconds: int = 24 * 60 * 60
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Work available: {self.title}.",)
+
 
 @dataclass(frozen=True)
 class GeneratedQuestComponent(Component):
@@ -142,6 +191,10 @@ class GeneratedQuestComponent(Component):
     objective: str
     status: str = "offered"
     accepted_by: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Generated quest: {self.title} ({self.status}).",)
 
 
 @dataclass(frozen=True)
@@ -161,6 +214,10 @@ class BankComponent(Component):
     name: str
     region_id: str = ""
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Bank nearby: {self.name}.",)
+
 
 @dataclass(frozen=True)
 class BankAccountComponent(Component):
@@ -178,6 +235,10 @@ class LoanComponent(Component):
     due_at_epoch: int
     status: str = "active"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Loan: {self.balance} due at epoch {self.due_at_epoch} ({self.status}).",)
+
 
 @dataclass(frozen=True)
 class DebtComponent(Component):
@@ -192,11 +253,21 @@ class LetterOfCreditComponent(Component):
     amount: int
     redeemed: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        letter_state = "redeemed" if self.redeemed else "active"
+        return (f"Letter of credit: {self.amount} ({letter_state}).",)
+
 
 @dataclass(frozen=True)
 class SafeStorageComponent(Component):
     owner_id: str
     item_ids: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or self.owner_id != str(ctx.target.id):
+            return ()
+        return (f"Safe storage: {len(self.item_ids)} item(s).",)
 
 
 @dataclass(frozen=True)
@@ -204,6 +275,11 @@ class DebtCollectorComponent(Component):
     borrower_id: str
     debt_id: str
     pressure: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or self.borrower_id != str(ctx.target.id):
+            return ()
+        return (f"Debt collector pressure: {self.pressure}.",)
 
 
 @dataclass(frozen=True)
@@ -218,6 +294,10 @@ class CrimeRecordComponent(Component):
     region_id: str
     fine: int
     status: str = "open"
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Crime record: {self.crime_type} ({self.status}).",)
 
 
 @dataclass(frozen=True)
@@ -235,15 +315,36 @@ class RegionalReputationComponent(Component):
 class InstitutionReputationComponent(Component):
     scores: dict[str, int]
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return tuple(
+            f"Institution reputation with {institution_id}: {score}."
+            for institution_id, score in sorted(self.scores.items())
+        )
+
 
 @dataclass(frozen=True)
 class LegalReputationComponent(Component):
     scores: dict[str, int]
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return tuple(
+            f"Legal reputation in {region_id}: {score}."
+            for region_id, score in sorted(self.scores.items())
+        )
+
 
 @dataclass(frozen=True)
 class ServiceAccessComponent(Component):
     service_ids: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or not self.service_ids:
+            return ()
+        return (f"Unlocked institution services: {len(self.service_ids)}.",)
 
 
 @dataclass(frozen=True)
@@ -260,12 +361,22 @@ class OwnsProperty(Edge):
     deed_id: str
     purchased_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None:
+            return ()
+        return (f"Property owned: {_name(ctx.target)}.",)
+
 
 @dataclass(frozen=True)
 class LodgingComponent(Component):
     price: int = 5
     occupied_by: str | None = None
     paid_until_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "occupied" if self.occupied_by else "available"
+        return (f"Lodging nearby: {state}, {self.price} coins.",)
 
 
 @dataclass(frozen=True)
@@ -274,16 +385,29 @@ class CampingComponent(Component):
     risk: str = "low"
     started_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Camp here: {self.risk}.",)
+
 
 @dataclass(frozen=True)
 class TravelSupplyComponent(Component):
     quantity: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Travel supplies: {self.quantity}.",)
 
 
 @dataclass(frozen=True)
 class TravelInterruptionComponent(Component):
     reason: str = "weather"
     resolved: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "resolved" if self.resolved else "unresolved"
+        return (f"Travel interruption: {self.reason} ({state}).",)
 
 
 @dataclass(frozen=True)
@@ -294,6 +418,10 @@ class ClassTemplateComponent(Component):
     minor_skills: tuple[str, ...] = ()
     advantages: tuple[str, ...] = ()
     disadvantages: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Class template available: {self.class_name}.",)
 
 
 @dataclass(frozen=True)
@@ -306,6 +434,11 @@ class CustomClassComponent(Component):
     disadvantages: tuple[str, ...] = ()
     finalized_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Custom class: {self.class_name}.",)
+
 
 @dataclass(frozen=True)
 class SpellTemplateComponent(Component):
@@ -313,6 +446,10 @@ class SpellTemplateComponent(Component):
     effect_type: str
     magnitude: float
     cost: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Spell formula available: {self.spell_name}.",)
 
 
 @dataclass(frozen=True)
@@ -322,6 +459,10 @@ class CustomSpellComponent(Component):
     magnitude: float
     cost: int = 1
     creator_id: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Known custom spell: {self.spell_name} ({self.effect_type}).",)
 
 
 @dataclass(frozen=True)
@@ -334,16 +475,28 @@ class EnchantedItemComponent(Component):
     enchanter_id: str | None = None
     enchanted_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Enchanted item: {self.spell_name} ({self.effect_type}).",)
+
 
 @dataclass(frozen=True)
 class PotionMakerComponent(Component):
     recipe_name: str = "tonic"
     output_item_name: str = "tonic"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Potionmaker nearby: {self.recipe_name}.",)
+
 
 @dataclass(frozen=True)
 class RechargeServiceComponent(Component):
     charge_amount: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Recharge service nearby: +{self.charge_amount}.",)
 
 
 @dataclass(frozen=True)
@@ -351,6 +504,11 @@ class IngredientComponent(Component):
     ingredient_name: str
     effect: str = ""
     identified_by: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        identified = ctx.target is not None and str(ctx.target.id) in self.identified_by
+        state = "identified" if identified else "unknown"
+        return (f"Ingredient nearby: {self.ingredient_name} ({state}).",)
 
 
 @dataclass(frozen=True)
@@ -362,6 +520,12 @@ class LanguageSkillComponent(Component):
 class CreatureLanguageComponent(Component):
     language: str
     pacification_difficulty: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "hostile"
+        if ctx.entity.has_component(HostilityComponent):
+            state = "hostile" if ctx.entity.get_component(HostilityComponent).hostile else "calm"
+        return (f"Creature language nearby: {self.language} ({state}).",)
 
 
 @dataclass(frozen=True)
@@ -383,17 +547,32 @@ class SupernaturalAfflictionComponent(Component):
     stage: str = "incubating"
     incubation_ends_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Affliction: {self.affliction_type} ({self.stage}).",)
+
 
 @dataclass(frozen=True)
 class AfflictionStigmaComponent(Component):
     region_id: str = ""
     severity: int = 1
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Affliction stigma: {self.region_id or 'local'} severity {self.severity}.",)
+
 
 @dataclass(frozen=True)
 class CureQuestHookComponent(Component):
     affliction_type: str
     quest_id: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Cure quest hook: {self.affliction_type}.",)
 
 
 @dataclass(frozen=True)
@@ -403,11 +582,21 @@ class FeedingNeedComponent(Component):
     gain_per_hour: float = 1.0
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Feeding need: {self.current:.1f}/{self.maximum:.1f}.",)
+
 
 @dataclass(frozen=True)
 class WereformComponent(Component):
     form_name: str
     transformed_at_epoch: int
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Transformed into {self.form_name}.",)
 
 
 @dataclass(frozen=True)
@@ -421,6 +610,12 @@ class DungeonComponent(Component):
     generated: bool = False
     entered: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and ctx.entity.id == ctx.target.id:
+            return ()
+        state = "explored" if self.entered else "unexplored"
+        return (f"Dungeon nearby: {self.dungeon_id} ({state}).",)
+
 
 @dataclass(frozen=True)
 class DungeonRoomComponent(Component):
@@ -430,12 +625,22 @@ class DungeonRoomComponent(Component):
     is_objective: bool = False
     danger: str = "low"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"In dungeon {self.dungeon_id} at depth {self.depth}.",)
+
 
 @dataclass(frozen=True)
 class DungeonObjectiveComponent(Component):
     objective_kind: str
     description: str = ""
     found: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if not self.found:
+            return ()
+        return (f"Dungeon objective found: {self.objective_kind}.",)
 
 
 @dataclass(frozen=True)
@@ -447,22 +652,42 @@ class SecretDoorComponent(Component):
     hint: str = ""
     opened: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if not self.found or self.opened:
+            return ()
+        return (f"Secret door found here: {self.hint or self.direction}.",)
+
 
 @dataclass(frozen=True)
 class AutomapComponent(Component):
     discovered_rooms: tuple[str, ...] = ()
     marked_rooms: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Automap: {len(self.discovered_rooms)} room(s) discovered.",)
+
 
 @dataclass(frozen=True)
 class RecallAnchorComponent(Component):
     room_id: str
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Recall anchor set at room {self.room_id}.",)
 
 
 @dataclass(frozen=True)
 class RestRiskComponent(Component):
     band: str = "low"
     note: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Rest risk here: {self.band}.",)
 
 
 @dataclass(frozen=True)
@@ -474,10 +699,20 @@ class DialogueApproachComponent(Component):
 class EtiquetteSkillComponent(Component):
     level: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Etiquette skill: {self.level}.",)
+
 
 @dataclass(frozen=True)
 class StreetwiseSkillComponent(Component):
     level: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Streetwise skill: {self.level}.",)
 
 
 @dataclass(frozen=True)
@@ -486,12 +721,25 @@ class SocialRegisterComponent(Component):
     expected_approaches: tuple[str, ...] = ()
     skill_threshold: int = 3
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and ctx.entity.id == ctx.target.id:
+            return ()
+        return (f"Social register of {_name(ctx.entity)}: {self.register}.",)
+
 
 @dataclass(frozen=True)
 class ConversationToneComponent(Component):
     tone: str = "neutral"
     last_reaction: str = ""
     last_approach: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.last_reaction or (ctx.target is not None and ctx.entity.id == ctx.target.id):
+            return ()
+        return (
+            f"{_name(ctx.entity)} took your last approach {self.last_reaction} "
+            f"(tone: {self.tone}).",
+        )
 
 
 class ExpansionRequestedEvent(DomainEvent):
@@ -3689,166 +3937,74 @@ class LeaveDungeonHandler:
 
 def daggersim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
+    ctx = ComponentPromptContext.for_entity(world, character)
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        if entity.has_component(UnrealizedLocationComponent):
-            unrealized = entity.get_component(UnrealizedLocationComponent)
-            if unrealized.detail_level != "instantiated":
-                site_type = (
-                    entity.get_component(ProceduralSiteComponent).site_type
-                    if entity.has_component(ProceduralSiteComponent)
-                    else "site"
-                )
-                lines.append(
-                    f"Nearby unrealized {site_type}: {_name(entity)} ({unrealized.summary})."
-                )
-        if entity.has_component(RumorComponent):
-            rumor = entity.get_component(RumorComponent)
-            if str(character.id) in rumor.heard_by:
-                lines.append(f"Rumor: {rumor.text} ({rumor.state}).")
-        if entity.id != character.id and entity.has_component(TravelHubComponent):
-            hub = entity.get_component(TravelHubComponent)
-            lines.append(f"Travel destination: {hub.name}.")
-        if entity.has_component(InstitutionComponent):
-            institution = entity.get_component(InstitutionComponent)
-            lines.append(
-                f"Institution nearby: {institution.name} ({institution.institution_type})."
-            )
-        if entity.has_component(InstitutionDuesComponent):
-            dues = entity.get_component(InstitutionDuesComponent)
-            state = "paid" if str(character.id) in dues.paid_by else "due"
-            lines.append(f"Institution dues: {dues.amount_due} ({state}).")
-        if entity.has_component(InstitutionServiceComponent):
-            service = entity.get_component(InstitutionServiceComponent)
-            lines.append(f"Service directory entry: {service.service_name}.")
-        if entity.has_component(GeneratedQuestComponent):
-            quest = entity.get_component(GeneratedQuestComponent)
-            lines.append(f"Generated quest: {quest.title} ({quest.status}).")
-        if entity.has_component(QuestTemplateComponent):
-            template = entity.get_component(QuestTemplateComponent)
-            lines.append(f"Work available: {template.title}.")
-        if entity.has_component(BankComponent):
-            lines.append(f"Bank nearby: {entity.get_component(BankComponent).name}.")
-        if entity.has_component(LoanComponent):
-            loan = entity.get_component(LoanComponent)
-            lines.append(f"Loan: {loan.balance} due at epoch {loan.due_at_epoch} ({loan.status}).")
-        if entity.has_component(LetterOfCreditComponent):
-            letter = entity.get_component(LetterOfCreditComponent)
-            letter_state = "redeemed" if letter.redeemed else "active"
-            lines.append(f"Letter of credit: {letter.amount} ({letter_state}).")
-        if entity.has_component(SafeStorageComponent):
-            safe = entity.get_component(SafeStorageComponent)
-            if safe.owner_id == str(character.id):
-                lines.append(f"Safe storage: {len(safe.item_ids)} item(s).")
-        if entity.has_component(DebtCollectorComponent):
-            collector = entity.get_component(DebtCollectorComponent)
-            if collector.borrower_id == str(character.id):
-                lines.append(f"Debt collector pressure: {collector.pressure}.")
-        if entity.has_component(CrimeRecordComponent):
-            crime = entity.get_component(CrimeRecordComponent)
-            lines.append(f"Crime record: {crime.crime_type} ({crime.status}).")
-        if entity.has_component(LodgingComponent):
-            lodging = entity.get_component(LodgingComponent)
-            state = "occupied" if lodging.occupied_by else "available"
-            lines.append(f"Lodging nearby: {state}, {lodging.price} coins.")
-        if entity.has_component(TravelSupplyComponent):
-            supply = entity.get_component(TravelSupplyComponent)
-            lines.append(f"Travel supplies: {supply.quantity}.")
-        if entity.has_component(TravelInterruptionComponent):
-            interruption = entity.get_component(TravelInterruptionComponent)
-            state = "resolved" if interruption.resolved else "unresolved"
-            lines.append(f"Travel interruption: {interruption.reason} ({state}).")
-        if entity.has_component(ClassTemplateComponent):
-            template = entity.get_component(ClassTemplateComponent)
-            lines.append(f"Class template available: {template.class_name}.")
-        if entity.has_component(SpellTemplateComponent):
-            template = entity.get_component(SpellTemplateComponent)
-            lines.append(f"Spell formula available: {template.spell_name}.")
-        if entity.has_component(CustomSpellComponent):
-            spell = entity.get_component(CustomSpellComponent)
-            lines.append(f"Known custom spell: {spell.spell_name} ({spell.effect_type}).")
-        if entity.has_component(EnchantedItemComponent):
-            spell = entity.get_component(EnchantedItemComponent)
-            lines.append(f"Enchanted item: {spell.spell_name} ({spell.effect_type}).")
-        if entity.has_component(PotionMakerComponent):
-            maker = entity.get_component(PotionMakerComponent)
-            lines.append(f"Potionmaker nearby: {maker.recipe_name}.")
-        if entity.has_component(RechargeServiceComponent):
-            recharge = entity.get_component(RechargeServiceComponent)
-            lines.append(f"Recharge service nearby: +{recharge.charge_amount}.")
-        if entity.has_component(IngredientComponent):
-            ingredient = entity.get_component(IngredientComponent)
-            state = "identified" if str(character.id) in ingredient.identified_by else "unknown"
-            lines.append(f"Ingredient nearby: {ingredient.ingredient_name} ({state}).")
-        if entity.has_component(CreatureLanguageComponent):
-            language = entity.get_component(CreatureLanguageComponent).language
-            state = "hostile"
-            if entity.has_component(HostilityComponent):
-                state = "hostile" if entity.get_component(HostilityComponent).hostile else "calm"
-            lines.append(f"Creature language nearby: {language} ({state}).")
-        if entity.id != character.id and entity.has_component(DungeonComponent):
-            dungeon = entity.get_component(DungeonComponent)
-            state = "explored" if dungeon.entered else "unexplored"
-            lines.append(f"Dungeon nearby: {dungeon.dungeon_id} ({state}).")
-        if entity.has_component(SecretDoorComponent):
-            door = entity.get_component(SecretDoorComponent)
-            if door.found and not door.opened:
-                lines.append(f"Secret door found here: {door.hint or door.direction}.")
-        if entity.has_component(DungeonObjectiveComponent):
-            objective = entity.get_component(DungeonObjectiveComponent)
-            if objective.found:
-                lines.append(f"Dungeon objective found: {objective.objective_kind}.")
-        if entity.id != character.id and entity.has_component(SocialRegisterComponent):
-            register = entity.get_component(SocialRegisterComponent).register
-            lines.append(f"Social register of {_name(entity)}: {register}.")
-        if entity.id != character.id and entity.has_component(ConversationToneComponent):
-            tone = entity.get_component(ConversationToneComponent)
-            if tone.last_reaction:
-                lines.append(
-                    f"{_name(entity)} took your last approach {tone.last_reaction} "
-                    f"(tone: {tone.tone})."
-                )
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        for component_type in (
+            UnrealizedLocationComponent,
+            RumorComponent,
+            TravelHubComponent,
+            InstitutionComponent,
+            InstitutionDuesComponent,
+            InstitutionServiceComponent,
+            GeneratedQuestComponent,
+            QuestTemplateComponent,
+            BankComponent,
+            LoanComponent,
+            LetterOfCreditComponent,
+            SafeStorageComponent,
+            DebtCollectorComponent,
+            CrimeRecordComponent,
+            LodgingComponent,
+            TravelSupplyComponent,
+            TravelInterruptionComponent,
+            ClassTemplateComponent,
+            SpellTemplateComponent,
+            CustomSpellComponent,
+            EnchantedItemComponent,
+            PotionMakerComponent,
+            RechargeServiceComponent,
+            IngredientComponent,
+            CreatureLanguageComponent,
+            DungeonComponent,
+            SecretDoorComponent,
+            DungeonObjectiveComponent,
+            SocialRegisterComponent,
+            ConversationToneComponent,
+        ):
+            if entity.has_component(component_type):
+                lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     current_room_id = container_of(character)
     if current_room_id is not None and world.has_entity(current_room_id):
         current_room = world.get_entity(current_room_id)
+        room_ctx = ComponentPromptContext.for_entity(
+            world, current_room, perspective=ctx.perspective, target=character
+        )
         if current_room.has_component(DungeonRoomComponent):
-            dungeon_room = current_room.get_component(DungeonRoomComponent)
-            lines.append(f"In dungeon {dungeon_room.dungeon_id} at depth {dungeon_room.depth}.")
+            lines.extend(current_room.get_component(DungeonRoomComponent).prompt_fragments(room_ctx))
         if current_room.has_component(RestRiskComponent):
-            risk = current_room.get_component(RestRiskComponent)
-            lines.append(f"Rest risk here: {risk.band}.")
+            lines.extend(current_room.get_component(RestRiskComponent).prompt_fragments(room_ctx))
         if current_room.has_component(CampingComponent):
-            camp = current_room.get_component(CampingComponent)
-            lines.append(f"Camp here: {camp.risk}.")
-    if character.has_component(AutomapComponent):
-        automap = character.get_component(AutomapComponent)
-        lines.append(f"Automap: {len(automap.discovered_rooms)} room(s) discovered.")
-    if character.has_component(RecallAnchorComponent):
-        anchor_id = character.get_component(RecallAnchorComponent).room_id
-        lines.append(f"Recall anchor set at room {anchor_id}.")
-    if character.has_component(EtiquetteSkillComponent):
-        lines.append(f"Etiquette skill: {character.get_component(EtiquetteSkillComponent).level}.")
-    if character.has_component(StreetwiseSkillComponent):
-        lines.append(
-            f"Streetwise skill: {character.get_component(StreetwiseSkillComponent).level}."
-        )
-    if character.has_component(CustomClassComponent):
-        custom_class = character.get_component(CustomClassComponent)
-        lines.append(f"Custom class: {custom_class.class_name}.")
-    if character.has_component(SupernaturalAfflictionComponent):
-        affliction = character.get_component(SupernaturalAfflictionComponent)
-        lines.append(f"Affliction: {affliction.affliction_type} ({affliction.stage}).")
-    if character.has_component(AfflictionStigmaComponent):
-        stigma = character.get_component(AfflictionStigmaComponent)
-        lines.append(
-            f"Affliction stigma: {stigma.region_id or 'local'} severity {stigma.severity}."
-        )
-    if character.has_component(CureQuestHookComponent):
-        cure = character.get_component(CureQuestHookComponent)
-        lines.append(f"Cure quest hook: {cure.affliction_type}.")
-    if character.has_component(FeedingNeedComponent):
-        need = character.get_component(FeedingNeedComponent)
-        lines.append(f"Feeding need: {need.current:.1f}/{need.maximum:.1f}.")
+            lines.extend(current_room.get_component(CampingComponent).prompt_fragments(room_ctx))
+    for component_type in (
+        AutomapComponent,
+        RecallAnchorComponent,
+        EtiquetteSkillComponent,
+        StreetwiseSkillComponent,
+        CustomClassComponent,
+        SupernaturalAfflictionComponent,
+        AfflictionStigmaComponent,
+        CureQuestHookComponent,
+        FeedingNeedComponent,
+        ServiceAccessComponent,
+        WereformComponent,
+        TravelPlanComponent,
+    ):
+        if character.has_component(component_type):
+            lines.extend(character.get_component(component_type).prompt_fragments(ctx))
     if character.has_component(InstitutionReputationComponent):
         for institution_id, score in character.get_component(
             InstitutionReputationComponent
@@ -3859,28 +4015,20 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
                 label = _name(world.get_entity(parsed))
             lines.append(f"Institution reputation with {label}: {score}.")
     if character.has_component(LegalReputationComponent):
-        for region_id, score in character.get_component(LegalReputationComponent).scores.items():
-            lines.append(f"Legal reputation in {region_id}: {score}.")
-    if character.has_component(ServiceAccessComponent):
-        access = character.get_component(ServiceAccessComponent)
-        if access.service_ids:
-            lines.append(f"Unlocked institution services: {len(access.service_ids)}.")
-    if character.has_component(WereformComponent):
-        lines.append(f"Transformed into {character.get_component(WereformComponent).form_name}.")
-    if character.has_component(TravelPlanComponent):
-        plan = character.get_component(TravelPlanComponent)
-        lines.append(f"Traveling by {plan.mode}; arrival due at epoch {plan.arrive_at_epoch}.")
+        lines.extend(character.get_component(LegalReputationComponent).prompt_fragments(ctx))
     for edge, institution_id in character.get_relationships(MemberOfInstitution):
         if world.has_entity(institution_id):
             institution = world.get_entity(institution_id)
-            if institution.has_component(InstitutionComponent):
-                lines.append(
-                    f"Institution membership: "
-                    f"{institution.get_component(InstitutionComponent).name} ({edge.rank})."
-                )
+            edge_ctx = ComponentPromptContext.for_entity(
+                world, character, perspective=ctx.perspective, target=institution
+            )
+            lines.extend(edge.prompt_fragments(edge_ctx))
     for _edge, property_id in character.get_relationships(OwnsProperty):
         if world.has_entity(property_id):
-            lines.append(f"Property owned: {_name(world.get_entity(property_id))}.")
+            property_ctx = ComponentPromptContext.for_entity(
+                world, character, perspective=ctx.perspective, target=world.get_entity(property_id)
+            )
+            lines.extend(_edge.prompt_fragments(property_ctx))
     return sorted(lines)
 
 

@@ -224,6 +224,7 @@ from bunnyland.mechanics.daggersim import (
     daggersim_fragments,
     install_daggersim,
 )
+from bunnyland.prompts import ComponentPromptContext
 
 HOUR = 60 * 60
 
@@ -3827,6 +3828,39 @@ def test_daggersim_fragments_show_travel_plan():
     fragments = daggersim_fragments(scenario.actor.world, character)
 
     assert any("Traveling by foot" in line for line in fragments)
+
+
+def test_daggersim_component_prompt_fragments_use_target_and_self_context():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    rumor = spawn_entity(
+        world,
+        [RumorComponent(text="The old carrot vault is open.", heard_by=(str(character.id),))],
+    )
+    institution = spawn_entity(
+        world,
+        [
+            InstitutionComponent(name="Burrow Cartographers"),
+            InstitutionDuesComponent(amount_due=12, paid_by=(str(character.id),)),
+        ],
+    )
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    rumor_ctx = ComponentPromptContext.for_entity(world, rumor, target=character)
+    institution_ctx = ComponentPromptContext.for_entity(world, institution, target=character)
+
+    assert rumor.get_component(RumorComponent).prompt_fragments(rumor_ctx) == (
+        "Rumor: The old carrot vault is open. (unverified).",
+    )
+    assert institution.get_component(InstitutionDuesComponent).prompt_fragments(
+        institution_ctx
+    ) == ("Institution dues: 12 (paid).",)
+    assert AutomapComponent(discovered_rooms=("room_a", "room_b")).prompt_fragments(
+        self_ctx
+    ) == ("Automap: 2 room(s) discovered.",)
+    assert CustomClassComponent(class_name="Night Gardener").prompt_fragments(self_ctx) == (
+        "Custom class: Night Gardener.",
+    )
 
 
 def test_daggersim_fragments_show_institutions_and_memberships():
