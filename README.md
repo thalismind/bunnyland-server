@@ -245,7 +245,9 @@ the worldgen plugin ships `storm-lighthouse-demo` (a coastal lighthouse in an au
 with a beacon to keep fueled and a wrecker's secret under the lens), `vacancy-motel-demo`
 (a roadside motel where Room 6 only opens after dark and the night clerk gets hungry), and
 `frozen-greenhouse-demo` (a greenhouse dome on a frozen plain with crops to keep warm and a
-specimen that grows too fast in the dark and cold).
+specimen that grows too fast in the dark and cold), and `stuck-subway-demo` (a subway car
+stalled between stations with dim power, dead ventilation, a dead motor, and strangers
+waiting out the hold).
 The `fortresssim` package is a planned catalogue package and does not have a plugin or demo
 generator yet.
 

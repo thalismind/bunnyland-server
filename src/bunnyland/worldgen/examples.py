@@ -2291,6 +2291,114 @@ async def frozen_greenhouse_example(actor, seed: str, options: GenOptions) -> In
     return world
 
 
+async def stuck_subway_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A subway car stalled between stations, strangers and failing systems in the dark."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+    from ..mechanics.lifesim import WhimComponent
+    from ..mechanics.voidsim import (
+        DistressSignalComponent,
+        LifeSupportComponent,
+        OxygenComponent,
+        PowerGridComponent,
+        ShipSystemComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="car", title="Stalled Subway Car", biome="subway",
+                     indoor=True, light=0.3, celsius=27.0),
+            RoomSpec(key="cab", title="Operator's Cab", biome="subway",
+                     indoor=True, light=0.45, celsius=26.0),
+            RoomSpec(key="tunnel", title="Dark Tunnel Catwalk", biome="tunnel",
+                     indoor=True, light=0.05, celsius=18.0),
+        ],
+        exits=[
+            ExitSpec(from_key="car", direction="fore", to_key="cab"),
+            ExitSpec(from_key="cab", direction="aft", to_key="car"),
+            ExitSpec(from_key="car", direction="emergency-door", to_key="tunnel"),
+            ExitSpec(from_key="tunnel", direction="back-aboard", to_key="car"),
+        ],
+        objects=[
+            ObjectSpec(key="pretzel", room_key="car", name="a half-eaten soft pretzel",
+                       kind="food", nutrition=3.0, satiety=8.0, portable=True),
+            ObjectSpec(key="bottle", room_key="car", name="a sweating water bottle",
+                       kind="water", hydration=10.0, portable=True),
+            ObjectSpec(key="notice", room_key="car", name="a laminated service notice",
+                       kind="paper", writable=False, portable=False),
+            ObjectSpec(key="map", room_key="car", name="a strip map of the line",
+                       kind="paper", writable=False, portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="commuter", name="Priya Nadeau", room_key="car",
+                          controller="suspended", traits=("anxious", "polite", "practical"),
+                          goals=("get home tonight", "keep everyone calm")),
+            CharacterSpec(key="operator", name="Gus Holloway", room_key="cab",
+                          controller="llm", llm_profile="transit-operator",
+                          traits=("gruff", "reassuring"),
+                          goals=("restart the car", "keep passengers seated")),
+            CharacterSpec(key="busker", name="Remy Osei", room_key="car",
+                          controller="llm", llm_profile="stuck-busker",
+                          traits=("easygoing", "talkative"),
+                          goals=("lighten the mood", "busk for transfer fare")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=18 * 3600))
+            clock[0].add_component(TimeOfDayComponent(phase="dusk"))
+            clock[0].add_component(CalendarComponent(day=1, season="summer", hour=18))
+
+        car, cab, tunnel = world.rooms["car"], world.rooms["cab"], world.rooms["tunnel"]
+        # The car's systems are failing: dim power, ventilation off, air going stale.
+        _augment(actor, car,
+                 PowerGridComponent(capacity=100.0, available=18.0),
+                 LifeSupportComponent(online=False),
+                 OxygenComponent(level=82.0, maximum=100.0))
+        # The dead traction motor up front, and the intercom crackling at control.
+        _add(actor, cab, [
+            IdentityComponent(name="the traction motor", kind="ship-system"),
+            ShipSystemComponent(system_type="traction motor", integrity=40.0, online=False),
+        ])
+        _add(actor, cab, [
+            IdentityComponent(name="the cab intercom", kind="signal"),
+            DistressSignalComponent(text="Control, car 1142 dead in the tube past Junction St."),
+        ])
+        # The clamped social want that makes the wait bite: a transfer she may now miss.
+        _augment(actor, world.characters["commuter"],
+                 WhimComponent(want="make the last cross-town transfer"))
+        # The tunnel is pitch-dark and not somewhere passengers should wander.
+        _augment(actor, tunnel,
+                 PointOfInterestComponent(location_type="service tunnel", region="Junction St"),
+                 DiscoveryComponent())
+        _add(actor, car, [
+            IdentityComponent(name="a strip map marked at the dead spot", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Strip Map",
+                              text="Someone has circled the same stretch of tunnel three times "
+                                   "and written: it always stops here."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["notice"]),
+            ReadableComponent(title="Service Notice",
+                              text="In the event of an extended hold, remain in the car. Do not "
+                                   "open the emergency door onto the trackway."),
+        )
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -2386,6 +2494,11 @@ FROZEN_GREENHOUSE_DEMO = WorldGenerator(
     description="A greenhouse dome on a frozen winter plain with crops to keep warm, a boiler "
                 "to stoke, and a specimen that grows too fast in the dark and cold.",
     uses_seed=False)
+STUCK_SUBWAY_DEMO = WorldGenerator(
+    name="stuck-subway-demo", generate=stuck_subway_example,
+    description="A subway car stalled between stations with dim power, dead ventilation, a "
+                "dead traction motor, and strangers waiting out the hold in the dark.",
+    uses_seed=False)
 
 POP_CULTURE_DEMOS = (
     CLUE_SNACK_DEMO,
@@ -2405,6 +2518,7 @@ SCENE_DEMOS = (
     STORM_LIGHTHOUSE_DEMO,
     VACANCY_MOTEL_DEMO,
     FROZEN_GREENHOUSE_DEMO,
+    STUCK_SUBWAY_DEMO,
 )
 
 
@@ -2432,6 +2546,7 @@ __all__ = [
     "SCENE_DEMOS",
     "STAR_OPERA_DEMO",
     "STORM_LIGHTHOUSE_DEMO",
+    "STUCK_SUBWAY_DEMO",
     "VACANCY_MOTEL_DEMO",
     "VOIDSIM_DEMO",
     "barbariansim_example",
@@ -2454,6 +2569,7 @@ __all__ = [
     "nukesim_example",
     "star_opera_example",
     "storm_lighthouse_example",
+    "stuck_subway_example",
     "vacancy_motel_example",
     "voidsim_example",
 ]

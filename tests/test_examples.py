@@ -87,7 +87,13 @@ from bunnyland.mechanics.lifesim import (
 from bunnyland.mechanics.needs import HungerComponent
 from bunnyland.mechanics.neonsim import CyberpunkSiteComponent
 from bunnyland.mechanics.nukesim import RadiationSourceComponent
-from bunnyland.mechanics.voidsim import HabitatModuleComponent, ShipComponent
+from bunnyland.mechanics.voidsim import (
+    HabitatModuleComponent,
+    LifeSupportComponent,
+    PowerGridComponent,
+    ShipComponent,
+    ShipSystemComponent,
+)
 from bunnyland.plugins.builtin import bunnyland_plugins
 from bunnyland.worldgen.examples import (
     BARBARIANSIM_DEMO,
@@ -106,6 +112,7 @@ from bunnyland.worldgen.examples import (
     POP_CULTURE_DEMOS,
     SCENE_DEMOS,
     STORM_LIGHTHOUSE_DEMO,
+    STUCK_SUBWAY_DEMO,
     VACANCY_MOTEL_DEMO,
     VOIDSIM_DEMO,
 )
@@ -375,6 +382,24 @@ async def test_frozen_greenhouse_demo_grows_crops_against_the_cold():
     ]
     assert any(required <= 1.0 for required in growths)
     assert actor.world.get_entity(world.rooms["dome"]).has_component(PointOfInterestComponent)
+
+
+async def test_stuck_subway_demo_is_a_failing_car_full_of_strangers():
+    actor = WorldActor()
+
+    world = await STUCK_SUBWAY_DEMO.generate(actor, "stuck-subway-demo", GenOptions())
+
+    # The car's systems are failing: dim power and dead ventilation.
+    car = actor.world.get_entity(world.rooms["car"])
+    assert car.has_component(PowerGridComponent)
+    assert car.get_component(LifeSupportComponent).online is False
+
+    # A dead traction motor up front.
+    motor = list(actor.world.query().with_all([ShipSystemComponent]).execute_entities())[0]
+    assert motor.get_component(ShipSystemComponent).online is False
+
+    # The clamped social want that makes the wait bite.
+    assert _has(actor, WhimComponent)
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)
