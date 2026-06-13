@@ -199,7 +199,11 @@ class ImprintComponent(Component):
     bond: float = 1.0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is None or self.imprinted_by != str(ctx.target.id):
+        if (
+            ctx.target is None
+            or self.imprinted_by != str(ctx.target.id)
+            or not ctx.can_view_private_state
+        ):
             return ()
         return (f"Imprinted creature: {_entity_name(ctx.entity)} bond {self.bond:g}.",)
 
@@ -230,7 +234,11 @@ class WaterStudyComponent(Component):
     studied_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        studied = ctx.target is not None and str(ctx.target.id) in self.studied_by
+        studied = (
+            ctx.target is not None
+            and str(ctx.target.id) in self.studied_by
+            and ctx.can_view_private_state
+        )
         state = "studied" if studied else "unstudied"
         return (f"Water study {_entity_name(ctx.entity)}: {state}.",)
 
@@ -386,7 +394,11 @@ class CompanionComponent(Component):
     role: str = "companion"
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is None or self.owner_id != str(ctx.target.id):
+        if (
+            ctx.target is None
+            or self.owner_id != str(ctx.target.id)
+            or not ctx.can_view_private_state
+        ):
             return ()
         return (f"Your {self.role}: {_entity_name(ctx.entity)}.",)
 

@@ -63,6 +63,7 @@ from bunnyland.mechanics.daggersim import (
     CustomClassCreatedEvent,
     CustomSpellComponent,
     DaggerQuestRewardComponent,
+    DebtCollectorComponent,
     DebtCollectorSentEvent,
     DebtComponent,
     DepositHandler,
@@ -115,6 +116,7 @@ from bunnyland.mechanics.daggersim import (
     LeaveDungeonHandler,
     LegalReputationChangedEvent,
     LegalReputationComponent,
+    LetterOfCreditComponent,
     LetterOfCreditIssuedEvent,
     LieAboutQuestHandler,
     LoanComponent,
@@ -224,7 +226,7 @@ from bunnyland.mechanics.daggersim import (
     daggersim_fragments,
     install_daggersim,
 )
-from bunnyland.prompts import ComponentPromptContext
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 60 * 60
 
@@ -3846,15 +3848,110 @@ def test_daggersim_component_prompt_fragments_use_target_and_self_context():
         ],
     )
     self_ctx = ComponentPromptContext.for_entity(world, character)
-    rumor_ctx = ComponentPromptContext.for_entity(world, rumor, target=character)
-    institution_ctx = ComponentPromptContext.for_entity(world, institution, target=character)
+    viewer = spawn_entity(world, [CharacterComponent()])
+    rumor_ctx = ComponentPromptContext.for_entity(
+        world, rumor, perspective=self_ctx.perspective, target=character
+    )
+    observer_rumor_ctx = ComponentPromptContext.for_entity(
+        world,
+        rumor,
+        perspective=PromptPerspective(viewer=viewer),
+        target=character,
+    )
+    institution_ctx = ComponentPromptContext.for_entity(
+        world, institution, perspective=self_ctx.perspective, target=character
+    )
+    observer_institution_ctx = ComponentPromptContext.for_entity(
+        world,
+        institution,
+        perspective=PromptPerspective(viewer=viewer),
+        target=character,
+    )
 
     assert rumor.get_component(RumorComponent).prompt_fragments(rumor_ctx) == (
         "Rumor: The old carrot vault is open. (unverified).",
     )
+    assert rumor.get_component(RumorComponent).prompt_fragments(observer_rumor_ctx) == ()
     assert institution.get_component(InstitutionDuesComponent).prompt_fragments(
         institution_ctx
     ) == ("Institution dues: 12 (paid).",)
+    assert institution.get_component(InstitutionDuesComponent).prompt_fragments(
+        observer_institution_ctx
+    ) == ()
+    assert LoanComponent(
+        bank_id=str(institution.id),
+        borrower_id=str(character.id),
+        principal=20,
+        balance=15,
+        due_at_epoch=9,
+    ).prompt_fragments(institution_ctx) == ("Loan: 15 due at epoch 9 (active).",)
+    assert LoanComponent(
+        bank_id=str(institution.id),
+        borrower_id=str(character.id),
+        principal=20,
+        balance=15,
+        due_at_epoch=9,
+    ).prompt_fragments(observer_institution_ctx) == ()
+    custom_spell = CustomSpellComponent(spell_name="Moon Mend", effect_type="heal", magnitude=3)
+    assert custom_spell.prompt_fragments(institution_ctx) == (
+        "Known custom spell: Moon Mend (heal).",
+    )
+    assert custom_spell.prompt_fragments(observer_institution_ctx) == ()
+    assert GeneratedQuestComponent(
+        title="Accepted",
+        objective="help",
+        status="accepted",
+        accepted_by=str(character.id),
+    ).prompt_fragments(institution_ctx) == ("Generated quest: Accepted (accepted).",)
+    assert GeneratedQuestComponent(
+        title="Accepted",
+        objective="help",
+        status="accepted",
+        accepted_by=str(character.id),
+    ).prompt_fragments(observer_institution_ctx) == ()
+    assert LetterOfCreditComponent(
+        bank_id=str(institution.id),
+        owner_id=str(character.id),
+        amount=30,
+    ).prompt_fragments(institution_ctx) == ("Letter of credit: 30 (active).",)
+    assert LetterOfCreditComponent(
+        bank_id=str(institution.id),
+        owner_id=str(character.id),
+        amount=30,
+    ).prompt_fragments(observer_institution_ctx) == ()
+    assert SafeStorageComponent(owner_id=str(character.id), item_ids=("a", "b")).prompt_fragments(
+        institution_ctx
+    ) == ("Safe storage: 2 item(s).",)
+    assert SafeStorageComponent(owner_id=str(character.id), item_ids=("a", "b")).prompt_fragments(
+        observer_institution_ctx
+    ) == ()
+    assert DebtCollectorComponent(
+        borrower_id=str(character.id),
+        debt_id="debt",
+        pressure=2,
+    ).prompt_fragments(institution_ctx) == ("Debt collector pressure: 2.",)
+    assert DebtCollectorComponent(
+        borrower_id=str(character.id),
+        debt_id="debt",
+        pressure=2,
+    ).prompt_fragments(observer_institution_ctx) == ()
+    property_target = spawn_entity(world, [IdentityComponent(name="Burrow Loft", kind="home")])
+    assert OwnsProperty(deed_id="deed").prompt_fragments(
+        ComponentPromptContext.for_entity(
+            world,
+            character,
+            perspective=self_ctx.perspective,
+            target=property_target,
+        )
+    ) == ("Property owned: Burrow Loft.",)
+    assert OwnsProperty(deed_id="deed").prompt_fragments(
+        ComponentPromptContext.for_entity(
+            world,
+            character,
+            perspective=PromptPerspective(viewer=viewer),
+            target=property_target,
+        )
+    ) == ()
     assert AutomapComponent(discovered_rooms=("room_a", "room_b")).prompt_fragments(
         self_ctx
     ) == ("Automap: 2 room(s) discovered.",)

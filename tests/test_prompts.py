@@ -165,8 +165,23 @@ def test_component_prompt_context_lazy_room_siblings_and_inventory_helpers():
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried.id)
     ctx = ComponentPromptContext.for_entity(world, character)
+    target_ctx = ComponentPromptContext.for_entity(
+        world,
+        nearby,
+        perspective=ctx.perspective,
+        target=character,
+    )
+    observer_ctx = ComponentPromptContext.for_entity(
+        world,
+        nearby,
+        perspective=PromptPerspective(viewer=room),
+        target=character,
+    )
 
     assert ctx.room == room
+    assert ctx.can_view_private_state is True
+    assert target_ctx.can_view_private_state is True
+    assert observer_ctx.can_view_private_state is False
     assert ctx.room_siblings(PortableComponent) == (nearby,)
     assert ctx.inventory_items(PortableComponent) == (carried,)
 
@@ -205,7 +220,15 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
         return spawn_entity(world, [IdentityComponent(name=name, kind="thing"), *components])
 
     def target_ctx(item):
-        return ComponentPromptContext.for_entity(world, item, target=character)
+        return ComponentPromptContext.for_entity(
+            world, item, perspective=self_ctx.perspective, target=character
+        )
+
+    def observer_target_ctx(item):
+        return ComponentPromptContext.for_entity(
+            world, item, perspective=other_ctx.perspective, target=character
+        )
+
     self_ctx = ComponentPromptContext.for_entity(world, character)
     other = entity("viewer")
     other_ctx = ComponentPromptContext.for_entity(
@@ -243,6 +266,9 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert marker.get_component(MapMarkerComponent).prompt_fragments(target_ctx(marker)) == (
         "Map marker: Camp (landmark).",
     )
+    assert marker.get_component(MapMarkerComponent).prompt_fragments(
+        observer_target_ctx(marker)
+    ) == ()
     assert MapMarkerComponent(label="Hidden").prompt_fragments(self_ctx) == ()
     assert inactive_zone.get_component(EncounterZoneComponent).prompt_fragments(
         target_ctx(inactive_zone)
@@ -253,6 +279,9 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert active_quest.get_component(QuestComponent).prompt_fragments(
         target_ctx(active_quest)
     ) == ("Active quest: Find the relic.",)
+    assert active_quest.get_component(QuestComponent).prompt_fragments(
+        observer_target_ctx(active_quest)
+    ) == ()
     assert declined_quest.get_component(QuestComponent).prompt_fragments(
         target_ctx(declined_quest)
     ) == ("Declined quest: Bad idea.",)
@@ -260,6 +289,9 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert stage.get_component(QuestStageComponent).prompt_fragments(target_ctx(stage)) == (
         "Tracked quest stage 2 for q1, branch a.",
     )
+    assert stage.get_component(QuestStageComponent).prompt_fragments(
+        observer_target_ctx(stage)
+    ) == ()
     assert QuestStageComponent(quest_id="q1").prompt_fragments(self_ctx) == ()
     assert JailComponent(faction_id="hold", release_epoch=10).prompt_fragments(other_ctx) == ()
     assert JailComponent(faction_id="hold", release_epoch=10).prompt_fragments(self_ctx) == (
@@ -269,6 +301,11 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert MemberOf(rank="thane").prompt_fragments(
         ComponentPromptContext.for_entity(world, character, target=faction)
     ) == ("You are a thane of Companions.",)
+    assert MemberOf(rank="thane").prompt_fragments(
+        ComponentPromptContext.for_entity(
+            world, character, perspective=other_ctx.perspective, target=faction
+        )
+    ) == ()
     assert AncientBeastComponent(name="Alduin", soul_absorbed=True).prompt_fragments(
         self_ctx
     ) == ("Ancient beast nearby: Alduin (soul absorbed).",)
@@ -295,6 +332,9 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert SurrenderComponent().prompt_fragments(other_ctx) == ()
     assert known_spell.get_component(SpellComponent).prompt_fragments(
         target_ctx(known_spell)
+    ) == ("Spell learned: Spark.",)
+    assert known_spell.get_component(SpellComponent).prompt_fragments(
+        observer_target_ctx(known_spell)
     ) == ()
     unknown_spell = entity("bolt", SpellComponent(name="Bolt"))
     assert unknown_spell.get_component(SpellComponent).prompt_fragments(

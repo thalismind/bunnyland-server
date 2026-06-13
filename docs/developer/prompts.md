@@ -20,6 +20,8 @@ The context deliberately stays small:
 - `ctx.room`: the current room for `ctx.entity`, when known.
 - `ctx.target`: an optional relationship target for edge-scoped formatting.
 - `ctx.perspective`: prose style and future localization metadata.
+- `ctx.can_view_private_state`: true when private component state is scoped to the
+  prompt viewer, either because `ctx.entity` is the viewer or because `ctx.target` is.
 - `ctx.room_siblings(component_type=None)`: lazy direct contents of `ctx.room`, excluding
   `ctx.entity`.
 - `ctx.inventory_items(component_type=None)`: lazy direct contents of `ctx.entity`.
@@ -83,6 +85,28 @@ def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
 `ctx.is_first_person` is about access, not grammar. A self prompt may still use second-person
 prose (`You are brave.`) while counting as first-person access because `ctx.viewer` is
 `ctx.entity`.
+
+Use `ctx.can_view_private_state` for private records that live on linked entities rather
+than on the character itself. Bills, loans, known spells, accepted contracts, map markers,
+heard rumors, installed implants, and similar relationship-owned or target-specific records
+usually pass the viewer as `ctx.target`; they should remain visible to that viewer while
+being hidden from an observer context where the target is someone else.
+
+Visibility rules of thumb:
+
+- Source-private state: feelings, traits, goals, skills, reputation, diseases, criminal
+  heat, active plans, and relationship edges from the described entity use
+  `if not ctx.is_first_person: return ()`.
+- Target-private state: records or room/entity annotations that describe `ctx.target`'s
+  progress, ownership, or knowledge use `if not ctx.can_view_private_state: return ()`
+  before formatting the private line.
+- Public or physical state: visible room objects, machine state, hazards, resources,
+  doors, sites, public services, and broadly observable creature/room state can remain
+  visible when the provider has selected that entity.
+- Mixed state: keep the public line visible, but gate only the viewer-specific tag or
+  state. Examples include showing an artifact as unidentified to outsiders while only the
+  viewer sees their identified/studied/read status, or hiding an "installed" implant line
+  unless the install target is the prompt viewer.
 
 Physical or externally visible state, such as hunger pressure, injuries, carried items, or a
 machine status, can be visible to other viewers if the provider has selected that entity and

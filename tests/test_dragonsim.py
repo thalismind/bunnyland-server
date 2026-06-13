@@ -129,7 +129,7 @@ from bunnyland.mechanics.dragonsim import (
     dragonsim_fragments,
 )
 from bunnyland.mechanics.lifesim import SkillSetComponent
-from bunnyland.prompts import ComponentPromptContext
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 60 * 60
 
@@ -1610,10 +1610,24 @@ def test_dragonsim_component_prompt_fragments_use_target_context():
         [ArtifactComponent(name="Moon Amulet", charges=2, identified_by=(str(character.id),))],
     )
     character.add_relationship(KnowsSpell(), spell.id)
-    target_ctx = ComponentPromptContext.for_entity(world, quest, target=character)
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    observer = spawn_entity(world, [CharacterComponent()])
+    target_ctx = ComponentPromptContext.for_entity(
+        world, quest, perspective=self_ctx.perspective, target=character
+    )
     learned_ctx = ComponentPromptContext.for_entity(world, spell)
-    reachable_spell_ctx = ComponentPromptContext.for_entity(world, spell, target=character)
-    artifact_ctx = ComponentPromptContext.for_entity(world, artifact, target=character)
+    reachable_spell_ctx = ComponentPromptContext.for_entity(
+        world, spell, perspective=self_ctx.perspective, target=character
+    )
+    observer_spell_ctx = ComponentPromptContext.for_entity(
+        world,
+        spell,
+        perspective=PromptPerspective(viewer=observer),
+        target=character,
+    )
+    artifact_ctx = ComponentPromptContext.for_entity(
+        world, artifact, perspective=self_ctx.perspective, target=character
+    )
 
     assert quest.get_component(QuestComponent).prompt_fragments(target_ctx) == (
         "Active quest: Find the Lost Ring.",
@@ -1621,7 +1635,20 @@ def test_dragonsim_component_prompt_fragments_use_target_context():
     assert spell.get_component(SpellComponent).prompt_fragments(learned_ctx) == (
         "Spell learned: Oakflesh.",
     )
-    assert spell.get_component(SpellComponent).prompt_fragments(reachable_spell_ctx) == ()
+    assert spell.get_component(SpellComponent).prompt_fragments(reachable_spell_ctx) == (
+        "Spell learned: Oakflesh.",
+    )
+    assert spell.get_component(SpellComponent).prompt_fragments(observer_spell_ctx) == ()
+    assert PerkComponent(name="Power Attack", skill_name="blade").prompt_fragments(
+        reachable_spell_ctx
+    ) == ("Perk unlocked: Power Attack.",)
+    assert PerkComponent(name="Power Attack", skill_name="blade").prompt_fragments(
+        observer_spell_ctx
+    ) == ()
+    assert WordOfPowerComponent(name="Fus").prompt_fragments(reachable_spell_ctx) == (
+        "Word of power known: Fus.",
+    )
+    assert WordOfPowerComponent(name="Fus").prompt_fragments(observer_spell_ctx) == ()
     assert artifact.get_component(ArtifactComponent).prompt_fragments(artifact_ctx) == (
         "Artifact nearby: Moon Amulet (2 charges, identified).",
     )

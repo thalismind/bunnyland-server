@@ -72,7 +72,11 @@ class RumorComponent(Component):
     state: str = "unverified"
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is None or str(ctx.target.id) not in self.heard_by:
+        if (
+            ctx.target is None
+            or str(ctx.target.id) not in self.heard_by
+            or not ctx.can_view_private_state
+        ):
             return ()
         return (f"Rumor: {self.text} ({self.state}).",)
 
@@ -156,6 +160,8 @@ class InstitutionDuesComponent(Component):
     paid_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and not ctx.can_view_private_state:
+            return ()
         paid = ctx.target is not None and str(ctx.target.id) in self.paid_by
         state = "paid" if paid else "due"
         return (f"Institution dues: {self.amount_due} ({state}).",)
@@ -167,6 +173,8 @@ class MemberOfInstitution(Edge):
     since_epoch: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
         if ctx.target is None or not ctx.target.has_component(InstitutionComponent):
             return ()
         institution = ctx.target.get_component(InstitutionComponent)
@@ -193,7 +201,13 @@ class GeneratedQuestComponent(Component):
     accepted_by: str | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if self.accepted_by is not None:
+            if (
+                ctx.target is None
+                or self.accepted_by != str(ctx.target.id)
+                or not ctx.can_view_private_state
+            ):
+                return ()
         return (f"Generated quest: {self.title} ({self.status}).",)
 
 
@@ -236,7 +250,12 @@ class LoanComponent(Component):
     status: str = "active"
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if (
+            ctx.target is None
+            or self.borrower_id != str(ctx.target.id)
+            or not ctx.can_view_private_state
+        ):
+            return ()
         return (f"Loan: {self.balance} due at epoch {self.due_at_epoch} ({self.status}).",)
 
 
@@ -254,7 +273,12 @@ class LetterOfCreditComponent(Component):
     redeemed: bool = False
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if (
+            ctx.target is None
+            or self.owner_id != str(ctx.target.id)
+            or not ctx.can_view_private_state
+        ):
+            return ()
         letter_state = "redeemed" if self.redeemed else "active"
         return (f"Letter of credit: {self.amount} ({letter_state}).",)
 
@@ -265,7 +289,11 @@ class SafeStorageComponent(Component):
     item_ids: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is None or self.owner_id != str(ctx.target.id):
+        if (
+            ctx.target is None
+            or self.owner_id != str(ctx.target.id)
+            or not ctx.can_view_private_state
+        ):
             return ()
         return (f"Safe storage: {len(self.item_ids)} item(s).",)
 
@@ -277,7 +305,11 @@ class DebtCollectorComponent(Component):
     pressure: int = 1
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is None or self.borrower_id != str(ctx.target.id):
+        if (
+            ctx.target is None
+            or self.borrower_id != str(ctx.target.id)
+            or not ctx.can_view_private_state
+        ):
             return ()
         return (f"Debt collector pressure: {self.pressure}.",)
 
@@ -362,6 +394,8 @@ class OwnsProperty(Edge):
     purchased_at_epoch: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
         if ctx.target is None:
             return ()
         return (f"Property owned: {_name(ctx.target)}.",)
@@ -461,7 +495,8 @@ class CustomSpellComponent(Component):
     creator_id: str | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if not ctx.can_view_private_state:
+            return ()
         return (f"Known custom spell: {self.spell_name} ({self.effect_type}).",)
 
 
@@ -506,7 +541,11 @@ class IngredientComponent(Component):
     identified_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        identified = ctx.target is not None and str(ctx.target.id) in self.identified_by
+        identified = (
+            ctx.target is not None
+            and str(ctx.target.id) in self.identified_by
+            and ctx.can_view_private_state
+        )
         state = "identified" if identified else "unknown"
         return (f"Ingredient nearby: {self.ingredient_name} ({state}).",)
 
@@ -735,6 +774,8 @@ class ConversationToneComponent(Component):
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if not self.last_reaction or (ctx.target is not None and ctx.entity.id == ctx.target.id):
+            return ()
+        if ctx.target is not None and not ctx.can_view_private_state:
             return ()
         return (
             f"{_name(ctx.entity)} took your last approach {self.last_reaction} "

@@ -252,7 +252,11 @@ class ContractComponent(Component):
                 f"Available {self.contract_type} contract: {_name(ctx.entity)} "
                 f"for {self.reward} credits.",
             )
-        if ctx.target is not None and self.accepted_by == str(ctx.target.id):
+        if (
+            ctx.target is not None
+            and self.accepted_by == str(ctx.target.id)
+            and ctx.can_view_private_state
+        ):
             return (f"{self.contract_type.title()} contract {_name(ctx.entity)}: {self.status}.",)
         return ()
 
@@ -306,7 +310,11 @@ class FirstContactComponent(Component):
     status: str = "uncontacted"
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is not None and str(ctx.target.id) in self.contacted_by:
+        if (
+            ctx.target is not None
+            and str(ctx.target.id) in self.contacted_by
+            and ctx.can_view_private_state
+        ):
             return ()
         return (f"First contact opportunity: {_name(ctx.entity)}.",)
 
@@ -351,7 +359,11 @@ class AlienArtifactComponent(Component):
     insight: str = ""
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is not None and str(ctx.target.id) in self.studied_by:
+        if (
+            ctx.target is not None
+            and str(ctx.target.id) in self.studied_by
+            and ctx.can_view_private_state
+        ):
             return ()
         return (f"Alien artifact ready for study: {_name(ctx.entity)}.",)
 

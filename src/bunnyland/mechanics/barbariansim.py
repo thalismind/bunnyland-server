@@ -246,7 +246,11 @@ class ThrallComponent(Component):
     bound_at_epoch: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is not None and self.master_id == str(ctx.target.id):
+        if (
+            ctx.target is not None
+            and self.master_id == str(ctx.target.id)
+            and ctx.can_view_private_state
+        ):
             return (f"Your thrall {entity_name(ctx.entity)} is set to {self.task}.",)
         if ctx.is_first_person:
             return (f"You are bound as a thrall (task: {self.task}).",)
@@ -262,7 +266,11 @@ class FollowerComponent(Component):
     since_epoch: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is not None and self.master_id == str(ctx.target.id):
+        if (
+            ctx.target is not None
+            and self.master_id == str(ctx.target.id)
+            and ctx.can_view_private_state
+        ):
             return (f"Your follower {entity_name(ctx.entity)} is ordered to {self.orders}.",)
         if ctx.is_first_person:
             return (f"You follow a leader (orders: {self.orders}).",)

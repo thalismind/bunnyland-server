@@ -192,7 +192,7 @@ from bunnyland.mechanics.voidsim import (
     install_voidsim,
     voidsim_fragments,
 )
-from bunnyland.prompts import ComponentPromptContext
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 60 * 60
 
@@ -1844,11 +1844,26 @@ def test_voidsim_component_prompt_fragments_cover_alternate_branches():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    observer = spawn_entity(world, [CharacterComponent()])
 
     def room_entity(name, kind, component):
         entity_id = _spawn_in_room_a(scenario, [IdentityComponent(name=name, kind=kind), component])
         entity = world.get_entity(entity_id)
-        return entity, ComponentPromptContext.for_entity(world, entity, target=character)
+        return entity, ComponentPromptContext.for_entity(
+            world,
+            entity,
+            perspective=self_ctx.perspective,
+            target=character,
+        )
+
+    def observer_ctx(entity):
+        return ComponentPromptContext.for_entity(
+            world,
+            entity,
+            perspective=PromptPerspective(viewer=observer),
+            target=character,
+        )
 
     source, source_ctx = room_entity(
         "warp crack", "hazard", ChaosInfluenceComponent(source_type="warp crack")
@@ -1914,6 +1929,9 @@ def test_voidsim_component_prompt_fragments_cover_alternate_branches():
         == ()
     )
     assert contacted.get_component(FirstContactComponent).prompt_fragments(contacted_ctx) == ()
+    assert contacted.get_component(FirstContactComponent).prompt_fragments(
+        observer_ctx(contacted)
+    ) == ("First contact opportunity: envoy.",)
     assert complete_matrix.get_component(TranslationMatrixComponent).prompt_fragments(
         complete_matrix_ctx
     ) == ("Translation matrix lexicon: complete.",)
@@ -1926,6 +1944,26 @@ def test_voidsim_component_prompt_fragments_cover_alternate_branches():
     assert artifact.get_component(AlienArtifactComponent).prompt_fragments(artifact_ctx) == (
         "Alien artifact ready for study: idol.",
     )
+    studied_artifact = world.get_entity(
+        _spawn_in_room_a(
+            scenario,
+            [
+                IdentityComponent(name="tablet", kind="artifact"),
+                AlienArtifactComponent(studied_by=(str(character.id),)),
+            ],
+        )
+    )
+    assert studied_artifact.get_component(AlienArtifactComponent).prompt_fragments(
+        ComponentPromptContext.for_entity(
+            world,
+            studied_artifact,
+            perspective=self_ctx.perspective,
+            target=character,
+        )
+    ) == ()
+    assert studied_artifact.get_component(AlienArtifactComponent).prompt_fragments(
+        observer_ctx(studied_artifact)
+    ) == ("Alien artifact ready for study: tablet.",)
 
 
 def test_voidsim_fragments_describe_chaos_wards_and_mutation_pressure():

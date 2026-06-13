@@ -87,7 +87,11 @@ class CyberpunkSiteComponent(Component):
             tags.append("public")
         if ctx.entity.has_component(RestrictedAreaComponent):
             tags.append("restricted")
-        if ctx.target is not None and ctx.target.has_relationship(InsideZone, ctx.entity.id):
+        if (
+            ctx.target is not None
+            and ctx.target.has_relationship(InsideZone, ctx.entity.id)
+            and ctx.can_view_private_state
+        ):
             tags.append("you are inside")
         suffix = f" ({', '.join(tags)})" if tags else ""
         return (f"Site {_name(ctx.entity)}: {self.site_type}{suffix}.",)
@@ -2331,7 +2335,11 @@ class ImplantComponent(Component):
     maintenance_due_epoch: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is not None and ctx.target.has_relationship(HasImplant, ctx.entity.id):
+        if (
+            ctx.target is not None
+            and ctx.target.has_relationship(HasImplant, ctx.entity.id)
+            and ctx.can_view_private_state
+        ):
             tags = [self.slot]
             if not self.active:
                 tags.append("offline")

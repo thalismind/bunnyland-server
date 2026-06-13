@@ -65,7 +65,11 @@ class MapMarkerComponent(Component):
     marked_at_epoch: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is None or str(ctx.target.id) not in self.marked_by:
+        if (
+            ctx.target is None
+            or str(ctx.target.id) not in self.marked_by
+            or not ctx.can_view_private_state
+        ):
             return ()
         return (f"Map marker: {self.label} ({self.marker_type}).",)
 
@@ -97,9 +101,10 @@ class QuestComponent(Component):
             self.status == "active"
             and ctx.target is not None
             and str(ctx.target.id) in self.accepted_by
+            and ctx.can_view_private_state
         ):
             return (f"Active quest: {self.title}.",)
-        if self.status == "declined":
+        if self.status == "declined" and ctx.can_view_private_state:
             return (f"Declined quest: {self.title}.",)
         return ()
 
@@ -112,7 +117,11 @@ class QuestStageComponent(Component):
     branch: str = ""
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is None or str(ctx.target.id) not in self.tracked_by:
+        if (
+            ctx.target is None
+            or str(ctx.target.id) not in self.tracked_by
+            or not ctx.can_view_private_state
+        ):
             return ()
         branch = f", branch {self.branch}" if self.branch else ""
         return (f"Tracked quest stage {self.stage} for {self.quest_id}{branch}.",)
@@ -173,7 +182,8 @@ class PerkComponent(Component):
     min_level: int = 2
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if not ctx.can_view_private_state:
+            return ()
         return (f"Perk unlocked: {self.name}.",)
 
 
@@ -183,6 +193,8 @@ class MemberOf(Edge):
     since_epoch: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
         if ctx.target is None:
             return ()
         faction_name = (
@@ -235,7 +247,8 @@ class WordOfPowerComponent(Component):
     min_skill_level: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if not ctx.can_view_private_state:
+            return ()
         return (f"Word of power known: {self.name}.",)
 
 
@@ -291,7 +304,11 @@ class LoreBookComponent(Component):
     read_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is not None and str(ctx.target.id) in self.read_by:
+        if (
+            ctx.target is not None
+            and str(ctx.target.id) in self.read_by
+            and ctx.can_view_private_state
+        ):
             return ()
         if self.skill_name:
             return (f"Unread skill book nearby: {self.title} ({self.skill_name}).",)
@@ -358,8 +375,12 @@ class SpellComponent(Component):
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if ctx.target is not None:
             if ctx.target.has_relationship(KnowsSpell, ctx.entity.id):
-                return ()
+                if not ctx.can_view_private_state:
+                    return ()
+                return (f"Spell learned: {self.name}.",)
             return (f"Learnable spell nearby: {self.name}.",)
+        if not ctx.can_view_private_state:
+            return ()
         return (f"Spell learned: {self.name}.",)
 
 
@@ -393,7 +414,11 @@ class ArtifactComponent(Component):
     identified_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        identified = ctx.target is not None and str(ctx.target.id) in self.identified_by
+        identified = (
+            ctx.target is not None
+            and str(ctx.target.id) in self.identified_by
+            and ctx.can_view_private_state
+        )
         state = "identified" if identified else "unidentified"
         return (f"Artifact nearby: {self.name} ({self.charges} charges, {state}).",)
 
@@ -410,7 +435,11 @@ class VoiceInscriptionComponent(Component):
     studied_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if ctx.target is not None and str(ctx.target.id) in self.studied_by:
+        if (
+            ctx.target is not None
+            and str(ctx.target.id) in self.studied_by
+            and ctx.can_view_private_state
+        ):
             return ()
         return (f"Voice inscription nearby: {_name(ctx.entity)}.",)
 
@@ -2330,7 +2359,7 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         spell = world.get_entity(spell_id)
         if spell.has_component(SpellComponent):
             spell_ctx = ComponentPromptContext.for_entity(
-                world, spell, perspective=ctx.perspective
+                world, spell, perspective=ctx.perspective, target=character
             )
             lines.extend(spell.get_component(SpellComponent).prompt_fragments(spell_ctx))
     if character.has_component(MagickaComponent):
@@ -2372,6 +2401,10 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
             VoiceInscriptionComponent,
         ):
             if entity.has_component(component_type):
+                if component_type is SpellComponent and character.has_relationship(
+                    KnowsSpell, entity.id
+                ):
+                    continue
                 lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     return sorted(lines)
 

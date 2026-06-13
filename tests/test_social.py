@@ -162,9 +162,17 @@ def test_social_bond_prompt_fragments_use_context_target_and_perspective():
         perspective=PromptPerspective(viewer=character, perspective="third-person"),
         target=target,
     )
+    observer = spawn_entity(world, [CharacterComponent()])
+    observer_ctx = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=observer),
+        target=target,
+    )
 
     assert SocialBond(affinity=0.5).prompt_fragments(first) == ("I am fond of Hazel.",)
     assert SocialBond(familiarity=0.5).prompt_fragments(third) == ("They know Hazel.",)
+    assert SocialBond(affinity=0.5).prompt_fragments(observer_ctx) == ()
     assert SocialBond(affinity=0.1).prompt_fragments(first) == ()
 
 

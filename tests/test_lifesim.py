@@ -2437,6 +2437,12 @@ def test_lifesim_component_prompt_fragments_respect_visibility_and_targets():
         perspective=self_ctx.perspective,
         target=character,
     )
+    external_home_ctx = ComponentPromptContext.for_entity(
+        world,
+        room,
+        perspective=external_ctx.perspective,
+        target=character,
+    )
 
     assert LifeStageComponent(stage="adult").prompt_fragments(self_ctx) == (
         "Your life stage is adult.",
@@ -2445,7 +2451,21 @@ def test_lifesim_component_prompt_fragments_respect_visibility_and_targets():
     assert room.get_component(HomeComponent).prompt_fragments(home_ctx) == (
         "Your home is Mosslit Burrow.",
     )
+    assert room.get_component(HomeComponent).prompt_fragments(external_home_ctx) == ()
     assert WhimComponent(want="garden").prompt_fragments(home_ctx) == ("Current whim: garden.",)
+    assert WhimComponent(want="garden").prompt_fragments(external_home_ctx) == ()
+    assert BillComponent(amount=12, reason="rent").prompt_fragments(home_ctx) == ("rent (12)",)
+    assert BillComponent(amount=12, reason="rent").prompt_fragments(external_home_ctx) == ()
+    assert BusinessOwnerComponent(name="Tea Cart").prompt_fragments(home_ctx) == (
+        "You own Tea Cart; 0 sales.",
+    )
+    assert BusinessOwnerComponent(name="Tea Cart").prompt_fragments(external_home_ctx) == ()
+    assert RoutineComponent(activity="garden", next_due_epoch=9).prompt_fragments(home_ctx) == (
+        "Routine: garden due at epoch 9.",
+    )
+    assert RoutineComponent(activity="garden", next_due_epoch=9).prompt_fragments(
+        external_home_ctx
+    ) == ()
 
 
 def test_lifesim_fragments_describe_aspiration_career_funds_routine_and_jealousy():

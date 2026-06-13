@@ -38,6 +38,8 @@ class SocialBond(Edge):
     familiarity: float = 0.0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
         if ctx.target is None:
             return ()
         descriptor = _describe_bond(self, ctx.perspective.perspective)

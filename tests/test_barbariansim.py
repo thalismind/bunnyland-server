@@ -1716,6 +1716,12 @@ def test_barbariansim_component_prompt_fragments_cover_self_and_target_context()
         perspective=self_ctx.perspective,
         target=master,
     )
+    external_thrall_ctx = ComponentPromptContext.for_entity(
+        world,
+        thrall,
+        perspective=external_ctx.perspective,
+        target=master,
+    )
     weapon_ctx = ComponentPromptContext.for_entity(world, weapon)
 
     assert StaminaComponent(current=4, maximum=10).prompt_fragments(self_ctx) == (
@@ -1725,6 +1731,7 @@ def test_barbariansim_component_prompt_fragments_cover_self_and_target_context()
     assert thrall.get_component(ThrallComponent).prompt_fragments(thrall_ctx) == (
         "Your thrall Captive is set to haul.",
     )
+    assert thrall.get_component(ThrallComponent).prompt_fragments(external_thrall_ctx) == ()
     assert weapon.get_component(WeaponComponent).prompt_fragments(weapon_ctx) == (
         "Reachable weapon: axe (7.0 damage, durability 3/5).",
     )

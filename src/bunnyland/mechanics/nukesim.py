@@ -244,7 +244,11 @@ class SampleComponent(Component):
     studied_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        studied = ctx.target is not None and str(ctx.target.id) in self.studied_by
+        studied = (
+            ctx.target is not None
+            and str(ctx.target.id) in self.studied_by
+            and ctx.can_view_private_state
+        )
         state = "studied" if studied else "unstudied"
         return (f"Sample {_name(ctx.entity)}: {self.sample_type} ({state}).",)
 

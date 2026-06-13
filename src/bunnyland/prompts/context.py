@@ -105,6 +105,13 @@ class ComponentPromptContext:
         """Whether this context describes the prompt viewer's own entity."""
         return self.viewer is None or self.viewer.id == self.entity.id
 
+    @property
+    def can_view_private_state(self) -> bool:
+        """Whether private state in this context is scoped to the prompt viewer."""
+        if self.is_first_person:
+            return True
+        return self.target is not None and self.viewer.id == self.target.id
+
     def room_siblings(self, component_type: type[Component] | None = None) -> tuple[Entity, ...]:
         if component_type in self._sibling_cache:
             return self._sibling_cache[component_type]

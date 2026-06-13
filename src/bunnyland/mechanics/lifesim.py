@@ -135,7 +135,8 @@ class BillComponent(Component):
     paid_at_epoch: int | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if not ctx.can_view_private_state:
+            return ()
         if self.paid_at_epoch is not None:
             return ()
         return (f"{self.reason} ({self.amount})",)
@@ -170,7 +171,8 @@ class BusinessOwnerComponent(Component):
     promoted: bool = False
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if not ctx.can_view_private_state:
+            return ()
         return (f"You own {self.name}; {self.sales_count} sales.",)
 
 
@@ -197,6 +199,8 @@ class HomeComponent(Component):
     household_id: str | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.can_view_private_state:
+            return ()
         if ctx.target is None or self.owner_id != str(ctx.target.id):
             return ()
         if not ctx.entity.has_component(RoomComponent):
@@ -211,6 +215,8 @@ class RoomClaimComponent(Component):
     claimed_at_epoch: int
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.can_view_private_state:
+            return ()
         if ctx.target is None or self.claimed_by_id != str(ctx.target.id):
             return ()
         if not ctx.entity.has_component(RoomComponent):
@@ -255,7 +261,8 @@ class RoutineComponent(Component):
     last_completed_epoch: int | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if not ctx.can_view_private_state:
+            return ()
         return (f"Routine: {self.activity} due at epoch {self.next_due_epoch}.",)
 
 
@@ -310,7 +317,8 @@ class WhimComponent(Component):
     completed_at_epoch: int | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
+        if not ctx.can_view_private_state:
+            return ()
         if self.completed_at_epoch is not None:
             return ()
         return (f"Current whim: {self.want}.",)
@@ -395,6 +403,8 @@ class PartnerOf(Edge):
     status: str = "together"
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
         if self.status != "together" or ctx.target is None:
             return ()
         return (f"You are partners with {entity_name(ctx.target, 'someone')}.",)
@@ -406,6 +416,8 @@ class RelationshipStatus(Edge):
     since_epoch: int
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
         if ctx.target is None:
             return ()
         return (f"{entity_name(ctx.target, 'someone')} is your {self.status}.",)
