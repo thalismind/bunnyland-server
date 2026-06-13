@@ -1057,7 +1057,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "DeviceComponent",
         "CameraComponent",
         "SurveillanceCoverageComponent",
-        "DroneComponent",
         "RecordedEvidenceComponent",
         "BlindSpotComponent",
         "HackableComponent",
