@@ -28,7 +28,14 @@ from ..core.components import (
     SuspendedComponent,
     TemperatureComponent,
 )
-from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component, spawn_entity
+from ..core.ecs import (
+    container_of,
+    entity_name,
+    parse_entity_id,
+    reachable_ids,
+    replace_component,
+    spawn_entity,
+)
 from ..core.edges import ContainmentMode, Contains, HasInjury, Wearing
 from ..core.events import (
     CharacterAttackedEvent,
@@ -42,6 +49,7 @@ from ..core.events import (
     RaidStartedEvent,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..prompts import ComponentPromptContext
 from .policy import BoundaryTag, PolicyGate
 
 UNARMED_DAMAGE = 5.0
@@ -99,6 +107,18 @@ class TemperatureExposureComponent(Component):
     cold_danger: bool = False
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        lines: list[str] = []
+        if self.heat or self.cold:
+            lines.append(f"Exposure: heat {self.heat:g}, cold {self.cold:g}.")
+        if self.heat_danger:
+            lines.append("You are suffering dangerous heat exposure.")
+        if self.cold_danger:
+            lines.append("You are suffering dangerous cold exposure.")
+        return tuple(lines)
+
 
 @dataclass(frozen=True)
 class PoisonComponent(Component):
@@ -106,11 +126,21 @@ class PoisonComponent(Component):
     damage_per_hour: float = 1.0
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Poisoned: severity {self.severity:g}.",)
+
 
 @dataclass(frozen=True)
 class CorruptionComponent(Component):
     amount: float = 0.0
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Corruption: {self.amount:g}.",)
 
 
 @dataclass(frozen=True)
@@ -118,6 +148,11 @@ class StaminaComponent(Component):
     current: float = 10.0
     maximum: float = 10.0
     regen_per_hour: float = 4.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Stamina: {self.current:g}/{self.maximum:g}.",)
 
 
 @dataclass(frozen=True)
@@ -133,10 +168,25 @@ class WeaponComponent(Component):
     damage_type: str = "blunt"
     lethal_capable: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        durability = ""
+        if ctx.entity.has_component(DurabilityComponent):
+            item_durability = ctx.entity.get_component(DurabilityComponent)
+            status = "broken" if item_durability.broken else "durability"
+            durability = f", {status} {item_durability.current:g}/{item_durability.maximum:g}"
+        return (
+            f"Reachable weapon: {self.damage_type} ({self.damage} damage{durability}).",
+        )
+
 
 @dataclass(frozen=True)
 class ArmorComponent(Component):
     rating: float = 0.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Your armor rating is {self.rating}.",)
 
 
 @dataclass(frozen=True)
@@ -144,11 +194,20 @@ class DefendingComponent(Component):
     started_at_epoch: int
     reduction: float = DEFEND_REDUCTION
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return ("You are defending yourself.",)
+
 
 @dataclass(frozen=True)
 class FortificationComponent(Component):
     rating: float = 1.0
     durability: float = 10.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Reachable fortification: rating {self.rating}, durability {self.durability}.",)
 
 
 @dataclass(frozen=True)
@@ -157,12 +216,20 @@ class BaseClaimComponent(Component):
     clan: str = ""
     claimed_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        clan = f" for {self.clan}" if self.clan else ""
+        return (f"Base claim on {entity_name(ctx.entity)}{clan}.",)
+
 
 @dataclass(frozen=True)
 class TrapComponent(Component):
     damage: float = 5.0
     armed: bool = True
     placed_by: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "armed" if self.armed else "disarmed"
+        return (f"Trap {entity_name(ctx.entity)}: {state}, {self.damage:g} damage.",)
 
 
 @dataclass(frozen=True)
@@ -178,6 +245,13 @@ class ThrallComponent(Component):
     loyalty: float = 0.0
     bound_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and self.master_id == str(ctx.target.id):
+            return (f"Your thrall {entity_name(ctx.entity)} is set to {self.task}.",)
+        if ctx.is_first_person:
+            return (f"You are bound as a thrall (task: {self.task}).",)
+        return ()
+
 
 @dataclass(frozen=True)
 class FollowerComponent(Component):
@@ -187,6 +261,13 @@ class FollowerComponent(Component):
     orders: str = "follow"
     since_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and self.master_id == str(ctx.target.id):
+            return (f"Your follower {entity_name(ctx.entity)} is ordered to {self.orders}.",)
+        if ctx.is_first_person:
+            return (f"You follow a leader (orders: {self.orders}).",)
+        return ()
+
 
 @dataclass(frozen=True)
 class SurvivalGapComponent(Component):
@@ -194,6 +275,11 @@ class SurvivalGapComponent(Component):
     severity: float = 1.0
     required_resource: str = ""
     bridged_by: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "bridged" if self.bridged_by else "open"
+        return (f"Survival gap: {self.gap_type} severity {self.severity:g} ({state}).",)
 
 
 @dataclass(frozen=True)
@@ -203,12 +289,22 @@ class BuildingComponent(Component):
     maximum_integrity: float = 10.0
     demolished: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "demolished" if self.demolished else "standing"
+        return (
+            f"Building {entity_name(ctx.entity)}: level {self.level}, "
+            f"integrity {self.integrity:g}/{self.maximum_integrity:g}, {state}.",
+        )
+
 
 @dataclass(frozen=True)
 class SiegeReadinessComponent(Component):
     score: float = 0.0
     prepared_by: str | None = None
     prepared_at_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Siege readiness at {entity_name(ctx.entity)}: {self.score:g}.",)
 
 
 @dataclass(frozen=True)
@@ -218,11 +314,19 @@ class PurgeWaveComponent(Component):
     active: bool = False
     started_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "active" if self.active else "quiet"
+        return (f"Purge wave at {entity_name(ctx.entity)}: wave {self.wave}, {state}.",)
+
 
 @dataclass(frozen=True)
 class ShrineComponent(Component):
     deity: str = "the wild"
     attunement: float = 0.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Shrine nearby: {self.deity} attunement {self.attunement:g}.",)
 
 
 @dataclass(frozen=True)
@@ -233,12 +337,21 @@ class RitualComponent(Component):
     corruption_cost: float = 0.0
     performed_by: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Ritual nearby: {self.ritual_type}.",)
+
 
 @dataclass(frozen=True)
 class BlessingComponent(Component):
     name: str
     source_id: str = ""
     expires_at_epoch: int | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Blessing: {self.name}.",)
 
 
 @dataclass(frozen=True)
@@ -247,12 +360,21 @@ class CurseComponent(Component):
     source_id: str = ""
     severity: float = 1.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Curse: {self.name} severity {self.severity:g}.",)
+
 
 @dataclass(frozen=True)
 class DangerZoneComponent(Component):
     zone_type: str = "ruin"
     danger_rating: float = 1.0
     explored_by: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Danger zone: {self.zone_type} rating {self.danger_rating:g}.",)
 
 
 @dataclass(frozen=True)
@@ -261,10 +383,19 @@ class BossComponent(Component):
     defeated: bool = False
     defeated_by: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "defeated" if self.defeated else "undefeated"
+        return (f"Boss nearby: {self.name} ({state}).",)
+
 
 @dataclass(frozen=True)
 class KeyComponent(Component):
     key_name: str
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Key nearby: {self.key_name}.",)
 
 
 @dataclass(frozen=True)
@@ -274,16 +405,30 @@ class TreasureComponent(Component):
     key_name: str = ""
     claimed_by: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "locked" if self.locked else "unlocked"
+        return (f"Treasure nearby: {self.treasure_type} ({state}).",)
+
 
 @dataclass(frozen=True)
 class ClimbingSkillComponent(Component):
     level: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Climbing skill: {self.level}.",)
 
 
 @dataclass(frozen=True)
 class ClimbingGateComponent(Component):
     required_level: int = 1
     opened_by: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Climbing gate nearby: requires level {self.required_level}.",)
 
 
 class StaminaChangedEvent(DomainEvent):
@@ -469,12 +614,6 @@ def _barbarian_event_base(epoch: int, **kwargs) -> dict:
     base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
     base.update(kwargs)
     return base
-
-
-def _name(entity) -> str:
-    if entity.has_component(IdentityComponent):
-        return entity.get_component(IdentityComponent).name
-    return str(entity.id)
 
 
 class StaminaRegenSystem(System):
@@ -2215,124 +2354,52 @@ def ensure_barbariansim_policy(actor) -> BarbarianSimPolicyComponent:
 
 def barbariansim_fragments(world: World, character) -> list[str]:
     lines: list[str] = []
-    if character.has_component(StaminaComponent):
-        stamina = character.get_component(StaminaComponent)
-        lines.append(f"Stamina: {stamina.current:g}/{stamina.maximum:g}.")
-    if character.has_component(TemperatureExposureComponent):
-        exposure = character.get_component(TemperatureExposureComponent)
-        if exposure.heat or exposure.cold:
-            lines.append(f"Exposure: heat {exposure.heat:g}, cold {exposure.cold:g}.")
-        if exposure.heat_danger:
-            lines.append("You are suffering dangerous heat exposure.")
-        if exposure.cold_danger:
-            lines.append("You are suffering dangerous cold exposure.")
-    if character.has_component(PoisonComponent):
-        poison = character.get_component(PoisonComponent)
-        lines.append(f"Poisoned: severity {poison.severity:g}.")
-    if character.has_component(CorruptionComponent):
-        corruption = character.get_component(CorruptionComponent)
-        lines.append(f"Corruption: {corruption.amount:g}.")
-    if character.has_component(DefendingComponent):
-        lines.append("You are defending yourself.")
-    if character.has_component(ArmorComponent):
-        lines.append(f"Your armor rating is {character.get_component(ArmorComponent).rating}.")
-    if character.has_component(ThrallComponent):
-        task = character.get_component(ThrallComponent).task
-        lines.append(f"You are bound as a thrall (task: {task}).")
-    if character.has_component(FollowerComponent):
-        orders = character.get_component(FollowerComponent).orders
-        lines.append(f"You follow a leader (orders: {orders}).")
-    if character.has_component(BlessingComponent):
-        lines.append(f"Blessing: {character.get_component(BlessingComponent).name}.")
-    if character.has_component(CurseComponent):
-        curse = character.get_component(CurseComponent)
-        lines.append(f"Curse: {curse.name} severity {curse.severity:g}.")
-    if character.has_component(ClimbingSkillComponent):
-        lines.append(f"Climbing skill: {character.get_component(ClimbingSkillComponent).level}.")
-    character_id = str(character.id)
+    ctx = ComponentPromptContext.for_entity(world, character)
+    for component_type in (
+        StaminaComponent,
+        TemperatureExposureComponent,
+        PoisonComponent,
+        CorruptionComponent,
+        DefendingComponent,
+        ArmorComponent,
+        ThrallComponent,
+        FollowerComponent,
+        BlessingComponent,
+        CurseComponent,
+        ClimbingSkillComponent,
+    ):
+        if character.has_component(component_type):
+            lines.extend(character.get_component(component_type).prompt_fragments(ctx))
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        if _master_of(entity) == character_id:
-            name = entity.get_component(IdentityComponent).name
-            if entity.has_component(ThrallComponent):
-                task = entity.get_component(ThrallComponent).task
-                lines.append(f"Your thrall {name} is set to {task}.")
-            else:
-                orders = entity.get_component(FollowerComponent).orders
-                lines.append(f"Your follower {name} is ordered to {orders}.")
-        if entity.has_component(WeaponComponent):
-            weapon = entity.get_component(WeaponComponent)
-            durability = ""
-            if entity.has_component(DurabilityComponent):
-                item_durability = entity.get_component(DurabilityComponent)
-                status = "broken" if item_durability.broken else "durability"
-                durability = f", {status} {item_durability.current:g}/{item_durability.maximum:g}"
-            lines.append(
-                f"Reachable weapon: {weapon.damage_type} ({weapon.damage} damage{durability})."
-            )
-        if entity.has_component(FortificationComponent):
-            fort = entity.get_component(FortificationComponent)
-            lines.append(
-                f"Reachable fortification: rating {fort.rating}, durability {fort.durability}."
-            )
-        if entity.has_component(BaseClaimComponent):
-            claim = entity.get_component(BaseClaimComponent)
-            clan = f" for {claim.clan}" if claim.clan else ""
-            base_name = (
-                entity.get_component(IdentityComponent).name
-                if entity.has_component(IdentityComponent)
-                else str(entity.id)
-            )
-            lines.append(f"Base claim on {base_name}{clan}.")
-        if entity.has_component(TrapComponent):
-            trap = entity.get_component(TrapComponent)
-            state = "armed" if trap.armed else "disarmed"
-            trap_name = (
-                entity.get_component(IdentityComponent).name
-                if entity.has_component(IdentityComponent)
-                else str(entity.id)
-            )
-            lines.append(f"Trap {trap_name}: {state}, {trap.damage:g} damage.")
-        if entity.has_component(SurvivalGapComponent):
-            gap = entity.get_component(SurvivalGapComponent)
-            state = "bridged" if gap.bridged_by else "open"
-            lines.append(f"Survival gap: {gap.gap_type} severity {gap.severity:g} ({state}).")
-        if entity.has_component(BuildingComponent):
-            building = entity.get_component(BuildingComponent)
-            state = "demolished" if building.demolished else "standing"
-            lines.append(
-                f"Building {_name(entity)}: level {building.level}, "
-                f"integrity {building.integrity:g}/{building.maximum_integrity:g}, {state}."
-            )
-        if entity.has_component(SiegeReadinessComponent):
-            readiness = entity.get_component(SiegeReadinessComponent)
-            lines.append(f"Siege readiness at {_name(entity)}: {readiness.score:g}.")
-        if entity.has_component(PurgeWaveComponent):
-            purge = entity.get_component(PurgeWaveComponent)
-            state = "active" if purge.active else "quiet"
-            lines.append(f"Purge wave at {_name(entity)}: wave {purge.wave}, {state}.")
-        if entity.has_component(ShrineComponent):
-            shrine = entity.get_component(ShrineComponent)
-            lines.append(f"Shrine nearby: {shrine.deity} attunement {shrine.attunement:g}.")
-        if entity.has_component(RitualComponent):
-            ritual = entity.get_component(RitualComponent)
-            lines.append(f"Ritual nearby: {ritual.ritual_type}.")
-        if entity.has_component(DangerZoneComponent):
-            zone = entity.get_component(DangerZoneComponent)
-            lines.append(f"Danger zone: {zone.zone_type} rating {zone.danger_rating:g}.")
-        if entity.has_component(BossComponent):
-            boss = entity.get_component(BossComponent)
-            state = "defeated" if boss.defeated else "undefeated"
-            lines.append(f"Boss nearby: {boss.name} ({state}).")
-        if entity.has_component(TreasureComponent):
-            treasure = entity.get_component(TreasureComponent)
-            state = "locked" if treasure.locked else "unlocked"
-            lines.append(f"Treasure nearby: {treasure.treasure_type} ({state}).")
-        if entity.has_component(KeyComponent):
-            lines.append(f"Key nearby: {entity.get_component(KeyComponent).key_name}.")
-        if entity.has_component(ClimbingGateComponent):
-            gate = entity.get_component(ClimbingGateComponent)
-            lines.append(f"Climbing gate nearby: requires level {gate.required_level}.")
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        if _master_of(entity) == str(character.id):
+            for component_type in (ThrallComponent, FollowerComponent):
+                if entity.has_component(component_type):
+                    lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
+        for component_type in (
+            WeaponComponent,
+            FortificationComponent,
+            BaseClaimComponent,
+            TrapComponent,
+            SurvivalGapComponent,
+            BuildingComponent,
+            SiegeReadinessComponent,
+            PurgeWaveComponent,
+            ShrineComponent,
+            RitualComponent,
+            DangerZoneComponent,
+            BossComponent,
+            TreasureComponent,
+            KeyComponent,
+            ClimbingGateComponent,
+        ):
+            if entity.has_component(component_type):
+                lines.extend(
+                    entity.get_component(component_type).prompt_fragments(entity_ctx)
+                )
     return sorted(lines)
 
 

@@ -132,6 +132,7 @@ from bunnyland.mechanics.storyteller import (
     StorytellerComponent,
     StorytellerConsequence,
 )
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
 
@@ -1681,6 +1682,52 @@ def test_barbariansim_fragments_show_defense_armor_and_weapons():
     assert any("Reachable weapon" in line for line in fragments)
     assert any("durability 2/2" in line for line in fragments)
     assert any("Reachable fortification" in line for line in fragments)
+
+
+def test_barbariansim_component_prompt_fragments_cover_self_and_target_context():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    master = world.get_entity(scenario.character)
+    viewer = spawn_entity(world, [CharacterComponent()])
+    thrall = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Captive", kind="character"),
+            CharacterComponent(),
+            ThrallComponent(master_id=str(master.id), task="haul"),
+        ],
+    )
+    weapon = spawn_entity(
+        world,
+        [
+            WeaponComponent(damage=7, damage_type="axe"),
+            DurabilityComponent(current=3, maximum=5),
+        ],
+    )
+    self_ctx = ComponentPromptContext.for_entity(world, master)
+    external_ctx = ComponentPromptContext.for_entity(
+        world,
+        master,
+        perspective=PromptPerspective(viewer=viewer),
+    )
+    thrall_ctx = ComponentPromptContext.for_entity(
+        world,
+        thrall,
+        perspective=self_ctx.perspective,
+        target=master,
+    )
+    weapon_ctx = ComponentPromptContext.for_entity(world, weapon)
+
+    assert StaminaComponent(current=4, maximum=10).prompt_fragments(self_ctx) == (
+        "Stamina: 4/10.",
+    )
+    assert StaminaComponent(current=4, maximum=10).prompt_fragments(external_ctx) == ()
+    assert thrall.get_component(ThrallComponent).prompt_fragments(thrall_ctx) == (
+        "Your thrall Captive is set to haul.",
+    )
+    assert weapon.get_component(WeaponComponent).prompt_fragments(weapon_ctx) == (
+        "Reachable weapon: axe (7.0 damage, durability 3/5).",
+    )
 
 
 def test_generate_raid_spawn_specs_builds_swarm_with_few_leaders():
