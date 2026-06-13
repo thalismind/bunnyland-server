@@ -57,6 +57,7 @@ from ..core.events import (
     event_base,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..prompts import ComponentPromptContext
 from .consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 
 SECONDS_PER_DAY = 24 * 60 * 60
@@ -74,6 +75,10 @@ class ResourceNodeComponent(Component):
     current: int
     maximum: int
     regen_per_day: float = 0.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby resource: {self.resource_type} ({self.current} available).",)
 
 
 @dataclass(frozen=True)
@@ -101,11 +106,19 @@ class HaulableComponent(Component):
 class ForbiddenComponent(Component):
     forbidden: bool = True
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        name = _identity_name(ctx.entity, "something")
+        return (f"{name} is forbidden for hauling.",)
+
 
 @dataclass(frozen=True)
 class WorkstationComponent(Component):
     station_type: str
     quality: float = 1.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby workstation: {self.station_type}.",)
 
 
 @dataclass(frozen=True)
@@ -117,6 +130,10 @@ class RecipeComponent(Component):
     action_cost: int = 1
     output_entities: dict[str, dict[str, object]] = field(default_factory=dict)
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"You know the {self.recipe_id} recipe.",)
+
 
 @dataclass(frozen=True)
 class JobComponent(Component):
@@ -124,6 +141,13 @@ class JobComponent(Component):
     priority: int
     assigned: bool = False
     completed: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.completed:
+            return ()
+        status = "assigned" if self.assigned else "available"
+        return (f"Nearby job: {self.job_type} priority {self.priority} ({status}).",)
 
 
 @dataclass(frozen=True)
@@ -133,10 +157,23 @@ class JobBillComponent(Component):
     work_done: float = 0.0
     suspended: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (
+            f"Nearby job bill: {self.recipe_id} "
+            f"{self.work_done:.1f}/{self.work_required:.1f} work.",
+        )
+
 
 @dataclass(frozen=True)
 class WorkPriorityComponent(Component):
     priorities: dict[str, int] = field(default_factory=dict)
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or not self.priorities:
+            return ()
+        parts = [f"{work}:{priority}" for work, priority in sorted(self.priorities.items())]
+        return ("Work priorities: " + ", ".join(parts) + ".",)
 
 
 @dataclass(frozen=True)
@@ -151,10 +188,27 @@ class PawnProfileComponent(Component):
     passions: dict[str, int] = field(default_factory=dict)
     expectations: str = "low"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        lines: list[str] = []
+        if self.backstory:
+            lines.append(f"Backstory: {self.backstory}.")
+        if self.passions:
+            parts = [f"{work}:{level}" for work, level in sorted(self.passions.items())]
+            lines.append("Passions: " + ", ".join(parts) + ".")
+        lines.append(f"Pawn expectations: {self.expectations}.")
+        return tuple(lines)
+
 
 @dataclass(frozen=True)
 class AllowedAreaComponent(Component):
     room_ids: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or not self.room_ids:
+            return ()
+        return ("Allowed work area rooms: " + ", ".join(sorted(self.room_ids)) + ".",)
 
 
 @dataclass(frozen=True)
@@ -179,12 +233,20 @@ class RoomQualityComponent(Component):
     impressiveness: float = 0.0
     updated_at_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Room quality: {self.role}, impressiveness {self.impressiveness:.1f}.",)
+
 
 @dataclass(frozen=True)
 class ColonyWealthComponent(Component):
     wealth: float = 0.0
     expectations: str = "low"
     updated_at_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Colony wealth is {self.wealth:.0f}; expectations are {self.expectations}.",)
 
 
 @dataclass(frozen=True)
@@ -194,6 +256,14 @@ class PrisonerComponent(Component):
     recruitment_progress: float = 0.0
     policy: str = "hold"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (
+            f"Prisoner policy: {self.policy}, recruitment "
+            f"{self.recruitment_progress:.1f}/{self.recruitment_difficulty:.1f}.",
+        )
+
 
 @dataclass(frozen=True)
 class ResearchProjectComponent(Component):
@@ -201,6 +271,11 @@ class ResearchProjectComponent(Component):
     work_required: float
     work_done: float = 0.0
     unlocked: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "unlocked" if self.unlocked else f"{self.work_done:.1f}/{self.work_required:.1f}"
+        return (f"Research project: {self.project_id} ({state}).",)
 
 
 @dataclass(frozen=True)
@@ -214,6 +289,12 @@ class ColonyIncidentComponent(Component):
     incident_type: str
     severity: int = 1
     resolved: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.resolved:
+            return ()
+        return (f"Colony incident: {self.incident_type} severity {self.severity}.",)
 
 
 @dataclass(frozen=True)
@@ -229,6 +310,12 @@ class TradeOfferComponent(Component):
     wants: dict[str, int] = field(default_factory=dict)
     goodwill_delta: float = 0.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        gives = ", ".join(f"{qty} {kind}" for kind, qty in sorted(self.gives.items()))
+        wants = ", ".join(f"{qty} {kind}" for kind, qty in sorted(self.wants.items()))
+        return (f"Trade offer from {self.faction_id}: gives {gives}; wants {wants}.",)
+
 
 @dataclass(frozen=True)
 class CaravanComponent(Component):
@@ -238,16 +325,30 @@ class CaravanComponent(Component):
     departed_at_epoch: int = 0
     returned: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.returned:
+            return ()
+        return (f"Caravan bound for {self.destination}.",)
+
 
 @dataclass(frozen=True)
 class MedicineComponent(Component):
     quality: float = 1.0
     uses: int = 1
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby medicine: quality {self.quality:.2f}, uses {self.uses}.",)
+
 
 @dataclass(frozen=True)
 class MedicalBedComponent(Component):
     quality: float = 1.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return ("Nearby medical bed is available.",)
 
 
 @dataclass(frozen=True)
@@ -255,12 +356,22 @@ class BedRestComponent(Component):
     started_at_epoch: int
     bed_id: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return ("You are on medical bed rest.",)
+
 
 @dataclass(frozen=True)
 class InfectionComponent(Component):
     severity: float = 0.0
     immunity: float = 0.0
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Infection: severity {self.severity:.2f}, immunity {self.immunity:.2f}.",)
 
 
 @dataclass(frozen=True)
@@ -270,6 +381,13 @@ class BodyPartHealthComponent(Component):
     missing: bool = False
     prosthetic: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "missing" if self.missing else f"health {self.health:.1f}"
+        if self.prosthetic:
+            state += f", prosthetic {self.prosthetic}"
+        return (f"Body part {self.part}: {state}.",)
+
 
 @dataclass(frozen=True)
 class SurgeryBillComponent(Component):
@@ -278,6 +396,12 @@ class SurgeryBillComponent(Component):
     prosthetic_item_id: str | None = None
     work_required: float = 10.0
     completed: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.completed:
+            return ()
+        return (f"Surgery bill: {self.operation} {self.part}.",)
 
 
 @dataclass(frozen=True)
@@ -291,6 +415,11 @@ class MentalStateComponent(Component):
     state: str = "stable"
     reason: str = ""
     expires_at_epoch: int | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or self.state == "stable":
+            return ()
+        return (f"Mental state: {self.state} ({self.reason}).",)
 
 
 @dataclass(frozen=True)
@@ -710,6 +839,12 @@ def _same_room_or_self(world: World, left_id: EntityId, right_id: EntityId) -> b
 
 def _resource_name(resource_type: str, quantity: int) -> str:
     return f"{resource_type} x{quantity}"
+
+
+def _identity_name(entity: Entity, fallback: str) -> str:
+    if entity.has_component(IdentityComponent):
+        return entity.get_component(IdentityComponent).name
+    return fallback
 
 
 def _parse_types(raw: object) -> tuple[str, ...]:
@@ -2087,77 +2222,59 @@ class ReleaseOwnershipHandler:
 
 def colonysim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
+    ctx = ComponentPromptContext.for_entity(world, character)
     inventory = []
-    for item_id in contents(character):
-        item = world.get_entity(item_id)
-        if item.has_component(ResourceStackComponent):
-            stack = item.get_component(ResourceStackComponent)
-            inventory.append(f"{stack.quantity} {stack.resource_type}")
+    for item in ctx.inventory_items(ResourceStackComponent):
+        stack = item.get_component(ResourceStackComponent)
+        inventory.append(f"{stack.quantity} {stack.resource_type}")
     if inventory:
         lines.append("You have resources: " + ", ".join(sorted(inventory)) + ".")
-    if character.has_component(WorkPriorityComponent):
-        priorities = character.get_component(WorkPriorityComponent).priorities
-        if priorities:
-            parts = [f"{work}:{priority}" for work, priority in sorted(priorities.items())]
-            lines.append("Work priorities: " + ", ".join(parts) + ".")
-    if character.has_component(PawnProfileComponent):
-        profile = character.get_component(PawnProfileComponent)
-        if profile.backstory:
-            lines.append(f"Backstory: {profile.backstory}.")
-        if profile.passions:
-            parts = [f"{work}:{level}" for work, level in sorted(profile.passions.items())]
-            lines.append("Passions: " + ", ".join(parts) + ".")
-        lines.append(f"Pawn expectations: {profile.expectations}.")
-    if character.has_component(AllowedAreaComponent):
-        allowed = character.get_component(AllowedAreaComponent).room_ids
-        if allowed:
-            lines.append("Allowed work area rooms: " + ", ".join(sorted(allowed)) + ".")
-    if character.has_component(PrisonerComponent):
-        prisoner = character.get_component(PrisonerComponent)
-        lines.append(
-            f"Prisoner policy: {prisoner.policy}, recruitment "
-            f"{prisoner.recruitment_progress:.1f}/{prisoner.recruitment_difficulty:.1f}."
-        )
-    if character.has_component(BedRestComponent):
-        lines.append("You are on medical bed rest.")
-    if character.has_component(InfectionComponent):
-        infection = character.get_component(InfectionComponent)
-        lines.append(
-            f"Infection: severity {infection.severity:.2f}, immunity {infection.immunity:.2f}."
-        )
-    if character.has_component(MentalStateComponent):
-        mental = character.get_component(MentalStateComponent)
-        if mental.state != "stable":
-            lines.append(f"Mental state: {mental.state} ({mental.reason}).")
+    for component_type in (
+        WorkPriorityComponent,
+        PawnProfileComponent,
+        AllowedAreaComponent,
+        PrisonerComponent,
+        BedRestComponent,
+        InfectionComponent,
+        MentalStateComponent,
+    ):
+        if character.has_component(component_type):
+            lines.extend(character.get_component(component_type).prompt_fragments(ctx))
     for entity in world.query().with_all([RecipeComponent]).execute_entities():
-        recipe = entity.get_component(RecipeComponent)
-        lines.append(f"You know the {recipe.recipe_id} recipe.")
+        recipe_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, target=character
+        )
+        lines.extend(entity.get_component(RecipeComponent).prompt_fragments(recipe_ctx))
     for marker in world.query().with_all([ColonySimComponent]).execute_entities():
         if marker.has_component(ColonyWealthComponent):
-            wealth = marker.get_component(ColonyWealthComponent)
-            lines.append(
-                f"Colony wealth is {wealth.wealth:.0f}; expectations are {wealth.expectations}."
+            marker_ctx = ComponentPromptContext.for_entity(
+                world, marker, perspective=ctx.perspective, target=character
+            )
+            lines.extend(
+                marker.get_component(ColonyWealthComponent).prompt_fragments(marker_ctx)
             )
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        if entity.has_component(ResourceNodeComponent):
-            resource = entity.get_component(ResourceNodeComponent)
-            lines.append(
-                f"Nearby resource: {resource.resource_type} ({resource.current} available)."
-            )
-        if entity.has_component(WorkstationComponent):
-            station = entity.get_component(WorkstationComponent)
-            lines.append(f"Nearby workstation: {station.station_type}.")
-        if entity.has_component(MedicalBedComponent):
-            lines.append("Nearby medical bed is available.")
-        if entity.has_component(MedicineComponent):
-            medicine = entity.get_component(MedicineComponent)
-            lines.append(f"Nearby medicine: quality {medicine.quality:.2f}, uses {medicine.uses}.")
-        if entity.has_component(RoomQualityComponent):
-            room = entity.get_component(RoomQualityComponent)
-            lines.append(
-                f"Room quality: {room.role}, impressiveness {room.impressiveness:.1f}."
-            )
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        for component_type in (
+            ResourceNodeComponent,
+            WorkstationComponent,
+            MedicalBedComponent,
+            MedicineComponent,
+            RoomQualityComponent,
+            ForbiddenComponent,
+            JobComponent,
+            JobBillComponent,
+            ResearchProjectComponent,
+            ColonyIncidentComponent,
+            TradeOfferComponent,
+            SurgeryBillComponent,
+            CaravanComponent,
+        ):
+            if entity.has_component(component_type):
+                lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
         if entity.has_component(StockpileComponent):
             stockpile = entity.get_component(StockpileComponent)
             load = _stockpile_load(world, entity)
@@ -2170,70 +2287,19 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(
                 f"Nearby stockpile: {load}/{stockpile.capacity} stored, accepts {filter_text}."
             )
-        if entity.has_component(ForbiddenComponent):
-            name = (
-                entity.get_component(IdentityComponent).name
-                if entity.has_component(IdentityComponent)
-                else "something"
-            )
-            lines.append(f"{name} is forbidden for hauling.")
-        if entity.has_component(JobComponent):
-            job = entity.get_component(JobComponent)
-            if not job.completed:
-                status = "assigned" if job.assigned else "available"
-                lines.append(
-                    f"Nearby job: {job.job_type} priority {job.priority} ({status})."
-                )
-        if entity.has_component(JobBillComponent):
-            bill = entity.get_component(JobBillComponent)
-            lines.append(
-                f"Nearby job bill: {bill.recipe_id} "
-                f"{bill.work_done:.1f}/{bill.work_required:.1f} work."
-            )
-        if entity.has_component(ResearchProjectComponent):
-            project = entity.get_component(ResearchProjectComponent)
-            state = (
-                "unlocked"
-                if project.unlocked
-                else f"{project.work_done:.1f}/{project.work_required:.1f}"
-            )
-            lines.append(f"Research project: {project.project_id} ({state}).")
-        if entity.has_component(ColonyIncidentComponent):
-            incident = entity.get_component(ColonyIncidentComponent)
-            if not incident.resolved:
-                lines.append(
-                    f"Colony incident: {incident.incident_type} severity {incident.severity}."
-                )
-        if entity.has_component(TradeOfferComponent):
-            offer = entity.get_component(TradeOfferComponent)
-            gives = ", ".join(f"{qty} {kind}" for kind, qty in sorted(offer.gives.items()))
-            wants = ", ".join(f"{qty} {kind}" for kind, qty in sorted(offer.wants.items()))
-            lines.append(f"Trade offer from {offer.faction_id}: gives {gives}; wants {wants}.")
-        if entity.has_component(SurgeryBillComponent):
-            surgery = entity.get_component(SurgeryBillComponent)
-            if not surgery.completed:
-                lines.append(f"Surgery bill: {surgery.operation} {surgery.part}.")
-        if entity.has_component(CaravanComponent):
-            caravan = entity.get_component(CaravanComponent)
-            if not caravan.returned:
-                lines.append(f"Caravan bound for {caravan.destination}.")
         if character.has_relationship(Owns, entity_id) and entity_id != character.id:
-            name = (
-                entity.get_component(IdentityComponent).name
-                if entity.has_component(IdentityComponent)
-                else "something"
-            )
-            lines.append(f"You own {name}.")
+            lines.append(f"You own {_identity_name(entity, 'something')}.")
     for _edge, part_id in character.get_relationships(HasBodyPart):
         if not world.has_entity(part_id):
             continue
         part_entity = world.get_entity(part_id)
         if part_entity.has_component(BodyPartHealthComponent):
-            part = part_entity.get_component(BodyPartHealthComponent)
-            state = "missing" if part.missing else f"health {part.health:.1f}"
-            if part.prosthetic:
-                state += f", prosthetic {part.prosthetic}"
-            lines.append(f"Body part {part.part}: {state}.")
+            part_ctx = ComponentPromptContext.for_entity(
+                world, part_entity, perspective=ctx.perspective, target=character
+            )
+            lines.extend(
+                part_entity.get_component(BodyPartHealthComponent).prompt_fragments(part_ctx)
+            )
     return sorted(lines)
 
 

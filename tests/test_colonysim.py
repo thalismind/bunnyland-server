@@ -129,6 +129,7 @@ from bunnyland.mechanics.colonysim import (
 from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from bunnyland.mechanics.meter import Meter
 from bunnyland.mechanics.needs import FunNeedComponent
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
 
@@ -1970,6 +1971,38 @@ def test_colonysim_fragments_show_health_room_and_work_context():
     assert not any(line.startswith("Work priorities:") for line in sparse_fragments)
     assert not any(line.startswith("Allowed work area rooms:") for line in sparse_fragments)
     assert not any(line.startswith("Mental state:") for line in sparse_fragments)
+
+
+def test_colonysim_component_prompt_fragments_cover_self_and_nearby_state():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    viewer = spawn_entity(world, [CharacterComponent()])
+    node = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="berry patch", kind="resource"),
+            ResourceNodeComponent(resource_type="berries", current=3, maximum=5),
+        ],
+    )
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    external_ctx = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=viewer),
+    )
+    node_ctx = ComponentPromptContext.for_entity(world, node, perspective=self_ctx.perspective)
+
+    assert WorkPriorityComponent(priorities={"doctor": 1}).prompt_fragments(self_ctx) == (
+        "Work priorities: doctor:1.",
+    )
+    assert WorkPriorityComponent(priorities={"doctor": 1}).prompt_fragments(external_ctx) == ()
+    assert node.get_component(ResourceNodeComponent).prompt_fragments(node_ctx) == (
+        "Nearby resource: berries (3 available).",
+    )
+    assert JobComponent(job_type="haul", priority=2).prompt_fragments(node_ctx) == (
+        "Nearby job: haul priority 2 (available).",
+    )
 
 
 async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_surgery():
