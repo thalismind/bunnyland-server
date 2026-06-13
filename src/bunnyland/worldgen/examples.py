@@ -845,6 +845,129 @@ async def nukesim_example(actor, seed: str, options: GenOptions) -> Instantiated
 
 
 # --------------------------------------------------------------------------------------
+# neon-sim — districts, surveillance, hacking, street economy, cyberware, and fixers
+# --------------------------------------------------------------------------------------
+
+
+async def neonsim_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    del options
+    from ..core.components import IdentityComponent, PortableComponent, RegionComponent
+    from ..core.edges import ContainmentMode, Contains
+    from ..mechanics.colonysim import ResourceStackComponent
+    from ..mechanics.neonsim import (
+        AccessLevelComponent,
+        BlackMarketComponent,
+        CameraComponent,
+        CheckpointComponent,
+        ClinicComponent,
+        CyberpunkSiteComponent,
+        DataPayloadComponent,
+        DeviceComponent,
+        ExploitComponent,
+        FixerComponent,
+        HackableComponent,
+        ImplantComponent,
+        RestrictedAreaComponent,
+        RunnerContractComponent,
+        SafehouseComponent,
+        SecurityZoneComponent,
+        SurveillanceCoverageComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="strip", title="Glass Spire Strip", biome="city", light=0.4,
+                     celsius=14.0),
+            RoomSpec(key="office", title="Arasaka Records Office", biome="corp", indoor=True,
+                     light=0.7, celsius=21.0),
+        ],
+        exits=[
+            ExitSpec(from_key="strip", direction="north", to_key="office"),
+            ExitSpec(from_key="office", direction="south", to_key="strip"),
+        ],
+        characters=[
+            CharacterSpec(key="runner", name="Vesper", room_key="strip",
+                          controller="suspended", traits=("paranoid",),
+                          goals=("exfiltrate the personnel files",)),
+            CharacterSpec(key="fixer", name="Padre", room_key="strip", controller="llm",
+                          llm_profile="neon-city fixer",
+                          goals=("keep the runners working",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        strip, office = world.rooms["strip"], world.rooms["office"]
+        _augment(actor, strip, RegionComponent(name="Glass Spire", kind="district"))
+
+        runner = actor.world.get_entity(world.characters["runner"])
+        runner.add_component(AccessLevelComponent(clearance=1))
+        fixer = actor.world.get_entity(world.characters["fixer"])
+        fixer.add_component(FixerComponent(name="Padre"))
+
+        kit = _add(actor, strip, [
+            IdentityComponent(name="a breach kit", kind="tool"),
+            PortableComponent(can_pick_up=True),
+            ExploitComponent(power=3),
+        ])
+        runner.add_relationship(Contains(mode=ContainmentMode.INVENTORY), kit.id)
+        scrip = _add(actor, strip, [
+            IdentityComponent(name="scrip x80", kind="resource"),
+            PortableComponent(can_pick_up=True),
+            ResourceStackComponent(resource_type="scrip", quantity=80),
+        ])
+        runner.add_relationship(Contains(mode=ContainmentMode.INVENTORY), scrip.id)
+
+        _add(actor, strip, [
+            IdentityComponent(name="a corp turnstile", kind="checkpoint"),
+            CheckpointComponent(clearance_required=2, bribe_cost=20),
+        ])
+        _add(actor, strip, [
+            IdentityComponent(name="a back-alley flop", kind="safehouse"),
+            SafehouseComponent(),
+        ])
+        _add(actor, strip, [
+            IdentityComponent(name="a chrome dealer's stall", kind="vendor"),
+            BlackMarketComponent(price=20, contraband_name="synthcoke", contraband_heat=3.0),
+        ])
+        _add(actor, strip, [
+            IdentityComponent(name="a ripperdoc booth", kind="clinic"),
+            ClinicComponent(licensed=False, install_cost=40),
+        ])
+        _add(actor, strip, [
+            IdentityComponent(name="a reflex booster", kind="implant"),
+            PortableComponent(can_pick_up=True),
+            ImplantComponent(implant_type="reflex", slot="neural", maintenance_interval=7200.0,
+                             side_effect="hand tremors"),
+        ])
+        _add(actor, strip, [
+            IdentityComponent(name="a data-run contract", kind="contract"),
+            RunnerContractComponent(objective="courier the records", payout=250),
+        ])
+
+        _add(actor, office, [
+            IdentityComponent(name="a records vault", kind="cyberpunk-site"),
+            CyberpunkSiteComponent(site_type="data center"),
+            SecurityZoneComponent(clearance_required=3),
+            RestrictedAreaComponent(),
+        ])
+        _add(actor, office, [
+            IdentityComponent(name="a ceiling camera", kind="camera"),
+            DeviceComponent(device_type="camera"),
+            CameraComponent(),
+            SurveillanceCoverageComponent(),
+        ])
+        _add(actor, office, [
+            IdentityComponent(name="a records server", kind="server"),
+            DeviceComponent(device_type="server"),
+            HackableComponent(security=2, owner="arasaka"),
+            DataPayloadComponent(name="personnel files", sensitive=True),
+        ])
+    return world
+
+
+# --------------------------------------------------------------------------------------
 # dino-sim — fossils, clone eggs, reptile procreation, incubation, and hatching
 # --------------------------------------------------------------------------------------
 
@@ -1753,6 +1876,11 @@ NUKESIM_DEMO = WorldGenerator(
     name="nukesim-demo", generate=nukesim_example,
     description="A wasteland checkpoint with radiation, scavenging, decon, and scrap crafting.",
     uses_seed=False)
+NEONSIM_DEMO = WorldGenerator(
+    name="neonsim-demo", generate=neonsim_example,
+    description="A neon strip and corp office with surveillance, a hackable server, a fixer "
+                "contract, a ripperdoc, and a runner ready to break in.",
+    uses_seed=False)
 DINOSIM_DEMO = WorldGenerator(
     name="dinosim-demo", generate=dinosim_example,
     description="A hatchery with fossils, a ready egg, and a fertile dinosaur parent.",
@@ -1818,6 +1946,7 @@ __all__ = [
     "GOTHIC_COUNT_DEMO",
     "LIFESIM_DEMO",
     "MAPLE_FARM_DEMO",
+    "NEONSIM_DEMO",
     "NUKESIM_DEMO",
     "POP_CULTURE_DEMOS",
     "STAR_OPERA_DEMO",
@@ -1836,6 +1965,7 @@ __all__ = [
     "gothic_count_example",
     "lifesim_example",
     "maple_farm_example",
+    "neonsim_example",
     "nukesim_example",
     "star_opera_example",
     "voidsim_example",

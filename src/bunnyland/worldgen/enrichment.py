@@ -257,6 +257,24 @@ from ..mechanics.lifesim import (
     SkillSetComponent,
     WhimComponent,
 )
+from ..mechanics.neonsim import (
+    AccessLevelComponent,
+    AugmentationSlotsComponent,
+    BlackMarketComponent,
+    CameraComponent,
+    CheckpointComponent,
+    ClinicComponent,
+    CyberpunkSiteComponent,
+    DataBrokerComponent,
+    DeviceComponent,
+    FixerComponent,
+    HackableComponent,
+    RestrictedAreaComponent,
+    RunnerContractComponent,
+    SafehouseComponent,
+    SecurityZoneComponent,
+    SurveillanceCoverageComponent,
+)
 from ..mechanics.nukesim import (
     BeaconComponent,
     ChemComponent,
@@ -1751,6 +1769,56 @@ class NukeWorldgenHook:
             replace_component(entity, MutationResistanceComponent(threshold_bonus=1.0))
 
 
+class NeonWorldgenHook:
+    def subscribe(self, actor: WorldActor) -> None:
+        self.actor = actor
+        actor.bus.subscribe(RoomGeneratedEvent, self._on_entity)
+        actor.bus.subscribe(ObjectGeneratedEvent, self._on_entity)
+        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
+
+    def _on_entity(self, event: RoomGeneratedEvent | ObjectGeneratedEvent) -> None:
+        entity = _entity(self.actor, event)
+        if entity is None:
+            return
+        if _wants(event, "cyberpunk-site") or _mentions(
+            event, "district", "arcology", "corp", "nightclub", "plaza", "market", "alley"
+        ):
+            replace_component(entity, CyberpunkSiteComponent(site_type=_name(entity, "site")))
+        if _wants(event, "security-zone") or _mentions(event, "restricted", "secure", "vault"):
+            replace_component(entity, SecurityZoneComponent(clearance_required=2))
+            replace_component(entity, RestrictedAreaComponent())
+        if _wants(event, "checkpoint") or _mentions(event, "checkpoint", "turnstile"):
+            replace_component(entity, CheckpointComponent(clearance_required=2, bribe_cost=20))
+        if _wants(event, "safehouse") or _mentions(event, "safehouse", "hideout", "flop"):
+            replace_component(entity, SafehouseComponent())
+        if _wants(event, "camera") or _mentions(event, "camera", "cctv"):
+            replace_component(entity, DeviceComponent(device_type="camera"))
+            replace_component(entity, CameraComponent())
+            replace_component(entity, SurveillanceCoverageComponent())
+        if _wants(event, "terminal") or _mentions(event, "terminal", "server", "console"):
+            replace_component(entity, DeviceComponent(device_type="terminal"))
+            replace_component(entity, HackableComponent(security=2))
+        if _wants(event, "black-market") or _mentions(event, "vendor", "black market", "dealer"):
+            replace_component(entity, BlackMarketComponent())
+        if _wants(event, "data-broker") or _mentions(event, "fence", "broker"):
+            replace_component(entity, DataBrokerComponent())
+        if _wants(event, "clinic") or _mentions(event, "clinic", "ripperdoc", "surgeon"):
+            licensed = not _mentions(event, "ripperdoc", "street", "back-alley")
+            replace_component(entity, ClinicComponent(licensed=licensed))
+        if _wants(event, "contract") or _mentions(event, "contract", "job posting", "gig"):
+            replace_component(entity, RunnerContractComponent())
+
+    def _on_character(self, event: CharacterGeneratedEvent) -> None:
+        entity = _entity(self.actor, event)
+        if entity is None:
+            return
+        if _wants(event, "fixer") or _mentions(event, "fixer"):
+            replace_component(entity, FixerComponent(name=_name(entity, "fixer")))
+        if _wants(event, "netrunner") or _mentions(event, "netrunner", "runner", "hacker"):
+            replace_component(entity, AccessLevelComponent(clearance=2))
+            replace_component(entity, AugmentationSlotsComponent())
+
+
 __all__ = [
     "BarbarianWorldgenHook",
     "ColonyWorldgenHook",
@@ -1760,6 +1828,7 @@ __all__ = [
     "EnvironmentWorldgenHook",
     "GardenWorldgenHook",
     "LifeWorldgenHook",
+    "NeonWorldgenHook",
     "NukeWorldgenHook",
     "VoidWorldgenHook",
 ]

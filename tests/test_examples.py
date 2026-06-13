@@ -73,6 +73,7 @@ from bunnyland.mechanics.lifesim import (
     WhimComponent,
 )
 from bunnyland.mechanics.needs import HungerComponent
+from bunnyland.mechanics.neonsim import CyberpunkSiteComponent
 from bunnyland.mechanics.nukesim import RadiationSourceComponent
 from bunnyland.mechanics.voidsim import HabitatModuleComponent, ShipComponent
 from bunnyland.plugins.builtin import bunnyland_plugins
@@ -86,6 +87,7 @@ from bunnyland.worldgen.examples import (
     GARDENSIM_DEMO,
     LIFESIM_DEMO,
     MAPLE_FARM_DEMO,
+    NEONSIM_DEMO,
     NUKESIM_DEMO,
     POP_CULTURE_DEMOS,
     VOIDSIM_DEMO,
@@ -101,6 +103,7 @@ PACKAGE_DEMOS = [
     DAGGERSIM_DEMO,
     VOIDSIM_DEMO,
     NUKESIM_DEMO,
+    NEONSIM_DEMO,
     DINOSIM_DEMO,
 ]
 ALL_DEMOS = [*PACKAGE_DEMOS, MAPLE_FARM_DEMO, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS]
@@ -115,6 +118,7 @@ HALLMARKS = {
     DAGGERSIM_DEMO.name: BankComponent,
     VOIDSIM_DEMO.name: ShipComponent,
     NUKESIM_DEMO.name: RadiationSourceComponent,
+    NEONSIM_DEMO.name: CyberpunkSiteComponent,
     DINOSIM_DEMO.name: DinosaurComponent,
 }
 

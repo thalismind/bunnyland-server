@@ -2557,3 +2557,126 @@ async def test_instantiate_raises_on_invalid_proposal():
     bad = WorldProposal(seed="x", rooms=[])
     with pytest.raises(ValueError):
         await instantiate(actor, bad)
+
+
+def _has_component(actor, component_type) -> bool:
+    return bool(list(actor.world.query().with_all([component_type]).execute_entities()))
+
+
+async def test_neon_worldgen_hook_enriches_from_intent():
+    from bunnyland.mechanics.neonsim import (
+        AccessLevelComponent,
+        BlackMarketComponent,
+        CameraComponent,
+        CheckpointComponent,
+        ClinicComponent,
+        CyberpunkSiteComponent,
+        DataBrokerComponent,
+        FixerComponent,
+        HackableComponent,
+        RunnerContractComponent,
+        SafehouseComponent,
+        SecurityZoneComponent,
+    )
+
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    proposal = WorldProposal(
+        seed="neon",
+        rooms=[
+            RoomSpec(
+                key="strip",
+                title="Neon Strip",
+                biome="city",
+                generation=GenerationIntentComponent(
+                    description="a neon strip",
+                    wants=("cyberpunk-site", "security-zone"),
+                ),
+            )
+        ],
+        objects=[
+            ObjectSpec(key="gate", room_key="strip", name="a turnstile", kind="checkpoint",
+                       wants=("checkpoint",)),
+            ObjectSpec(key="flop", room_key="strip", name="a flop", kind="safehouse",
+                       wants=("safehouse",)),
+            ObjectSpec(key="cam", room_key="strip", name="a dome", kind="device",
+                       wants=("camera",)),
+            ObjectSpec(key="term", room_key="strip", name="a console", kind="device",
+                       wants=("terminal",)),
+            ObjectSpec(key="stall", room_key="strip", name="a stall", kind="vendor",
+                       wants=("black-market",)),
+            ObjectSpec(key="fence", room_key="strip", name="a fence", kind="vendor",
+                       wants=("data-broker",)),
+            ObjectSpec(key="doc", room_key="strip", name="a booth", kind="clinic",
+                       wants=("clinic",)),
+            ObjectSpec(key="gig", room_key="strip", name="a job", kind="contract",
+                       wants=("contract",)),
+        ],
+        characters=[
+            CharacterSpec(key="padre", name="Padre", room_key="strip", controller="suspended",
+                          generation=GenerationIntentComponent(
+                              description="a fixer and netrunner", wants=("fixer", "netrunner"))),
+        ],
+    )
+    await instantiate(actor, proposal)
+
+    for component in (
+        CyberpunkSiteComponent,
+        SecurityZoneComponent,
+        CheckpointComponent,
+        SafehouseComponent,
+        CameraComponent,
+        HackableComponent,
+        BlackMarketComponent,
+        DataBrokerComponent,
+        ClinicComponent,
+        RunnerContractComponent,
+        FixerComponent,
+        AccessLevelComponent,
+    ):
+        assert _has_component(actor, component), component.__name__
+
+
+async def test_neon_worldgen_hook_enriches_from_mentions():
+    from bunnyland.mechanics.neonsim import (
+        BlackMarketComponent,
+        CameraComponent,
+        CheckpointComponent,
+        ClinicComponent,
+        CyberpunkSiteComponent,
+        FixerComponent,
+        HackableComponent,
+        SafehouseComponent,
+    )
+
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    proposal = WorldProposal(
+        seed="neon-mentions",
+        rooms=[RoomSpec(key="corp", title="Corp Arcology Plaza", biome="corp")],
+        objects=[
+            ObjectSpec(key="gate", room_key="corp", name="a checkpoint turnstile", kind="gate"),
+            ObjectSpec(key="flop", room_key="corp", name="a back-alley hideout", kind="room"),
+            ObjectSpec(key="cam", room_key="corp", name="a cctv camera", kind="device"),
+            ObjectSpec(key="term", room_key="corp", name="a records server", kind="device"),
+            ObjectSpec(key="stall", room_key="corp", name="a black market dealer", kind="npc"),
+            ObjectSpec(key="doc", room_key="corp", name="a ripperdoc surgeon", kind="npc"),
+        ],
+        characters=[
+            CharacterSpec(key="rk", name="a street fixer", room_key="corp",
+                          controller="suspended"),
+        ],
+    )
+    await instantiate(actor, proposal)
+
+    for component in (
+        CyberpunkSiteComponent,
+        CheckpointComponent,
+        SafehouseComponent,
+        CameraComponent,
+        HackableComponent,
+        BlackMarketComponent,
+        ClinicComponent,
+        FixerComponent,
+    ):
+        assert _has_component(actor, component), component.__name__
