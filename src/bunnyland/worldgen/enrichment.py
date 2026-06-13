@@ -20,18 +20,38 @@ from ..mechanics.barbariansim import (
     WeaponComponent,
 )
 from ..mechanics.colonysim import (
+    AllowedAreaComponent,
+    BedRestComponent,
     BodyPartHealthComponent,
+    CaravanComponent,
     ColonyIncidentComponent,
+    ColonyWealthComponent,
+    FactionRelationComponent,
+    ForbiddenComponent,
+    HaulableComponent,
+    InfectionComponent,
     JobBillComponent,
     JobComponent,
+    MedicalBedComponent,
+    MedicineComponent,
+    MentalStateComponent,
     PawnProfileComponent,
     PrisonerComponent,
+    ProstheticComponent,
+    RecipeComponent,
     ResearchProjectComponent,
     ResourceNodeComponent,
     ResourceStackComponent,
+    RoomQualityComponent,
+    RoomRoleComponent,
+    RoomStatComponent,
     StockpileComponent,
+    StorageFilterComponent,
     SurgeryBillComponent,
+    TechUnlockComponent,
     TradeOfferComponent,
+    WorkCapabilityComponent,
+    WorkPriorityComponent,
     WorkstationComponent,
 )
 from ..mechanics.daggersim import (
@@ -85,26 +105,63 @@ from ..mechanics.dragonsim import (
 )
 from ..mechanics.environment import FireComponent, FlammableComponent
 from ..mechanics.gardensim import (
+    AnimalBreedingComponent,
+    AnimalHomeComponent,
+    AnimalProductComponent,
+    BundleComponent,
+    CollectionComponent,
+    CropComponent,
+    CropGrowthComponent,
+    CropInspectionComponent,
     CropQualityComponent,
+    DailyFarmResetComponent,
+    FarmAnimalComponent,
     FarmQuestComponent,
     FertilizerComponent,
+    FestivalComponent,
+    FishingSpotComponent,
+    ForageComponent,
+    FriendshipComponent,
     GeodeComponent,
+    GiftPreferenceComponent,
     GreenhouseComponent,
+    HarvestableComponent,
     LadderComponent,
+    MachineBreakdownComponent,
     MachineComponent,
     MailComponent,
     MineLevelComponent,
+    MiningNodeComponent,
+    MuseumCollectionComponent,
     PestComponent,
+    ProcessingRecipeComponent,
     RegrowableComponent,
+    RewardComponent,
     SeedComponent,
     ShippingBinComponent,
     SoilComponent,
+    TilledComponent,
     TreeComponent,
+    TreeTapComponent,
+    WateredComponent,
     WeedComponent,
 )
 from ..mechanics.lifesim import (
+    AspirationComponent,
+    BillComponent,
+    BusinessOwnerComponent,
+    CareerComponent,
     CharacterProfileComponent,
+    CustomerComponent,
+    HomeComponent,
     HomeObjectComponent,
+    HouseholdComponent,
+    JobScheduleComponent,
+    ReproductiveComponent,
+    ReputationComponent,
+    RoomClaimComponent,
+    RoutineComponent,
+    SkillSetComponent,
     WhimComponent,
 )
 from ..mechanics.nukesim import (
@@ -289,6 +346,42 @@ def _orbital_body_type(event: GeneratedEntityEvent) -> str:
     return "planet"
 
 
+def _generated_id(event: GeneratedEntityEvent, suffix: str) -> str:
+    return f"generated-{event.entity_key}-{suffix}"
+
+
+def _trade_faction(event: GeneratedEntityEvent) -> str:
+    if _mentions(event, "trader"):
+        return "generated-trader"
+    if _mentions(event, "faction"):
+        return "generated-faction"
+    return "generated-colony"
+
+
+def _animal_species(event: GeneratedEntityEvent) -> str:
+    text = _text(event)
+    for species in ("chicken", "cow", "goat", "sheep", "duck", "rabbit"):
+        if species in text:
+            return species
+    return event.entity_kind if event.entity_kind != "object" else "animal"
+
+
+def _fish_type(event: GeneratedEntityEvent) -> str:
+    text = _text(event)
+    for fish_type in ("trout", "bass", "catfish", "salmon", "carp"):
+        if fish_type in text:
+            return fish_type
+    return "trout"
+
+
+def _season(event: GeneratedEntityEvent) -> str:
+    text = _text(event)
+    for season in ("spring", "summer", "autumn", "winter"):
+        if season in text:
+            return season
+    return "spring"
+
+
 class EnvironmentWorldgenHook:
     def subscribe(self, actor: WorldActor) -> None:
         self.actor = actor
@@ -310,8 +403,30 @@ class EnvironmentWorldgenHook:
 class LifeWorldgenHook:
     def subscribe(self, actor: WorldActor) -> None:
         self.actor = actor
+        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
         actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
         actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
+
+    def _on_room(self, event: RoomGeneratedEvent) -> None:
+        entity = _entity(self.actor, event)
+        if entity is None:
+            return
+        if _wants(event, "home"):
+            replace_component(
+                entity,
+                HomeComponent(
+                    owner_id=_generated_id(event, "owner"),
+                    household_id=_generated_id(event, "household"),
+                ),
+            )
+        if _wants(event, "room-claim"):
+            replace_component(
+                entity,
+                RoomClaimComponent(
+                    claimed_by_id=_generated_id(event, "claimant"),
+                    claimed_at_epoch=event.world_epoch,
+                ),
+            )
 
     def _on_character(self, event: CharacterGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
@@ -328,17 +443,62 @@ class LifeWorldgenHook:
                     preferred_routine="generated routine" if _mentions(event, "routine") else "",
                 ),
             )
+        if _wants(event, "aspiration") or _mentions(event, "aspiration", "life goal"):
+            replace_component(
+                entity,
+                AspirationComponent(
+                    name=event.intent or "generated aspiration",
+                    milestones=tuple(event.generation.tags),
+                ),
+            )
+        if _wants(event, "career") or _mentions(event, "career", "job"):
+            replace_component(entity, CareerComponent(title=event.intent or "Generated Career"))
+        if _wants(event, "job-schedule") or _mentions(event, "shift", "schedule"):
+            replace_component(entity, JobScheduleComponent(next_shift_epoch=event.world_epoch))
+        if _wants(event, "customer") or _mentions(event, "customer", "shopper"):
+            replace_component(entity, CustomerComponent())
+        if _wants(event, "household") or _mentions(event, "household", "family"):
+            replace_component(
+                entity,
+                HouseholdComponent(
+                    household_id=_generated_id(event, "household"),
+                    name=event.intent or _name(entity, event.entity_key),
+                ),
+            )
+        if _wants(event, "routine") or _mentions(event, "daily routine"):
+            replace_component(
+                entity,
+                RoutineComponent(
+                    activity=event.intent or "generated routine",
+                    next_due_epoch=event.world_epoch,
+                ),
+            )
+        if _wants(event, "reputation") or _mentions(event, "known for", "famous"):
+            replace_component(entity, ReputationComponent(known_for=tuple(event.generation.tags)))
+        if _wants(event, "skill-set") or _mentions(event, "skill", "skilled"):
+            resource_type = _resource_type(event)
+            replace_component(
+                entity,
+                SkillSetComponent(levels={resource_type: 1}, xp={resource_type: 0.0}),
+            )
+        if _wants(event, "reproductive") or _mentions(event, "fertile"):
+            replace_component(entity, ReproductiveComponent(species_group=event.species))
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
             return
+        name = _name(entity, event.object_key)
         if _wants(event, "whim") or _mentions(event, "whim", "wish"):
-            replace_component(entity, WhimComponent(want=_name(entity, "generated whim")))
+            replace_component(entity, WhimComponent(want=name))
         if _wants(event, "home-object") or _mentions(
             event, "chair", "bed", "stove", "sofa", "decor", "home"
         ):
             replace_component(entity, HomeObjectComponent(affordance="comfort", decor_score=1.0))
+        if _wants(event, "bill") or _mentions(event, "bill", "rent", "tax"):
+            replace_component(entity, BillComponent(amount=10, reason=event.intent or name))
+        if _wants(event, "business-owner") or _mentions(event, "business", "shop", "stall"):
+            replace_component(entity, BusinessOwnerComponent(name=name))
 
 
 class ColonyWorldgenHook:
@@ -354,6 +514,34 @@ class ColonyWorldgenHook:
             return
         if _wants(event, "stockpile") or _mentions(event, "stockpile", "warehouse"):
             replace_component(entity, StockpileComponent(capacity=40))
+        if _wants(event, "room-role") or _mentions(event, "barracks", "clinic", "dining room"):
+            replace_component(entity, RoomRoleComponent(role=event.biome or "room"))
+        if _wants(event, "room-stat") or _mentions(event, "beautiful", "clean", "comfortable"):
+            replace_component(
+                entity,
+                RoomStatComponent(beauty=1.0, cleanliness=1.0, comfort=1.0, wealth=25.0),
+            )
+        if _wants(event, "room-quality") or _mentions(event, "impressive", "quality room"):
+            replace_component(
+                entity,
+                RoomQualityComponent(
+                    role=event.biome or "room",
+                    beauty=1.0,
+                    cleanliness=1.0,
+                    comfort=1.0,
+                    impressiveness=3.0,
+                    updated_at_epoch=event.world_epoch,
+                ),
+            )
+        if _wants(event, "colony-wealth") or _mentions(event, "colony wealth", "wealth"):
+            replace_component(
+                entity,
+                ColonyWealthComponent(
+                    wealth=100.0,
+                    expectations="low",
+                    updated_at_epoch=event.world_epoch,
+                ),
+            )
 
     def _on_character(self, event: CharacterGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
@@ -369,11 +557,33 @@ class ColonyWorldgenHook:
             )
         if _wants(event, "prisoner", "captive") or _mentions(event, "prisoner", "captive"):
             replace_component(entity, PrisonerComponent(policy="hold"))
+        if _wants(event, "work-priority") or _mentions(event, "work priority"):
+            replace_component(entity, WorkPriorityComponent(priorities={_resource_type(event): 1}))
+        if _wants(event, "work-capability") or _mentions(event, "capable", "disabled work"):
+            replace_component(
+                entity,
+                WorkCapabilityComponent(skill_levels={_resource_type(event): 1}),
+            )
+        if _wants(event, "allowed-area") or _mentions(event, "allowed area"):
+            replace_component(entity, AllowedAreaComponent(room_ids=()))
+        if _wants(event, "bed-rest") or _mentions(event, "bed rest"):
+            replace_component(entity, BedRestComponent(started_at_epoch=event.world_epoch))
+        if _wants(event, "infection") or _mentions(event, "infection", "infected"):
+            replace_component(
+                entity,
+                InfectionComponent(severity=0.1, last_updated_epoch=event.world_epoch),
+            )
+        if _wants(event, "mental-state") or _mentions(event, "mental state", "inspired"):
+            replace_component(
+                entity,
+                MentalStateComponent(state="inspired", reason=event.intent or "worldgen"),
+            )
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
             return
+        name = _name(entity, event.object_key)
         resource_type = _resource_type(event)
         if _wants(event, "resource-node") or _mentions(event, "vein", "deposit", "patch"):
             replace_component(
@@ -387,8 +597,23 @@ class ColonyWorldgenHook:
             )
         if _wants(event, "stockpile"):
             replace_component(entity, StockpileComponent(capacity=20))
+        if _wants(event, "storage-filter") or _mentions(event, "storage filter"):
+            replace_component(entity, StorageFilterComponent(allowed_types=(resource_type,)))
+        if _wants(event, "haulable") or _mentions(event, "haulable"):
+            replace_component(entity, HaulableComponent(priority=1))
+        if _wants(event, "forbidden") or _mentions(event, "forbidden"):
+            replace_component(entity, ForbiddenComponent())
         if _wants(event, "workstation") or _mentions(event, "workbench", "forge", "bench"):
             replace_component(entity, WorkstationComponent(station_type=resource_type))
+        if _wants(event, "recipe") or _mentions(event, "recipe"):
+            replace_component(
+                entity,
+                RecipeComponent(
+                    recipe_id=resource_type,
+                    inputs={resource_type: 1},
+                    outputs={resource_type: 1},
+                ),
+            )
         if _wants(event, "job"):
             replace_component(entity, JobComponent(job_type=resource_type, priority=1))
         if _wants(event, "job-bill") or _mentions(event, "bill", "work order"):
@@ -409,12 +634,37 @@ class ColonyWorldgenHook:
             replace_component(entity, SurgeryBillComponent(part="torso", operation=resource_type))
         if _wants(event, "body-part") or _mentions(event, "body part", "limb"):
             replace_component(entity, BodyPartHealthComponent(part=resource_type))
+        if _wants(event, "tech-unlock") or _mentions(event, "unlocked tech"):
+            replace_component(
+                entity,
+                TechUnlockComponent(tech_id=resource_type, unlocked_at_epoch=event.world_epoch),
+            )
+        if _wants(event, "faction-relation") or _mentions(event, "faction relation"):
+            replace_component(
+                entity,
+                FactionRelationComponent(faction_id=_trade_faction(event), goodwill=1.0),
+            )
+        if _wants(event, "caravan") or _mentions(event, "caravan"):
+            replace_component(
+                entity,
+                CaravanComponent(
+                    destination=event.intent or name,
+                    departed_at_epoch=event.world_epoch,
+                ),
+            )
+        if _wants(event, "medicine") or _mentions(event, "medicine", "medkit"):
+            replace_component(entity, MedicineComponent(quality=1.0, uses=1))
+        if _wants(event, "medical-bed") or _mentions(event, "clinic bed", "medical bed"):
+            replace_component(entity, MedicalBedComponent())
+        if _wants(event, "prosthetic") or _mentions(event, "prosthetic"):
+            replace_component(entity, ProstheticComponent(part=resource_type))
 
 
 class GardenWorldgenHook:
     def subscribe(self, actor: WorldActor) -> None:
         self.actor = actor
         actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
+        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
         actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
 
     def _on_room(self, event: RoomGeneratedEvent) -> None:
@@ -427,26 +677,76 @@ class GardenWorldgenHook:
             replace_component(entity, GreenhouseComponent())
         if _wants(event, "mine-level") or _mentions(event, "mine", "cavern"):
             replace_component(entity, MineLevelComponent(level=1))
+        if _wants(event, "daily-farm-reset"):
+            replace_component(entity, DailyFarmResetComponent(last_reset_epoch=event.world_epoch))
+
+    def _on_character(self, event: CharacterGeneratedEvent) -> None:
+        entity = _entity(self.actor, event)
+        if entity is None:
+            return
+        resource_type = _resource_type(event)
+        if _wants(event, "gift-preference") or _mentions(event, "likes", "loves gifts"):
+            replace_component(entity, GiftPreferenceComponent(likes=(resource_type,)))
+        if _wants(event, "friendship") or _mentions(event, "friend"):
+            replace_component(entity, FriendshipComponent())
+        if _wants(event, "collection") or _mentions(event, "collection"):
+            replace_component(entity, CollectionComponent(entries=(resource_type,)))
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
             return
+        name = _name(entity, event.object_key)
+        crop_type = _crop_type(event)
+        resource_type = _resource_type(event)
         if _wants(event, "seed") or _mentions(event, "seed", "seeds"):
-            crop_type = _crop_type(event)
             replace_component(
                 entity,
                 SeedComponent(crop_type=crop_type, growth_days=2.0, yield_item=crop_type),
             )
+        if _wants(event, "tilled") or _mentions(event, "tilled soil"):
+            replace_component(entity, TilledComponent(tilled_at_epoch=event.world_epoch))
+        if _wants(event, "watered") or _mentions(event, "watered"):
+            replace_component(
+                entity,
+                WateredComponent(
+                    watered_at_epoch=event.world_epoch,
+                    expires_at_epoch=event.world_epoch + 24 * 60 * 60,
+                ),
+            )
+        if _wants(event, "crop") or _mentions(event, "planted crop"):
+            replace_component(
+                entity,
+                CropComponent(crop_type=crop_type, planted_at_epoch=event.world_epoch),
+            )
+        if _wants(event, "crop-growth"):
+            replace_component(
+                entity,
+                CropGrowthComponent(
+                    progress_days=0.0,
+                    required_days=2.0,
+                    last_updated_epoch=event.world_epoch,
+                ),
+            )
+        if _wants(event, "harvestable") or _mentions(event, "harvestable"):
+            replace_component(entity, HarvestableComponent(yield_item=resource_type, ready=True))
         if _wants(event, "fertilizer") or _mentions(event, "fertilizer", "compost"):
             replace_component(entity, FertilizerComponent(kind="compost", growth_multiplier=1.2))
         if _wants(event, "tree") or _mentions(event, "sapling", "tree"):
             replace_component(
                 entity,
                 TreeComponent(
-                    tree_type=_resource_type(event),
+                    tree_type=resource_type,
                     planted_at_epoch=event.world_epoch,
                     maturity_days=7.0,
+                ),
+            )
+        if _wants(event, "tree-tap") or _mentions(event, "tree tap", "tapped tree"):
+            replace_component(
+                entity,
+                TreeTapComponent(
+                    tapped_at_epoch=event.world_epoch,
+                    last_collected_epoch=event.world_epoch,
                 ),
             )
         if _wants(event, "crop-quality") or _mentions(event, "crop", "sprout"):
@@ -457,18 +757,72 @@ class GardenWorldgenHook:
             replace_component(entity, PestComponent(severity=0.5))
         if _wants(event, "weed") or _mentions(event, "weed", "weeds"):
             replace_component(entity, WeedComponent(density=0.5))
+        if _wants(event, "crop-inspection"):
+            replace_component(
+                entity,
+                CropInspectionComponent(inspected_at_epoch=event.world_epoch, notes=event.intent),
+            )
         if _wants(event, "machine") or _mentions(event, "machine", "preserves", "keg"):
-            replace_component(entity, MachineComponent(machine_type=_resource_type(event)))
+            replace_component(entity, MachineComponent(machine_type=resource_type))
+        if _wants(event, "machine-breakdown") or _mentions(event, "broken machine"):
+            replace_component(entity, MachineBreakdownComponent(reason=event.intent or "worldgen"))
+        if _wants(event, "processing-recipe") or _mentions(event, "processing recipe"):
+            replace_component(
+                entity,
+                ProcessingRecipeComponent(
+                    recipe_id=resource_type,
+                    machine_type=resource_type,
+                    inputs={resource_type: 1},
+                    outputs={resource_type: 1},
+                    duration_seconds=60,
+                ),
+            )
+        if _wants(event, "animal-home") or _mentions(event, "coop", "barn"):
+            replace_component(entity, AnimalHomeComponent())
+        if _wants(event, "farm-animal") or _mentions(event, "farm animal", "cow", "chicken"):
+            species = _animal_species(event)
+            replace_component(entity, FarmAnimalComponent(species=species))
+        if _wants(event, "animal-product"):
+            replace_component(entity, AnimalProductComponent(product_type=resource_type))
+        if _wants(event, "animal-breeding"):
+            replace_component(
+                entity,
+                AnimalBreedingComponent(offspring_species=_animal_species(event)),
+            )
+        if _wants(event, "fishing-spot") or _mentions(event, "fishing spot", "pond"):
+            replace_component(
+                entity,
+                FishingSpotComponent(fish_type=_fish_type(event), season=_season(event)),
+            )
+        if _wants(event, "mining-node") or _mentions(event, "mining node", "ore node"):
+            replace_component(entity, MiningNodeComponent(resource_type=resource_type))
         if _wants(event, "shipping-bin") or _mentions(event, "shipping bin", "shipping crate"):
             replace_component(entity, ShippingBinComponent())
         if _wants(event, "geode") or _mentions(event, "geode"):
-            replace_component(entity, GeodeComponent(resource_type=_resource_type(event)))
+            replace_component(entity, GeodeComponent(resource_type=resource_type))
         if _wants(event, "ladder") or _mentions(event, "ladder"):
             replace_component(entity, LadderComponent(target_room_id=event.entity_id))
+        if _wants(event, "forage") or _mentions(event, "forage"):
+            replace_component(
+                entity,
+                ForageComponent(resource_type=resource_type, seasons=(_season(event),)),
+            )
+        if _wants(event, "festival") or _mentions(event, "festival"):
+            replace_component(entity, FestivalComponent(name=name, season=_season(event)))
+        if _wants(event, "bundle") or _mentions(event, "bundle"):
+            replace_component(
+                entity,
+                BundleComponent(bundle_id=event.object_key, requirements={resource_type: 1}),
+            )
+        if _wants(event, "collection") or _mentions(event, "collection"):
+            replace_component(entity, CollectionComponent(entries=(resource_type,)))
+        if _wants(event, "museum-collection") or _mentions(event, "museum"):
+            replace_component(entity, MuseumCollectionComponent())
+        if _wants(event, "reward") or _mentions(event, "reward"):
+            replace_component(entity, RewardComponent(resource_type=resource_type))
         if _wants(event, "mail") or _mentions(event, "mail", "letter"):
-            replace_component(entity, MailComponent(subject=_name(entity, "generated mail")))
+            replace_component(entity, MailComponent(subject=name))
         if _wants(event, "farm-quest") or _mentions(event, "quest", "order board"):
-            resource_type = _resource_type(event)
             replace_component(
                 entity,
                 FarmQuestComponent(quest_id=resource_type, requested={resource_type: 1}),

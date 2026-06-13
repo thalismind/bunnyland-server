@@ -1092,6 +1092,288 @@ async def test_builtin_worldgen_hooks_enrich_from_descriptive_mentions():
     assert actor.world.get_entity(result.objects["quest"]).has_component(FarmQuestComponent)
 
 
+async def test_builtin_worldgen_hooks_cover_core_sim_pack_wants():
+    from bunnyland.mechanics.colonysim import (
+        AllowedAreaComponent,
+        BedRestComponent,
+        CaravanComponent,
+        ColonyWealthComponent,
+        FactionRelationComponent,
+        ForbiddenComponent,
+        HaulableComponent,
+        InfectionComponent,
+        MedicalBedComponent,
+        MedicineComponent,
+        MentalStateComponent,
+        ProstheticComponent,
+        RecipeComponent,
+        RoomQualityComponent,
+        RoomRoleComponent,
+        RoomStatComponent,
+        StorageFilterComponent,
+        TechUnlockComponent,
+        WorkCapabilityComponent,
+        WorkPriorityComponent,
+    )
+    from bunnyland.mechanics.gardensim import (
+        AnimalBreedingComponent,
+        AnimalHomeComponent,
+        AnimalProductComponent,
+        BundleComponent,
+        CollectionComponent,
+        CropComponent,
+        CropGrowthComponent,
+        CropInspectionComponent,
+        DailyFarmResetComponent,
+        FarmAnimalComponent,
+        FestivalComponent,
+        FishingSpotComponent,
+        ForageComponent,
+        FriendshipComponent,
+        GiftPreferenceComponent,
+        HarvestableComponent,
+        MachineBreakdownComponent,
+        MiningNodeComponent,
+        MuseumCollectionComponent,
+        ProcessingRecipeComponent,
+        RewardComponent,
+        TilledComponent,
+        TreeTapComponent,
+        WateredComponent,
+    )
+    from bunnyland.mechanics.lifesim import (
+        AspirationComponent,
+        BillComponent,
+        BusinessOwnerComponent,
+        CareerComponent,
+        CustomerComponent,
+        HomeComponent,
+        HouseholdComponent,
+        JobScheduleComponent,
+        ReproductiveComponent,
+        ReputationComponent,
+        RoomClaimComponent,
+        RoutineComponent,
+        SkillSetComponent,
+    )
+
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    proposal = WorldProposal(
+        seed="core-pack-wants",
+        rooms=[
+            RoomSpec(
+                key="life_home",
+                title="Generated Apartment",
+                description="a claimed home apartment",
+                wants=("home", "room-claim", "daily-farm-reset"),
+            ),
+            RoomSpec(
+                key="colony_core",
+                title="Clinic Barracks",
+                biome="clinic",
+                description="a beautiful clean comfortable impressive colony wealth room",
+                wants=("room-role", "room-stat", "room-quality", "colony-wealth"),
+            ),
+        ],
+        objects=[
+            ObjectSpec(
+                key="life_shop",
+                room_key="life_home",
+                name="corner stall bill",
+                kind="shop",
+                wants=("bill", "business-owner"),
+            ),
+            ObjectSpec(
+                key="garden_plot",
+                room_key="life_home",
+                name="turnip planted crop with tapped tree",
+                kind="crop",
+                wants=(
+                    "tilled",
+                    "watered",
+                    "crop",
+                    "crop-growth",
+                    "harvestable",
+                    "crop-inspection",
+                    "tree-tap",
+                ),
+            ),
+            ObjectSpec(
+                key="garden_animal",
+                room_key="life_home",
+                name="chicken coop animal product",
+                kind="animal",
+                wants=("animal-home", "farm-animal", "animal-product", "animal-breeding"),
+            ),
+            ObjectSpec(
+                key="garden_board",
+                room_key="life_home",
+                name="spring trout pond ore node festival bundle museum reward",
+                kind="garden-marker",
+                wants=(
+                    "fishing-spot",
+                    "mining-node",
+                    "forage",
+                    "festival",
+                    "bundle",
+                    "collection",
+                    "museum-collection",
+                    "reward",
+                    "machine-breakdown",
+                    "processing-recipe",
+                ),
+            ),
+            ObjectSpec(
+                key="colony_cache",
+                room_key="colony_core",
+                name="medicine caravan prosthetic recipe cache",
+                kind="colony-cache",
+                wants=(
+                    "storage-filter",
+                    "haulable",
+                    "forbidden",
+                    "recipe",
+                    "tech-unlock",
+                    "faction-relation",
+                    "caravan",
+                    "medicine",
+                    "medical-bed",
+                    "prosthetic",
+                ),
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="resident",
+                name="Resident",
+                room_key="life_home",
+                species="bunny",
+                description="a skilled friend with an aspiration career household and routine",
+                traits=("gardening",),
+                wants=(
+                    "aspiration",
+                    "career",
+                    "job-schedule",
+                    "customer",
+                    "household",
+                    "routine",
+                    "reputation",
+                    "skill-set",
+                    "reproductive",
+                    "gift-preference",
+                    "friendship",
+                    "collection",
+                    "work-priority",
+                    "work-capability",
+                    "allowed-area",
+                    "bed-rest",
+                    "infection",
+                    "mental-state",
+                ),
+            )
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    life_home = actor.world.get_entity(result.rooms["life_home"])
+    assert life_home.has_component(HomeComponent)
+    assert life_home.has_component(RoomClaimComponent)
+    assert life_home.has_component(DailyFarmResetComponent)
+
+    resident = actor.world.get_entity(result.characters["resident"])
+    for component_type in (
+        AspirationComponent,
+        CareerComponent,
+        JobScheduleComponent,
+        CustomerComponent,
+        HouseholdComponent,
+        RoutineComponent,
+        ReputationComponent,
+        SkillSetComponent,
+        ReproductiveComponent,
+        GiftPreferenceComponent,
+        FriendshipComponent,
+        CollectionComponent,
+        WorkPriorityComponent,
+        WorkCapabilityComponent,
+        AllowedAreaComponent,
+        BedRestComponent,
+        InfectionComponent,
+        MentalStateComponent,
+    ):
+        assert resident.has_component(component_type)
+    assert resident.get_component(ReproductiveComponent).species_group == "bunny"
+
+    life_shop = actor.world.get_entity(result.objects["life_shop"])
+    assert life_shop.has_component(BillComponent)
+    assert life_shop.has_component(BusinessOwnerComponent)
+
+    garden_plot = actor.world.get_entity(result.objects["garden_plot"])
+    for component_type in (
+        TilledComponent,
+        WateredComponent,
+        CropComponent,
+        CropGrowthComponent,
+        HarvestableComponent,
+        CropInspectionComponent,
+        TreeTapComponent,
+    ):
+        assert garden_plot.has_component(component_type)
+
+    garden_animal = actor.world.get_entity(result.objects["garden_animal"])
+    for component_type in (
+        AnimalHomeComponent,
+        FarmAnimalComponent,
+        AnimalProductComponent,
+        AnimalBreedingComponent,
+    ):
+        assert garden_animal.has_component(component_type)
+    assert garden_animal.get_component(FarmAnimalComponent).species == "chicken"
+
+    garden_board = actor.world.get_entity(result.objects["garden_board"])
+    for component_type in (
+        FishingSpotComponent,
+        MiningNodeComponent,
+        ForageComponent,
+        FestivalComponent,
+        BundleComponent,
+        CollectionComponent,
+        MuseumCollectionComponent,
+        RewardComponent,
+        MachineBreakdownComponent,
+        ProcessingRecipeComponent,
+    ):
+        assert garden_board.has_component(component_type)
+    assert garden_board.get_component(FishingSpotComponent).fish_type == "trout"
+
+    colony_core = actor.world.get_entity(result.rooms["colony_core"])
+    for component_type in (
+        RoomRoleComponent,
+        RoomStatComponent,
+        RoomQualityComponent,
+        ColonyWealthComponent,
+    ):
+        assert colony_core.has_component(component_type)
+    assert colony_core.get_component(RoomRoleComponent).role == "clinic"
+
+    colony_cache = actor.world.get_entity(result.objects["colony_cache"])
+    for component_type in (
+        StorageFilterComponent,
+        HaulableComponent,
+        ForbiddenComponent,
+        RecipeComponent,
+        TechUnlockComponent,
+        FactionRelationComponent,
+        CaravanComponent,
+        MedicineComponent,
+        MedicalBedComponent,
+        ProstheticComponent,
+    ):
+        assert colony_cache.has_component(component_type)
+
+
 async def test_builtin_worldgen_hooks_cover_cross_package_mention_branches():
     from bunnyland.mechanics.barbariansim import (
         ArmorComponent,
