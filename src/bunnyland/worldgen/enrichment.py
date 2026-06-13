@@ -14,9 +14,30 @@ from ..core.ecs import parse_entity_id, replace_component
 from ..core.events import CharacterGeneratedEvent, ObjectGeneratedEvent, RoomGeneratedEvent
 from ..mechanics.barbariansim import (
     ArmorComponent,
+    BaseClaimComponent,
+    BlessingComponent,
+    BossComponent,
+    BuildingComponent,
+    ClimbingGateComponent,
+    ClimbingSkillComponent,
+    CorruptionComponent,
+    CurseComponent,
+    DangerZoneComponent,
+    DurabilityComponent,
     FortificationComponent,
+    KeyComponent,
+    PoisonComponent,
+    PurgeWaveComponent,
+    RitualComponent,
     ShelterComponent,
+    ShrineComponent,
+    SiegeReadinessComponent,
     StaminaComponent,
+    SurvivalGapComponent,
+    TemperatureExposureComponent,
+    TemperatureResistanceComponent,
+    TrapComponent,
+    TreasureComponent,
     WeaponComponent,
 )
 from ..mechanics.colonysim import (
@@ -55,14 +76,60 @@ from ..mechanics.colonysim import (
     WorkstationComponent,
 )
 from ..mechanics.daggersim import (
+    AfflictionStigmaComponent,
+    AutomapComponent,
+    BankComponent,
+    BountyComponent,
+    CampingComponent,
+    ClassTemplateComponent,
+    ConversationToneComponent,
+    CreatureLanguageComponent,
+    CureQuestHookComponent,
+    CustomClassComponent,
+    CustomSpellComponent,
+    DaggerQuestRewardComponent,
+    DialogueApproachComponent,
     DungeonComponent,
+    DungeonObjectiveComponent,
     DungeonRoomComponent,
+    EnchantedItemComponent,
+    EtiquetteSkillComponent,
     ExpansionHookComponent,
+    FeedingNeedComponent,
+    GeneratedQuestComponent,
+    HostilityComponent,
+    IngredientComponent,
     InstitutionComponent,
+    InstitutionDuesComponent,
+    InstitutionReputationComponent,
+    InstitutionServiceComponent,
+    LanguageSkillComponent,
+    LawRegionComponent,
+    LegalReputationComponent,
+    LodgingComponent,
+    PotionMakerComponent,
     ProceduralSiteComponent,
+    PropertyDeedComponent,
+    QuestDeadlineComponent,
     QuestTemplateComponent,
+    RecallAnchorComponent,
+    RechargeServiceComponent,
+    RegionalReputationComponent,
+    RestRiskComponent,
     RumorComponent,
+    RumorReliabilityComponent,
+    RumorSourceComponent,
+    RumorTargetComponent,
+    SecretDoorComponent,
+    ServiceAccessComponent,
+    SocialRegisterComponent,
+    SpellTemplateComponent,
+    StreetwiseSkillComponent,
+    SupernaturalAfflictionComponent,
     TravelHubComponent,
+    TravelInterruptionComponent,
+    TravelModeComponent,
+    TravelSupplyComponent,
     UnrealizedLocationComponent,
 )
 from ..mechanics.dinosim import (
@@ -98,10 +165,36 @@ from ..mechanics.dinosim import (
     WeakPointComponent,
 )
 from ..mechanics.dragonsim import (
+    AncientBeastComponent,
+    ArtifactComponent,
+    CarvableComponent,
+    DiscoveryComponent,
+    EncounterZoneComponent,
     FactionComponent,
     FactionReputationComponent,
+    GreatSoulComponent,
+    GuardComponent,
+    JailComponent,
+    LockDifficultyComponent,
+    LoreBookComponent,
+    MagickaComponent,
+    MapMarkerComponent,
+    PerkComponent,
+    PersuasionComponent,
     PointOfInterestComponent,
+    PotionComponent,
+    PotionRecipeComponent,
     QuestComponent,
+    QuestObjectiveComponent,
+    QuestRewardComponent,
+    QuestStageComponent,
+    SpellComponent,
+    SpellCooldownComponent,
+    StealthComponent,
+    SurrenderComponent,
+    VoiceInscriptionComponent,
+    WantedComponent,
+    WordOfPowerComponent,
 )
 from ..mechanics.environment import FireComponent, FlammableComponent
 from ..mechanics.gardensim import (
@@ -838,27 +931,93 @@ class BarbarianWorldgenHook:
 
     def _on_character(self, event: CharacterGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
-        if entity is not None and (
-            _wants(event, "stamina", "combatant")
-            or _mentions(event, "warrior", "fighter")
-        ):
+        if entity is None:
+            return
+        name = _name(entity, event.character_key)
+        if _wants(event, "temperature-resistance"):
+            replace_component(entity, TemperatureResistanceComponent(heat=5.0, cold=5.0))
+        if _wants(event, "temperature-exposure"):
+            replace_component(
+                entity,
+                TemperatureExposureComponent(last_updated_epoch=event.world_epoch),
+            )
+        if _wants(event, "poison") or _mentions(event, "poisoned"):
+            replace_component(entity, PoisonComponent(severity=1.0))
+        if _wants(event, "corruption") or _mentions(event, "corrupted"):
+            replace_component(entity, CorruptionComponent(amount=1.0))
+        if _wants(event, "stamina", "combatant") or _mentions(event, "warrior", "fighter"):
             replace_component(entity, StaminaComponent())
+        if _wants(event, "blessing"):
+            replace_component(entity, BlessingComponent(name=name, source_id=event.entity_id))
+        if _wants(event, "curse"):
+            replace_component(entity, CurseComponent(name=name, source_id=event.entity_id))
+        if _wants(event, "climbing-skill") or _mentions(event, "climber"):
+            replace_component(entity, ClimbingSkillComponent(level=1))
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
             return
+        name = _name(entity, event.object_key)
         if _wants(event, "weapon") or _mentions(event, "sword", "axe", "spear", "club"):
             replace_component(entity, WeaponComponent(damage=8.0, lethal_capable=True))
         if _wants(event, "armor") or _mentions(event, "armor", "shield"):
             replace_component(entity, ArmorComponent(rating=2.0))
+        if _wants(event, "durability") or _mentions(event, "durable"):
+            replace_component(entity, DurabilityComponent(current=10.0, maximum=10.0))
         if _wants(event, "durable-fortification") or _mentions(event, "barricade", "wall"):
             replace_component(entity, FortificationComponent(rating=2.0, durability=20.0))
+        if _wants(event, "trap") or _mentions(event, "trap"):
+            replace_component(entity, TrapComponent(damage=6.0))
+        if _wants(event, "shrine") or _mentions(event, "shrine", "altar"):
+            replace_component(entity, ShrineComponent(deity=name))
+        if _wants(event, "ritual") or _mentions(event, "ritual"):
+            replace_component(entity, RitualComponent(ritual_type=event.intent or name))
+        if _wants(event, "blessing"):
+            replace_component(entity, BlessingComponent(name=name, source_id=event.entity_id))
+        if _wants(event, "curse"):
+            replace_component(entity, CurseComponent(name=name, source_id=event.entity_id))
+        if _wants(event, "key") or _mentions(event, "key"):
+            replace_component(entity, KeyComponent(key_name=name))
+        if _wants(event, "treasure") or _mentions(event, "treasure", "cache"):
+            replace_component(
+                entity,
+                TreasureComponent(treasure_type=event.entity_kind, key_name=name),
+            )
+        if _wants(event, "climbing-gate") or _mentions(event, "cliff", "climb"):
+            replace_component(entity, ClimbingGateComponent(required_level=1))
 
     def _on_room(self, event: RoomGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
-        if entity is not None and (_wants(event, "shelter") or _mentions(event, "shelter", "camp")):
+        if entity is None:
+            return
+        name = _name(entity, event.room_key)
+        if _wants(event, "shelter") or _mentions(event, "shelter", "camp"):
             replace_component(entity, ShelterComponent(temperature_buffer=10.0))
+        if _wants(event, "base-claim"):
+            replace_component(
+                entity,
+                BaseClaimComponent(
+                    claimed_by=_generated_id(event, "claimant"),
+                    clan=name,
+                    claimed_at_epoch=event.world_epoch,
+                ),
+            )
+        if _wants(event, "survival-gap") or _mentions(event, "shortage", "survival gap"):
+            replace_component(entity, SurvivalGapComponent(required_resource=_resource_type(event)))
+        if _wants(event, "building") or _mentions(event, "building", "hall"):
+            replace_component(entity, BuildingComponent(integrity=20.0, maximum_integrity=20.0))
+        if _wants(event, "siege-readiness") or _mentions(event, "siege"):
+            replace_component(entity, SiegeReadinessComponent(score=1.0))
+        if _wants(event, "purge-wave") or _mentions(event, "purge wave"):
+            replace_component(
+                entity,
+                PurgeWaveComponent(wave=1, started_at_epoch=event.world_epoch),
+            )
+        if _wants(event, "danger-zone") or _mentions(event, "danger zone", "ruin"):
+            replace_component(entity, DangerZoneComponent(zone_type=event.biome))
+        if _wants(event, "boss") or _mentions(event, "boss", "warlord"):
+            replace_component(entity, BossComponent(name=name))
 
 
 class DragonWorldgenHook:
@@ -875,15 +1034,118 @@ class DragonWorldgenHook:
         name = _name(entity, event.entity_key)
         if _wants(event, "point-of-interest") or _mentions(event, "landmark", "shrine", "ruin"):
             replace_component(entity, PointOfInterestComponent(location_type=event.entity_kind))
+        if _wants(event, "discovery"):
+            replace_component(
+                entity,
+                DiscoveryComponent(first_discovered_at_epoch=event.world_epoch),
+            )
+        if _wants(event, "map-marker") or _mentions(event, "map marker"):
+            replace_component(entity, MapMarkerComponent(label=name, marker_type=event.entity_kind))
+        if _wants(event, "encounter-zone") or _mentions(event, "encounter zone"):
+            replace_component(entity, EncounterZoneComponent(zone_type=event.entity_kind))
         if _wants(event, "faction") or _mentions(event, "faction", "guild", "clan"):
             replace_component(entity, FactionComponent(name=name))
         if _wants(event, "quest"):
             replace_component(entity, QuestComponent(quest_id=event.entity_key, title=name))
+        if _wants(event, "quest-stage"):
+            replace_component(entity, QuestStageComponent(quest_id=event.entity_key))
+        if _wants(event, "quest-objective"):
+            replace_component(
+                entity,
+                QuestObjectiveComponent(
+                    quest_id=event.entity_key,
+                    description=event.intent or name,
+                ),
+            )
+        if _wants(event, "quest-reward"):
+            replace_component(
+                entity,
+                QuestRewardComponent(quest_id=event.entity_key, description=event.intent or name),
+            )
+        if _wants(event, "guard") or _mentions(event, "guard"):
+            replace_component(entity, GuardComponent(faction_id=_generated_id(event, "faction")))
+        if _wants(event, "jail") or _mentions(event, "jail"):
+            replace_component(
+                entity,
+                JailComponent(
+                    faction_id=_generated_id(event, "faction"),
+                    release_epoch=event.world_epoch,
+                ),
+            )
+        if _wants(event, "perk"):
+            replace_component(entity, PerkComponent(name=name, skill_name=_resource_type(event)))
+        if _wants(event, "ancient-beast") or _mentions(event, "ancient beast"):
+            replace_component(entity, AncientBeastComponent(name=name))
+        if _wants(event, "word-of-power") or _mentions(event, "word of power"):
+            replace_component(entity, WordOfPowerComponent(name=name))
+        if _wants(event, "lock-difficulty", "locked"):
+            replace_component(entity, LockDifficultyComponent(difficulty=2))
+        if _wants(event, "lore-book") or _mentions(event, "lore book", "manual"):
+            replace_component(entity, LoreBookComponent(title=name, lore=event.intent or name))
+        if _wants(event, "spell"):
+            replace_component(entity, SpellComponent(name=name, effect=event.intent or name))
+        if _wants(event, "potion-recipe"):
+            replace_component(
+                entity,
+                PotionRecipeComponent(name=name, potion_name=f"{name} potion"),
+            )
+        if _wants(event, "potion"):
+            replace_component(entity, PotionComponent(name=name, effect=event.intent or name))
+        if _wants(event, "artifact") or _mentions(event, "artifact"):
+            replace_component(entity, ArtifactComponent(name=name, effect=event.intent or name))
+        if _wants(event, "carvable"):
+            replace_component(entity, CarvableComponent(remaining_space=24))
+        if _wants(event, "voice-inscription"):
+            replace_component(
+                entity,
+                VoiceInscriptionComponent(
+                    word_id=_generated_id(event, "word"),
+                    phrase=event.intent or name,
+                ),
+            )
 
     def _on_character(self, event: CharacterGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
-        if entity is not None and _wants(event, "faction-reputation"):
+        if entity is None:
+            return
+        name = _name(entity, event.character_key)
+        if _wants(event, "faction-reputation"):
             replace_component(entity, FactionReputationComponent(scores={}))
+        if _wants(event, "guard") or _mentions(event, "guard"):
+            replace_component(entity, GuardComponent(faction_id=_generated_id(event, "faction")))
+        if _wants(event, "jail"):
+            replace_component(
+                entity,
+                JailComponent(
+                    faction_id=_generated_id(event, "faction"),
+                    release_epoch=event.world_epoch,
+                ),
+            )
+        if _wants(event, "great-soul"):
+            replace_component(entity, GreatSoulComponent(souls=1))
+        if _wants(event, "stealth") or _mentions(event, "sneak", "stealthy"):
+            replace_component(
+                entity,
+                StealthComponent(sneaking=True, since_epoch=event.world_epoch),
+            )
+        if _wants(event, "wanted", "bounty"):
+            replace_component(
+                entity,
+                WantedComponent(amounts={_generated_id(event, "faction"): 10}),
+            )
+        if _wants(event, "magicka"):
+            replace_component(entity, MagickaComponent(last_updated_epoch=event.world_epoch))
+        if _wants(event, "spell-cooldown"):
+            replace_component(entity, SpellCooldownComponent(ready_at_epoch=event.world_epoch))
+        if _wants(event, "persuasion"):
+            replace_component(entity, PersuasionComponent(disposition=1))
+        if _wants(event, "surrender"):
+            replace_component(
+                entity,
+                SurrenderComponent(reason=event.intent or name, at_epoch=event.world_epoch),
+            )
+        if _wants(event, "ancient-beast") or _mentions(event, "ancient beast"):
+            replace_component(entity, AncientBeastComponent(name=name))
 
 
 class DaggerWorldgenHook:
@@ -891,6 +1153,7 @@ class DaggerWorldgenHook:
         self.actor = actor
         actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
         actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
+        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
 
     def _on_room(self, event: RoomGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
@@ -934,8 +1197,42 @@ class DaggerWorldgenHook:
             )
         if _wants(event, "travel-hub") or _mentions(event, "crossroads", "station"):
             replace_component(entity, TravelHubComponent(name=name))
+        if _wants(event, "travel-mode"):
+            replace_component(entity, TravelModeComponent(mode=event.biome or "foot"))
         if _wants(event, "institution") or _mentions(event, "guild", "temple", "bank"):
             replace_component(entity, InstitutionComponent(name=name))
+        if _wants(event, "institution-service"):
+            replace_component(entity, InstitutionServiceComponent(service_name=name))
+        if _wants(event, "institution-dues"):
+            replace_component(entity, InstitutionDuesComponent(amount_due=10))
+        if _wants(event, "bank") or _mentions(event, "bank"):
+            replace_component(entity, BankComponent(name=name, region_id=event.entity_id))
+        if _wants(event, "law-region"):
+            replace_component(
+                entity,
+                LawRegionComponent(region_id=event.entity_id, fines={"trespass": 5}),
+            )
+        if _wants(event, "property-deed"):
+            replace_component(
+                entity,
+                PropertyDeedComponent(property_id=event.entity_id, region_id=event.entity_id),
+            )
+        if _wants(event, "lodging") or _mentions(event, "inn", "lodging"):
+            replace_component(entity, LodgingComponent(price=5))
+        if _wants(event, "camping") or _mentions(event, "camp"):
+            replace_component(
+                entity,
+                CampingComponent(risk="low", started_at_epoch=event.world_epoch),
+            )
+        if _wants(event, "travel-supply"):
+            replace_component(entity, TravelSupplyComponent(quantity=3))
+        if _wants(event, "travel-interruption"):
+            replace_component(
+                entity,
+                TravelInterruptionComponent(reason=event.intent or "worldgen"),
+            )
+        if _wants(event, "rest-risk"):
+            replace_component(entity, RestRiskComponent(band="uneasy", note=event.intent or name))
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
@@ -952,6 +1249,15 @@ class DaggerWorldgenHook:
             )
         if _wants(event, "rumor") or _mentions(event, "rumor"):
             replace_component(entity, RumorComponent(text=event.intent or name))
+        if _wants(event, "rumor-source"):
+            replace_component(entity, RumorSourceComponent(source_id=event.room_id))
+        if _wants(event, "rumor-reliability"):
+            replace_component(entity, RumorReliabilityComponent(score=0.75))
+        if _wants(event, "rumor-target"):
+            replace_component(
+                entity,
+                RumorTargetComponent(target_id=event.room_id or event.entity_id),
+            )
         if _wants(event, "quest-template"):
             replace_component(
                 entity,
@@ -960,6 +1266,146 @@ class DaggerWorldgenHook:
                     objective=event.intent or name,
                     reward_item_name="coin",
                 ),
+            )
+        if _wants(event, "generated-quest"):
+            replace_component(
+                entity,
+                GeneratedQuestComponent(title=name, objective=event.intent or name),
+            )
+        if _wants(event, "quest-deadline"):
+            replace_component(
+                entity,
+                QuestDeadlineComponent(due_at_epoch=event.world_epoch + 86400),
+            )
+        if _wants(event, "dagger-quest-reward"):
+            replace_component(entity, DaggerQuestRewardComponent(item_name=name))
+        if _wants(event, "bank") or _mentions(event, "bank"):
+            replace_component(entity, BankComponent(name=name, region_id=event.room_id or ""))
+        if _wants(event, "spell-template"):
+            replace_component(
+                entity,
+                SpellTemplateComponent(
+                    spell_name=name,
+                    effect_type="worldgen",
+                    magnitude=1.0,
+                ),
+            )
+        if _wants(event, "custom-spell"):
+            replace_component(
+                entity,
+                CustomSpellComponent(spell_name=name, effect_type="worldgen", magnitude=1.0),
+            )
+        if _wants(event, "enchanted-item"):
+            replace_component(
+                entity,
+                EnchantedItemComponent(
+                    spell_name=name,
+                    effect_type="worldgen",
+                    magnitude=1.0,
+                ),
+            )
+        if _wants(event, "potion-maker"):
+            replace_component(
+                entity,
+                PotionMakerComponent(recipe_name=name, output_item_name=f"{name} potion"),
+            )
+        if _wants(event, "recharge-service"):
+            replace_component(entity, RechargeServiceComponent(charge_amount=1))
+        if _wants(event, "ingredient"):
+            replace_component(
+                entity,
+                IngredientComponent(ingredient_name=name, effect=event.intent or "worldgen"),
+            )
+        if _wants(event, "creature-language"):
+            replace_component(entity, CreatureLanguageComponent(language=event.entity_kind))
+        if _wants(event, "hostility"):
+            replace_component(entity, HostilityComponent(hostile=True))
+        if _wants(event, "dungeon-objective"):
+            replace_component(
+                entity,
+                DungeonObjectiveComponent(
+                    objective_kind=event.entity_kind,
+                    description=event.intent or name,
+                ),
+            )
+        if _wants(event, "secret-door") or _mentions(event, "secret door"):
+            replace_component(
+                entity,
+                SecretDoorComponent(target_room_id=event.room_id or event.entity_id, hint=name),
+            )
+        if _wants(event, "automap"):
+            replace_component(
+                entity,
+                AutomapComponent(marked_rooms=(event.room_id,) if event.room_id else ()),
+            )
+
+    def _on_character(self, event: CharacterGeneratedEvent) -> None:
+        entity = _entity(self.actor, event)
+        if entity is None:
+            return
+        name = _name(entity, event.character_key)
+        if _wants(event, "bounty"):
+            replace_component(entity, BountyComponent(amount=10, region_id=event.room_id))
+        if _wants(event, "regional-reputation"):
+            replace_component(entity, RegionalReputationComponent(scores={event.room_id: 1}))
+        if _wants(event, "institution-reputation"):
+            replace_component(
+                entity,
+                InstitutionReputationComponent(scores={_generated_id(event, "institution"): 1}),
+            )
+        if _wants(event, "legal-reputation"):
+            replace_component(entity, LegalReputationComponent(scores={event.room_id: 0}))
+        if _wants(event, "service-access"):
+            replace_component(
+                entity,
+                ServiceAccessComponent(service_ids=(_generated_id(event, "service"),)),
+            )
+        if _wants(event, "class-template"):
+            replace_component(
+                entity,
+                ClassTemplateComponent(class_name=name, primary_skills=tuple(event.tags)),
+            )
+        if _wants(event, "custom-class"):
+            replace_component(
+                entity,
+                CustomClassComponent(class_name=name, primary_skills=tuple(event.tags)),
+            )
+        if _wants(event, "language-skill"):
+            replace_component(entity, LanguageSkillComponent(languages={event.species: 1}))
+        if _wants(event, "supernatural-affliction"):
+            replace_component(
+                entity,
+                SupernaturalAfflictionComponent(
+                    affliction_type=event.intent or "worldgen",
+                    contracted_at_epoch=event.world_epoch,
+                ),
+            )
+        if _wants(event, "affliction-stigma"):
+            replace_component(entity, AfflictionStigmaComponent(region_id=event.room_id))
+        if _wants(event, "cure-quest-hook"):
+            replace_component(
+                entity,
+                CureQuestHookComponent(affliction_type=event.intent or "worldgen"),
+            )
+        if _wants(event, "feeding-need"):
+            replace_component(
+                entity,
+                FeedingNeedComponent(current=1.0, last_updated_epoch=event.world_epoch),
+            )
+        if _wants(event, "recall-anchor"):
+            replace_component(entity, RecallAnchorComponent(room_id=event.room_id))
+        if _wants(event, "dialogue-approach"):
+            replace_component(entity, DialogueApproachComponent(last_approach="worldgen"))
+        if _wants(event, "etiquette-skill"):
+            replace_component(entity, EtiquetteSkillComponent(level=1))
+        if _wants(event, "streetwise-skill"):
+            replace_component(entity, StreetwiseSkillComponent(level=1))
+        if _wants(event, "social-register"):
+            replace_component(entity, SocialRegisterComponent(register=event.species))
+        if _wants(event, "conversation-tone"):
+            replace_component(
+                entity,
+                ConversationToneComponent(tone="curious", last_reaction=event.intent or name),
             )
 
 
