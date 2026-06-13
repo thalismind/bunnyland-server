@@ -192,6 +192,7 @@ from bunnyland.mechanics.voidsim import (
     install_voidsim,
     voidsim_fragments,
 )
+from bunnyland.prompts import ComponentPromptContext
 
 HOUR = 60 * 60
 
@@ -1794,6 +1795,49 @@ def test_voidsim_fragments_describe_module_and_systems():
     assert any("engineering module" in line for line in fragments)
     assert any("Module oxygen: 80/100" in line for line in fragments)
     assert any("Ship system reactor" in line for line in fragments)
+
+
+def test_voidsim_component_prompt_fragments_cover_module_and_target_state():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    room = world.get_entity(scenario.room_a)
+    room.add_component(HabitatModuleComponent(module_type="engineering"))
+    contract_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="survey charter", kind="contract"),
+            ContractComponent(contract_type="survey", reward=40),
+        ],
+    )
+    artifact_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="alien idol", kind="artifact"),
+            AlienArtifactComponent(studied_by=(str(character.id),)),
+        ],
+    )
+
+    room_ctx = ComponentPromptContext.for_entity(world, room, room=room)
+    target_ctx = ComponentPromptContext.for_entity(
+        world, world.get_entity(contract_id), target=character
+    )
+    artifact_ctx = ComponentPromptContext.for_entity(
+        world, world.get_entity(artifact_id), target=character
+    )
+
+    assert room.get_component(HabitatModuleComponent).prompt_fragments(room_ctx) == (
+        f"You are in the engineering module ({room.id}).",
+    )
+    assert world.get_entity(contract_id).get_component(ContractComponent).prompt_fragments(
+        target_ctx
+    ) == ("Available survey contract: survey charter for 40 credits.",)
+    assert (
+        world.get_entity(artifact_id)
+        .get_component(AlienArtifactComponent)
+        .prompt_fragments(artifact_ctx)
+        == ()
+    )
 
 
 def test_voidsim_fragments_describe_chaos_wards_and_mutation_pressure():

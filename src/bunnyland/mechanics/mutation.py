@@ -46,6 +46,11 @@ class CyberneticMutationPressureComponent(Component):
     amount: float = 0.0
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or self.amount <= 0.0:
+            return ()
+        return (f"Cybernetic mutation pressure: {self.amount:g}.",)
+
 
 __all__ = [
     "ChaosMutationPressureComponent",

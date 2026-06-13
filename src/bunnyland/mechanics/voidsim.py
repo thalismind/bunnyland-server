@@ -45,6 +45,7 @@ from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.events import event_base as _void_event
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..prompts import ComponentPromptContext
 from .barbariansim import CorruptionComponent, CorruptionGainedEvent
 from .colonysim import ResourceStackComponent, TechUnlockComponent
 from .mutation import (
@@ -74,12 +75,18 @@ class HabitatModuleComponent(Component):
     module_type: str
     ship_id: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"You are in the {self.module_type} module ({_name(ctx.entity)}).",)
+
 
 @dataclass(frozen=True)
 class AirlockComponent(Component):
     state: str = "sealed"  # sealed | open | cycled
     module_id: str | None = None
     exposes_vacuum: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Airlock {_name(ctx.entity)}: {self.state}.",)
 
 
 @dataclass(frozen=True)
@@ -91,11 +98,20 @@ class BulkheadComponent(Component):
 class PressurizedComponent(Component):
     pressure: float = 1.0  # atmospheres; 0.0 == vacuum
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "vacuum" if self.pressure <= 0.0 else f"{self.pressure:.1f} atm"
+        return (f"Module pressure: {state}.",)
+
 
 @dataclass(frozen=True)
 class LifeSupportComponent(Component):
     online: bool = True
     oxygen_per_hour: float = 5.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Life support: {'online' if self.online else 'OFFLINE'}.",)
 
 
 @dataclass(frozen=True)
@@ -104,11 +120,20 @@ class ShipSystemComponent(Component):
     integrity: float = 100.0
     online: bool = True
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        status = "online" if self.online else "offline"
+        return (f"Ship system {self.system_type}: {self.integrity:.0f}% ({status}).",)
+
 
 @dataclass(frozen=True)
 class PowerGridComponent(Component):
     capacity: float = 100.0
     available: float = 100.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Power grid: {self.available:.0f}/{self.capacity:.0f} available.",)
 
 
 @dataclass(frozen=True)
@@ -117,6 +142,10 @@ class OxygenComponent(Component):
     maximum: float = 100.0
     failed: bool = False
     last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Module oxygen: {self.level:.0f}/{self.maximum:.0f}.",)
 
 
 @dataclass(frozen=True)
@@ -133,12 +162,26 @@ class ChaosInfluenceComponent(Component):
     mutation_pressure_per_corruption: float = 1.0
     last_updated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.room is not None and ctx.entity.id == ctx.room.id:
+            return (
+                f"Chaos influence: {self.source_type} "
+                f"({self.corruption_per_hour:g}/hour).",
+            )
+        return (
+            f"Chaos source {_name(ctx.entity)}: {self.source_type} "
+            f"({self.corruption_per_hour:g}/hour).",
+        )
+
 
 @dataclass(frozen=True)
 class ChaosWardComponent(Component):
     """Protection against nearby chaos influence."""
 
     protection_per_hour: float = 1.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Chaos ward {_name(ctx.entity)}: {self.protection_per_hour:g}/hour.",)
 
 
 # --- 8.4 Technology, fabrication, and upgrades ----------------------------------------
@@ -149,6 +192,9 @@ class FabricatorComponent(Component):
     """A module that can fabricate parts from blueprints."""
 
     online: bool = True
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Fabricator {_name(ctx.entity)}: {'online' if self.online else 'offline'}.",)
 
 
 @dataclass(frozen=True)
@@ -165,6 +211,12 @@ class BlueprintComponent(Component):
     integrity_bonus: float = 25.0
     resource_inputs: tuple[tuple[str, int], ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        world = ctx._world
+        ready = _tech_unlocked(world, self.required_tech) if world is not None else False
+        gate = "ready" if ready else f"needs tech {self.required_tech}"
+        return (f"Blueprint {self.name} ({self.system_type}): {gate}.",)
+
 
 @dataclass(frozen=True)
 class ShipUpgradeComponent(Component):
@@ -173,6 +225,12 @@ class ShipUpgradeComponent(Component):
     system_type: str
     integrity_bonus: float = 25.0
     installed: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.installed:
+            return ()
+        return (f"Upgrade part ready for {self.system_type} system.",)
 
 
 # --- 8.7 Contracts, salvage, cargo, and frontier economy ------------------------------
@@ -188,6 +246,16 @@ class ContractComponent(Component):
     cargo_id: str | None = None
     salvage_claim_id: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.status == "offered":
+            return (
+                f"Available {self.contract_type} contract: {_name(ctx.entity)} "
+                f"for {self.reward} credits.",
+            )
+        if ctx.target is not None and self.accepted_by == str(ctx.target.id):
+            return (f"{self.contract_type.title()} contract {_name(ctx.entity)}: {self.status}.",)
+        return ()
+
 
 @dataclass(frozen=True)
 class CargoComponent(Component):
@@ -195,6 +263,13 @@ class CargoComponent(Component):
     destination_id: str = ""
     loaded_on: str | None = None
     delivered: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.delivered:
+            return (f"Cargo delivered: {_name(ctx.entity)}.",)
+        if self.loaded_on is not None:
+            return (f"Cargo loaded on {self.loaded_on}: {_name(ctx.entity)}.",)
+        return (f"Cargo waiting: {_name(ctx.entity)} ({self.cargo_type}).",)
 
 
 @dataclass(frozen=True)
@@ -205,6 +280,11 @@ class SalvageClaimComponent(Component):
     claimed_by: str | None = None
     claimed: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.claimed:
+            return ()
+        return (f"Salvage claim available: {_name(ctx.entity)}.",)
+
 
 # --- 8.5 Alien contact, diplomacy, and xenobiology ------------------------------------
 
@@ -214,12 +294,21 @@ class AlienSpeciesComponent(Component):
     name: str
     disposition: str = "unknown"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Alien species contact: {self.name} ({self.disposition}).",)
+
 
 @dataclass(frozen=True)
 class FirstContactComponent(Component):
     species_id: str
     contacted_by: tuple[str, ...] = ()
     status: str = "uncontacted"
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and str(ctx.target.id) in self.contacted_by:
+            return ()
+        return (f"First contact opportunity: {_name(ctx.entity)}.",)
 
 
 @dataclass(frozen=True)
@@ -228,12 +317,21 @@ class TranslationMatrixComponent(Component):
     progress: float = 0.0
     complete: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        status = "complete" if self.complete else f"{self.progress:.0f}%"
+        return (f"Translation matrix {_name(ctx.entity)}: {status}.",)
+
 
 @dataclass(frozen=True)
 class QuarantineComponent(Component):
     reason: str = "unknown organism"
     active: bool = True
     started_by: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not self.active:
+            return ()
+        return (f"Quarantined sample {_name(ctx.entity)}: {self.reason}.",)
 
 
 @dataclass(frozen=True)
@@ -242,12 +340,20 @@ class DiplomaticMissionComponent(Component):
     standing: int = 0
     last_negotiated_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Diplomatic mission {_name(ctx.entity)}: standing {self.standing}.",)
+
 
 @dataclass(frozen=True)
 class AlienArtifactComponent(Component):
     species_id: str = ""
     studied_by: tuple[str, ...] = ()
     insight: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is not None and str(ctx.target.id) in self.studied_by:
+            return ()
+        return (f"Alien artifact ready for study: {_name(ctx.entity)}.",)
 
 
 @dataclass(frozen=True)
@@ -256,12 +362,19 @@ class XenobiologySampleComponent(Component):
     contamination: float = 0.0
     studied_by: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Xenobiology sample {_name(ctx.entity)}: contamination {self.contamination:g}.",)
+
 
 @dataclass(frozen=True)
 class TradeProtocolComponent(Component):
     species_id: str = ""
     terms: str = "cautious exchange"
     accepted: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "accepted" if self.accepted else "pending"
+        return (f"Trade protocol {_name(ctx.entity)}: {state}, {self.terms}.",)
 
 
 @dataclass(frozen=True)
@@ -270,12 +383,21 @@ class DroneComponent(Component):
     assigned_task: str = ""
     active: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "active" if self.active else "idle"
+        return (f"Drone {_name(ctx.entity)}: {state} {self.assigned_task}.",)
+
 
 @dataclass(frozen=True)
 class ShipAIComponent(Component):
     name: str = "ship AI"
     trust: int = 0
     hacked: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "hacked" if self.hacked else "locked"
+        return (f"Ship AI {self.name}: trust {self.trust}, {state}.",)
 
 
 @dataclass(frozen=True)
@@ -284,6 +406,10 @@ class DataSalvageComponent(Component):
     encrypted: bool = True
     recovered_by: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "encrypted" if self.encrypted else "recovered"
+        return (f"Data salvage {_name(ctx.entity)}: {self.data_type}, {state}.",)
+
 
 @dataclass(frozen=True)
 class AwayTeamComponent(Component):
@@ -291,10 +417,19 @@ class AwayTeamComponent(Component):
     member_ids: tuple[str, ...] = ()
     deployed: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "deployed" if self.deployed else "standing by"
+        return (f"Away team {_name(ctx.entity)}: {self.mission}, {state}.",)
+
 
 @dataclass(frozen=True)
 class MoraleComponent(Component):
     value: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Crew morale: {self.value}.",)
 
 
 @dataclass(frozen=True)
@@ -302,11 +437,20 @@ class MutinyComponent(Component):
     active: bool = False
     ringleader_id: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or not self.active:
+            return ()
+        return ("Mutiny is active.",)
+
 
 @dataclass(frozen=True)
 class EmergencyComponent(Component):
     emergency_type: str = "decompression"
     resolved: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "resolved" if self.resolved else "active"
+        return (f"Emergency {_name(ctx.entity)}: {self.emergency_type}, {state}.",)
 
 
 @dataclass(frozen=True)
@@ -314,11 +458,18 @@ class ReactorComponent(Component):
     stability: float = 100.0
     online: bool = True
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Reactor {_name(ctx.entity)}: stability {self.stability:g}.",)
+
 
 @dataclass(frozen=True)
 class GravityComponent(Component):
     enabled: bool = True
     strength: float = 1.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "enabled" if self.enabled else "disabled"
+        return (f"Gravity {_name(ctx.entity)}: {state} {self.strength:g}g.",)
 
 
 @dataclass(frozen=True)
@@ -326,11 +477,19 @@ class BoardingThreatComponent(Component):
     threat_level: int = 1
     repelled: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "repelled" if self.repelled else "boarding"
+        return (f"Boarding threat {_name(ctx.entity)}: level {self.threat_level}, {state}.",)
+
 
 @dataclass(frozen=True)
 class PassengerComponent(Component):
     destination_id: str = ""
     delivered: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "delivered" if self.delivered else "aboard"
+        return (f"Passenger {_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -338,11 +497,17 @@ class SurveySiteComponent(Component):
     resource: str = ""
     surveyed_by: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Survey site {_name(ctx.entity)}: {self.resource}.",)
+
 
 @dataclass(frozen=True)
 class MiningSiteComponent(Component):
     resource_type: str = "ore"
     remaining: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Mining site {_name(ctx.entity)}: {self.remaining} {self.resource_type}.",)
 
 
 @dataclass(frozen=True)
@@ -350,11 +515,19 @@ class CustomsHoldComponent(Component):
     inspected: bool = False
     contraband_found: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "inspected" if self.inspected else "pending"
+        return (f"Customs hold {_name(ctx.entity)}: {state}.",)
+
 
 @dataclass(frozen=True)
 class SmugglingCompartmentComponent(Component):
     hidden: bool = True
     discovered: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "discovered" if self.discovered else "hidden"
+        return (f"Smuggling compartment {_name(ctx.entity)}: {state}.",)
 
 
 @dataclass(frozen=True)
@@ -363,11 +536,18 @@ class InsurancePolicyComponent(Component):
     premium: int = 0
     claimed: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        state = "claimed" if self.claimed else "active"
+        return (f"Insurance policy {_name(ctx.entity)}: {state}.",)
+
 
 @dataclass(frozen=True)
 class MortgageComponent(Component):
     principal: int = 0
     balance: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Mortgage {_name(ctx.entity)}: balance {self.balance}.",)
 
 
 # --- 8.2 Space travel, orbits, and navigation -----------------------------------------
@@ -377,17 +557,32 @@ class MortgageComponent(Component):
 class StarSystemComponent(Component):
     name: str
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Current system: {self.name}.",)
+
 
 @dataclass(frozen=True)
 class OrbitalBodyComponent(Component):
     body_type: str  # planet | moon | asteroid-belt | station
     landable: bool = True
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"Orbital body nearby: {_name(ctx.entity)} ({self.body_type}).",)
+
 
 @dataclass(frozen=True)
 class OrbitComponent(Component):
     body_id: str
     altitude: str = "orbit"  # orbit | surface
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        world = ctx._world
+        body_id = parse_entity_id(self.body_id)
+        if world is None or body_id is None or not world.has_entity(body_id):
+            return ()
+        where = "landed on" if self.altitude == "surface" else "in orbit of"
+        return (f"{_name(ctx.entity)} is {where} {_name(world.get_entity(body_id))}.",)
 
 
 @dataclass(frozen=True)
@@ -398,6 +593,9 @@ class NavigationRouteComponent(Component):
     jump_seconds: float = 0.0
     status: str = "plotted"  # plotted | jumping
     arrive_at_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"{_name(ctx.entity)} course: {self.status} (hazard: {self.hazard}).",)
 
 
 @dataclass(frozen=True)
@@ -411,6 +609,9 @@ class FuelComponent(Component):
     level: float = 100.0
     maximum: float = 100.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return (f"{_name(ctx.entity)} fuel: {self.level:.0f}/{self.maximum:.0f}.",)
+
 
 @dataclass(frozen=True)
 class SensorComponent(Component):
@@ -423,6 +624,12 @@ class DistressSignalComponent(Component):
     source_site_id: str | None = None
     detected: bool = False
     answered: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if not self.detected or self.answered:
+            return ()
+        return (f"Distress signal: {self.text}",)
 
 
 @dataclass(frozen=True)
@@ -2082,6 +2289,11 @@ class CrewDutyStatusComponent(Component):
     on_duty: bool = False
     last_changed_epoch: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or not self.on_duty:
+            return ()
+        return ("You are currently on duty.",)
+
 
 @dataclass(frozen=True)
 class WorksShift(Edge):
@@ -2973,222 +3185,97 @@ class CrewDutyConsequence:
 
 def voidsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
+    ctx = ComponentPromptContext.for_entity(world, character)
     module_id = container_of(character)
     if module_id is not None and world.has_entity(module_id):
         module = world.get_entity(module_id)
-        if module.has_component(HabitatModuleComponent):
-            module_type = module.get_component(HabitatModuleComponent).module_type
-            lines.append(f"You are in the {module_type} module ({_name(module)}).")
-        if module.has_component(PressurizedComponent):
-            pressure = module.get_component(PressurizedComponent).pressure
-            state = "vacuum" if pressure <= 0.0 else f"{pressure:.1f} atm"
-            lines.append(f"Module pressure: {state}.")
-        if module.has_component(OxygenComponent):
-            oxygen = module.get_component(OxygenComponent)
-            lines.append(f"Module oxygen: {oxygen.level:.0f}/{oxygen.maximum:.0f}.")
-        if module.has_component(LifeSupportComponent):
-            online = module.get_component(LifeSupportComponent).online
-            lines.append(f"Life support: {'online' if online else 'OFFLINE'}.")
-        if module.has_component(ChaosInfluenceComponent):
-            influence = module.get_component(ChaosInfluenceComponent)
-            lines.append(
-                f"Chaos influence: {influence.source_type} "
-                f"({influence.corruption_per_hour:g}/hour)."
-            )
+        module_ctx = ComponentPromptContext.for_entity(
+            world, module, perspective=ctx.perspective, room=module
+        )
+        for component_type in (
+            HabitatModuleComponent,
+            PressurizedComponent,
+            OxygenComponent,
+            LifeSupportComponent,
+            ChaosInfluenceComponent,
+        ):
+            if module.has_component(component_type):
+                lines.extend(module.get_component(component_type).prompt_fragments(module_ctx))
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        if entity.has_component(ChaosInfluenceComponent):
-            influence = entity.get_component(ChaosInfluenceComponent)
-            lines.append(
-                f"Chaos source {_name(entity)}: {influence.source_type} "
-                f"({influence.corruption_per_hour:g}/hour)."
-            )
-        if entity.has_component(ChaosWardComponent):
-            ward = entity.get_component(ChaosWardComponent)
-            lines.append(f"Chaos ward {_name(entity)}: {ward.protection_per_hour:g}/hour.")
-        if entity.has_component(ShipSystemComponent):
-            system = entity.get_component(ShipSystemComponent)
-            status = "online" if system.online else "offline"
-            lines.append(f"Ship system {system.system_type}: {system.integrity:.0f}% ({status}).")
-        if entity.has_component(FabricatorComponent):
-            online = entity.get_component(FabricatorComponent).online
-            lines.append(f"Fabricator {_name(entity)}: {'online' if online else 'offline'}.")
-        if entity.has_component(BlueprintComponent):
-            blueprint = entity.get_component(BlueprintComponent)
-            ready = _tech_unlocked(world, blueprint.required_tech)
-            gate = "ready" if ready else f"needs tech {blueprint.required_tech}"
-            lines.append(f"Blueprint {blueprint.name} ({blueprint.system_type}): {gate}.")
-        if entity.has_component(ShipUpgradeComponent):
-            upgrade = entity.get_component(ShipUpgradeComponent)
-            if not upgrade.installed:
-                lines.append(f"Upgrade part ready for {upgrade.system_type} system.")
-        if entity.has_component(ContractComponent):
-            contract = entity.get_component(ContractComponent)
-            if contract.status == "offered":
-                lines.append(
-                    f"Available {contract.contract_type} contract: {_name(entity)} "
-                    f"for {contract.reward} credits."
-                )
-            elif contract.accepted_by == str(character.id):
-                lines.append(
-                    f"{contract.contract_type.title()} contract {_name(entity)}: {contract.status}."
-                )
-        if entity.has_component(CargoComponent):
-            cargo = entity.get_component(CargoComponent)
-            if cargo.delivered:
-                lines.append(f"Cargo delivered: {_name(entity)}.")
-            elif cargo.loaded_on is not None:
-                lines.append(f"Cargo loaded on {cargo.loaded_on}: {_name(entity)}.")
-            else:
-                lines.append(f"Cargo waiting: {_name(entity)} ({cargo.cargo_type}).")
-        if entity.has_component(SalvageClaimComponent):
-            claim = entity.get_component(SalvageClaimComponent)
-            if not claim.claimed:
-                lines.append(f"Salvage claim available: {_name(entity)}.")
-        if entity.has_component(AlienSpeciesComponent):
-            species = entity.get_component(AlienSpeciesComponent)
-            lines.append(f"Alien species contact: {species.name} ({species.disposition}).")
-        if entity.has_component(FirstContactComponent):
-            contact = entity.get_component(FirstContactComponent)
-            if str(character.id) not in contact.contacted_by:
-                lines.append(f"First contact opportunity: {_name(entity)}.")
-        if entity.has_component(TranslationMatrixComponent):
-            matrix = entity.get_component(TranslationMatrixComponent)
-            status = "complete" if matrix.complete else f"{matrix.progress:.0f}%"
-            lines.append(f"Translation matrix {_name(entity)}: {status}.")
-        if entity.has_component(QuarantineComponent):
-            quarantine = entity.get_component(QuarantineComponent)
-            if quarantine.active:
-                lines.append(f"Quarantined sample {_name(entity)}: {quarantine.reason}.")
-        if entity.has_component(DiplomaticMissionComponent):
-            mission = entity.get_component(DiplomaticMissionComponent)
-            lines.append(f"Diplomatic mission {_name(entity)}: standing {mission.standing}.")
-        if entity.has_component(AlienArtifactComponent):
-            artifact = entity.get_component(AlienArtifactComponent)
-            if str(character.id) not in artifact.studied_by:
-                lines.append(f"Alien artifact ready for study: {_name(entity)}.")
-        if entity.has_component(XenobiologySampleComponent):
-            sample = entity.get_component(XenobiologySampleComponent)
-            lines.append(
-                f"Xenobiology sample {_name(entity)}: contamination {sample.contamination:g}."
-            )
-        if entity.has_component(TradeProtocolComponent):
-            protocol = entity.get_component(TradeProtocolComponent)
-            state = "accepted" if protocol.accepted else "pending"
-            lines.append(f"Trade protocol {_name(entity)}: {state}, {protocol.terms}.")
-        if entity.has_component(DroneComponent):
-            drone = entity.get_component(DroneComponent)
-            state = "active" if drone.active else "idle"
-            lines.append(f"Drone {_name(entity)}: {state} {drone.assigned_task}.")
-        if entity.has_component(ShipAIComponent):
-            ai = entity.get_component(ShipAIComponent)
-            state = "hacked" if ai.hacked else "locked"
-            lines.append(f"Ship AI {ai.name}: trust {ai.trust}, {state}.")
-        if entity.has_component(DataSalvageComponent):
-            data = entity.get_component(DataSalvageComponent)
-            state = "encrypted" if data.encrypted else "recovered"
-            lines.append(f"Data salvage {_name(entity)}: {data.data_type}, {state}.")
-        if entity.has_component(AwayTeamComponent):
-            team = entity.get_component(AwayTeamComponent)
-            state = "deployed" if team.deployed else "standing by"
-            lines.append(f"Away team {_name(entity)}: {team.mission}, {state}.")
-        if entity.has_component(EmergencyComponent):
-            emergency = entity.get_component(EmergencyComponent)
-            state = "resolved" if emergency.resolved else "active"
-            lines.append(f"Emergency {_name(entity)}: {emergency.emergency_type}, {state}.")
-        if entity.has_component(ReactorComponent):
-            reactor = entity.get_component(ReactorComponent)
-            lines.append(f"Reactor {_name(entity)}: stability {reactor.stability:g}.")
-        if entity.has_component(GravityComponent):
-            gravity = entity.get_component(GravityComponent)
-            state = "enabled" if gravity.enabled else "disabled"
-            lines.append(f"Gravity {_name(entity)}: {state} {gravity.strength:g}g.")
-        if entity.has_component(BoardingThreatComponent):
-            threat = entity.get_component(BoardingThreatComponent)
-            state = "repelled" if threat.repelled else "boarding"
-            lines.append(f"Boarding threat {_name(entity)}: level {threat.threat_level}, {state}.")
-        if entity.has_component(PassengerComponent):
-            passenger = entity.get_component(PassengerComponent)
-            state = "delivered" if passenger.delivered else "aboard"
-            lines.append(f"Passenger {_name(entity)}: {state}.")
-        if entity.has_component(SurveySiteComponent):
-            survey = entity.get_component(SurveySiteComponent)
-            lines.append(f"Survey site {_name(entity)}: {survey.resource}.")
-        if entity.has_component(MiningSiteComponent):
-            mining = entity.get_component(MiningSiteComponent)
-            lines.append(f"Mining site {_name(entity)}: {mining.remaining} {mining.resource_type}.")
-        if entity.has_component(CustomsHoldComponent):
-            hold = entity.get_component(CustomsHoldComponent)
-            state = "inspected" if hold.inspected else "pending"
-            lines.append(f"Customs hold {_name(entity)}: {state}.")
-        if entity.has_component(SmugglingCompartmentComponent):
-            compartment = entity.get_component(SmugglingCompartmentComponent)
-            state = "discovered" if compartment.discovered else "hidden"
-            lines.append(f"Smuggling compartment {_name(entity)}: {state}.")
-        if entity.has_component(InsurancePolicyComponent):
-            policy = entity.get_component(InsurancePolicyComponent)
-            state = "claimed" if policy.claimed else "active"
-            lines.append(f"Insurance policy {_name(entity)}: {state}.")
-        if entity.has_component(MortgageComponent):
-            mortgage = entity.get_component(MortgageComponent)
-            lines.append(f"Mortgage {_name(entity)}: balance {mortgage.balance}.")
-        if entity.has_component(AirlockComponent):
-            airlock = entity.get_component(AirlockComponent)
-            lines.append(f"Airlock {_name(entity)}: {airlock.state}.")
-        if entity.has_component(PowerGridComponent):
-            grid = entity.get_component(PowerGridComponent)
-            lines.append(f"Power grid: {grid.available:.0f}/{grid.capacity:.0f} available.")
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        for component_type in (
+            ChaosInfluenceComponent,
+            ChaosWardComponent,
+            ShipSystemComponent,
+            FabricatorComponent,
+            BlueprintComponent,
+            ShipUpgradeComponent,
+            ContractComponent,
+            CargoComponent,
+            SalvageClaimComponent,
+            AlienSpeciesComponent,
+            FirstContactComponent,
+            TranslationMatrixComponent,
+            QuarantineComponent,
+            DiplomaticMissionComponent,
+            AlienArtifactComponent,
+            XenobiologySampleComponent,
+            TradeProtocolComponent,
+            DroneComponent,
+            ShipAIComponent,
+            DataSalvageComponent,
+            AwayTeamComponent,
+            EmergencyComponent,
+            ReactorComponent,
+            GravityComponent,
+            BoardingThreatComponent,
+            PassengerComponent,
+            SurveySiteComponent,
+            MiningSiteComponent,
+            CustomsHoldComponent,
+            SmugglingCompartmentComponent,
+            InsurancePolicyComponent,
+            MortgageComponent,
+            AirlockComponent,
+            PowerGridComponent,
+            FuelComponent,
+            OrbitComponent,
+            NavigationRouteComponent,
+            DistressSignalComponent,
+            OrbitalBodyComponent,
+        ):
+            if entity.has_component(component_type):
+                lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
         if entity.has_component(ShipComponent):
             for _edge, station_id in entity.get_relationships(DockedTo):
                 if world.has_entity(station_id):
                     lines.append(
                         f"{_name(entity)} is docked at {_name(world.get_entity(station_id))}."
                     )
-        if entity.has_component(FuelComponent):
-            fuel = entity.get_component(FuelComponent)
-            lines.append(f"{_name(entity)} fuel: {fuel.level:.0f}/{fuel.maximum:.0f}.")
-        if entity.has_component(OrbitComponent):
-            orbit = entity.get_component(OrbitComponent)
-            where = "landed on" if orbit.altitude == "surface" else "in orbit of"
-            body_id = parse_entity_id(orbit.body_id)
-            if body_id is not None and world.has_entity(body_id):
-                body_name = _name(world.get_entity(body_id))
-                lines.append(f"{_name(entity)} is {where} {body_name}.")
-        if entity.has_component(NavigationRouteComponent):
-            route = entity.get_component(NavigationRouteComponent)
-            lines.append(f"{_name(entity)} course: {route.status} (hazard: {route.hazard}).")
-        if entity.has_component(DistressSignalComponent):
-            signal = entity.get_component(DistressSignalComponent)
-            if signal.detected and not signal.answered:
-                lines.append(f"Distress signal: {signal.text}")
-        if entity.has_component(OrbitalBodyComponent):
-            body = entity.get_component(OrbitalBodyComponent)
-            lines.append(f"Orbital body nearby: {_name(entity)} ({body.body_type}).")
     if module_id is not None and world.has_entity(module_id):
         current = world.get_entity(module_id)
         if current.has_component(StarSystemComponent):
-            lines.append(f"Current system: {current.get_component(StarSystemComponent).name}.")
+            current_ctx = ComponentPromptContext.for_entity(
+                world, current, perspective=ctx.perspective, room=current
+            )
+            lines.extend(
+                current.get_component(StarSystemComponent).prompt_fragments(current_ctx)
+            )
     if character.has_component(CorruptionComponent):
         corruption = character.get_component(CorruptionComponent)
         lines.append(f"Chaos corruption: {corruption.amount:g}.")
-    if character.has_component(ChaosMutationPressureComponent):
-        pressure = character.get_component(ChaosMutationPressureComponent)
-        if pressure.amount > 0.0:
-            lines.append(f"Chaos mutation pressure: {pressure.amount:g}.")
-    if character.has_component(RadiationMutationPressureComponent):
-        pressure = character.get_component(RadiationMutationPressureComponent)
-        if pressure.amount > 0.0:
-            lines.append(f"Radiation mutation pressure: {pressure.amount:g}.")
-    if character.has_component(CyberneticMutationPressureComponent):
-        pressure = character.get_component(CyberneticMutationPressureComponent)
-        if pressure.amount > 0.0:
-            lines.append(f"Cybernetic mutation pressure: {pressure.amount:g}.")
-    if character.has_component(MoraleComponent):
-        lines.append(f"Crew morale: {character.get_component(MoraleComponent).value}.")
-    if character.has_component(MutinyComponent):
-        mutiny = character.get_component(MutinyComponent)
-        if mutiny.active:
-            lines.append("Mutiny is active.")
+    for component_type in (
+        ChaosMutationPressureComponent,
+        RadiationMutationPressureComponent,
+        CyberneticMutationPressureComponent,
+        MoraleComponent,
+        MutinyComponent,
+    ):
+        if character.has_component(component_type):
+            lines.extend(character.get_component(component_type).prompt_fragments(ctx))
     for edge, shift_id in character.get_relationships(WorksShift):
         if not world.has_entity(shift_id):
             continue
@@ -3201,11 +3288,8 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
                 f"({shift.start_hour:02d}:00-{shift.end_hour:02d}:00) "
                 f"as {shift.role or 'crew'}{station}."
             )
-    if (
-        character.has_component(CrewDutyStatusComponent)
-        and character.get_component(CrewDutyStatusComponent).on_duty
-    ):
-        lines.append("You are currently on duty.")
+    if character.has_component(CrewDutyStatusComponent):
+        lines.extend(character.get_component(CrewDutyStatusComponent).prompt_fragments(ctx))
     return sorted(lines)
 
 
