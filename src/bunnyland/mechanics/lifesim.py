@@ -49,6 +49,7 @@ from ..core.events import (
     event_base as _event_base,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..prompts import ComponentPromptContext
 from .policy import BoundaryTag, PolicyGate
 
 DEFAULT_PREGNANCY_SECONDS = 3 * 24 * 60 * 60
@@ -68,6 +69,11 @@ MAX_WELL_RESTED_SECONDS = 8 * 60 * 60  # the buff lasts at most this long after 
 class LifeStageComponent(Component):
     stage: str = "adult"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Your life stage is {self.stage}.",)
+
 
 @dataclass(frozen=True)
 class AgeComponent(Component):
@@ -82,12 +88,24 @@ class LifesimAgingPolicyComponent(Component):
     natural_death_age_seconds: int = DEFAULT_NATURAL_DEATH_AGE_SECONDS
     natural_death_checks: int = 1
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return ("Natural aging is on." if self.natural_aging else "Natural aging is off.",)
+
 
 @dataclass(frozen=True)
 class AspirationComponent(Component):
     name: str
     milestones: tuple[str, ...] = ()
     completed: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        if self.completed:
+            done = ", ".join(self.completed)
+            return (f"Your aspiration is {self.name}; completed: {done}.",)
+        return (f"Your aspiration is {self.name}.",)
 
 
 @dataclass(frozen=True)
@@ -101,6 +119,11 @@ class MilestoneComponent(Component):
 class HouseholdFundsComponent(Component):
     balance: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"Household funds: {self.balance}.",)
+
 
 @dataclass(frozen=True)
 class BillComponent(Component):
@@ -110,6 +133,12 @@ class BillComponent(Component):
     creditor_id: str | None = None
     paid_at_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.paid_at_epoch is not None:
+            return ()
+        return (f"{self.reason} ({self.amount})",)
+
 
 @dataclass(frozen=True)
 class CareerComponent(Component):
@@ -118,6 +147,11 @@ class CareerComponent(Component):
     hourly_pay: int = 10
     performance: float = 0.0
     active: bool = True
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or not self.active:
+            return ()
+        return (f"Your career is {self.title}, level {self.level}.",)
 
 
 @dataclass(frozen=True)
@@ -134,6 +168,10 @@ class BusinessOwnerComponent(Component):
     sales_count: int = 0
     promoted: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"You own {self.name}; {self.sales_count} sales.",)
+
 
 @dataclass(frozen=True)
 class CustomerComponent(Component):
@@ -145,17 +183,38 @@ class HouseholdComponent(Component):
     household_id: str
     name: str = ""
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        label = self.name or self.household_id
+        return (f"Your household is {label}.",)
+
 
 @dataclass(frozen=True)
 class HomeComponent(Component):
     owner_id: str
     household_id: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or self.owner_id != str(ctx.target.id):
+            return ()
+        if not ctx.entity.has_component(RoomComponent):
+            return ()
+        title = ctx.entity.get_component(RoomComponent).title
+        return (f"Your home is {title}.",)
+
 
 @dataclass(frozen=True)
 class RoomClaimComponent(Component):
     claimed_by_id: str
     claimed_at_epoch: int
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or self.claimed_by_id != str(ctx.target.id):
+            return ()
+        if not ctx.entity.has_component(RoomComponent):
+            return ()
+        return (ctx.entity.get_component(RoomComponent).title,)
 
 
 @dataclass(frozen=True)
@@ -181,6 +240,11 @@ class WellRestedComponent(Component):
     expires_at_epoch: int
     bonus: float = WELL_RESTED_BONUS
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return ("You are well-rested after sleeping in your own home.",)
+
 
 @dataclass(frozen=True)
 class RoutineComponent(Component):
@@ -189,17 +253,34 @@ class RoutineComponent(Component):
     next_due_epoch: int = 0
     last_completed_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Routine: {self.activity} due at epoch {self.next_due_epoch}.",)
+
 
 @dataclass(frozen=True)
 class ReputationComponent(Component):
     score: float = 0.0
     known_for: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or not self.known_for:
+            return ()
+        return ("You are known for: " + ", ".join(self.known_for) + ".",)
+
 
 @dataclass(frozen=True)
 class SkillSetComponent(Component):
     levels: dict[str, int] = field(default_factory=dict)
     xp: dict[str, float] = field(default_factory=dict)
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return tuple(
+            f"Skill {skill}: level {level}, {self.xp.get(skill, 0.0):g} xp."
+            for skill, level in sorted(self.levels.items())
+        )
 
 
 @dataclass(frozen=True)
@@ -208,12 +289,30 @@ class CharacterProfileComponent(Component):
     interests: tuple[str, ...] = ()
     preferred_routine: str = ""
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        lines: list[str] = []
+        if self.traits:
+            lines.append("Your traits: " + ", ".join(self.traits) + ".")
+        if self.interests:
+            lines.append("Your interests: " + ", ".join(self.interests) + ".")
+        if self.preferred_routine:
+            lines.append(f"Your preferred routine is {self.preferred_routine}.")
+        return tuple(lines)
+
 
 @dataclass(frozen=True)
 class WhimComponent(Component):
     want: str
     reward_xp: float = 5.0
     completed_at_epoch: int | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.completed_at_epoch is not None:
+            return ()
+        return (f"Current whim: {self.want}.",)
 
 
 @dataclass(frozen=True)
@@ -223,6 +322,13 @@ class HomeObjectComponent(Component):
     condition: float = 1.0
     decor_score: float = 0.0
     upgrade_level: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        name = _identity_name(ctx.entity, "home object")
+        return (
+            f"Nearby home object: {name} offers {self.affordance}, "
+            f"condition {self.condition:.1f}, clean {self.cleanliness:.1f}.",
+        )
 
 
 @dataclass(frozen=True)
@@ -240,6 +346,16 @@ class PregnancyComponent(Component):
     due_at_epoch: int
     co_parent_ids: tuple[str, ...]
     source_event_id: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        due = (
+            "due now"
+            if ctx.entity.has_component(BirthDueComponent)
+            else f"due at epoch {self.due_at_epoch}"
+        )
+        return (f"You are pregnant ({due}).",)
 
 
 @dataclass(frozen=True)
@@ -277,11 +393,21 @@ class PartnerOf(Edge):
     since_epoch: int
     status: str = "together"
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if self.status != "together" or ctx.target is None:
+            return ()
+        return (f"You are partners with {_identity_name(ctx.target, 'someone')}.",)
+
 
 @dataclass(frozen=True)
 class RelationshipStatus(Edge):
     status: str
     since_epoch: int
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None:
+            return ()
+        return (f"{_identity_name(ctx.target, 'someone')} is your {self.status}.",)
 
 
 @dataclass(frozen=True)
@@ -2404,32 +2530,29 @@ class RestfulSleepConsequence:
         return events
 
 
+def _identity_name(entity: Entity, fallback: str) -> str:
+    if entity.has_component(IdentityComponent):
+        return entity.get_component(IdentityComponent).name
+    return fallback
+
+
 def lifesim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
-    if character.has_component(LifeStageComponent):
-        lines.append(f"Your life stage is {character.get_component(LifeStageComponent).stage}.")
-    if character.has_component(CharacterProfileComponent):
-        profile = character.get_component(CharacterProfileComponent)
-        if profile.traits:
-            lines.append("Your traits: " + ", ".join(profile.traits) + ".")
-        if profile.interests:
-            lines.append("Your interests: " + ", ".join(profile.interests) + ".")
-        if profile.preferred_routine:
-            lines.append(f"Your preferred routine is {profile.preferred_routine}.")
-    if character.has_component(AspirationComponent):
-        aspiration = character.get_component(AspirationComponent)
-        if aspiration.completed:
-            done = ", ".join(aspiration.completed)
-            lines.append(f"Your aspiration is {aspiration.name}; completed: {done}.")
-        else:
-            lines.append(f"Your aspiration is {aspiration.name}.")
-    if character.has_component(CareerComponent):
-        career = character.get_component(CareerComponent)
-        if career.active:
-            lines.append(f"Your career is {career.title}, level {career.level}.")
-    if character.has_component(HouseholdFundsComponent):
-        funds = character.get_component(HouseholdFundsComponent)
-        lines.append(f"Household funds: {funds.balance}.")
+    ctx = ComponentPromptContext.for_entity(world, character)
+    for component_type in (
+        LifeStageComponent,
+        CharacterProfileComponent,
+        AspirationComponent,
+        CareerComponent,
+        HouseholdFundsComponent,
+        HouseholdComponent,
+        WellRestedComponent,
+        ReputationComponent,
+        SkillSetComponent,
+        PregnancyComponent,
+    ):
+        if character.has_component(component_type):
+            lines.extend(character.get_component(component_type).prompt_fragments(ctx))
     unpaid_bills = []
     for _edge, bill_id in character.get_relationships(HasBill):
         if not world.has_entity(bill_id):
@@ -2437,9 +2560,10 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
         bill_entity = world.get_entity(bill_id)
         if not bill_entity.has_component(BillComponent):
             continue
-        bill = bill_entity.get_component(BillComponent)
-        if bill.paid_at_epoch is None:
-            unpaid_bills.append(f"{bill.reason} ({bill.amount})")
+        bill_ctx = ComponentPromptContext.for_entity(
+            world, bill_entity, perspective=ctx.perspective, target=character
+        )
+        unpaid_bills.extend(bill_entity.get_component(BillComponent).prompt_fragments(bill_ctx))
     if unpaid_bills:
         lines.append("Unpaid bills: " + ", ".join(sorted(unpaid_bills)) + ".")
     for _edge, business_id in character.get_relationships(OwnsBusiness):
@@ -2447,97 +2571,77 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
             continue
         business_entity = world.get_entity(business_id)
         if business_entity.has_component(BusinessOwnerComponent):
-            business = business_entity.get_component(BusinessOwnerComponent)
-            lines.append(f"You own {business.name}; {business.sales_count} sales.")
-    if character.has_component(HouseholdComponent):
-        household = character.get_component(HouseholdComponent)
-        label = household.name or household.household_id
-        lines.append(f"Your household is {label}.")
+            business_ctx = ComponentPromptContext.for_entity(
+                world, business_entity, perspective=ctx.perspective, target=character
+            )
+            lines.extend(
+                business_entity.get_component(BusinessOwnerComponent).prompt_fragments(
+                    business_ctx
+                )
+            )
     for room in world.query().with_all([HomeComponent, RoomComponent]).execute_entities():
-        home = room.get_component(HomeComponent)
-        if home.owner_id == str(character.id):
-            title = room.get_component(RoomComponent).title
-            lines.append(f"Your home is {title}.")
+        home_ctx = ComponentPromptContext.for_entity(
+            world, room, perspective=ctx.perspective, target=character
+        )
+        lines.extend(room.get_component(HomeComponent).prompt_fragments(home_ctx))
     claimed_rooms = []
     for room in world.query().with_all([RoomClaimComponent, RoomComponent]).execute_entities():
-        claim = room.get_component(RoomClaimComponent)
-        if claim.claimed_by_id == str(character.id):
-            claimed_rooms.append(room.get_component(RoomComponent).title)
+        claim_ctx = ComponentPromptContext.for_entity(
+            world, room, perspective=ctx.perspective, target=character
+        )
+        claimed_rooms.extend(room.get_component(RoomClaimComponent).prompt_fragments(claim_ctx))
     if claimed_rooms:
         lines.append("Rooms you claim: " + ", ".join(sorted(claimed_rooms)) + ".")
-    if character.has_component(WellRestedComponent):
-        lines.append("You are well-rested after sleeping in your own home.")
     for _edge, whim_id in character.get_relationships(HasWhim):
         if not world.has_entity(whim_id):
             continue
         whim_entity = world.get_entity(whim_id)
         if not whim_entity.has_component(WhimComponent):
             continue
-        whim = whim_entity.get_component(WhimComponent)
-        if whim.completed_at_epoch is None:
-            lines.append(f"Current whim: {whim.want}.")
+        whim_ctx = ComponentPromptContext.for_entity(
+            world, whim_entity, perspective=ctx.perspective, target=character
+        )
+        lines.extend(whim_entity.get_component(WhimComponent).prompt_fragments(whim_ctx))
     for _edge, routine_id in character.get_relationships(HasRoutine):
         if not world.has_entity(routine_id):
             continue
         routine_entity = world.get_entity(routine_id)
         if routine_entity.has_component(RoutineComponent):
-            routine = routine_entity.get_component(RoutineComponent)
-            lines.append(f"Routine: {routine.activity} due at epoch {routine.next_due_epoch}.")
-    if character.has_component(ReputationComponent):
-        reputation = character.get_component(ReputationComponent)
-        if reputation.known_for:
-            lines.append("You are known for: " + ", ".join(reputation.known_for) + ".")
-    if character.has_component(SkillSetComponent):
-        skills = character.get_component(SkillSetComponent)
-        for skill, level in sorted(skills.levels.items()):
-            xp = skills.xp.get(skill, 0.0)
-            lines.append(f"Skill {skill}: level {level}, {xp:g} xp.")
+            routine_ctx = ComponentPromptContext.for_entity(
+                world, routine_entity, perspective=ctx.perspective, target=character
+            )
+            lines.extend(
+                routine_entity.get_component(RoutineComponent).prompt_fragments(routine_ctx)
+            )
     for edge, rival_id in character.get_relationships(JealousOf):
         rival_name = "someone"
         partner_name = "someone"
         if world.has_entity(rival_id):
             rival = world.get_entity(rival_id)
-            if rival.has_component(IdentityComponent):
-                rival_name = rival.get_component(IdentityComponent).name
+            rival_name = _identity_name(rival, "someone")
         partner_id = parse_entity_id(edge.partner_id)
         if partner_id is not None and world.has_entity(partner_id):
             partner = world.get_entity(partner_id)
-            if partner.has_component(IdentityComponent):
-                partner_name = partner.get_component(IdentityComponent).name
+            partner_name = _identity_name(partner, "someone")
         lines.append(f"You feel jealous of {rival_name} over {partner_name}.")
-    if character.has_component(PregnancyComponent):
-        pregnancy = character.get_component(PregnancyComponent)
-        due = (
-            "due now"
-            if character.has_component(BirthDueComponent)
-            else f"due at epoch {pregnancy.due_at_epoch}"
-        )
-        lines.append(f"You are pregnant ({due}).")
     for edge, target_id in character.get_relationships(PartnerOf):
         if not world.has_entity(target_id) or edge.status != "together":
             continue
         target = world.get_entity(target_id)
-        name = (
-            target.get_component(IdentityComponent).name
-            if target.has_component(IdentityComponent)
-            else "someone"
+        edge_ctx = ComponentPromptContext.for_entity(
+            world, character, perspective=ctx.perspective, target=target
         )
-        lines.append(f"You are partners with {name}.")
+        lines.extend(edge.prompt_fragments(edge_ctx))
     for edge, target_id in character.get_relationships(RelationshipStatus):
         if not world.has_entity(target_id):
             continue
         target = world.get_entity(target_id)
-        name = (
-            target.get_component(IdentityComponent).name
-            if target.has_component(IdentityComponent)
-            else "someone"
+        edge_ctx = ComponentPromptContext.for_entity(
+            world, character, perspective=ctx.perspective, target=target
         )
-        lines.append(f"{name} is your {edge.status}.")
+        lines.extend(edge.prompt_fragments(edge_ctx))
     children = [
-        world.get_entity(child_id).get_component(IdentityComponent).name
-        if world.has_entity(child_id)
-        and world.get_entity(child_id).has_component(IdentityComponent)
-        else "someone"
+        _identity_name(world.get_entity(child_id), "someone")
         for _edge, child_id in character.get_relationships(ParentOf)
         if world.has_entity(child_id)
     ]
@@ -2546,29 +2650,19 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
     parents = []
     for parent in world.query().with_all([CharacterComponent]).execute_entities():
         if parent.has_relationship(ParentOf, character.id):
-            name = (
-                parent.get_component(IdentityComponent).name
-                if parent.has_component(IdentityComponent)
-                else "someone"
-            )
-            parents.append(name)
+            parents.append(_identity_name(parent, "someone"))
     if parents:
         lines.append("Your parents: " + ", ".join(sorted(parents)) + ".")
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
         if entity.has_component(HomeObjectComponent):
-            home_object = entity.get_component(HomeObjectComponent)
-            name = (
-                entity.get_component(IdentityComponent).name
-                if entity.has_component(IdentityComponent)
-                else "home object"
+            home_object_ctx = ComponentPromptContext.for_entity(
+                world, entity, perspective=ctx.perspective, room=ctx.room
             )
-            lines.append(
-                f"Nearby home object: {name} offers {home_object.affordance}, "
-                f"condition {home_object.condition:.1f}, clean {home_object.cleanliness:.1f}."
+            lines.extend(
+                entity.get_component(HomeObjectComponent).prompt_fragments(home_object_ctx)
             )
-    policy = _lifesim_aging_policy(world)
-    lines.append("Natural aging is on." if policy.natural_aging else "Natural aging is off.")
+    lines.extend(_lifesim_aging_policy(world).prompt_fragments(ctx))
     return sorted(lines)
 
 

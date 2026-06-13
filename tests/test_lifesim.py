@@ -148,6 +148,7 @@ from bunnyland.mechanics.policy import (
     install_policy,
 )
 from bunnyland.persistence import WorldMeta, load_world, save_world
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
 LIFE_TAGS = frozenset({BoundaryTag.ROMANCE, BoundaryTag.ADULT, BoundaryTag.PREGNANCY})
@@ -2415,6 +2416,36 @@ def test_lifesim_fragments_describe_partner_and_pregnancy():
     assert any("partners with Hazel" in line for line in fragments)
     assert any("pregnant" in line for line in fragments)
     assert any("Your children: Clover" in line for line in fragments)
+
+
+def test_lifesim_component_prompt_fragments_respect_visibility_and_targets():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    viewer = spawn_entity(world, [CharacterComponent()])
+    room = world.get_entity(scenario.room_a)
+    room.add_component(HomeComponent(owner_id=str(character.id)))
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    external_ctx = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=viewer),
+    )
+    home_ctx = ComponentPromptContext.for_entity(
+        world,
+        room,
+        perspective=self_ctx.perspective,
+        target=character,
+    )
+
+    assert LifeStageComponent(stage="adult").prompt_fragments(self_ctx) == (
+        "Your life stage is adult.",
+    )
+    assert LifeStageComponent(stage="adult").prompt_fragments(external_ctx) == ()
+    assert room.get_component(HomeComponent).prompt_fragments(home_ctx) == (
+        "Your home is Mosslit Burrow.",
+    )
+    assert WhimComponent(want="garden").prompt_fragments(home_ctx) == ("Current whim: garden.",)
 
 
 def test_lifesim_fragments_describe_aspiration_career_funds_routine_and_jealousy():
