@@ -1070,8 +1070,13 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "HeatComponent",
         "WantedLevelComponent",
         "InformantComponent",
+        "ImplantComponent",
+        "AugmentationSlotsComponent",
+        "ClinicComponent",
     } <= {component.__name__ for component in neon.ecs.components}
-    assert {"InsideZone", "OwesFavor"} <= {edge.__name__ for edge in neon.ecs.edges}
+    assert {"InsideZone", "OwesFavor", "HasImplant"} <= {
+        edge.__name__ for edge in neon.ecs.edges
+    }
     assert {
         "enter-district",
         "show-credentials",
@@ -1104,6 +1109,14 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "turn-informant",
         "hide-from-law",
         "clear-warrant",
+        "install-implant",
+        "remove-implant",
+        "service-implant",
+        "overclock-implant",
+        "disable-implant",
+        "license-implant",
+        "scan-implant",
+        "exploit-implant",
     } <= {handler.command_type for handler in neon.commands.action_handlers}
     assert {
         "DistrictEnteredEvent",
@@ -1138,6 +1151,11 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "WarrantClearedEvent",
         "InformantTurnedEvent",
         "LawResponseEvent",
+        "ImplantInstalledEvent",
+        "ImplantRemovedEvent",
+        "ImplantServicedEvent",
+        "ImplantExploitedEvent",
+        "SideEffectTriggeredEvent",
     } <= {event.__name__ for event in neon.commands.typed_events}
 
 

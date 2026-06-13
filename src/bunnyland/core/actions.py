@@ -1710,6 +1710,54 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="turn_informant",
         patterns=("turn {target_id} into an informant",),
     ),
+    _definition(
+        "install-implant",
+        ("implant_id", "clinic_id"),
+        tool_name="install_implant",
+        patterns=("install {implant_id} at {clinic_id}",),
+    ),
+    _definition(
+        "remove-implant",
+        ("implant_id",),
+        tool_name="remove_implant",
+        patterns=("remove implant {implant_id}",),
+    ),
+    _definition(
+        "service-implant",
+        ("implant_id", "clinic_id"),
+        tool_name="service_implant",
+        patterns=("service {implant_id} at {clinic_id}",),
+    ),
+    _definition(
+        "overclock-implant",
+        ("implant_id",),
+        tool_name="overclock_implant",
+        patterns=("overclock {implant_id}",),
+    ),
+    _definition(
+        "disable-implant",
+        ("implant_id",),
+        tool_name="disable_implant",
+        patterns=("disable implant {implant_id}",),
+    ),
+    _definition(
+        "license-implant",
+        ("implant_id",),
+        tool_name="license_implant",
+        patterns=("license {implant_id}",),
+    ),
+    _definition(
+        "scan-implant",
+        ("target_id",),
+        tool_name="scan_implant",
+        patterns=("scan {target_id} for implants",),
+    ),
+    _definition(
+        "exploit-implant",
+        ("target_id",),
+        tool_name="exploit_implant",
+        patterns=("exploit the implants of {target_id}",),
+    ),
 )
 
 
