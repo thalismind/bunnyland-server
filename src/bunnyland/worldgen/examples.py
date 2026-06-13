@@ -2156,6 +2156,141 @@ async def vacancy_motel_example(actor, seed: str, options: GenOptions) -> Instan
     return world
 
 
+async def frozen_greenhouse_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A greenhouse dome on a frozen plain, fighting the cold around a too-eager specimen."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.colonysim import (
+        JobComponent,
+        ResourceStackComponent,
+        StockpileComponent,
+        WorkstationComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent, WeatherComponent
+    from ..mechanics.gardensim import (
+        CropComponent,
+        CropGrowthComponent,
+        CropQualityComponent,
+        HarvestableComponent,
+        SeedComponent,
+        ShippingBinComponent,
+        SoilComponent,
+        TilledComponent,
+    )
+
+    # Day 88 at 10:00 is an overcast winter day, so the season and sky stay bleak as it ticks.
+    winter_morning_seconds = 87 * 24 * 3600 + 10 * 3600
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="tundra", title="Wind-Scoured Tundra", biome="tundra",
+                     light=0.6, celsius=-24.0),
+            RoomSpec(key="dome", title="Geodesic Greenhouse Dome", biome="greenhouse",
+                     indoor=True, light=0.9, celsius=19.0),
+            RoomSpec(key="boiler", title="Boiler and Seed Vault", biome="greenhouse",
+                     indoor=True, light=0.5, celsius=11.0),
+        ],
+        exits=[
+            ExitSpec(from_key="tundra", direction="in", to_key="dome"),
+            ExitSpec(from_key="dome", direction="out", to_key="tundra"),
+            ExitSpec(from_key="dome", direction="down", to_key="boiler"),
+            ExitSpec(from_key="boiler", direction="up", to_key="dome"),
+        ],
+        objects=[
+            ObjectSpec(key="greens", room_key="boiler", name="a tray of ration greens",
+                       kind="food", nutrition=4.0, satiety=12.0, portable=True),
+            ObjectSpec(key="meltwater", room_key="boiler", name="a meltwater tank",
+                       kind="water", hydration=15.0, portable=False),
+            ObjectSpec(key="peat", room_key="boiler", name="a sack of dried peat fuel",
+                       kind="item", portable=True),
+            ObjectSpec(key="journal", room_key="boiler", name="a station research journal",
+                       kind="paper", writable=True, portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="botanist", name="Dr. Imala Sorn", room_key="dome",
+                          controller="suspended", traits=("meticulous", "cold-numbed", "uneasy"),
+                          goals=("keep the dome above freezing", "catalogue the new specimen")),
+            CharacterSpec(key="tech", name="Bo Anders", room_key="boiler",
+                          controller="llm", llm_profile="station-tech",
+                          traits=("practical", "tired"),
+                          goals=("keep the boiler fed", "stop the specimen spreading")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(
+                clock[0], WorldClockComponent(game_time_seconds=winter_morning_seconds))
+            clock[0].add_component(TimeOfDayComponent(phase="day"))
+            clock[0].add_component(CalendarComponent(day=88, season="winter", hour=10))
+            clock[0].add_component(WeatherComponent(condition="overcast", intensity=0.5))
+
+        dome, boiler = world.rooms["dome"], world.rooms["boiler"]
+        _add(actor, dome, [
+            IdentityComponent(name="a raised bed of warmed soil", kind="soil"),
+            SoilComponent(quality=1.1),
+            TilledComponent(tilled_at_epoch=0),
+        ])
+        # An ordinary winter crop, growing at a sane pace.
+        _add(actor, dome, [
+            IdentityComponent(name="a row of winter kale", kind="crop"),
+            CropComponent(crop_type="kale", planted_at_epoch=0, stage=1),
+            CropGrowthComponent(progress_days=1.0, required_days=6.0, last_updated_epoch=0),
+            HarvestableComponent(yield_item="kale", quantity=3),
+            CropQualityComponent(quality=1.0),
+        ])
+        # The specimen: it should not grow in this cold, in the dark, this fast.
+        _augment(actor, dome,
+                 PointOfInterestComponent(location_type="quarantine bed", region="Station Drift-9"),
+                 DiscoveryComponent())
+        _add(actor, dome, [
+            IdentityComponent(name="a pale specimen that grew overnight", kind="crop"),
+            CropComponent(crop_type="specimen", planted_at_epoch=0, stage=2),
+            CropGrowthComponent(progress_days=0.4, required_days=0.5, last_updated_epoch=0),
+            HarvestableComponent(yield_item="spore pod", quantity=4),
+            CropQualityComponent(quality=1.6),
+        ])
+        _add(actor, boiler, [
+            IdentityComponent(name="a packet of saved seed", kind="item"),
+            PortableComponent(can_pick_up=True),
+            SeedComponent(crop_type="kale", growth_days=6.0, yield_item="kale", yield_quantity=3),
+        ])
+        _add(actor, boiler, [
+            IdentityComponent(name="the dome boiler", kind="workstation"),
+            WorkstationComponent(station_type="boiler"),
+        ])
+        _add(actor, boiler, [
+            IdentityComponent(name="stoke the boiler job", kind="job"),
+            JobComponent(job_type="haul", priority=4),
+        ])
+        _add(actor, boiler, [
+            IdentityComponent(name="a peat fuel bin", kind="stockpile"),
+            StockpileComponent(capacity=20),
+            ResourceStackComponent(resource_type="peat", quantity=9),
+        ])
+        _add(actor, dome, [
+            IdentityComponent(name="a frosted harvest crate", kind="shipping-bin"),
+            ShippingBinComponent(),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["journal"]),
+            ReadableComponent(title="Research Journal",
+                              text="Specimen doubled again with the heat off and the sun down. "
+                                   "It does not need us. Recommend we stop feeding the bed."),
+        )
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -2246,6 +2381,11 @@ VACANCY_MOTEL_DEMO = WorldGenerator(
     description="A roadside motel that checks in by day and rolls into night, where Room 6 "
                 "only opens after dark and the night clerk gets hungry.",
     uses_seed=False)
+FROZEN_GREENHOUSE_DEMO = WorldGenerator(
+    name="frozen-greenhouse-demo", generate=frozen_greenhouse_example,
+    description="A greenhouse dome on a frozen winter plain with crops to keep warm, a boiler "
+                "to stoke, and a specimen that grows too fast in the dark and cold.",
+    uses_seed=False)
 
 POP_CULTURE_DEMOS = (
     CLUE_SNACK_DEMO,
@@ -2264,6 +2404,7 @@ DUNGEON_DEMOS = (
 SCENE_DEMOS = (
     STORM_LIGHTHOUSE_DEMO,
     VACANCY_MOTEL_DEMO,
+    FROZEN_GREENHOUSE_DEMO,
 )
 
 
@@ -2279,6 +2420,7 @@ __all__ = [
     "DUNGEON_MAZE_DEMO",
     "DUNGEON_VAULT_DEMO",
     "DIVE_SCHEME_DEMO",
+    "FROZEN_GREENHOUSE_DEMO",
     "GARDENSIM_DEMO",
     "GOTHIC_COUNT_DEMO",
     "LIFESIM_DEMO",
@@ -2302,6 +2444,7 @@ __all__ = [
     "dungeon_maze_example",
     "dungeon_vault_example",
     "dive_scheme_example",
+    "frozen_greenhouse_example",
     "gardensim_example",
     "gothic_count_example",
     "lifesim_example",
