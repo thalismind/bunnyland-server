@@ -233,8 +233,10 @@ There is also a larger life-sim showcase, `apartment-demo`: a quirky NYC apartme
 building of eccentric tenants with backstories, homes, and daily routines, a rat-man in
 the warren below, and hidden corners.
 For lighter genre-spoof setups, the worldgen plugin also ships `clue-snack-demo`,
-`dive-scheme-demo`, `star-opera-demo`, and `gothic-count-demo`, all using new names,
-locations, and props.
+`dive-scheme-demo`, `star-opera-demo`, `gothic-count-demo`, and `midnight-burger-demo`
+(an inner-city burger shack that opens at dusk and rolls into night through the world's
+day/night cycle, with a hungry night cook and a hidden cellar that is only dangerous
+after dark), all using new names, locations, and props.
 For hand-crafted dungeon-crawler setups, use `dungeon-vault-demo`, `dungeon-maze-demo`,
 or `dungeon-crypt-demo`. These are small deterministic crawls with room maps, secrets,
 readable clues, food, water, and dungeon objectives.

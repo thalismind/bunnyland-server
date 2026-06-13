@@ -11,6 +11,7 @@ from bunnyland.core import SuspendedComponent, WorldActor, container_of
 from bunnyland.core.components import (
     DescriptionComponent,
     IdentityComponent,
+    LightComponent,
     ReadableComponent,
     RoomComponent,
 )
@@ -35,8 +36,10 @@ from bunnyland.mechanics.daggersim import (
     DungeonComponent,
     DungeonObjectiveComponent,
     DungeonRoomComponent,
+    FeedingNeedComponent,
     RestRiskComponent,
     SecretDoorComponent,
+    SupernaturalAfflictionComponent,
 )
 from bunnyland.mechanics.dinosim import (
     CreatureProductComponent,
@@ -46,8 +49,12 @@ from bunnyland.mechanics.dinosim import (
     FossilFragmentComponent,
     ReptileProcreationComponent,
 )
-from bunnyland.mechanics.dragonsim import QuestComponent
-from bunnyland.mechanics.environment import CalendarComponent
+from bunnyland.mechanics.dragonsim import PointOfInterestComponent, QuestComponent
+from bunnyland.mechanics.environment import (
+    CalendarComponent,
+    TimeOfDayComponent,
+    install_environment,
+)
 from bunnyland.mechanics.gardensim import (
     CropComponent,
     CropQualityComponent,
@@ -87,6 +94,7 @@ from bunnyland.worldgen.examples import (
     GARDENSIM_DEMO,
     LIFESIM_DEMO,
     MAPLE_FARM_DEMO,
+    MIDNIGHT_BURGER_DEMO,
     NEONSIM_DEMO,
     NUKESIM_DEMO,
     POP_CULTURE_DEMOS,
@@ -260,6 +268,33 @@ async def test_maple_farm_demo_is_a_functional_canadian_sugarbush():
         and not tree.get_component(HarvestableComponent).ready
         for tree in trees
     )
+
+
+async def test_midnight_burger_demo_secret_is_gated_by_a_running_night_cycle():
+    actor = WorldActor()
+
+    world = await MIDNIGHT_BURGER_DEMO.generate(actor, "midnight-burger-demo", GenOptions())
+
+    # The shack opens during the day — the world is not frozen at night.
+    clock = list(actor.world.query().with_all([TimeOfDayComponent]).execute_entities())[0]
+    assert clock.get_component(TimeOfDayComponent).phase == "day"
+    assert clock.get_component(CalendarComponent).hour == 17
+
+    # The dark secret: a hungry night cook and a hidden, pitch-dark cellar behind the kitchen.
+    cook = list(
+        actor.world.query().with_all([SupernaturalAfflictionComponent]).execute_entities()
+    )[0]
+    assert cook.get_component(SupernaturalAfflictionComponent).affliction_type == "nocturnal hunger"
+    assert cook.has_component(FeedingNeedComponent)
+    assert _has(actor, SecretDoorComponent)
+    cellar = actor.world.get_entity(world.rooms["cellar"])
+    assert cellar.has_component(PointOfInterestComponent)
+    assert cellar.get_component(LightComponent).level <= 0.1
+
+    # Let the clock run: within a few hourly ticks the shack tips into the dangerous night.
+    install_environment(actor)
+    await actor.tick(3 * 3600)  # 17:00 -> 20:00
+    assert clock.get_component(TimeOfDayComponent).phase == "night"
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)

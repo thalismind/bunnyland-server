@@ -1507,6 +1507,114 @@ async def gothic_count_example(actor, seed: str, options: GenOptions) -> Instant
     return world
 
 
+async def midnight_burger_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """An inner-city burger shack whose back cellar is only dangerous after dark."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.daggersim import (
+        FeedingNeedComponent,
+        SecretDoorComponent,
+        SupernaturalAfflictionComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="lot", title="Neon Corner Lot", biome="city-street",
+                     light=0.1, celsius=14.0),
+            RoomSpec(key="counter", title="Patty Stack Counter", biome="diner",
+                     indoor=True, light=0.55, celsius=24.0),
+            RoomSpec(key="kitchen", title="Greasy Back Kitchen", biome="diner",
+                     indoor=True, light=0.4, celsius=29.0),
+            RoomSpec(key="cellar", title="Cold-Iron Cellar", biome="cellar",
+                     indoor=True, light=0.05, celsius=4.0),
+        ],
+        exits=[
+            ExitSpec(from_key="lot", direction="in", to_key="counter"),
+            ExitSpec(from_key="counter", direction="out", to_key="lot"),
+            ExitSpec(from_key="counter", direction="back", to_key="kitchen"),
+            ExitSpec(from_key="kitchen", direction="front", to_key="counter"),
+            ExitSpec(from_key="kitchen", direction="down", to_key="cellar"),
+            ExitSpec(from_key="cellar", direction="up", to_key="kitchen"),
+        ],
+        objects=[
+            ObjectSpec(key="smash_burgers", room_key="counter",
+                       name="a tray of double smash burgers", kind="food",
+                       nutrition=6.0, satiety=24.0, portable=True),
+            ObjectSpec(key="fries", room_key="counter", name="a paper boat of salted fries",
+                       kind="food", nutrition=3.0, satiety=10.0, portable=True),
+            ObjectSpec(key="soda", room_key="counter", name="a sweating fountain soda",
+                       kind="water", hydration=14.0, portable=True),
+            ObjectSpec(key="menu", room_key="counter", name="a grease-spotted menu board",
+                       kind="paper", writable=False, portable=False),
+            ObjectSpec(key="freezer", room_key="kitchen", name="a padlocked chest freezer",
+                       kind="container", portable=False, open=False),
+        ],
+        characters=[
+            CharacterSpec(key="regular", name="Tessa Lane", room_key="counter",
+                          controller="suspended", traits=("hungry", "cheerful", "oblivious"),
+                          goals=("get a late-night burger", "head home before close")),
+            CharacterSpec(key="cook", name="Mort Greaves", room_key="kitchen",
+                          species="nightfolk", controller="llm", llm_profile="night-cook",
+                          traits=("genial", "ravenous", "secretive"),
+                          goals=("keep the grill hot", "keep guests out of the cellar after dark")),
+            CharacterSpec(key="manager", name="Owen Park", room_key="counter",
+                          controller="llm", llm_profile="closing-manager",
+                          traits=("tired", "decent"),
+                          goals=("hurry the last order", "warn Tessa without naming the danger")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        # Open in the late-afternoon dinner rush so the day/night cycle visibly rolls into
+        # night within a few hourly ticks — the cellar's danger is only real once it is dark.
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=17 * 3600))
+            clock[0].add_component(TimeOfDayComponent(phase="day"))
+            clock[0].add_component(CalendarComponent(day=1, season="autumn", hour=17))
+
+        kitchen, cellar = world.rooms["kitchen"], world.rooms["cellar"]
+        _augment(actor, cellar,
+                 PointOfInterestComponent(location_type="meat cellar", region="Sixth Ward"),
+                 DiscoveryComponent())
+        _augment(actor, world.characters["cook"],
+                 SupernaturalAfflictionComponent(affliction_type="nocturnal hunger",
+                                                 contracted_at_epoch=0,
+                                                 stage="mastered"),
+                 FeedingNeedComponent(current=8.0, maximum=10.0))
+        _add(actor, kitchen, [
+            IdentityComponent(name="a steel walk-in door held shut by a meat hook",
+                              kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(cellar), direction="behind the walk-in",
+                                hint="The walk-in only latches from the cellar side."),
+        ])
+        _add(actor, cellar, [
+            IdentityComponent(name="a stained butcher's ledger", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Butcher's Ledger",
+                              text="Day shift buys beef. Night shift never does, and the "
+                                   "regulars who stay past close never sign out."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["menu"]),
+            ReadableComponent(title="Menu Board",
+                              text="ALL DAY: double smash, fries, soda. AFTER MIDNIGHT: ask "
+                                   "Mort for the off-menu special. Staff only past the counter "
+                                   "once the sign goes dark."),
+        )
+    return world
+
+
 # --------------------------------------------------------------------------------------
 # dungeon showcases — hand-built text-adventure crawls with maps, secrets, and objectives
 # --------------------------------------------------------------------------------------
@@ -2008,6 +2116,11 @@ GOTHIC_COUNT_DEMO = WorldGenerator(
     name="gothic-count-demo", generate=gothic_count_example,
     description="A legally distinct gothic night-host castle with papers, secrets, and hunger.",
     uses_seed=False)
+MIDNIGHT_BURGER_DEMO = WorldGenerator(
+    name="midnight-burger-demo", generate=midnight_burger_example,
+    description="An inner-city burger shack that opens at dusk and rolls into night, with a "
+                "hungry night cook and a hidden cellar that is only dangerous after dark.",
+    uses_seed=False)
 DUNGEON_VAULT_DEMO = WorldGenerator(
     name="dungeon-vault-demo", generate=dungeon_vault_example,
     description="A torchlit hand-built vault with a hidden relic room and dungeon map.",
@@ -2031,6 +2144,7 @@ POP_CULTURE_DEMOS = (
     DIVE_SCHEME_DEMO,
     STAR_OPERA_DEMO,
     GOTHIC_COUNT_DEMO,
+    MIDNIGHT_BURGER_DEMO,
 )
 
 DUNGEON_DEMOS = (
@@ -2060,6 +2174,7 @@ __all__ = [
     "GOTHIC_COUNT_DEMO",
     "LIFESIM_DEMO",
     "MAPLE_FARM_DEMO",
+    "MIDNIGHT_BURGER_DEMO",
     "NEONSIM_DEMO",
     "NUKESIM_DEMO",
     "POP_CULTURE_DEMOS",
@@ -2081,6 +2196,7 @@ __all__ = [
     "gothic_count_example",
     "lifesim_example",
     "maple_farm_example",
+    "midnight_burger_example",
     "neonsim_example",
     "nukesim_example",
     "star_opera_example",
