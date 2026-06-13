@@ -228,6 +228,12 @@ def test_daily_need_recovery_handler_rejects_invalid_missing_and_unreachable_tar
     )
 
     char.add_component(HygieneComponent(meter=Meter(value=40.0)))
+    missing_target = BatheHandler().execute(
+        ctx,
+        verb(scenario, "bathe", target_id="entity_999"),
+    )
+    assert missing_target.ok is False
+    assert missing_target.reason == "target does not exist"
     result = BatheHandler().execute(
         ctx,
         verb(scenario, "bathe", target_id=str(distant_basin.id)),

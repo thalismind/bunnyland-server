@@ -32,7 +32,7 @@ from ..core.ecs import (
     entity_room_id as _entity_room_id,
 )
 from ..core.ecs import (
-    reachable_entity as _safe_reachable_entity,
+    reachable_entity as _reachable_entity,
 )
 from ..core.ecs import (
     remove_from_container as _remove_from_container,
@@ -852,10 +852,6 @@ class GuardAssignedEvent(DomainEvent):
     location_id: str
 
 
-def _reachable_entity(ctx: HandlerContext, character_id: EntityId, target_id: EntityId):
-    return _safe_reachable_entity(ctx.world, character_id, target_id)
-
-
 def _hatch_room_id(world: World, actor: Entity, egg: Entity) -> EntityId | None:
     egg_container_id = container_of(egg)
     if egg_container_id is not None and world.has_entity(egg_container_id):
@@ -1055,7 +1051,7 @@ def _reachable_creature(
         return None, "invalid creature id"
     if not ctx.world.has_entity(creature_id):
         return None, "creature does not exist"
-    creature = _reachable_entity(ctx, character_id, creature_id)
+    creature = _reachable_entity(ctx.world, character_id, creature_id)
     if creature is None:
         return None, "creature is not reachable"
     if not _is_creature(creature):
@@ -1071,7 +1067,7 @@ def _reachable_item(
         return None, "invalid item id"
     if not ctx.world.has_entity(item_id):
         return None, "item does not exist"
-    item = _reachable_entity(ctx, character_id, item_id)
+    item = _reachable_entity(ctx.world, character_id, item_id)
     if item is None:
         return None, "item is not reachable"
     return item, None
@@ -1369,7 +1365,7 @@ class IdentifyFossilHandler:
             return rejected("invalid character, fossil, or species name")
         if not ctx.world.has_entity(fossil_id):
             return rejected("fossil does not exist")
-        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        fossil = _reachable_entity(ctx.world, character_id, fossil_id)
         if fossil is None:
             return rejected("fossil is not reachable")
         if not fossil.has_component(FossilFragmentComponent):
@@ -1409,7 +1405,7 @@ class ExtractAncientSampleHandler:
         if not ctx.world.has_entity(fossil_id):
             return rejected("fossil does not exist")
         character = ctx.entity(character_id)
-        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        fossil = _reachable_entity(ctx.world, character_id, fossil_id)
         if fossil is None:
             return rejected("fossil is not reachable")
         if not fossil.has_component(FossilFragmentComponent):
@@ -1461,7 +1457,7 @@ class PrepareCloneHandler:
         if not ctx.world.has_entity(sample_id):
             return rejected("sample does not exist")
         character = ctx.entity(character_id)
-        sample_entity = _reachable_entity(ctx, character_id, sample_id)
+        sample_entity = _reachable_entity(ctx.world, character_id, sample_id)
         if sample_entity is None:
             return rejected("sample is not reachable")
         if not sample_entity.has_component(AncientSampleComponent):
@@ -1511,7 +1507,7 @@ class LayEggHandler:
             return rejected("invalid character or parent id")
         if not ctx.world.has_entity(parent_id):
             return rejected("parent does not exist")
-        parent = _reachable_entity(ctx, character_id, parent_id)
+        parent = _reachable_entity(ctx.world, character_id, parent_id)
         if parent is None:
             return rejected("parent is not reachable")
         if (
@@ -1563,8 +1559,8 @@ class FertilizeEggHandler:
             return rejected("invalid character, egg, or parent id")
         if not ctx.world.has_entity(egg_id) or not ctx.world.has_entity(parent_id):
             return rejected("egg or parent does not exist")
-        egg_entity = _reachable_entity(ctx, character_id, egg_id)
-        parent = _reachable_entity(ctx, character_id, parent_id)
+        egg_entity = _reachable_entity(ctx.world, character_id, egg_id)
+        parent = _reachable_entity(ctx.world, character_id, parent_id)
         if egg_entity is None or parent is None:
             return rejected("egg or parent is not reachable")
         if not egg_entity.has_component(EggComponent):
@@ -1605,7 +1601,7 @@ class IncubateEggHandler:
             return rejected("invalid character or egg id")
         if not ctx.world.has_entity(egg_id):
             return rejected("egg does not exist")
-        egg_entity = _reachable_entity(ctx, character_id, egg_id)
+        egg_entity = _reachable_entity(ctx.world, character_id, egg_id)
         if egg_entity is None:
             return rejected("egg is not reachable")
         if not egg_entity.has_component(EggComponent):
@@ -1652,7 +1648,7 @@ class HatchEggHandler:
         if not ctx.world.has_entity(egg_id):
             return rejected("egg does not exist")
         actor = ctx.entity(character_id)
-        egg_entity = _reachable_entity(ctx, character_id, egg_id)
+        egg_entity = _reachable_entity(ctx.world, character_id, egg_id)
         if egg_entity is None:
             return rejected("egg is not reachable")
         if not egg_entity.has_component(EggComponent):
@@ -1708,7 +1704,7 @@ class SurveyFossilHandler:
         fossil_id = parse_entity_id(command.payload.get("fossil_id"))
         if character_id is None or fossil_id is None:
             return rejected("invalid character or fossil id")
-        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        fossil = _reachable_entity(ctx.world, character_id, fossil_id)
         if fossil is None or not fossil.has_component(FossilFragmentComponent):
             return rejected("fossil is not reachable")
         survey = (
@@ -1741,7 +1737,7 @@ class ExcavateFossilHandler:
         fossil_id = parse_entity_id(command.payload.get("fossil_id"))
         if character_id is None or fossil_id is None:
             return rejected("invalid character or fossil id")
-        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        fossil = _reachable_entity(ctx.world, character_id, fossil_id)
         if fossil is None or not fossil.has_component(FossilFragmentComponent):
             return rejected("fossil is not reachable")
         survey = (
@@ -1775,7 +1771,7 @@ class CleanFossilHandler:
         fossil_id = parse_entity_id(command.payload.get("fossil_id"))
         if character_id is None or fossil_id is None:
             return rejected("invalid character or fossil id")
-        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        fossil = _reachable_entity(ctx.world, character_id, fossil_id)
         if fossil is None or not fossil.has_component(FossilFragmentComponent):
             return rejected("fossil is not reachable")
         fragment = fossil.get_component(FossilFragmentComponent)
@@ -1801,7 +1797,7 @@ class StabilizeFossilHandler:
         fossil_id = parse_entity_id(command.payload.get("fossil_id"))
         if character_id is None or fossil_id is None:
             return rejected("invalid character or fossil id")
-        fossil = _reachable_entity(ctx, character_id, fossil_id)
+        fossil = _reachable_entity(ctx.world, character_id, fossil_id)
         if fossil is None or not fossil.has_component(FossilFragmentComponent):
             return rejected("fossil is not reachable")
         survey = (
@@ -1858,7 +1854,7 @@ class InspectEggHandler:
         egg_id = parse_entity_id(command.payload.get("egg_id"))
         if character_id is None or egg_id is None:
             return rejected("invalid character or egg id")
-        egg = _reachable_entity(ctx, character_id, egg_id)
+        egg = _reachable_entity(ctx.world, character_id, egg_id)
         if egg is None or not egg.has_component(EggComponent):
             return rejected("egg is not reachable")
         viability = float(command.payload.get("viability", 1.0))
@@ -1892,7 +1888,7 @@ class ImprintCreatureHandler:
         creature_id = parse_entity_id(command.payload.get("creature_id"))
         if character_id is None or creature_id is None:
             return rejected("invalid character or creature id")
-        creature = _reachable_entity(ctx, character_id, creature_id)
+        creature = _reachable_entity(ctx.world, character_id, creature_id)
         if creature is None or not _is_creature(creature):
             return rejected("creature is not reachable")
         bond = float(command.payload.get("bond", 1.0))
@@ -1919,7 +1915,7 @@ class CareForJuvenileHandler:
         creature_id = parse_entity_id(command.payload.get("creature_id"))
         if character_id is None or creature_id is None:
             return rejected("invalid character or creature id")
-        creature = _reachable_entity(ctx, character_id, creature_id)
+        creature = _reachable_entity(ctx.world, character_id, creature_id)
         if creature is None or not _is_creature(creature):
             return rejected("creature is not reachable")
         current = (
@@ -1953,7 +1949,7 @@ class StudyWaterCreatureHandler:
         creature_id = parse_entity_id(command.payload.get("creature_id"))
         if character_id is None or creature_id is None:
             return rejected("invalid character or creature id")
-        creature = _reachable_entity(ctx, character_id, creature_id)
+        creature = _reachable_entity(ctx.world, character_id, creature_id)
         if creature is None or not creature.has_component(WaterCreatureComponent):
             return rejected("water creature is not reachable")
         water = creature.get_component(WaterCreatureComponent)
@@ -1988,7 +1984,7 @@ class BroodEggHandler:
         egg_id = parse_entity_id(command.payload.get("egg_id"))
         if character_id is None or egg_id is None:
             return rejected("invalid character or egg id")
-        egg = _reachable_entity(ctx, character_id, egg_id)
+        egg = _reachable_entity(ctx.world, character_id, egg_id)
         if egg is None or not egg.has_component(EggComponent):
             return rejected("egg is not reachable")
         warmth = float(command.payload.get("warmth", 1.0))
@@ -2018,7 +2014,7 @@ class SetIncubationTemperatureHandler:
         egg_id = parse_entity_id(command.payload.get("egg_id"))
         if character_id is None or egg_id is None:
             return rejected("invalid character or egg id")
-        egg = _reachable_entity(ctx, character_id, egg_id)
+        egg = _reachable_entity(ctx.world, character_id, egg_id)
         if egg is None or not egg.has_component(IncubationComponent):
             return rejected("egg is not incubating")
         temperature = float(command.payload.get("temperature", 30.0))
@@ -2046,7 +2042,7 @@ class TriggerContainmentPanicHandler:
         enclosure_id = parse_entity_id(command.payload.get("enclosure_id"))
         if character_id is None or enclosure_id is None:
             return rejected("invalid character or enclosure id")
-        enclosure = _reachable_entity(ctx, character_id, enclosure_id)
+        enclosure = _reachable_entity(ctx.world, character_id, enclosure_id)
         if enclosure is None or not enclosure.has_component(EnclosureComponent):
             return rejected("enclosure is not reachable")
         severity = int(command.payload.get("severity", 1))
@@ -2146,7 +2142,7 @@ class MarkTerritoryHandler:
         territory_id = parse_entity_id(command.payload.get("territory_id"))
         if character_id is None or territory_id is None:
             return rejected("invalid character or territory id")
-        territory = _reachable_entity(ctx, character_id, territory_id)
+        territory = _reachable_entity(ctx.world, character_id, territory_id)
         if territory is None:
             return rejected("territory is not reachable")
         if not territory.has_component(TerritoryComponent):
@@ -2180,7 +2176,7 @@ class TrackHerdHandler:
         herd_id = parse_entity_id(command.payload.get("herd_id"))
         if character_id is None or herd_id is None:
             return rejected("invalid character or herd id")
-        herd = _reachable_entity(ctx, character_id, herd_id)
+        herd = _reachable_entity(ctx.world, character_id, herd_id)
         if herd is None:
             return rejected("herd is not reachable")
         if not herd.has_component(HerdComponent):
@@ -2210,7 +2206,7 @@ class PrepareNestHandler:
         nest_id = parse_entity_id(command.payload.get("nest_id"))
         if character_id is None or nest_id is None:
             return rejected("invalid character or nest id")
-        nest = _reachable_entity(ctx, character_id, nest_id)
+        nest = _reachable_entity(ctx.world, character_id, nest_id)
         if nest is None:
             return rejected("nest is not reachable")
         if not nest.has_component(NestComponent):
@@ -3128,7 +3124,7 @@ class SignalArmyHandler:
         ]
         creature_id = parse_entity_id(command.payload.get("creature_id"))
         if creature_id is not None and ctx.world.has_entity(creature_id):
-            creature = _reachable_entity(ctx, character_id, creature_id)
+            creature = _reachable_entity(ctx.world, character_id, creature_id)
             if creature is not None and _is_creature(creature):
                 if creature.has_component(KaijuComponent):
                     kaiju = creature.get_component(KaijuComponent)
@@ -3256,8 +3252,8 @@ class FeedCreatureHandler:
             return rejected("invalid character, creature, or feed store id")
         if not ctx.world.has_entity(creature_id) or not ctx.world.has_entity(store_id):
             return rejected("creature or feed store does not exist")
-        creature = _reachable_entity(ctx, character_id, creature_id)
-        store = _reachable_entity(ctx, character_id, store_id)
+        creature = _reachable_entity(ctx.world, character_id, creature_id)
+        store = _reachable_entity(ctx.world, character_id, store_id)
         if creature is None or store is None:
             return rejected("creature or feed store is not reachable")
         if not creature.has_component(CreatureNeedComponent):
@@ -3296,7 +3292,7 @@ class CalmCreatureHandler:
             return rejected("invalid character or creature id")
         if not ctx.world.has_entity(creature_id):
             return rejected("creature does not exist")
-        creature = _reachable_entity(ctx, character_id, creature_id)
+        creature = _reachable_entity(ctx.world, character_id, creature_id)
         if creature is None:
             return rejected("creature is not reachable")
         if not creature.has_component(CreatureNeedComponent):
@@ -3328,7 +3324,7 @@ class ObserveCreatureHandler:
             return rejected("invalid character or creature id")
         if not ctx.world.has_entity(creature_id):
             return rejected("creature does not exist")
-        creature = _reachable_entity(ctx, character_id, creature_id)
+        creature = _reachable_entity(ctx.world, character_id, creature_id)
         if creature is None:
             return rejected("creature is not reachable")
         if not creature.has_component(CreatureNeedComponent):
@@ -3425,7 +3421,7 @@ class CollectEggHandler:
             return rejected("invalid character or egg id")
         if not ctx.world.has_entity(egg_id):
             return rejected("egg does not exist")
-        egg_entity = _reachable_entity(ctx, character_id, egg_id)
+        egg_entity = _reachable_entity(ctx.world, character_id, egg_id)
         if egg_entity is None:
             return rejected("egg is not reachable")
         if not egg_entity.has_component(EggComponent):

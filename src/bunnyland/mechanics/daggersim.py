@@ -29,7 +29,7 @@ from ..core.ecs import (
 )
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility, SpeechSaidEvent, SpeechToldEvent
-from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
 
 
 @dataclass(frozen=True)
@@ -2143,11 +2143,16 @@ class CommitCrimeHandler:
     command_type = "commit-crime"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
+        character_id, character, error = require_character(
+            ctx,
+            command.character_id,
+            invalid_reason="invalid character or crime type",
+        )
         crime_type = str(command.payload.get("crime_type", "")).strip()
-        if character_id is None or not crime_type:
+        if error is not None:
+            return error
+        if not crime_type:
             return rejected("invalid character or crime type")
-        character = ctx.entity(character_id)
         law_region = _current_law_region(ctx.world, character)
         if law_region is None:
             return rejected("no law region applies")

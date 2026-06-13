@@ -845,6 +845,17 @@ def test_nukesim_handlers_reject_invalid_character_ids_directly():
         assert result.ok is False
         assert result.reason == "invalid character id"
 
+    missing = StabilizeMutationHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "stabilize-mutation",
+            character_id="entity_999999",
+        ),
+    )
+    assert missing.ok is False
+    assert missing.reason == "character does not exist"
+
 
 def test_nukesim_handlers_reject_missing_and_wrong_kind_targets_directly():
     scenario = build_scenario()

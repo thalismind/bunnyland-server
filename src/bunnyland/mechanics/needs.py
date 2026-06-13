@@ -18,9 +18,16 @@ from relics import Component, Frequency, System
 
 from ..core.commands import SubmittedCommand
 from ..core.components import DeadComponent, SleepingComponent, SuspendedComponent
-from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
+from ..core.ecs import container_of, parse_entity_id, replace_component
 from ..core.events import DomainEvent
-from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..core.handlers import (
+    HandlerContext,
+    HandlerResult,
+    ok,
+    rejected,
+    require_character,
+    require_reachable_entity,
+)
 from .meter import Meter, band, changed
 
 SECONDS_PER_HOUR = 3600.0
@@ -320,16 +327,8 @@ def recover_daily_need(
     return updated
 
 
-def _reachable_target(ctx: HandlerContext, character, target_id):
-    if target_id is None:
-        return None
-    if target_id not in reachable_ids(ctx.world, character):
-        return False
-    return ctx.entity(target_id)
-
-
 def _affordance_bonus(target, need: str) -> float:
-    if target is None or target is False or not target.has_component(NeedAffordanceComponent):
+    if target is None or not target.has_component(NeedAffordanceComponent):
         return 0.0
     return target.get_component(NeedAffordanceComponent).recoveries.get(need, 0.0)
 
@@ -343,19 +342,25 @@ class _RecoverNeedHandler:
     target_payload_key = "target_id"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        if character_id is None:
-            return rejected("invalid character id")
-        if not ctx.world.has_entity(character_id):
-            return rejected("character does not exist")
-        character = ctx.entity(character_id)
+        character_id, character, error = require_character(ctx, command.character_id)
+        if error is not None:
+            return error
         if not character.has_component(self.component_type):
             return rejected(f"character has no {self.need} need")
 
         target_id = parse_entity_id(command.payload.get(self.target_payload_key))
-        target = _reachable_target(ctx, character, target_id)
-        if target is False:
-            return rejected("target is not reachable")
+        target = None
+        if target_id is not None:
+            _, target, error = require_reachable_entity(
+                ctx,
+                character,
+                target_id,
+                invalid_reason="invalid target id",
+                missing_reason="target does not exist",
+                unreachable_reason="target is not reachable",
+            )
+            if error is not None:
+                return error
 
         recovery = self.amount + _affordance_bonus(target, self.need)
         updated = recover_daily_need(

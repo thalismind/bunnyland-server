@@ -36,7 +36,7 @@ from ..core.ecs import (
     entity_name as _name,
 )
 from ..core.ecs import (
-    reachable_component as _safe_reachable_component,
+    reachable_component as _reachable_component,
 )
 from ..core.ecs import (
     room_id_for as _room_id,
@@ -611,11 +611,6 @@ class ChaosInfluenceAppliedEvent(DomainEvent):
     mutation_pressure: float
 
 
-def _reachable_component(ctx: HandlerContext, character_id: EntityId, target_id, component):
-    """Resolve a reachable entity that carries ``component``; return (entity, error)."""
-    return _safe_reachable_component(ctx.world, character_id, target_id, component)
-
-
 class OpenAirlockHandler:
     command_type = "open-airlock"
 
@@ -624,7 +619,7 @@ class OpenAirlockHandler:
         if character_id is None:
             return rejected("invalid character id")
         airlock, error = _reachable_component(
-            ctx, character_id, command.payload.get("airlock_id"), AirlockComponent
+            ctx.world, character_id, command.payload.get("airlock_id"), AirlockComponent
         )
         if airlock is None:
             return rejected(error if error else "target is not an airlock")
@@ -676,7 +671,7 @@ class CycleAirlockHandler:
         if character_id is None:
             return rejected("invalid character id")
         airlock, error = _reachable_component(
-            ctx, character_id, command.payload.get("airlock_id"), AirlockComponent
+            ctx.world, character_id, command.payload.get("airlock_id"), AirlockComponent
         )
         if airlock is None:
             return rejected(error if error else "target is not an airlock")
@@ -705,7 +700,7 @@ class SealBulkheadHandler:
         if character_id is None:
             return rejected("invalid character id")
         bulkhead, error = _reachable_component(
-            ctx, character_id, command.payload.get("bulkhead_id"), BulkheadComponent
+            ctx.world, character_id, command.payload.get("bulkhead_id"), BulkheadComponent
         )
         if bulkhead is None:
             return rejected(error if error else "target is not a bulkhead")
@@ -725,7 +720,7 @@ class RepairSystemHandler:
         if character_id is None:
             return rejected("invalid character id")
         system, error = _reachable_component(
-            ctx, character_id, command.payload.get("system_id"), ShipSystemComponent
+            ctx.world, character_id, command.payload.get("system_id"), ShipSystemComponent
         )
         if system is None:
             return rejected(error if error else "target is not a ship system")
@@ -756,12 +751,12 @@ class ReroutePowerHandler:
         if character_id is None:
             return rejected("invalid character id")
         grid, error = _reachable_component(
-            ctx, character_id, command.payload.get("grid_id"), PowerGridComponent
+            ctx.world, character_id, command.payload.get("grid_id"), PowerGridComponent
         )
         if grid is None:
             return rejected(error if error else "target is not a power grid")
         system, error = _reachable_component(
-            ctx, character_id, command.payload.get("system_id"), ShipSystemComponent
+            ctx.world, character_id, command.payload.get("system_id"), ShipSystemComponent
         )
         if system is None:
             return rejected(error if error else "target is not a ship system")
@@ -801,7 +796,7 @@ class InspectShipSystemHandler:
         if character_id is None:
             return rejected("invalid character id")
         system, error = _reachable_component(
-            ctx, character_id, command.payload.get("system_id"), ShipSystemComponent
+            ctx.world, character_id, command.payload.get("system_id"), ShipSystemComponent
         )
         if system is None:
             return rejected(error if error else "target is not a ship system")
@@ -876,14 +871,14 @@ class FabricateHandler:
         if character_id is None:
             return rejected("invalid character id")
         fabricator, error = _reachable_component(
-            ctx, character_id, command.payload.get("fabricator_id"), FabricatorComponent
+            ctx.world, character_id, command.payload.get("fabricator_id"), FabricatorComponent
         )
         if fabricator is None:
             return rejected(error if error else "target is not a fabricator")
         if not fabricator.get_component(FabricatorComponent).online:
             return rejected("fabricator is offline")
         blueprint_entity, error = _reachable_component(
-            ctx, character_id, command.payload.get("blueprint_id"), BlueprintComponent
+            ctx.world, character_id, command.payload.get("blueprint_id"), BlueprintComponent
         )
         if blueprint_entity is None:
             return rejected(error if error else "target is not a blueprint")
@@ -931,7 +926,7 @@ class InstallUpgradeHandler:
         if character_id is None:
             return rejected("invalid character id")
         upgrade_entity, error = _reachable_component(
-            ctx, character_id, command.payload.get("upgrade_id"), ShipUpgradeComponent
+            ctx.world, character_id, command.payload.get("upgrade_id"), ShipUpgradeComponent
         )
         if upgrade_entity is None:
             return rejected(error if error else "target is not an upgrade")
@@ -939,7 +934,7 @@ class InstallUpgradeHandler:
         if upgrade.installed:
             return rejected("upgrade is already installed")
         system, error = _reachable_component(
-            ctx, character_id, command.payload.get("system_id"), ShipSystemComponent
+            ctx.world, character_id, command.payload.get("system_id"), ShipSystemComponent
         )
         if system is None:
             return rejected(error if error else "target is not a ship system")
@@ -983,7 +978,7 @@ class AcceptContractHandler:
         if character_id is None:
             return rejected("invalid character id")
         contract, error = _reachable_component(
-            ctx, character_id, command.payload.get("contract_id"), ContractComponent
+            ctx.world, character_id, command.payload.get("contract_id"), ContractComponent
         )
         if contract is None:
             return rejected(error if error else "target is not a contract")
@@ -1035,7 +1030,7 @@ class LoadCargoHandler:
         if character_id is None:
             return rejected("invalid character id")
         contract_entity, error = _reachable_component(
-            ctx, character_id, command.payload.get("contract_id"), ContractComponent
+            ctx.world, character_id, command.payload.get("contract_id"), ContractComponent
         )
         if contract_entity is None:
             return rejected(error if error else "target is not a contract")
@@ -1043,12 +1038,12 @@ class LoadCargoHandler:
         if contract is None:
             return rejected("cargo contract is not active")
         cargo_entity, error = _reachable_component(
-            ctx, character_id, command.payload.get("cargo_id"), CargoComponent
+            ctx.world, character_id, command.payload.get("cargo_id"), CargoComponent
         )
         if cargo_entity is None:
             return rejected(error if error else "target is not cargo")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")
@@ -1085,7 +1080,7 @@ class DeliverCargoHandler:
         if character_id is None:
             return rejected("invalid character id")
         contract_entity, error = _reachable_component(
-            ctx, character_id, command.payload.get("contract_id"), ContractComponent
+            ctx.world, character_id, command.payload.get("contract_id"), ContractComponent
         )
         if contract_entity is None:
             return rejected(error if error else "target is not a contract")
@@ -1150,7 +1145,7 @@ class ClaimSalvageHandler:
         if character_id is None:
             return rejected("invalid character id")
         claim, error = _reachable_component(
-            ctx, character_id, command.payload.get("claim_id"), SalvageClaimComponent
+            ctx.world, character_id, command.payload.get("claim_id"), SalvageClaimComponent
         )
         if claim is None:
             return rejected(error if error else "target is not a salvage claim")
@@ -1204,7 +1199,7 @@ class InitiateContactHandler:
         if character_id is None:
             return rejected("invalid character id")
         contact, error = _reachable_component(
-            ctx, character_id, command.payload.get("contact_id"), FirstContactComponent
+            ctx.world, character_id, command.payload.get("contact_id"), FirstContactComponent
         )
         if contact is None:
             return rejected(error if error else "target is not a contact")
@@ -1240,7 +1235,7 @@ class AttemptTranslationHandler:
         if character_id is None:
             return rejected("invalid character id")
         matrix, error = _reachable_component(
-            ctx, character_id, command.payload.get("matrix_id"), TranslationMatrixComponent
+            ctx.world, character_id, command.payload.get("matrix_id"), TranslationMatrixComponent
         )
         if matrix is None:
             return rejected(error if error else "target is not a translation matrix")
@@ -1309,7 +1304,7 @@ class NegotiateAlienHandler:
         if character_id is None:
             return rejected("invalid character id")
         mission, error = _reachable_component(
-            ctx, character_id, command.payload.get("mission_id"), DiplomaticMissionComponent
+            ctx.world, character_id, command.payload.get("mission_id"), DiplomaticMissionComponent
         )
         if mission is None:
             return rejected(error if error else "target is not a diplomatic mission")
@@ -1344,7 +1339,7 @@ class StudyAlienArtifactHandler:
         if character_id is None:
             return rejected("invalid character id")
         artifact, error = _reachable_component(
-            ctx, character_id, command.payload.get("artifact_id"), AlienArtifactComponent
+            ctx.world, character_id, command.payload.get("artifact_id"), AlienArtifactComponent
         )
         if artifact is None:
             return rejected(error if error else "target is not an alien artifact")
@@ -1379,12 +1374,12 @@ class DockHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")
         station, error = _reachable_component(
-            ctx, character_id, command.payload.get("station_id"), StationComponent
+            ctx.world, character_id, command.payload.get("station_id"), StationComponent
         )
         if station is None:
             return rejected(error if error else "target is not a station")
@@ -1416,12 +1411,12 @@ class UndockHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")
         station, error = _reachable_component(
-            ctx, character_id, command.payload.get("station_id"), StationComponent
+            ctx.world, character_id, command.payload.get("station_id"), StationComponent
         )
         if station is None:
             return rejected(error if error else "target is not a station")
@@ -1452,7 +1447,7 @@ class EvacuateModuleHandler:
         if character_id is None:
             return rejected("invalid character id")
         module, error = _reachable_component(
-            ctx, character_id, command.payload.get("module_id"), HabitatModuleComponent
+            ctx.world, character_id, command.payload.get("module_id"), HabitatModuleComponent
         )
         if module is None:
             return rejected(error if error else "target is not a habitat module")
@@ -1510,7 +1505,7 @@ class PlotCourseHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")
@@ -1559,7 +1554,7 @@ class JumpHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")
@@ -1639,7 +1634,7 @@ class ScanHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), SensorComponent
+            ctx.world, character_id, command.payload.get("ship_id"), SensorComponent
         )
         if ship is None:
             return rejected(error if error else "no sensor to scan with")
@@ -1681,7 +1676,7 @@ class AnswerDistressSignalHandler:
         if character_id is None:
             return rejected("invalid character id")
         signal_entity, error = _reachable_component(
-            ctx, character_id, command.payload.get("signal_id"), DistressSignalComponent
+            ctx.world, character_id, command.payload.get("signal_id"), DistressSignalComponent
         )
         if signal_entity is None:
             return rejected(error if error else "target is not a distress signal")
@@ -1702,7 +1697,7 @@ class RefuelHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), FuelComponent
+            ctx.world, character_id, command.payload.get("ship_id"), FuelComponent
         )
         if ship is None:
             return rejected(error if error else "ship has no fuel tank")
@@ -1742,12 +1737,12 @@ class EnterOrbitHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")
         body, error = _reachable_component(
-            ctx, character_id, command.payload.get("body_id"), OrbitalBodyComponent
+            ctx.world, character_id, command.payload.get("body_id"), OrbitalBodyComponent
         )
         if body is None:
             return rejected(error if error else "target is not an orbital body")
@@ -1775,7 +1770,7 @@ class LeaveOrbitHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")
@@ -1793,7 +1788,7 @@ class LandHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")
@@ -1835,7 +1830,7 @@ class LaunchHandler:
         if character_id is None:
             return rejected("invalid character id")
         ship, error = _reachable_component(
-            ctx, character_id, command.payload.get("ship_id"), ShipComponent
+            ctx.world, character_id, command.payload.get("ship_id"), ShipComponent
         )
         if ship is None:
             return rejected(error if error else "target is not a ship")

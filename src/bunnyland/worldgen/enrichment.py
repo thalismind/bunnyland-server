@@ -37,20 +37,45 @@ from ..mechanics.colonysim import (
 from ..mechanics.daggersim import (
     DungeonComponent,
     DungeonRoomComponent,
+    ExpansionHookComponent,
     InstitutionComponent,
     ProceduralSiteComponent,
     QuestTemplateComponent,
     RumorComponent,
     TravelHubComponent,
+    UnrealizedLocationComponent,
 )
 from ..mechanics.dinosim import (
+    AncientSampleComponent,
+    ApexPredatorComponent,
+    ArmorPlateComponent,
+    BaitComponent,
+    BoneComponent,
+    ChargeComponent,
+    CreatureAttackComponent,
+    CreatureNeedComponent,
+    CreatureProductComponent,
     DinosaurComponent,
     EggComponent,
     EnclosureComponent,
     EscapeRiskComponent,
     FertilityComponent,
     FossilFragmentComponent,
+    FossilSurveyComponent,
+    HerdComponent,
+    HideComponent,
+    KaijuComponent,
+    NestComponent,
+    RoarComponent,
+    ScentComponent,
     SpeciesComponent,
+    TerritoryComponent,
+    ToxinComponent,
+    TrackComponent,
+    TrampleComponent,
+    TranquilizerComponent,
+    WaterCreatureComponent,
+    WeakPointComponent,
 )
 from ..mechanics.dragonsim import (
     FactionComponent,
@@ -83,31 +108,90 @@ from ..mechanics.lifesim import (
     WhimComponent,
 )
 from ..mechanics.nukesim import (
+    BeaconComponent,
+    ChemComponent,
+    ChemRecipeComponent,
     DecontaminationComponent,
+    FactionSalvageComponent,
+    FieldRepairComponent,
+    GeneratorComponent,
+    HotspotMarkerComponent,
+    ItemModComponent,
     JunkComponent,
+    LockedCrateComponent,
     LootTableComponent,
+    MutationComponent,
+    MutationResistanceComponent,
     MutationThresholdComponent,
+    OldWorldTechComponent,
     RadiationDoseComponent,
     RadiationSourceComponent,
     RadMedicineComponent,
     RadProtectionComponent,
+    RaiderPressureComponent,
+    SampleComponent,
     ScavengeSiteComponent,
+    SchematicComponent,
+    SettlementComponent,
+    SettlementSalvageComponent,
+    SuppressantComponent,
+    TechLeadComponent,
+    TerminalComponent,
+    TraderRouteComponent,
+    WastelandArtifactComponent,
+    WaterPurifierComponent,
+    WaterPurityComponent,
 )
 from ..mechanics.voidsim import (
     AirlockComponent,
+    AlienArtifactComponent,
+    AlienSpeciesComponent,
+    AstrogationComponent,
+    AwayTeamComponent,
+    BlueprintComponent,
+    BoardingThreatComponent,
+    CargoComponent,
+    ContractComponent,
+    CustomsHoldComponent,
+    DataSalvageComponent,
+    DiplomaticMissionComponent,
     DistressSignalComponent,
+    DroneComponent,
+    EmergencyComponent,
+    FabricatorComponent,
+    FirstContactComponent,
     FuelComponent,
+    GravityComponent,
     HabitatModuleComponent,
+    InsurancePolicyComponent,
     JumpDriveComponent,
     LifeSupportComponent,
+    MiningSiteComponent,
+    MoraleComponent,
+    MortgageComponent,
+    MutinyComponent,
+    NavigationRouteComponent,
+    OrbitalBodyComponent,
+    OrbitComponent,
     OxygenComponent,
+    PassengerComponent,
     PowerGridComponent,
     PressurizedComponent,
+    QuarantineComponent,
+    ReactorComponent,
+    SalvageClaimComponent,
     SensorComponent,
+    ShipAIComponent,
     ShipComponent,
     ShipSystemComponent,
+    ShipUpgradeComponent,
+    SmugglingCompartmentComponent,
     StarSystemComponent,
     StationComponent,
+    SurveySiteComponent,
+    TradeProtocolComponent,
+    TranslationMatrixComponent,
+    XenobiologySampleComponent,
 )
 
 if TYPE_CHECKING:
@@ -130,6 +214,8 @@ _RESOURCE_TYPES = (
     "hide",
     "sap",
 )
+
+_DEFAULT_EXPANSION_GENERATOR = "worldgen.recursive"
 
 
 def _entity(actor: WorldActor, event: GeneratedEntityEvent) -> Entity | None:
@@ -182,6 +268,25 @@ def _crop_type(event: GeneratedEntityEvent) -> str:
         if suffix in text:
             return text.split(suffix, 1)[0].rsplit(" ", 1)[-1] or "turnip"
     return "turnip"
+
+
+def _expansion_trigger(event: GeneratedEntityEvent) -> str:
+    if _wants(event, "rumor"):
+        return "rumor"
+    if _wants(event, "quest"):
+        return "quest"
+    return "worldgen"
+
+
+def _orbital_body_type(event: GeneratedEntityEvent) -> str:
+    text = _text(event)
+    if "moon" in text:
+        return "moon"
+    if "asteroid" in text:
+        return "asteroid-belt"
+    if "station" in text:
+        return "station"
+    return "planet"
 
 
 class EnvironmentWorldgenHook:
@@ -443,6 +548,22 @@ class DaggerWorldgenHook:
                 entity,
                 ProceduralSiteComponent(site_type=event.biome, seed=event.seed),
             )
+        if _wants(event, "unrealized-location") or _mentions(event, "unrealized location"):
+            replace_component(
+                entity,
+                UnrealizedLocationComponent(
+                    summary=event.intent or name,
+                    region_id=event.entity_id,
+                ),
+            )
+        if _wants(event, "expansion-hook"):
+            replace_component(
+                entity,
+                ExpansionHookComponent(
+                    trigger=_expansion_trigger(event),
+                    generator_plugin_id=_DEFAULT_EXPANSION_GENERATOR,
+                ),
+            )
         if _wants(event, "dungeon") or _mentions(event, "dungeon", "crypt", "vault"):
             replace_component(
                 entity,
@@ -467,6 +588,14 @@ class DaggerWorldgenHook:
         if entity is None:
             return
         name = _name(entity, event.object_key)
+        if _wants(event, "expansion-hook"):
+            replace_component(
+                entity,
+                ExpansionHookComponent(
+                    trigger=_expansion_trigger(event),
+                    generator_plugin_id=_DEFAULT_EXPANSION_GENERATOR,
+                ),
+            )
         if _wants(event, "rumor") or _mentions(event, "rumor"):
             replace_component(entity, RumorComponent(text=event.intent or name))
         if _wants(event, "quest-template"):
@@ -495,6 +624,26 @@ class DinoWorldgenHook:
             replace_component(entity, DinosaurComponent(species_name=event.species))
             replace_component(entity, SpeciesComponent(common_name=event.species))
             replace_component(entity, FertilityComponent())
+        if _wants(event, "water-creature") or _mentions(event, "aquatic", "water creature"):
+            replace_component(entity, WaterCreatureComponent(species_name=event.species))
+        if _wants(event, "creature-need"):
+            replace_component(entity, CreatureNeedComponent(last_updated_epoch=event.world_epoch))
+        if _wants(event, "kaiju") or _mentions(event, "kaiju"):
+            replace_component(entity, KaijuComponent())
+        if _wants(event, "creature-attack"):
+            replace_component(entity, CreatureAttackComponent())
+        if _wants(event, "roar") or _mentions(event, "roar"):
+            replace_component(entity, RoarComponent())
+        if _wants(event, "charge"):
+            replace_component(entity, ChargeComponent())
+        if _wants(event, "trample"):
+            replace_component(entity, TrampleComponent())
+        if _wants(event, "armor-plate"):
+            replace_component(entity, ArmorPlateComponent())
+        if _wants(event, "weak-point"):
+            replace_component(entity, WeakPointComponent())
+        if _wants(event, "apex-predator"):
+            replace_component(entity, ApexPredatorComponent())
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
@@ -503,6 +652,22 @@ class DinoWorldgenHook:
         species = _resource_type(event)
         if _wants(event, "fossil") or _mentions(event, "fossil", "amber"):
             replace_component(entity, FossilFragmentComponent(sample_quality=0.8))
+        if _wants(event, "fossil-survey"):
+            replace_component(entity, FossilSurveyComponent())
+        if _wants(event, "ancient-sample"):
+            replace_component(entity, AncientSampleComponent(species_name=species))
+        if _wants(event, "bait"):
+            replace_component(entity, BaitComponent(target_species=species))
+        if _wants(event, "tranquilizer"):
+            replace_component(entity, TranquilizerComponent())
+        if _wants(event, "creature-product"):
+            replace_component(entity, CreatureProductComponent(product_type=species))
+        if _wants(event, "hide"):
+            replace_component(entity, HideComponent())
+        if _wants(event, "bone"):
+            replace_component(entity, BoneComponent())
+        if _wants(event, "toxin"):
+            replace_component(entity, ToxinComponent())
         if _wants(event, "egg") or _mentions(event, "egg"):
             replace_component(
                 entity,
@@ -511,11 +676,31 @@ class DinoWorldgenHook:
 
     def _on_room(self, event: RoomGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
-        if entity is not None and (
-            _wants(event, "enclosure") or _mentions(event, "enclosure", "pen")
-        ):
+        if entity is None:
+            return
+        species = _resource_type(event)
+        if _wants(event, "enclosure") or _mentions(event, "enclosure", "pen"):
             replace_component(entity, EnclosureComponent(name=_name(entity, event.room_key)))
             replace_component(entity, EscapeRiskComponent(last_updated_epoch=event.world_epoch))
+        if _wants(event, "track") or _mentions(event, "tracks", "footprints"):
+            replace_component(
+                entity,
+                TrackComponent(room_id=event.entity_id, last_tracked_epoch=event.world_epoch),
+            )
+        if _wants(event, "territory") or _mentions(event, "territory"):
+            replace_component(
+                entity,
+                TerritoryComponent(species_name=species, marked_at_epoch=event.world_epoch),
+            )
+        if _wants(event, "herd") or _mentions(event, "herd"):
+            replace_component(
+                entity,
+                HerdComponent(species_name=species, last_tracked_epoch=event.world_epoch),
+            )
+        if _wants(event, "nest") or _mentions(event, "nest"):
+            replace_component(entity, NestComponent(species_name=species))
+        if _wants(event, "scent"):
+            replace_component(entity, ScentComponent(species_name=species))
 
 
 class VoidWorldgenHook:
@@ -543,11 +728,29 @@ class VoidWorldgenHook:
             replace_component(entity, AirlockComponent())
         if _wants(event, "star-system"):
             replace_component(entity, StarSystemComponent(name=name))
+        if _wants(event, "orbital-body") or _mentions(event, "planet", "moon", "asteroid"):
+            replace_component(entity, OrbitalBodyComponent(body_type=_orbital_body_type(event)))
+        if _wants(event, "survey-site") or _mentions(event, "survey site"):
+            replace_component(entity, SurveySiteComponent(resource=_resource_type(event)))
+        if _wants(event, "mining-site") or _mentions(event, "mining site", "asteroid mine"):
+            replace_component(entity, MiningSiteComponent(resource_type=_resource_type(event)))
+        if _wants(event, "salvage-claim") or _mentions(event, "salvage site", "derelict"):
+            replace_component(entity, SalvageClaimComponent(site_id=event.entity_id))
+        if _wants(event, "contract"):
+            replace_component(entity, ContractComponent(contract_type=_resource_type(event)))
+        if _wants(event, "emergency") or _mentions(event, "emergency"):
+            replace_component(entity, EmergencyComponent(emergency_type=_resource_type(event)))
+        if _wants(event, "reactor") or _mentions(event, "reactor"):
+            replace_component(entity, ReactorComponent())
+        if _wants(event, "gravity"):
+            replace_component(entity, GravityComponent())
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
             return
+        name = _name(entity, event.object_key)
+        resource_type = _resource_type(event)
         if _wants(event, "ship-system"):
             replace_component(entity, ShipSystemComponent(system_type=event.entity_kind))
         if _wants(event, "jump-drive") or _mentions(event, "jump drive"):
@@ -561,6 +764,76 @@ class VoidWorldgenHook:
                 entity,
                 DistressSignalComponent(text=event.intent or "distress signal"),
             )
+        if _wants(event, "fabricator") or _mentions(event, "fabricator"):
+            replace_component(entity, FabricatorComponent())
+        if _wants(event, "blueprint") or _mentions(event, "blueprint"):
+            replace_component(entity, BlueprintComponent(name=name, system_type=resource_type))
+        if _wants(event, "ship-upgrade"):
+            replace_component(entity, ShipUpgradeComponent(system_type=resource_type))
+        if _wants(event, "contract") or _mentions(event, "contract"):
+            replace_component(entity, ContractComponent(contract_type=resource_type))
+        if _wants(event, "cargo"):
+            replace_component(entity, CargoComponent(cargo_type=resource_type))
+        if _wants(event, "salvage-claim") or _mentions(event, "salvage claim"):
+            replace_component(entity, SalvageClaimComponent(site_id=event.entity_id))
+        if _wants(event, "alien-species") or _mentions(event, "alien species"):
+            replace_component(entity, AlienSpeciesComponent(name=name))
+        if _wants(event, "first-contact"):
+            replace_component(entity, FirstContactComponent(species_id=event.entity_id))
+        if _wants(event, "translation-matrix"):
+            replace_component(entity, TranslationMatrixComponent(species_id=event.entity_id))
+        if _wants(event, "quarantine") or _mentions(event, "quarantine"):
+            replace_component(entity, QuarantineComponent(reason=event.intent or name))
+        if _wants(event, "diplomatic-mission"):
+            replace_component(entity, DiplomaticMissionComponent(species_id=event.entity_id))
+        if _wants(event, "alien-artifact") or _mentions(event, "alien artifact"):
+            replace_component(entity, AlienArtifactComponent(species_id=event.entity_id))
+        if _wants(event, "xenobiology-sample"):
+            replace_component(entity, XenobiologySampleComponent(species_id=event.entity_id))
+        if _wants(event, "trade-protocol"):
+            replace_component(entity, TradeProtocolComponent(species_id=event.entity_id))
+        if _wants(event, "drone"):
+            replace_component(entity, DroneComponent(drone_type=resource_type))
+        if _wants(event, "ship-ai") or _mentions(event, "ship ai"):
+            replace_component(entity, ShipAIComponent(name=name))
+        if _wants(event, "data-salvage") or _mentions(event, "data salvage"):
+            replace_component(entity, DataSalvageComponent(data_type=resource_type))
+        if _wants(event, "away-team"):
+            replace_component(entity, AwayTeamComponent(mission=resource_type))
+        if _wants(event, "morale"):
+            replace_component(entity, MoraleComponent())
+        if _wants(event, "mutiny"):
+            replace_component(entity, MutinyComponent())
+        if _wants(event, "emergency"):
+            replace_component(entity, EmergencyComponent(emergency_type=resource_type))
+        if _wants(event, "reactor") or _mentions(event, "reactor"):
+            replace_component(entity, ReactorComponent())
+        if _wants(event, "gravity"):
+            replace_component(entity, GravityComponent())
+        if _wants(event, "boarding-threat") or _mentions(event, "boarding threat"):
+            replace_component(entity, BoardingThreatComponent())
+        if _wants(event, "passenger"):
+            replace_component(entity, PassengerComponent())
+        if _wants(event, "survey-site"):
+            replace_component(entity, SurveySiteComponent(resource=resource_type))
+        if _wants(event, "mining-site"):
+            replace_component(entity, MiningSiteComponent(resource_type=resource_type))
+        if _wants(event, "customs-hold"):
+            replace_component(entity, CustomsHoldComponent())
+        if _wants(event, "smuggling-compartment"):
+            replace_component(entity, SmugglingCompartmentComponent())
+        if _wants(event, "insurance-policy"):
+            replace_component(entity, InsurancePolicyComponent(insured_entity_id=event.entity_id))
+        if _wants(event, "mortgage"):
+            replace_component(entity, MortgageComponent())
+        if _wants(event, "orbital-body"):
+            replace_component(entity, OrbitalBodyComponent(body_type=_orbital_body_type(event)))
+        if _wants(event, "orbit"):
+            replace_component(entity, OrbitComponent(body_id=event.entity_id))
+        if _wants(event, "navigation-route"):
+            replace_component(entity, NavigationRouteComponent(destination_id=event.entity_id))
+        if _wants(event, "astrogation"):
+            replace_component(entity, AstrogationComponent())
 
 
 class NukeWorldgenHook:
@@ -574,6 +847,8 @@ class NukeWorldgenHook:
         entity = _entity(self.actor, event)
         if entity is None:
             return
+        name = _name(entity, event.entity_key)
+        resource_type = _resource_type(event)
         if _wants(event, "radiation-source") or _mentions(
             event, "radiation", "fallout", "reactor"
         ):
@@ -584,6 +859,37 @@ class NukeWorldgenHook:
         if _wants(event, "scavenge-site") or _mentions(event, "ruin", "wasteland", "cache"):
             replace_component(entity, ScavengeSiteComponent(hazard_rads=1.0))
             replace_component(entity, LootTableComponent(outputs={"scrap": 2}))
+        if _wants(event, "settlement") or _mentions(event, "settlement"):
+            replace_component(entity, SettlementComponent(name=name))
+        if _wants(event, "settlement-salvage") or _mentions(event, "settlement salvage"):
+            replace_component(entity, SettlementSalvageComponent(outputs={"scrap": 2}))
+        if _wants(event, "water-purifier") or _mentions(event, "water purifier"):
+            replace_component(entity, WaterPurifierComponent())
+        if _wants(event, "generator") or _mentions(event, "generator"):
+            replace_component(entity, GeneratorComponent())
+        if _wants(event, "beacon") or _mentions(event, "radio beacon"):
+            replace_component(entity, BeaconComponent(message=event.intent or name))
+        if _wants(event, "trader-route") or _mentions(event, "trader route"):
+            replace_component(entity, TraderRouteComponent(destination=name))
+        if _wants(event, "raider-pressure") or _mentions(event, "raider"):
+            replace_component(entity, RaiderPressureComponent())
+        if _wants(event, "terminal") or _mentions(event, "terminal"):
+            replace_component(entity, TerminalComponent())
+        if _wants(event, "old-world-tech") or _mentions(event, "old-world", "pre-war"):
+            replace_component(entity, OldWorldTechComponent(tech_name=name))
+        if _wants(event, "tech-lead"):
+            replace_component(
+                entity,
+                TechLeadComponent(target_tech=resource_type, location_hint=event.intent),
+            )
+        if _wants(event, "water-purity") or _mentions(event, "dirty water", "purified water"):
+            replace_component(
+                entity,
+                WaterPurityComponent(
+                    rads_per_drink=1.0 if _mentions(event, "dirty", "contaminated") else 0.0,
+                    purified=_mentions(event, "purified"),
+                ),
+            )
         if isinstance(event, ObjectGeneratedEvent):
             if _wants(event, "rad-protection"):
                 replace_component(entity, RadProtectionComponent(rating=0.5))
@@ -591,6 +897,42 @@ class NukeWorldgenHook:
                 replace_component(entity, DecontaminationComponent())
             if _wants(event, "rad-medicine"):
                 replace_component(entity, RadMedicineComponent())
+            if _wants(event, "mutation"):
+                replace_component(
+                    entity,
+                    MutationComponent(
+                        mutation_id=event.entity_key,
+                        label=name,
+                        manifested_at_epoch=event.world_epoch,
+                    ),
+                )
+            if _wants(event, "mutation-resistance"):
+                replace_component(entity, MutationResistanceComponent(threshold_bonus=1.0))
+            if _wants(event, "suppressant"):
+                replace_component(entity, SuppressantComponent())
+            if _wants(event, "sample") or _mentions(event, "sample"):
+                replace_component(entity, SampleComponent(sample_type=resource_type))
+            if _wants(event, "locked-crate") or _mentions(event, "locked crate"):
+                replace_component(entity, LockedCrateComponent())
+            if _wants(event, "wasteland-artifact") or _mentions(event, "wasteland artifact"):
+                replace_component(entity, WastelandArtifactComponent(artifact_type=resource_type))
+            if _wants(event, "faction-salvage"):
+                replace_component(entity, FactionSalvageComponent(faction_id="generated-faction"))
+            if _wants(event, "schematic"):
+                replace_component(entity, SchematicComponent(mod_name=name))
+            if _wants(event, "item-mod"):
+                replace_component(entity, ItemModComponent(mod_name=name))
+            if _wants(event, "field-repair"):
+                replace_component(entity, FieldRepairComponent())
+            if _wants(event, "chem") or _mentions(event, "chem"):
+                replace_component(entity, ChemComponent(chem_type=resource_type))
+            if _wants(event, "chem-recipe"):
+                replace_component(entity, ChemRecipeComponent(chem_type=resource_type))
+            if _wants(event, "hotspot-marker"):
+                replace_component(
+                    entity,
+                    HotspotMarkerComponent(source_id=event.entity_id, marked_by="worldgen"),
+                )
             if _wants(event, "junk") or _mentions(event, "junk"):
                 replace_component(
                     entity,
@@ -605,6 +947,8 @@ class NukeWorldgenHook:
             replace_component(entity, RadiationDoseComponent(last_updated_epoch=event.world_epoch))
         if _wants(event, "mutation-threshold"):
             replace_component(entity, MutationThresholdComponent())
+        if _wants(event, "mutation-resistance"):
+            replace_component(entity, MutationResistanceComponent(threshold_bonus=1.0))
 
 
 __all__ = [

@@ -267,6 +267,11 @@ def test_ignite_and_extinguish_handlers_reject_invalid_state_directly():
             "invalid character id",
             "not-an-id",
         ),
+        (
+            _cmd(scenario, "ignite", target_id=str(target.id), character_id="ignored"),
+            "character does not exist",
+            "entity_999999",
+        ),
         (_cmd(scenario, "ignite", target_id="entity_999"), "target does not exist", None),
         (
             _cmd(scenario, "ignite", target_id=str(unreachable.id)),
@@ -312,6 +317,11 @@ def test_ignite_and_extinguish_handlers_reject_invalid_state_directly():
             _cmd(scenario, "extinguish", target_id=str(target.id)),
             "invalid character id",
             "not-an-id",
+        ),
+        (
+            _cmd(scenario, "extinguish", target_id=str(target.id)),
+            "character does not exist",
+            "entity_999999",
         ),
         (_cmd(scenario, "extinguish", target_id="entity_999"), "target does not exist", None),
         (

@@ -3219,6 +3219,18 @@ def test_daggersim_handlers_reject_invalid_character_ids_directly():
         assert result.ok is False
         assert result.reason == reason
 
+    missing = CommitCrimeHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "commit-crime",
+            character_id="entity_999999",
+            crime_type="trespass",
+        ),
+    )
+    assert missing.ok is False
+    assert missing.reason == "character does not exist"
+
 
 async def test_plan_travel_moves_character_after_route_time():
     scenario = build_scenario()

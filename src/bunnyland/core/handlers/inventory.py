@@ -32,7 +32,7 @@ from ..events import (
     ItemUnheldEvent,
     ItemWornEvent,
 )
-from .base import HandlerContext, HandlerResult, ok, rejected
+from .base import HandlerContext, HandlerResult, ok, rejected, require_entity
 
 
 def _reachable_container_ids(ctx: HandlerContext, character) -> set[EntityId]:
@@ -54,17 +54,22 @@ class TakeHandler:
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         payload: Mapping[str, Any] = command.payload
-        character_id = parse_entity_id(command.character_id)
-        item_id = parse_entity_id(payload.get("item_id"))
-        if character_id is None or item_id is None:
-            return rejected("invalid character or item id")
-        if not ctx.world.has_entity(character_id):
-            return rejected("character does not exist")
-        if not ctx.world.has_entity(item_id):
-            return rejected("item does not exist")
-
-        character = ctx.entity(character_id)
-        item = ctx.entity(item_id)
+        character_id, character, error = require_entity(
+            ctx,
+            command.character_id,
+            invalid_reason="invalid character or item id",
+            missing_reason="character does not exist",
+        )
+        if error is not None:
+            return error
+        item_id, item, error = require_entity(
+            ctx,
+            payload.get("item_id"),
+            invalid_reason="invalid character or item id",
+            missing_reason="item does not exist",
+        )
+        if error is not None:
+            return error
 
         source_id = container_of(item)
         if source_id is None:
@@ -115,17 +120,22 @@ class PutHandler:
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         payload: Mapping[str, Any] = command.payload
-        character_id = parse_entity_id(command.character_id)
-        item_id = parse_entity_id(payload.get("item_id"))
-        if character_id is None or item_id is None:
-            return rejected("invalid character or item id")
-        if not ctx.world.has_entity(character_id):
-            return rejected("character does not exist")
-        if not ctx.world.has_entity(item_id):
-            return rejected("item does not exist")
-
-        character = ctx.entity(character_id)
-        item = ctx.entity(item_id)
+        character_id, character, error = require_entity(
+            ctx,
+            command.character_id,
+            invalid_reason="invalid character or item id",
+            missing_reason="character does not exist",
+        )
+        if error is not None:
+            return error
+        item_id, item, error = require_entity(
+            ctx,
+            payload.get("item_id"),
+            invalid_reason="invalid character or item id",
+            missing_reason="item does not exist",
+        )
+        if error is not None:
+            return error
         if container_of(item) != character_id:
             return rejected("item is not in inventory")
 
@@ -195,18 +205,25 @@ class DropHandler(PutHandler):
 
 def _inventory_item(ctx: HandlerContext, command: SubmittedCommand):
     payload: Mapping[str, Any] = command.payload
-    character_id = parse_entity_id(command.character_id)
-    item_id = parse_entity_id(payload.get("item_id"))
-    if character_id is None or item_id is None:
-        return None, None, rejected("invalid character or item id")
-    if not ctx.world.has_entity(character_id):
-        return None, None, rejected("character does not exist")
-    if not ctx.world.has_entity(item_id):
-        return None, None, rejected("item does not exist")
-    character = ctx.entity(character_id)
-    if container_of(ctx.entity(item_id)) != character_id:
+    character_id, character, error = require_entity(
+        ctx,
+        command.character_id,
+        invalid_reason="invalid character or item id",
+        missing_reason="character does not exist",
+    )
+    if error is not None:
+        return None, None, error
+    item_id, item, error = require_entity(
+        ctx,
+        payload.get("item_id"),
+        invalid_reason="invalid character or item id",
+        missing_reason="item does not exist",
+    )
+    if error is not None:
+        return None, None, error
+    if container_of(item) != character_id:
         return None, None, rejected("item is not in inventory")
-    return character, ctx.entity(item_id), None
+    return character, item, None
 
 
 class HoldHandler:

@@ -29,7 +29,7 @@ from ..core.components import (
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
 from ..core.edges import Contains
 from ..core.events import DomainEvent, EventVisibility, event_base
-from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -320,11 +320,10 @@ class IgniteHandler:
     command_type = "ignite"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        actor_id = parse_entity_id(command.character_id)
+        actor_id, actor, error = require_character(ctx, command.character_id)
         target_id = parse_entity_id(command.payload.get("target_id"))
-        if actor_id is None:
-            return rejected("invalid character id")
-        actor = ctx.entity(actor_id)
+        if error is not None:
+            return error
         if target_id is None:
             target_id = container_of(actor)
         if target_id is None or not ctx.world.has_entity(target_id):
@@ -362,11 +361,10 @@ class ExtinguishHandler:
     command_type = "extinguish"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        actor_id = parse_entity_id(command.character_id)
+        actor_id, actor, error = require_character(ctx, command.character_id)
         target_id = parse_entity_id(command.payload.get("target_id"))
-        if actor_id is None:
-            return rejected("invalid character id")
-        actor = ctx.entity(actor_id)
+        if error is not None:
+            return error
         if target_id is None:
             target_id = container_of(actor)
         if target_id is None or not ctx.world.has_entity(target_id):

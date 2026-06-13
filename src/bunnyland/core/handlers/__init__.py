@@ -1,6 +1,15 @@
 """Command handlers for the core text-adventure verb surface (spec 13)."""
 
-from .base import CommandHandler, HandlerContext, HandlerResult, ok, rejected
+from .base import (
+    CommandHandler,
+    HandlerContext,
+    HandlerResult,
+    ok,
+    rejected,
+    require_character,
+    require_entity,
+    require_reachable_entity,
+)
 from .interaction import (
     CloseHandler,
     InspectHandler,
@@ -52,4 +61,7 @@ __all__ = [
     "infer_intent",
     "ok",
     "rejected",
+    "require_character",
+    "require_entity",
+    "require_reachable_entity",
 ]

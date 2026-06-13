@@ -32,7 +32,7 @@ from ..core.ecs import (
     spawn_entity,
 )
 from ..core.ecs import (
-    reachable_component as _safe_reachable_component,
+    reachable_component as _reachable_component,
 )
 from ..core.ecs import (
     remove_from_container as _remove_from_container,
@@ -42,7 +42,7 @@ from ..core.ecs import (
 )
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility, event_base
-from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
 from .barbariansim import DurabilityComponent
 from .colonysim import ResourceStackComponent
 from .mutation import RadiationMutationPressureComponent, RadiationShieldComponent
@@ -420,10 +420,6 @@ class TerminalBootedEvent(DomainEvent):
 _event_base = partial(event_base, default_visibility=EventVisibility.ROOM)
 
 
-def _reachable_component(ctx: HandlerContext, character_id: EntityId, target_id, component):
-    return _safe_reachable_component(ctx.world, character_id, target_id, component)
-
-
 def _stack_name(resource_type: str, quantity: int) -> str:
     return f"{resource_type} x{quantity}"
 
@@ -795,7 +791,7 @@ class ScanRadiationHandler:
         if character_id is None:
             return rejected("invalid character id")
         target, error = _reachable_component(
-            ctx, character_id, command.payload.get("target_id"), RadiationSourceComponent
+            ctx.world, character_id, command.payload.get("target_id"), RadiationSourceComponent
         )
         if target is None:
             return rejected(error if error else "target is not radioactive")
@@ -824,7 +820,7 @@ class SealRadiationSourceHandler:
         if character_id is None:
             return rejected("invalid character id")
         source, error = _reachable_component(
-            ctx, character_id, command.payload.get("target_id"), RadiationSourceComponent
+            ctx.world, character_id, command.payload.get("target_id"), RadiationSourceComponent
         )
         if source is None:
             return rejected(error if error else "target is not radioactive")
@@ -861,7 +857,7 @@ class DecontaminateHandler:
             return rejected("target is not reachable")
 
         station, error = _reachable_component(
-            ctx, character_id, command.payload.get("station_id"), DecontaminationComponent
+            ctx.world, character_id, command.payload.get("station_id"), DecontaminationComponent
         )
         if station is None:
             return rejected(error if error else "decontamination station is required")
@@ -903,7 +899,7 @@ class UseRadMedicineHandler:
         if character_id is None:
             return rejected("invalid character id")
         medicine, error = _reachable_component(
-            ctx, character_id, command.payload.get("item_id"), RadMedicineComponent
+            ctx.world, character_id, command.payload.get("item_id"), RadMedicineComponent
         )
         if medicine is None:
             return rejected(error if error else "item is not rad medicine")
@@ -954,7 +950,7 @@ class TakeChemHandler:
         if character_id is None:
             return rejected("invalid character id")
         chem_entity, error = _reachable_component(
-            ctx, character_id, command.payload.get("chem_id"), ChemComponent
+            ctx.world, character_id, command.payload.get("chem_id"), ChemComponent
         )
         if chem_entity is None:
             return rejected(error if error else "item is not a chem")
@@ -1010,7 +1006,7 @@ class PurifyWaterHandler:
         if character_id is None:
             return rejected("invalid character id")
         water, error = _reachable_component(
-            ctx, character_id, command.payload.get("water_id"), WaterPurityComponent
+            ctx.world, character_id, command.payload.get("water_id"), WaterPurityComponent
         )
         if water is None:
             return rejected(error if error else "target is not a water source")
@@ -1039,7 +1035,7 @@ class DrinkContaminatedWaterHandler:
         if character_id is None:
             return rejected("invalid character id")
         water, error = _reachable_component(
-            ctx, character_id, command.payload.get("water_id"), WaterPurityComponent
+            ctx.world, character_id, command.payload.get("water_id"), WaterPurityComponent
         )
         if water is None:
             return rejected(error if error else "target is not a water source")
@@ -1079,7 +1075,7 @@ class ScavengeHandler:
         if character_id is None:
             return rejected("invalid character id")
         site, error = _reachable_component(
-            ctx, character_id, command.payload.get("site_id"), ScavengeSiteComponent
+            ctx.world, character_id, command.payload.get("site_id"), ScavengeSiteComponent
         )
         if site is None:
             return rejected(error if error else "target is not a scavenge site")
@@ -1172,7 +1168,7 @@ class ScrapItemHandler:
         if character_id is None:
             return rejected("invalid character id")
         item, error = _reachable_component(
-            ctx, character_id, command.payload.get("item_id"), JunkComponent
+            ctx.world, character_id, command.payload.get("item_id"), JunkComponent
         )
         if item is None:
             return rejected(error if error else "item cannot be scrapped")
@@ -1217,10 +1213,9 @@ class StabilizeMutationHandler:
     command_type = "stabilize-mutation"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        if character_id is None:
-            return rejected("invalid character id")
-        character = ctx.entity(character_id)
+        character_id, character, error = require_character(ctx, command.character_id)
+        if error is not None:
+            return error
         if not character.has_component(MutationComponent):
             return rejected("no mutation to stabilize")
         mutation = character.get_component(MutationComponent)
@@ -1252,7 +1247,7 @@ class MarkHotspotHandler:
         if character_id is None:
             return rejected("invalid character id")
         source, error = _reachable_component(
-            ctx, character_id, command.payload.get("source_id"), RadiationSourceComponent
+            ctx.world, character_id, command.payload.get("source_id"), RadiationSourceComponent
         )
         if source is None:
             return rejected(error if error else "target is not a radiation source")
@@ -1296,7 +1291,7 @@ class UseSuppressantHandler:
         if character_id is None:
             return rejected("invalid character id")
         item, error = _reachable_component(
-            ctx, character_id, command.payload.get("item_id"), SuppressantComponent
+            ctx.world, character_id, command.payload.get("item_id"), SuppressantComponent
         )
         if item is None:
             return rejected(error if error else "target is not a suppressant")
@@ -1366,7 +1361,7 @@ class StudySampleHandler:
         if character_id is None:
             return rejected("invalid character id")
         sample, error = _reachable_component(
-            ctx, character_id, command.payload.get("sample_id"), SampleComponent
+            ctx.world, character_id, command.payload.get("sample_id"), SampleComponent
         )
         if sample is None:
             return rejected(error if error else "target is not a sample")
@@ -1399,7 +1394,7 @@ class UnlockCrateHandler:
         if character_id is None:
             return rejected("invalid character id")
         crate, error = _reachable_component(
-            ctx, character_id, command.payload.get("crate_id"), LockedCrateComponent
+            ctx.world, character_id, command.payload.get("crate_id"), LockedCrateComponent
         )
         if crate is None:
             return rejected(error if error else "target is not a locked crate")
@@ -1428,7 +1423,7 @@ class StudyWastelandArtifactHandler:
         if character_id is None:
             return rejected("invalid character id")
         artifact, error = _reachable_component(
-            ctx, character_id, command.payload.get("artifact_id"), WastelandArtifactComponent
+            ctx.world, character_id, command.payload.get("artifact_id"), WastelandArtifactComponent
         )
         if artifact is None:
             return rejected(error if error else "target is not a wasteland artifact")
@@ -1456,7 +1451,7 @@ class ClaimFactionSalvageHandler:
         if character_id is None:
             return rejected("invalid character id")
         salvage, error = _reachable_component(
-            ctx, character_id, command.payload.get("salvage_id"), FactionSalvageComponent
+            ctx.world, character_id, command.payload.get("salvage_id"), FactionSalvageComponent
         )
         if salvage is None:
             return rejected(error if error else "target is not faction salvage")
@@ -1491,7 +1486,7 @@ class InstallModHandler:
             return rejected("item is not reachable")
         item = ctx.entity(item_id)
         schematic, error = _reachable_component(
-            ctx, character_id, command.payload.get("schematic_id"), SchematicComponent
+            ctx.world, character_id, command.payload.get("schematic_id"), SchematicComponent
         )
         if schematic is None:
             return rejected(error if error else "target is not a schematic")
@@ -1523,7 +1518,7 @@ class FieldRepairHandler:
         if not item.has_component(DurabilityComponent):
             return rejected("target has no durability")
         kit, error = _reachable_component(
-            ctx, character_id, command.payload.get("kit_id"), FieldRepairComponent
+            ctx.world, character_id, command.payload.get("kit_id"), FieldRepairComponent
         )
         if kit is None:
             return rejected(error if error else "target is not a repair kit")
@@ -1557,7 +1552,7 @@ class BrewChemHandler:
         if character_id is None:
             return rejected("invalid character id")
         recipe, error = _reachable_component(
-            ctx, character_id, command.payload.get("recipe_id"), ChemRecipeComponent
+            ctx.world, character_id, command.payload.get("recipe_id"), ChemRecipeComponent
         )
         if recipe is None:
             return rejected(error if error else "target is not a chem recipe")
@@ -1599,7 +1594,7 @@ class ActivateBeaconHandler:
         if character_id is None:
             return rejected("invalid character id")
         beacon, error = _reachable_component(
-            ctx, character_id, command.payload.get("beacon_id"), BeaconComponent
+            ctx.world, character_id, command.payload.get("beacon_id"), BeaconComponent
         )
         if beacon is None:
             return rejected(error if error else "target is not a beacon")
@@ -1627,7 +1622,7 @@ class OpenTraderRouteHandler:
         if character_id is None:
             return rejected("invalid character id")
         route, error = _reachable_component(
-            ctx, character_id, command.payload.get("route_id"), TraderRouteComponent
+            ctx.world, character_id, command.payload.get("route_id"), TraderRouteComponent
         )
         if route is None:
             return rejected(error if error else "target is not a trader route")
@@ -1686,7 +1681,7 @@ class BootTerminalHandler:
         if character_id is None:
             return rejected("invalid character id")
         terminal, error = _reachable_component(
-            ctx, character_id, command.payload.get("terminal_id"), TerminalComponent
+            ctx.world, character_id, command.payload.get("terminal_id"), TerminalComponent
         )
         if terminal is None:
             return rejected(error if error else "target is not a terminal")
@@ -1801,7 +1796,7 @@ class IdentifyTechHandler:
         if character_id is None:
             return rejected("invalid character id")
         item, error = _reachable_component(
-            ctx, character_id, command.payload.get("tech_id"), OldWorldTechComponent
+            ctx.world, character_id, command.payload.get("tech_id"), OldWorldTechComponent
         )
         if item is None:
             return rejected(error if error else "target is not old-world tech")
@@ -1831,7 +1826,7 @@ class RestoreTechHandler:
         if character_id is None:
             return rejected("invalid character id")
         item, error = _reachable_component(
-            ctx, character_id, command.payload.get("tech_id"), OldWorldTechComponent
+            ctx.world, character_id, command.payload.get("tech_id"), OldWorldTechComponent
         )
         if item is None:
             return rejected(error if error else "target is not old-world tech")
@@ -1885,7 +1880,7 @@ class ClaimSettlementHandler:
         if character_id is None:
             return rejected("invalid character id")
         settlement, error = _reachable_component(
-            ctx, character_id, command.payload.get("settlement_id"), SettlementComponent
+            ctx.world, character_id, command.payload.get("settlement_id"), SettlementComponent
         )
         if settlement is None:
             return rejected(error if error else "target is not a settlement")
@@ -1915,7 +1910,7 @@ class SalvageSettlementHandler:
         if character_id is None:
             return rejected("invalid character id")
         settlement, error = _reachable_component(
-            ctx, character_id, command.payload.get("settlement_id"), SettlementComponent
+            ctx.world, character_id, command.payload.get("settlement_id"), SettlementComponent
         )
         if settlement is None:
             return rejected(error if error else "target is not a settlement")
@@ -1973,7 +1968,7 @@ class BuildPurifierHandler:
         if character_id is None:
             return rejected("invalid character id")
         settlement, error = _reachable_component(
-            ctx, character_id, command.payload.get("settlement_id"), SettlementComponent
+            ctx.world, character_id, command.payload.get("settlement_id"), SettlementComponent
         )
         if settlement is None:
             return rejected(error if error else "target is not a settlement")
@@ -2013,7 +2008,7 @@ class PowerGeneratorHandler:
         if character_id is None:
             return rejected("invalid character id")
         generator, error = _reachable_component(
-            ctx, character_id, command.payload.get("generator_id"), GeneratorComponent
+            ctx.world, character_id, command.payload.get("generator_id"), GeneratorComponent
         )
         if generator is None:
             return rejected(error if error else "target is not a generator")

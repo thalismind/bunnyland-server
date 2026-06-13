@@ -11,7 +11,7 @@ from dataclasses import field, replace
 from functools import partial
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
-from relics import Component, Entity, EntityId, World
+from relics import Component, Entity, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import IdentityComponent, PortableComponent
@@ -27,7 +27,7 @@ from ..core.ecs import (
     entity_room_id as _entity_room_id,
 )
 from ..core.ecs import (
-    reachable_entity as _safe_reachable_entity,
+    reachable_entity as _reachable_entity,
 )
 from ..core.ecs import (
     remove_from_container as _remove_from_container,
@@ -573,10 +573,6 @@ class DailyFarmResetEvent(DomainEvent):
 _event_base = partial(event_base, default_visibility=EventVisibility.ROOM)
 
 
-def _reachable_entity(ctx: HandlerContext, character_id: EntityId, target_id: EntityId):
-    return _safe_reachable_entity(ctx.world, character_id, target_id)
-
-
 def _spawn_harvest_item(
     world: World,
     character: Entity,
@@ -1019,7 +1015,7 @@ class TillHandler:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
             return rejected("soil does not exist")
-        soil = _reachable_entity(ctx, character_id, soil_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
         if soil is None:
             return rejected("soil is not reachable")
         if not soil.has_component(SoilComponent):
@@ -1053,8 +1049,8 @@ class PlantHandler:
         if not ctx.world.has_entity(soil_id) or not ctx.world.has_entity(seed_id):
             return rejected("soil or seed does not exist")
 
-        soil = _reachable_entity(ctx, character_id, soil_id)
-        seed_entity = _reachable_entity(ctx, character_id, seed_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
+        seed_entity = _reachable_entity(ctx.world, character_id, seed_id)
         if soil is None or seed_entity is None:
             return rejected("soil or seed is not reachable")
         if not soil.has_component(SoilComponent) or not soil.has_component(TilledComponent):
@@ -1123,7 +1119,7 @@ class WaterCropHandler:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
             return rejected("soil does not exist")
-        soil = _reachable_entity(ctx, character_id, soil_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
         if soil is None:
             return rejected("soil is not reachable")
         if not soil.has_component(SoilComponent):
@@ -1162,8 +1158,8 @@ class FertilizeHandler:
             return rejected("invalid character, soil, or fertilizer id")
         if not ctx.world.has_entity(soil_id) or not ctx.world.has_entity(fertilizer_id):
             return rejected("soil or fertilizer does not exist")
-        soil = _reachable_entity(ctx, character_id, soil_id)
-        fertilizer_entity = _reachable_entity(ctx, character_id, fertilizer_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
+        fertilizer_entity = _reachable_entity(ctx.world, character_id, fertilizer_id)
         if soil is None or fertilizer_entity is None:
             return rejected("soil or fertilizer is not reachable")
         if not soil.has_component(SoilComponent):
@@ -1199,7 +1195,7 @@ class InspectCropHandler:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
             return rejected("soil does not exist")
-        soil = _reachable_entity(ctx, character_id, soil_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
         if soil is None:
             return rejected("soil is not reachable")
         if not soil.has_component(CropComponent):
@@ -1234,7 +1230,7 @@ class WeedCropHandler:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
             return rejected("soil does not exist")
-        soil = _reachable_entity(ctx, character_id, soil_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
         if soil is None:
             return rejected("soil is not reachable")
         if not soil.has_component(WeedComponent):
@@ -1266,7 +1262,7 @@ class TreatPestsHandler:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
             return rejected("soil does not exist")
-        soil = _reachable_entity(ctx, character_id, soil_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
         if soil is None:
             return rejected("soil is not reachable")
         if not soil.has_component(PestComponent):
@@ -1299,7 +1295,7 @@ class HarvestCropHandler:
         if not ctx.world.has_entity(soil_id):
             return rejected("soil does not exist")
         character = ctx.entity(character_id)
-        soil = _reachable_entity(ctx, character_id, soil_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
         if soil is None:
             return rejected("soil is not reachable")
         if not soil.has_component(CropComponent) or not soil.has_component(HarvestableComponent):
@@ -1376,7 +1372,7 @@ class ClearDeadCropHandler:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
             return rejected("soil does not exist")
-        soil = _reachable_entity(ctx, character_id, soil_id)
+        soil = _reachable_entity(ctx.world, character_id, soil_id)
         if soil is None:
             return rejected("soil is not reachable")
         if not soil.has_component(CropComponent):
@@ -1416,7 +1412,7 @@ class TapTreeHandler:
             return rejected("invalid character or tree id")
         if not ctx.world.has_entity(tree_id):
             return rejected("tree does not exist")
-        tree = _reachable_entity(ctx, character_id, tree_id)
+        tree = _reachable_entity(ctx.world, character_id, tree_id)
         if tree is None:
             return rejected("tree is not reachable")
         if not tree.has_component(TreeComponent):
@@ -1458,7 +1454,7 @@ class HarvestSapHandler:
         if not ctx.world.has_entity(tree_id):
             return rejected("tree does not exist")
         character = ctx.entity(character_id)
-        tree = _reachable_entity(ctx, character_id, tree_id)
+        tree = _reachable_entity(ctx.world, character_id, tree_id)
         if tree is None:
             return rejected("tree is not reachable")
         if not tree.has_component(TreeComponent):
@@ -1514,7 +1510,7 @@ class StartMachineHandler:
         if not ctx.world.has_entity(machine_id):
             return rejected("machine does not exist")
         character = ctx.entity(character_id)
-        machine = _reachable_entity(ctx, character_id, machine_id)
+        machine = _reachable_entity(ctx.world, character_id, machine_id)
         if machine is None:
             return rejected("machine is not reachable")
         if not machine.has_component(MachineComponent):
@@ -1577,7 +1573,7 @@ class CollectMachineOutputHandler:
         if not ctx.world.has_entity(machine_id):
             return rejected("machine does not exist")
         character = ctx.entity(character_id)
-        machine = _reachable_entity(ctx, character_id, machine_id)
+        machine = _reachable_entity(ctx.world, character_id, machine_id)
         if machine is None:
             return rejected("machine is not reachable")
         if not machine.has_component(MachineComponent) or not machine.has_component(
@@ -1628,7 +1624,7 @@ class CancelMachineHandler:
             return rejected("invalid character or machine id")
         if not ctx.world.has_entity(machine_id):
             return rejected("machine does not exist")
-        machine = _reachable_entity(ctx, character_id, machine_id)
+        machine = _reachable_entity(ctx.world, character_id, machine_id)
         if machine is None:
             return rejected("machine is not reachable")
         if not machine.has_component(MachineComponent) or not machine.has_component(
@@ -1663,7 +1659,7 @@ class RepairMachineHandler:
             return rejected("invalid character or machine id")
         if not ctx.world.has_entity(machine_id):
             return rejected("machine does not exist")
-        machine = _reachable_entity(ctx, character_id, machine_id)
+        machine = _reachable_entity(ctx.world, character_id, machine_id)
         if machine is None:
             return rejected("machine is not reachable")
         if not machine.has_component(MachineComponent):
@@ -1700,7 +1696,7 @@ class FeedAnimalHandler:
         if not ctx.world.has_entity(animal_id):
             return rejected("animal does not exist")
         character = ctx.entity(character_id)
-        animal = _reachable_entity(ctx, character_id, animal_id)
+        animal = _reachable_entity(ctx.world, character_id, animal_id)
         if animal is None:
             return rejected("animal is not reachable")
         if not animal.has_component(FarmAnimalComponent):
@@ -1740,7 +1736,7 @@ class PetAnimalHandler:
             return rejected("invalid character or animal id")
         if not ctx.world.has_entity(animal_id):
             return rejected("animal does not exist")
-        animal = _reachable_entity(ctx, character_id, animal_id)
+        animal = _reachable_entity(ctx.world, character_id, animal_id)
         if animal is None:
             return rejected("animal is not reachable")
         if not animal.has_component(FarmAnimalComponent):
@@ -1786,8 +1782,8 @@ class BreedAnimalHandler:
             return rejected("invalid character or animal id")
         if not ctx.world.has_entity(animal_id) or not ctx.world.has_entity(mate_id):
             return rejected("animal or mate does not exist")
-        animal = _reachable_entity(ctx, character_id, animal_id)
-        mate = _reachable_entity(ctx, character_id, mate_id)
+        animal = _reachable_entity(ctx.world, character_id, animal_id)
+        mate = _reachable_entity(ctx.world, character_id, mate_id)
         if animal is None or mate is None:
             return rejected("animal or mate is not reachable")
         if not animal.has_component(FarmAnimalComponent) or not mate.has_component(
@@ -1834,7 +1830,7 @@ class CollectAnimalProductHandler:
         if not ctx.world.has_entity(animal_id):
             return rejected("animal does not exist")
         character = ctx.entity(character_id)
-        animal = _reachable_entity(ctx, character_id, animal_id)
+        animal = _reachable_entity(ctx.world, character_id, animal_id)
         if animal is None:
             return rejected("animal is not reachable")
         if not animal.has_component(AnimalProductComponent):
@@ -1880,7 +1876,7 @@ class FishHandler:
         if not ctx.world.has_entity(spot_id):
             return rejected("fishing spot does not exist")
         character = ctx.entity(character_id)
-        spot = _reachable_entity(ctx, character_id, spot_id)
+        spot = _reachable_entity(ctx.world, character_id, spot_id)
         if spot is None:
             return rejected("fishing spot is not reachable")
         if not spot.has_component(FishingSpotComponent):
@@ -1923,7 +1919,7 @@ class MineHandler:
         if not ctx.world.has_entity(node_id):
             return rejected("mining node does not exist")
         character = ctx.entity(character_id)
-        node = _reachable_entity(ctx, character_id, node_id)
+        node = _reachable_entity(ctx.world, character_id, node_id)
         if node is None:
             return rejected("mining node is not reachable")
         if not node.has_component(MiningNodeComponent):
@@ -1958,7 +1954,7 @@ class DiscoverLadderHandler:
             return rejected("invalid character or ladder id")
         if not ctx.world.has_entity(ladder_id):
             return rejected("ladder does not exist")
-        ladder_entity = _reachable_entity(ctx, character_id, ladder_id)
+        ladder_entity = _reachable_entity(ctx.world, character_id, ladder_id)
         if ladder_entity is None:
             return rejected("ladder is not reachable")
         if not ladder_entity.has_component(LadderComponent):
@@ -2031,7 +2027,7 @@ class ForageHandler:
         if not ctx.world.has_entity(forage_id):
             return rejected("forage does not exist")
         character = ctx.entity(character_id)
-        forage = _reachable_entity(ctx, character_id, forage_id)
+        forage = _reachable_entity(ctx.world, character_id, forage_id)
         if forage is None:
             return rejected("forage is not reachable")
         if not forage.has_component(ForageComponent):
@@ -2127,7 +2123,7 @@ class JoinFestivalHandler:
             return rejected("invalid character or festival id")
         if not ctx.world.has_entity(festival_id):
             return rejected("festival does not exist")
-        festival = _reachable_entity(ctx, character_id, festival_id)
+        festival = _reachable_entity(ctx.world, character_id, festival_id)
         if festival is None:
             return rejected("festival is not reachable")
         if not festival.has_component(FestivalComponent):
@@ -2169,7 +2165,7 @@ class ContributeBundleHandler:
         if not ctx.world.has_entity(bundle_id):
             return rejected("bundle does not exist")
         character = ctx.entity(character_id)
-        bundle = _reachable_entity(ctx, character_id, bundle_id)
+        bundle = _reachable_entity(ctx.world, character_id, bundle_id)
         if bundle is None:
             return rejected("bundle is not reachable")
         if not bundle.has_component(BundleComponent):
@@ -2217,7 +2213,7 @@ class ClaimMailHandler:
         if not ctx.world.has_entity(mail_id):
             return rejected("mail does not exist")
         character = ctx.entity(character_id)
-        mail = _reachable_entity(ctx, character_id, mail_id)
+        mail = _reachable_entity(ctx.world, character_id, mail_id)
         if mail is None:
             return rejected("mail is not reachable")
         if not mail.has_component(MailComponent):
@@ -2257,7 +2253,7 @@ class CompleteFarmQuestHandler:
         if not ctx.world.has_entity(quest_id):
             return rejected("quest does not exist")
         character = ctx.entity(character_id)
-        quest = _reachable_entity(ctx, character_id, quest_id)
+        quest = _reachable_entity(ctx.world, character_id, quest_id)
         if quest is None:
             return rejected("quest is not reachable")
         if not quest.has_component(FarmQuestComponent):
@@ -2321,7 +2317,7 @@ class ShipItemsHandler:
         if not ctx.world.has_entity(bin_id):
             return rejected("shipping bin does not exist")
         character = ctx.entity(character_id)
-        shipping_bin = _reachable_entity(ctx, character_id, bin_id)
+        shipping_bin = _reachable_entity(ctx.world, character_id, bin_id)
         if shipping_bin is None:
             return rejected("shipping bin is not reachable")
         if not shipping_bin.has_component(ShippingBinComponent):
@@ -2377,7 +2373,7 @@ class DonateMuseumHandler:
         if not ctx.world.has_entity(museum_id):
             return rejected("museum does not exist")
         character = ctx.entity(character_id)
-        museum = _reachable_entity(ctx, character_id, museum_id)
+        museum = _reachable_entity(ctx.world, character_id, museum_id)
         if museum is None:
             return rejected("museum is not reachable")
         if not museum.has_component(MuseumCollectionComponent):
@@ -2425,7 +2421,7 @@ class ClaimRewardHandler:
         if not ctx.world.has_entity(reward_id):
             return rejected("reward does not exist")
         character = ctx.entity(character_id)
-        reward = _reachable_entity(ctx, character_id, reward_id)
+        reward = _reachable_entity(ctx.world, character_id, reward_id)
         if reward is None:
             return rejected("reward is not reachable")
         if not reward.has_component(RewardComponent):

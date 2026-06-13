@@ -12,7 +12,7 @@ from ..components import NoiseComponent
 from ..ecs import container_of, parse_entity_id, spawn_entity
 from ..edges import ContainmentMode, Contains, ExitTo
 from ..events import ActorMovedEvent
-from .base import HandlerContext, HandlerResult, ok, rejected
+from .base import HandlerContext, HandlerResult, ok, rejected, require_character
 
 
 class MoveHandler:
@@ -26,13 +26,9 @@ class MoveHandler:
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         payload: Mapping[str, Any] = command.payload
-        character_id = parse_entity_id(command.character_id)
-        if character_id is None:
-            return rejected("invalid character id")
-        if not ctx.world.has_entity(character_id):
-            return rejected("character does not exist")
-
-        character = ctx.entity(character_id)
+        character_id, character, error = require_character(ctx, command.character_id)
+        if error is not None:
+            return error
         current_room_id = container_of(character)
         if current_room_id is None:
             return rejected("character is not in a room")

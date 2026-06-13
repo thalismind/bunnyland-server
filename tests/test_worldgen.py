@@ -1291,6 +1291,378 @@ async def test_builtin_worldgen_hooks_cover_cross_package_mention_branches():
     assert fighter.has_component(FactionReputationComponent)
 
 
+async def test_builtin_worldgen_hooks_cover_sim_pack_expansion_wants():
+    from bunnyland.mechanics.daggersim import (
+        ExpansionHookComponent,
+        ProceduralSiteComponent,
+        UnrealizedLocationComponent,
+    )
+    from bunnyland.mechanics.dinosim import (
+        AncientSampleComponent,
+        ApexPredatorComponent,
+        ArmorPlateComponent,
+        BaitComponent,
+        BoneComponent,
+        ChargeComponent,
+        CreatureAttackComponent,
+        CreatureNeedComponent,
+        CreatureProductComponent,
+        DinosaurComponent,
+        EggComponent,
+        EnclosureComponent,
+        EscapeRiskComponent,
+        FossilFragmentComponent,
+        FossilSurveyComponent,
+        HerdComponent,
+        HideComponent,
+        KaijuComponent,
+        NestComponent,
+        RoarComponent,
+        ScentComponent,
+        TerritoryComponent,
+        ToxinComponent,
+        TrackComponent,
+        TrampleComponent,
+        TranquilizerComponent,
+        WaterCreatureComponent,
+        WeakPointComponent,
+    )
+    from bunnyland.mechanics.nukesim import (
+        BeaconComponent,
+        ChemComponent,
+        ChemRecipeComponent,
+        FactionSalvageComponent,
+        FieldRepairComponent,
+        GeneratorComponent,
+        HotspotMarkerComponent,
+        ItemModComponent,
+        LockedCrateComponent,
+        MutationComponent,
+        MutationResistanceComponent,
+        OldWorldTechComponent,
+        RaiderPressureComponent,
+        SampleComponent,
+        SchematicComponent,
+        SettlementComponent,
+        SettlementSalvageComponent,
+        SuppressantComponent,
+        TechLeadComponent,
+        TerminalComponent,
+        TraderRouteComponent,
+        WastelandArtifactComponent,
+        WaterPurifierComponent,
+        WaterPurityComponent,
+    )
+    from bunnyland.mechanics.voidsim import (
+        AlienArtifactComponent,
+        AlienSpeciesComponent,
+        AstrogationComponent,
+        AwayTeamComponent,
+        BlueprintComponent,
+        BoardingThreatComponent,
+        CargoComponent,
+        ContractComponent,
+        CustomsHoldComponent,
+        DataSalvageComponent,
+        DiplomaticMissionComponent,
+        DroneComponent,
+        EmergencyComponent,
+        FabricatorComponent,
+        FirstContactComponent,
+        GravityComponent,
+        InsurancePolicyComponent,
+        MiningSiteComponent,
+        MoraleComponent,
+        MortgageComponent,
+        MutinyComponent,
+        NavigationRouteComponent,
+        OrbitalBodyComponent,
+        OrbitComponent,
+        PassengerComponent,
+        QuarantineComponent,
+        ReactorComponent,
+        SalvageClaimComponent,
+        ShipAIComponent,
+        ShipUpgradeComponent,
+        SmugglingCompartmentComponent,
+        SurveySiteComponent,
+        TradeProtocolComponent,
+        TranslationMatrixComponent,
+        XenobiologySampleComponent,
+    )
+
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    proposal = WorldProposal(
+        seed="sim-pack-expansion",
+        rooms=[
+            RoomSpec(
+                key="stub_site",
+                title="Unrealized Road Hamlet",
+                description="an unrealized location carried by a rumor",
+                biome="hamlet",
+                wants=("procedural-site", "unrealized-location", "expansion-hook", "rumor"),
+            ),
+            RoomSpec(
+                key="void_frontier",
+                title="Derelict Asteroid Survey Site",
+                description="a derelict asteroid survey site with salvage and a reactor emergency",
+                wants=(
+                    "orbital-body",
+                    "survey-site",
+                    "mining-site",
+                    "salvage-claim",
+                    "contract",
+                    "reactor",
+                    "gravity",
+                ),
+            ),
+            RoomSpec(
+                key="nuke_settlement",
+                title="Radio Beacon Settlement",
+                description="a settlement with a pre-war terminal and trader route",
+                wants=(
+                    "settlement",
+                    "settlement-salvage",
+                    "water-purifier",
+                    "generator",
+                    "beacon",
+                    "trader-route",
+                    "raider-pressure",
+                    "terminal",
+                    "old-world-tech",
+                    "tech-lead",
+                    "water-purity",
+                ),
+            ),
+            RoomSpec(
+                key="dino_field",
+                title="Raptor Track Territory",
+                description="tracks cross a herd nest inside a fenced enclosure",
+                wants=("enclosure", "track", "territory", "herd", "nest", "scent"),
+            ),
+        ],
+        objects=[
+            ObjectSpec(
+                key="void_cache",
+                room_key="void_frontier",
+                name="frontier fabrication cache",
+                kind="cache",
+                wants=(
+                    "fabricator",
+                    "blueprint",
+                    "ship-upgrade",
+                    "cargo",
+                    "alien-species",
+                    "first-contact",
+                    "translation-matrix",
+                    "quarantine",
+                    "diplomatic-mission",
+                    "alien-artifact",
+                    "xenobiology-sample",
+                    "trade-protocol",
+                    "drone",
+                    "ship-ai",
+                    "data-salvage",
+                    "away-team",
+                    "morale",
+                    "mutiny",
+                    "boarding-threat",
+                    "passenger",
+                    "customs-hold",
+                    "smuggling-compartment",
+                    "insurance-policy",
+                    "mortgage",
+                    "orbit",
+                    "navigation-route",
+                    "astrogation",
+                ),
+            ),
+            ObjectSpec(
+                key="nuke_cache",
+                room_key="nuke_settlement",
+                name="wasteland repair cache",
+                kind="cache",
+                wants=(
+                    "mutation",
+                    "mutation-resistance",
+                    "suppressant",
+                    "sample",
+                    "locked-crate",
+                    "wasteland-artifact",
+                    "faction-salvage",
+                    "schematic",
+                    "item-mod",
+                    "field-repair",
+                    "chem",
+                    "chem-recipe",
+                    "hotspot-marker",
+                ),
+            ),
+            ObjectSpec(
+                key="dino_cache",
+                room_key="dino_field",
+                name="raptor fossil egg sample",
+                kind="fossil",
+                wants=(
+                    "fossil",
+                    "fossil-survey",
+                    "ancient-sample",
+                    "bait",
+                    "tranquilizer",
+                    "creature-product",
+                    "hide",
+                    "bone",
+                    "toxin",
+                    "egg",
+                ),
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="kaiju",
+                name="Thunderstep",
+                room_key="dino_field",
+                species="raptor",
+                description="a roaring aquatic kaiju raptor",
+                wants=(
+                    "dinosaur",
+                    "water-creature",
+                    "creature-need",
+                    "kaiju",
+                    "creature-attack",
+                    "roar",
+                    "charge",
+                    "trample",
+                    "armor-plate",
+                    "weak-point",
+                    "apex-predator",
+                ),
+            )
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    stub_site = actor.world.get_entity(result.rooms["stub_site"])
+    assert stub_site.has_component(ProceduralSiteComponent)
+    assert stub_site.has_component(UnrealizedLocationComponent)
+    assert stub_site.get_component(ExpansionHookComponent).trigger == "rumor"
+
+    void_frontier = actor.world.get_entity(result.rooms["void_frontier"])
+    assert void_frontier.has_component(OrbitalBodyComponent)
+    assert void_frontier.has_component(SurveySiteComponent)
+    assert void_frontier.has_component(MiningSiteComponent)
+    assert void_frontier.has_component(SalvageClaimComponent)
+    assert void_frontier.has_component(ContractComponent)
+    assert void_frontier.has_component(EmergencyComponent)
+    assert void_frontier.has_component(ReactorComponent)
+    assert void_frontier.has_component(GravityComponent)
+
+    nuke_settlement = actor.world.get_entity(result.rooms["nuke_settlement"])
+    assert nuke_settlement.has_component(SettlementComponent)
+    assert nuke_settlement.has_component(SettlementSalvageComponent)
+    assert nuke_settlement.has_component(WaterPurifierComponent)
+    assert nuke_settlement.has_component(GeneratorComponent)
+    assert nuke_settlement.has_component(BeaconComponent)
+    assert nuke_settlement.has_component(TraderRouteComponent)
+    assert nuke_settlement.has_component(RaiderPressureComponent)
+    assert nuke_settlement.has_component(TerminalComponent)
+    assert nuke_settlement.has_component(OldWorldTechComponent)
+    assert nuke_settlement.has_component(TechLeadComponent)
+    assert nuke_settlement.has_component(WaterPurityComponent)
+
+    dino_field = actor.world.get_entity(result.rooms["dino_field"])
+    assert dino_field.has_component(EnclosureComponent)
+    assert dino_field.has_component(EscapeRiskComponent)
+    assert dino_field.has_component(TrackComponent)
+    assert dino_field.has_component(TerritoryComponent)
+    assert dino_field.has_component(HerdComponent)
+    assert dino_field.has_component(NestComponent)
+    assert dino_field.has_component(ScentComponent)
+
+    void_cache = actor.world.get_entity(result.objects["void_cache"])
+    for component_type in (
+        FabricatorComponent,
+        BlueprintComponent,
+        ShipUpgradeComponent,
+        CargoComponent,
+        AlienSpeciesComponent,
+        FirstContactComponent,
+        TranslationMatrixComponent,
+        QuarantineComponent,
+        DiplomaticMissionComponent,
+        AlienArtifactComponent,
+        XenobiologySampleComponent,
+        TradeProtocolComponent,
+        DroneComponent,
+        ShipAIComponent,
+        DataSalvageComponent,
+        AwayTeamComponent,
+        MoraleComponent,
+        MutinyComponent,
+        BoardingThreatComponent,
+        PassengerComponent,
+        CustomsHoldComponent,
+        SmugglingCompartmentComponent,
+        InsurancePolicyComponent,
+        MortgageComponent,
+        OrbitComponent,
+        NavigationRouteComponent,
+        AstrogationComponent,
+    ):
+        assert void_cache.has_component(component_type)
+
+    nuke_cache = actor.world.get_entity(result.objects["nuke_cache"])
+    for component_type in (
+        MutationComponent,
+        MutationResistanceComponent,
+        SuppressantComponent,
+        SampleComponent,
+        LockedCrateComponent,
+        WastelandArtifactComponent,
+        FactionSalvageComponent,
+        SchematicComponent,
+        ItemModComponent,
+        FieldRepairComponent,
+        ChemComponent,
+        ChemRecipeComponent,
+        HotspotMarkerComponent,
+    ):
+        assert nuke_cache.has_component(component_type)
+
+    dino_cache = actor.world.get_entity(result.objects["dino_cache"])
+    for component_type in (
+        FossilFragmentComponent,
+        FossilSurveyComponent,
+        AncientSampleComponent,
+        BaitComponent,
+        TranquilizerComponent,
+        CreatureProductComponent,
+        HideComponent,
+        BoneComponent,
+        ToxinComponent,
+        EggComponent,
+    ):
+        assert dino_cache.has_component(component_type)
+
+    kaiju = actor.world.get_entity(result.characters["kaiju"])
+    for component_type in (
+        DinosaurComponent,
+        WaterCreatureComponent,
+        CreatureNeedComponent,
+        KaijuComponent,
+        CreatureAttackComponent,
+        RoarComponent,
+        ChargeComponent,
+        TrampleComponent,
+        ArmorPlateComponent,
+        WeakPointComponent,
+        ApexPredatorComponent,
+    ):
+        assert kaiju.has_component(component_type)
+
+
 def test_builtin_worldgen_hooks_ignore_missing_generated_entities():
     from bunnyland.worldgen.enrichment import (
         BarbarianWorldgenHook,

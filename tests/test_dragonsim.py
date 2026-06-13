@@ -434,6 +434,38 @@ def test_dragonsim_parity_handlers_reject_invalid_targets_directly():
     assert result.reason == "invalid character id"
 
 
+def test_dragonsim_location_handlers_reject_missing_character_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    poi_id = _poi(scenario)
+    zone = _dragon_room_entity(
+        scenario,
+        "wolf road",
+        "encounter-zone",
+        [EncounterZoneComponent(zone_type="roadside")],
+    )
+    missing_character = "entity_999999"
+    cases = [
+        (DiscoverLocationHandler(), "discover-location", {"location_id": str(poi_id)}),
+        (MarkMapHandler(), "mark-map", {"location_id": str(poi_id)}),
+        (TriggerEncounterHandler(), "trigger-encounter", {"zone_id": str(zone.id)}),
+    ]
+
+    for handler, command_type, payload in cases:
+        result = handler.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                command_type,
+                character_id=missing_character,
+                **payload,
+            ),
+        )
+        assert result.ok is False
+        assert result.reason == "character does not exist"
+
+
 def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directly():
     scenario = build_scenario()
     _install(scenario.actor)

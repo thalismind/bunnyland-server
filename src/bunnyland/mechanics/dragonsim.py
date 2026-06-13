@@ -34,7 +34,7 @@ from ..core.ecs import (
 )
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
-from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_entity
 from .lifesim import SkillSetComponent, _add_skill_xp
 
 
@@ -552,17 +552,24 @@ class DiscoverLocationHandler:
     command_type = "discover-location"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        location_id = parse_entity_id(command.payload.get("location_id"))
-        if character_id is None or location_id is None:
-            return rejected("invalid character or location id")
-        if not ctx.world.has_entity(location_id):
-            return rejected("location does not exist")
-
-        character = ctx.entity(character_id)
+        character_id, character, error = require_entity(
+            ctx,
+            command.character_id,
+            invalid_reason="invalid character or location id",
+            missing_reason="character does not exist",
+        )
+        if error is not None:
+            return error
+        location_id, location, error = require_entity(
+            ctx,
+            command.payload.get("location_id"),
+            invalid_reason="invalid character or location id",
+            missing_reason="location does not exist",
+        )
+        if error is not None:
+            return error
         if location_id not in reachable_ids(ctx.world, character):
             return rejected("location is not reachable")
-        location = ctx.entity(location_id)
         if not location.has_component(PointOfInterestComponent):
             return rejected("target is not discoverable")
         poi = location.get_component(PointOfInterestComponent)
@@ -603,16 +610,24 @@ class MarkMapHandler:
     command_type = "mark-map"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        location_id = parse_entity_id(command.payload.get("location_id"))
-        if character_id is None or location_id is None:
-            return rejected("invalid character or location id")
-        if not ctx.world.has_entity(location_id):
-            return rejected("location does not exist")
-        character = ctx.entity(character_id)
+        character_id, character, error = require_entity(
+            ctx,
+            command.character_id,
+            invalid_reason="invalid character or location id",
+            missing_reason="character does not exist",
+        )
+        if error is not None:
+            return error
+        location_id, location, error = require_entity(
+            ctx,
+            command.payload.get("location_id"),
+            invalid_reason="invalid character or location id",
+            missing_reason="location does not exist",
+        )
+        if error is not None:
+            return error
         if location_id not in reachable_ids(ctx.world, character):
             return rejected("location is not reachable")
-        location = ctx.entity(location_id)
         if not location.has_component(PointOfInterestComponent):
             return rejected("target is not a mappable location")
 
@@ -656,16 +671,24 @@ class TriggerEncounterHandler:
     command_type = "trigger-encounter"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        zone_id = parse_entity_id(command.payload.get("zone_id"))
-        if character_id is None or zone_id is None:
-            return rejected("invalid character or encounter zone id")
-        if not ctx.world.has_entity(zone_id):
-            return rejected("encounter zone does not exist")
-        character = ctx.entity(character_id)
+        character_id, character, error = require_entity(
+            ctx,
+            command.character_id,
+            invalid_reason="invalid character or encounter zone id",
+            missing_reason="character does not exist",
+        )
+        if error is not None:
+            return error
+        zone_id, zone_entity, error = require_entity(
+            ctx,
+            command.payload.get("zone_id"),
+            invalid_reason="invalid character or encounter zone id",
+            missing_reason="encounter zone does not exist",
+        )
+        if error is not None:
+            return error
         if zone_id not in reachable_ids(ctx.world, character):
             return rejected("encounter zone is not reachable")
-        zone_entity = ctx.entity(zone_id)
         if not zone_entity.has_component(EncounterZoneComponent):
             return rejected("target is not an encounter zone")
         zone = zone_entity.get_component(EncounterZoneComponent)
