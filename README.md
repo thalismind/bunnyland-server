@@ -154,6 +154,11 @@ branch tags and `latest` for the default branch. The web repo publishes
 - **[Dino ranching, feed, and creature products](docs/player/dino-ranching-products.md)** —
   feed stores, resource-backed feed, hunger and stress, egg collection, product harvests,
   ranch work, and guard duty.
+- **[Neon-sim cyberpunk city](docs/player/neonsim.md)** — districts and access control,
+  surveillance and evidence, and hacking with counter-intrusion traces.
+- **[Neon streets, cyberware, and fixers](docs/player/neon-streets-and-fixers.md)** — the
+  street economy, heat and wanted levels, cybernetic implants, and fixer missions with
+  corporate intrigue.
 
 ### Technical docs
 
@@ -203,7 +208,7 @@ full catalogue is in [`bunnyland_mechanics.md`](bunnyland_mechanics.md).
 | **Dagger Sim**  | Implemented | Daggerfall       | Procedural frontier expansion, rumors, travel logistics, guilds/institutions and services, banking and debt, civic law and fines, custom classes and spells, language pacification, supernatural afflictions, procedural dungeons, etiquette and social approach |
 | **Void Sim**    | Implemented | FTL              | Ships, stations and habitat modules, life support, pressure and airlocks, power grids, ship-system repair, docking, crew morale and mutiny, drones and ship AI, xenobiology, emergencies, passengers, customs, mining, insurance, and mortgages |
 | **Nuke Sim**    | Implemented | Fallout          | Radiation sources and shielding, mutation pressure, hotspots, suppressants, samples, locked crates, faction salvage, old-world artifacts and tech, schematics, field repair, chem brewing, beacons, trader routes, raider pressure, and terminals |
-| **Neon Sim**    | Planned, out of current parity scope | Deus Ex, Watch Dogs, Cyberpunk 2077 | Cyberpunk districts, usable surveillance, ECS hacking, fixer missions, corporate intrigue, street economy, wanted levels, reputation, and cybernetics |
+| **Neon Sim**    | Implemented | Deus Ex, Watch Dogs, Cyberpunk 2077 | Cyberpunk districts and access control, usable surveillance and evidence, ECS hacking with counter-intrusion traces, street economy with heat/wanted levels, cybernetic implants, and fixer missions with corporate intrigue |
 | **Dino Sim**    | Implemented | Jurassic Park, ARK, Dino Crisis | Fossil/species identification and cloning, fossil survey and preparation, lab incubation, egg inspection, imprinting, juvenile care, brooding, water creature study, containment panic, tracking, taming, companion commands, enclosures and escapes, and kaiju storyteller incidents |
 | **Fortress Sim** | Planned, out of current parity scope | Dwarf Fortress   | Deep materials, world history, civilizations, artifacts, nobles, justice, institutions, tantrum spirals, and multi-site worlds |
 
@@ -233,8 +238,9 @@ locations, and props.
 For hand-crafted dungeon-crawler setups, use `dungeon-vault-demo`, `dungeon-maze-demo`,
 or `dungeon-crypt-demo`. These are small deterministic crawls with room maps, secrets,
 readable clues, food, water, and dungeon objectives.
-The `neonsim` and `fortresssim` packages are planned catalogue packages and do not have
-plugins or demo generators yet.
+The `neonsim` plugin is implemented and enabled by default, but does not yet ship a demo
+generator. The `fortresssim` package is a planned catalogue package and does not have a
+plugin or demo generator yet.
 
 ## Development
 
