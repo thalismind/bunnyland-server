@@ -28,6 +28,7 @@ from ..core.handlers import (
     require_character,
     require_reachable_entity,
 )
+from ..prompts import ComponentPromptContext, PerspectivePhrase
 from .meter import Meter, band, changed
 
 SECONDS_PER_HOUR = 3600.0
@@ -44,12 +45,20 @@ class HungerComponent(Component):
     metabolism: float = 1.0  # hunger points gained per game hour
     last_ate_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        phrase = _need_phrase(ctx, _HUNGER_PROMPT_PHRASES.get(band(self.meter)))
+        return (phrase,) if phrase else ()
+
 
 @dataclass(frozen=True)
 class ThirstComponent(Component):
     meter: Meter = Meter()
     hydration_loss_rate: float = 1.5  # thirst points gained per game hour
     last_drank_epoch: int | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        phrase = _need_phrase(ctx, _THIRST_PROMPT_PHRASES.get(band(self.meter)))
+        return (phrase,) if phrase else ()
 
 
 @dataclass(frozen=True)
@@ -59,12 +68,18 @@ class FatigueComponent(Component):
     recovery_rate: float = 12.0
     last_recovered_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return _daily_need_fragments(ctx, self)
+
 
 @dataclass(frozen=True)
 class HygieneComponent(Component):
     meter: Meter = Meter()
     decay_rate: float = 0.75
     last_cleaned_epoch: int | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return _daily_need_fragments(ctx, self)
 
 
 @dataclass(frozen=True)
@@ -73,12 +88,18 @@ class ComfortNeedComponent(Component):
     decay_rate: float = 0.5
     last_comforted_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return _daily_need_fragments(ctx, self)
+
 
 @dataclass(frozen=True)
 class FunNeedComponent(Component):
     meter: Meter = Meter()
     decay_rate: float = 0.5
     last_played_epoch: int | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return _daily_need_fragments(ctx, self)
 
 
 @dataclass(frozen=True)
@@ -87,6 +108,9 @@ class SocialNeedComponent(Component):
     decay_rate: float = 0.5
     last_social_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return _daily_need_fragments(ctx, self)
+
 
 @dataclass(frozen=True)
 class PrivacyNeedComponent(Component):
@@ -94,12 +118,18 @@ class PrivacyNeedComponent(Component):
     decay_rate: float = 0.25
     last_private_epoch: int | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return _daily_need_fragments(ctx, self)
+
 
 @dataclass(frozen=True)
 class SafetyNeedComponent(Component):
     meter: Meter = Meter()
     decay_rate: float = 0.25
     last_safe_epoch: int | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        return _daily_need_fragments(ctx, self)
 
 
 @dataclass(frozen=True)
@@ -487,26 +517,188 @@ _DAILY_NEED_PHRASES = {
         "crisis": "You feel exposed to immediate danger.",
     },
 }
+_HUNGER_PROMPT_PHRASES = {
+    "warning": PerspectivePhrase(
+        "I am getting hungry.",
+        _HUNGER_PHRASES["warning"],
+        "They are getting hungry.",
+    ),
+    "urgent": PerspectivePhrase(
+        "I am hungry; food is becoming a priority.",
+        _HUNGER_PHRASES["urgent"],
+        "They are hungry; food is becoming a priority.",
+    ),
+    "crisis": PerspectivePhrase(
+        "I am starving and feel weak.",
+        _HUNGER_PHRASES["crisis"],
+        "They are starving and feel weak.",
+    ),
+}
+_THIRST_PROMPT_PHRASES = {
+    "warning": PerspectivePhrase(
+        "My mouth is dry.",
+        _THIRST_PHRASES["warning"],
+        "Their mouth is dry.",
+    ),
+    "urgent": PerspectivePhrase(
+        "I am thirsty; I should find clean water soon.",
+        _THIRST_PHRASES["urgent"],
+        "They are thirsty; they should find clean water soon.",
+    ),
+    "crisis": PerspectivePhrase(
+        "I am dehydrated, dizzy, and unfocused.",
+        _THIRST_PHRASES["crisis"],
+        "They are dehydrated, dizzy, and unfocused.",
+    ),
+}
+_DAILY_NEED_PROMPT_PHRASES = {
+    FatigueComponent: {
+        "warning": PerspectivePhrase(
+            "I am getting tired.",
+            _DAILY_NEED_PHRASES[FatigueComponent]["warning"],
+            "They are getting tired.",
+        ),
+        "urgent": PerspectivePhrase(
+            "I am fatigued and should rest soon.",
+            _DAILY_NEED_PHRASES[FatigueComponent]["urgent"],
+            "They are fatigued and should rest soon.",
+        ),
+        "crisis": PerspectivePhrase(
+            "I am exhausted and badly need sleep.",
+            _DAILY_NEED_PHRASES[FatigueComponent]["crisis"],
+            "They are exhausted and badly need sleep.",
+        ),
+    },
+    HygieneComponent: {
+        "warning": PerspectivePhrase(
+            "I feel a little grimy.",
+            _DAILY_NEED_PHRASES[HygieneComponent]["warning"],
+            "They feel a little grimy.",
+        ),
+        "urgent": PerspectivePhrase(
+            "I need to bathe or clean myself.",
+            _DAILY_NEED_PHRASES[HygieneComponent]["urgent"],
+            "They need to bathe or clean themselves.",
+        ),
+        "crisis": PerspectivePhrase(
+            "I feel filthy and uncomfortable.",
+            _DAILY_NEED_PHRASES[HygieneComponent]["crisis"],
+            "They feel filthy and uncomfortable.",
+        ),
+    },
+    ComfortNeedComponent: {
+        "warning": PerspectivePhrase(
+            "I want somewhere more comfortable.",
+            _DAILY_NEED_PHRASES[ComfortNeedComponent]["warning"],
+            "They want somewhere more comfortable.",
+        ),
+        "urgent": PerspectivePhrase(
+            "Discomfort is wearing on me.",
+            _DAILY_NEED_PHRASES[ComfortNeedComponent]["urgent"],
+            "Discomfort is wearing on them.",
+        ),
+        "crisis": PerspectivePhrase(
+            "I am deeply uncomfortable.",
+            _DAILY_NEED_PHRASES[ComfortNeedComponent]["crisis"],
+            "They are deeply uncomfortable.",
+        ),
+    },
+    FunNeedComponent: {
+        "warning": PerspectivePhrase(
+            "I could use something fun to do.",
+            _DAILY_NEED_PHRASES[FunNeedComponent]["warning"],
+            "They could use something fun to do.",
+        ),
+        "urgent": PerspectivePhrase(
+            "Boredom is becoming hard to ignore.",
+            _DAILY_NEED_PHRASES[FunNeedComponent]["urgent"],
+            "Boredom is becoming hard for them to ignore.",
+        ),
+        "crisis": PerspectivePhrase(
+            "I am miserable from boredom.",
+            _DAILY_NEED_PHRASES[FunNeedComponent]["crisis"],
+            "They are miserable from boredom.",
+        ),
+    },
+    SocialNeedComponent: {
+        "warning": PerspectivePhrase(
+            "I could use some company.",
+            _DAILY_NEED_PHRASES[SocialNeedComponent]["warning"],
+            "They could use some company.",
+        ),
+        "urgent": PerspectivePhrase(
+            "I feel lonely and need conversation.",
+            _DAILY_NEED_PHRASES[SocialNeedComponent]["urgent"],
+            "They feel lonely and need conversation.",
+        ),
+        "crisis": PerspectivePhrase(
+            "Isolation is weighing heavily on me.",
+            _DAILY_NEED_PHRASES[SocialNeedComponent]["crisis"],
+            "Isolation is weighing heavily on them.",
+        ),
+    },
+    PrivacyNeedComponent: {
+        "warning": PerspectivePhrase(
+            "I could use a little privacy.",
+            _DAILY_NEED_PHRASES[PrivacyNeedComponent]["warning"],
+            "They could use a little privacy.",
+        ),
+        "urgent": PerspectivePhrase(
+            "I need space away from others.",
+            _DAILY_NEED_PHRASES[PrivacyNeedComponent]["urgent"],
+            "They need space away from others.",
+        ),
+        "crisis": PerspectivePhrase(
+            "I feel overwhelmed and need privacy now.",
+            _DAILY_NEED_PHRASES[PrivacyNeedComponent]["crisis"],
+            "They feel overwhelmed and need privacy now.",
+        ),
+    },
+    SafetyNeedComponent: {
+        "warning": PerspectivePhrase(
+            "I feel a little unsafe.",
+            _DAILY_NEED_PHRASES[SafetyNeedComponent]["warning"],
+            "They feel a little unsafe.",
+        ),
+        "urgent": PerspectivePhrase(
+            "I need to get somewhere safe.",
+            _DAILY_NEED_PHRASES[SafetyNeedComponent]["urgent"],
+            "They need to get somewhere safe.",
+        ),
+        "crisis": PerspectivePhrase(
+            "I feel exposed to immediate danger.",
+            _DAILY_NEED_PHRASES[SafetyNeedComponent]["crisis"],
+            "They feel exposed to immediate danger.",
+        ),
+    },
+}
+
+
+def _need_phrase(ctx: ComponentPromptContext, phrase: PerspectivePhrase | None) -> str | None:
+    if phrase is None:
+        return None
+    return phrase.render(ctx.perspective)
+
+
+def _daily_need_fragments(ctx: ComponentPromptContext, component: Component) -> tuple[str, ...]:
+    phrases = _DAILY_NEED_PROMPT_PHRASES[type(component)].get(band(component.meter))
+    phrase = _need_phrase(ctx, phrases)
+    return (phrase,) if phrase else ()
 
 
 def need_fragments(world, character) -> list[str]:
     """Prompt phrases for this character's pressing needs (spec 16.3, 27.1)."""
-    del world  # signature matches the builder's fragment-provider protocol
     fragments: list[str] = []
+    ctx = ComponentPromptContext.for_entity(world, character)
     if character.has_component(HungerComponent):
-        phrase = _HUNGER_PHRASES.get(hunger_band(character))
-        if phrase:
-            fragments.append(phrase)
+        fragments.extend(character.get_component(HungerComponent).prompt_fragments(ctx))
     if character.has_component(ThirstComponent):
-        phrase = _THIRST_PHRASES.get(thirst_band(character))
-        if phrase:
-            fragments.append(phrase)
+        fragments.extend(character.get_component(ThirstComponent).prompt_fragments(ctx))
     for component_type, phrases in _DAILY_NEED_PHRASES.items():
+        del phrases
         if not character.has_component(component_type):
             continue
-        phrase = phrases.get(band(character.get_component(component_type).meter))
-        if phrase:
-            fragments.append(phrase)
+        fragments.extend(character.get_component(component_type).prompt_fragments(ctx))
     return fragments
 
 

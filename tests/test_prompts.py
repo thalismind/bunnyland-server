@@ -22,7 +22,12 @@ from bunnyland.mechanics.meter import Meter
 from bunnyland.mechanics.needs import HungerComponent, ThirstComponent, need_fragments
 from bunnyland.memory import InMemoryStore
 from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
-from bunnyland.prompts import PromptBuilder, render_prompt
+from bunnyland.prompts import (
+    ComponentPromptContext,
+    PerspectivePhrase,
+    PromptBuilder,
+    render_prompt,
+)
 from bunnyland.prompts.builder import _status
 
 
@@ -96,6 +101,49 @@ def test_build_context_includes_needs_feelings_and_notes():
     assert all("dry" not in n for n in ctx.conditions)  # thirst calm
     assert "tense" in ctx.feelings
     assert "The basin water is unsafe." in ctx.notes
+
+
+def test_component_prompt_context_lazy_room_siblings_and_inventory_helpers():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    room = world.get_entity(scenario.room_a)
+    nearby = add_item(scenario, scenario.room_a, "nearby berries")
+    carried = spawn_entity(
+        world,
+        [IdentityComponent(name="carried berries", kind="item"), PortableComponent()],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried.id)
+    ctx = ComponentPromptContext.for_entity(world, character)
+
+    assert ctx.room == room
+    assert ctx.room_siblings(PortableComponent) == (nearby,)
+    assert ctx.inventory_items(PortableComponent) == (carried,)
+
+    later_nearby = add_item(scenario, scenario.room_a, "later berries")
+    later_carried = spawn_entity(
+        world,
+        [IdentityComponent(name="later carried berries", kind="item"), PortableComponent()],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), later_carried.id)
+
+    assert ctx.room_siblings(PortableComponent) == (nearby,)
+    assert ctx.inventory_items(PortableComponent) == (carried,)
+    fresh_ctx = ComponentPromptContext.for_entity(world, character)
+    assert fresh_ctx.room_siblings(PortableComponent) == (nearby, later_nearby)
+    assert fresh_ctx.inventory_items(PortableComponent) == (carried, later_carried)
+
+
+def test_perspective_phrase_supports_static_and_templated_lines():
+    phrase = PerspectivePhrase(
+        "I have {count} berry.",
+        "You have {count} berry.",
+        "They have {count} berry.",
+    )
+
+    assert phrase.render("first-person", count=1) == "I have 1 berry."
+    assert phrase.render("second-person", count=1) == "You have 1 berry."
+    assert PerspectivePhrase("Ready.", "Ready.", "Ready.").render("third-person") == "Ready."
 
 
 def test_render_prompt_matches_foundation_layout():

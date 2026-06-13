@@ -10,6 +10,7 @@ from bunnyland.mechanics.persona import (
     persona_fragments,
 )
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 from bunnyland.worldgen import StubWorldBuilder, instantiate
 
 
@@ -40,6 +41,45 @@ def test_single_trait_has_no_conjunction():
     world = WorldActor().world
     character = spawn_entity(world, [TraitSetComponent(traits=("brave",))])
     assert persona_fragments(world, character) == ["You are brave."]
+
+
+def test_persona_component_fragments_support_perspective_styles():
+    world = WorldActor().world
+    character = spawn_entity(world, [])
+    first = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=character, perspective="first-person"),
+    )
+    third = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=character, perspective="third-person"),
+    )
+
+    assert TraitSetComponent(traits=("brave",)).prompt_fragments(first) == ("I am brave.",)
+    assert PreferenceComponent(likes=("tea",), dislikes=("rain",)).prompt_fragments(third) == (
+        "They like tea.",
+        "They dislike rain.",
+    )
+    assert GoalComponent(active_goals=("find shelter",)).prompt_fragments(first) == (
+        "My goal: find shelter.",
+    )
+
+
+def test_persona_component_fragments_are_self_view_only():
+    world = WorldActor().world
+    viewer = spawn_entity(world, [])
+    character = spawn_entity(world, [])
+    ctx = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=viewer),
+    )
+
+    assert TraitSetComponent(traits=("secretive",)).prompt_fragments(ctx) == ()
+    assert PreferenceComponent(likes=("moonlight",)).prompt_fragments(ctx) == ()
+    assert GoalComponent(active_goals=("hide the map",)).prompt_fragments(ctx) == ()
 
 
 async def test_generated_characters_carry_their_persona():

@@ -6,5 +6,13 @@ fragment providers, so the builder holds no domain-specific phrasing of its own.
 """
 
 from .builder import PromptBuilder, PromptContext, render_prompt
+from .context import ComponentPromptContext, PerspectivePhrase, PromptPerspective
 
-__all__ = ["PromptBuilder", "PromptContext", "render_prompt"]
+__all__ = [
+    "ComponentPromptContext",
+    "PerspectivePhrase",
+    "PromptBuilder",
+    "PromptContext",
+    "PromptPerspective",
+    "render_prompt",
+]

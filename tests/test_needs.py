@@ -39,6 +39,7 @@ from bunnyland.mechanics.needs import (
     ThirstComponent,
     need_fragments,
 )
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
 
@@ -252,6 +253,32 @@ def test_need_fragments_include_hunger_and_thirst_pressure():
 
     assert any("starving" in line.lower() for line in fragments)
     assert any("dehydrated" in line.lower() for line in fragments)
+
+
+def test_need_component_fragments_preserve_thresholds_and_support_perspective():
+    scenario = build_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+    first = ComponentPromptContext.for_entity(
+        scenario.actor.world,
+        char,
+        perspective=PromptPerspective(viewer=char, perspective="first-person"),
+    )
+    third = ComponentPromptContext.for_entity(
+        scenario.actor.world,
+        char,
+        perspective=PromptPerspective(viewer=char, perspective="third-person"),
+    )
+
+    assert HungerComponent(meter=Meter(value=10.0)).prompt_fragments(first) == ()
+    assert HungerComponent(meter=Meter(value=95.0)).prompt_fragments(first) == (
+        "I am starving and feel weak.",
+    )
+    assert ThirstComponent(meter=Meter(value=75.0)).prompt_fragments(third) == (
+        "They are thirsty; they should find clean water soon.",
+    )
+    assert FatigueComponent(meter=Meter(value=40.0)).prompt_fragments(first) == (
+        "I am getting tired.",
+    )
 
 
 async def test_suspended_character_does_not_get_hungry():

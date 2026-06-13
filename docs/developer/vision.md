@@ -89,6 +89,9 @@ describes weather. Social bonds describe nearby social context. A plugin that ad
 spaceships, dungeons, jobs, laws, recipes, or rumors should also add the prompt fragments
 that make those mechanics legible to agents.
 
+For component-owned prompt formatting conventions and migration guidance, see
+[`prompts.md`](prompts.md).
+
 ### Humans and agents coexist
 
 Characters are persistent entities. Controllers are swappable entities linked to characters.
