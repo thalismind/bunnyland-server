@@ -20,6 +20,7 @@ from relics import Edge, Entity, EntityId, World
 from ..core.components import IdentityComponent
 from ..core.ecs import parse_entity_id
 from ..core.events import SpeechSaidEvent, SpeechToldEvent
+from ..prompts import ComponentPromptContext
 from .needs import SocialNeedComponent, recover_daily_need
 
 if TYPE_CHECKING:
@@ -35,6 +36,20 @@ class SocialBond(Edge):
     fear: float = 0.0
     resentment: float = 0.0
     familiarity: float = 0.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None:
+            return ()
+        descriptor = _describe_bond(self, ctx.perspective.perspective)
+        if descriptor is None:
+            return ()
+        name = (
+            ctx.target.get_component(IdentityComponent).name
+            if ctx.target.has_component(IdentityComponent)
+            else "someone"
+        )
+        subject = ctx.perspective.choose(first="I", second="You", third="They")
+        return (f"{subject} {descriptor} {name}.",)
 
 
 _FIELDS = ("affinity", "trust", "fear", "resentment", "familiarity")
@@ -150,12 +165,15 @@ class RelationshipReactor:
             )
 
 
-def _describe_bond(bond: SocialBond) -> str | None:
+def _describe_bond(bond: SocialBond, perspective: str = "second-person") -> str | None:
+    first_person = perspective == "first-person"
     if bond.fear >= 0.3:
         return "fear"
     if bond.resentment >= 0.3:
         return "resent"
     if bond.affinity >= 0.3:
+        if first_person:
+            return "am fond of"
         return "are fond of"
     if bond.affinity <= -0.3:
         return "dislike"
@@ -170,16 +188,9 @@ def relationship_fragments(world: World, character: Entity) -> list[str]:
     for bond, target_id in character.get_relationships(SocialBond):
         if not world.has_entity(target_id):
             continue
-        descriptor = _describe_bond(bond)
-        if descriptor is None:
-            continue
         target = world.get_entity(target_id)
-        name = (
-            target.get_component(IdentityComponent).name
-            if target.has_component(IdentityComponent)
-            else "someone"
-        )
-        lines.append(f"You {descriptor} {name}.")
+        ctx = ComponentPromptContext.for_entity(world, character, target=target)
+        lines.extend(bond.prompt_fragments(ctx))
     return sorted(lines)
 
 

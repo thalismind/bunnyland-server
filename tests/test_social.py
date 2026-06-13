@@ -26,6 +26,7 @@ from bunnyland.mechanics.social import (
     install_social,
     relationship_fragments,
 )
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
 
@@ -139,6 +140,32 @@ def test_relationship_fragment_describes_strong_bonds():
 
     adjust_bond(world, scenario.character, hazel, {"fear": 0.6})  # fear dominates
     assert any("fear Hazel" in line for line in relationship_fragments(world, juniper))
+
+
+def test_social_bond_prompt_fragments_use_context_target_and_perspective():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    target = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    first = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=character, perspective="first-person"),
+        target=target,
+    )
+    third = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=character, perspective="third-person"),
+        target=target,
+    )
+
+    assert SocialBond(affinity=0.5).prompt_fragments(first) == ("I am fond of Hazel.",)
+    assert SocialBond(familiarity=0.5).prompt_fragments(third) == ("They know Hazel.",)
+    assert SocialBond(affinity=0.1).prompt_fragments(first) == ()
 
 
 def test_relationship_fragments_cover_negative_and_familiar_bonds():
