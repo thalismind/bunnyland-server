@@ -1467,6 +1467,7 @@ from ..worldgen.enrichment import (
     EnvironmentWorldgenHook,
     GardenWorldgenHook,
     LifeWorldgenHook,
+    NeonWorldgenHook,
     NukeWorldgenHook,
     VoidWorldgenHook,
 )
@@ -1483,6 +1484,7 @@ from ..worldgen.examples import (
     GOTHIC_COUNT_DEMO,
     LIFESIM_DEMO,
     MAPLE_FARM_DEMO,
+    NEONSIM_DEMO,
     NUKESIM_DEMO,
     STAR_OPERA_DEMO,
     VOIDSIM_DEMO,
@@ -3310,6 +3312,8 @@ def neonsim_plugin() -> Plugin:
         runtime=RuntimeContribution(service_factories=(install_neonsim,)),
         content=ContentContribution(
             prompt_fragments=(neonsim_fragments,),
+            worldgen_hooks=(NeonWorldgenHook,),
+            world_generators=(NEONSIM_DEMO,),
         ),
     )
 

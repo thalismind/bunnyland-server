@@ -226,7 +226,7 @@ uv run bunnyland serve --generator voidsim-demo --ticks 5
 
 The demos are `lifesim-demo`, `gardensim-demo`, `maple-farm-demo`, `colonysim-demo`,
 `barbariansim-demo`, `dragonsim-demo`, `daggersim-demo`, `voidsim-demo`, `nukesim-demo`,
-and `dinosim-demo`.
+`neonsim-demo`, and `dinosim-demo`.
 Fast travel and richer map features remain planned follow-up work rather than part of the
 current implemented parity surface.
 There is also a larger life-sim showcase, `apartment-demo`: a quirky NYC apartment
@@ -238,9 +238,8 @@ locations, and props.
 For hand-crafted dungeon-crawler setups, use `dungeon-vault-demo`, `dungeon-maze-demo`,
 or `dungeon-crypt-demo`. These are small deterministic crawls with room maps, secrets,
 readable clues, food, water, and dungeon objectives.
-The `neonsim` plugin is implemented and enabled by default, but does not yet ship a demo
-generator. The `fortresssim` package is a planned catalogue package and does not have a
-plugin or demo generator yet.
+The `fortresssim` package is a planned catalogue package and does not have a plugin or demo
+generator yet.
 
 ## Development
 
