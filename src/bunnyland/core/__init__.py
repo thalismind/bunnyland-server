@@ -92,9 +92,15 @@ from .controllers import (
 from .ecs import (
     container_of,
     contents,
+    entity_name,
+    entity_room_id,
     parse_entity_id,
+    reachable_component,
+    reachable_entity,
     reachable_ids,
+    remove_from_container,
     replace_component,
+    room_id_for,
     spawn_entity,
 )
 from .edges import (
@@ -129,6 +135,7 @@ from .events import (
     RoomGeneratedEvent,
     RoomLookedEvent,
     WorldPauseStatusChangedEvent,
+    event_base,
 )
 from .handlers import (
     CloseHandler,
@@ -206,6 +213,7 @@ __all__ = [
     "EncumbranceComponent",
     "EventBus",
     "EventVisibility",
+    "event_base",
     "ExitTo",
     "FocusPointsComponent",
     "GeneratedEntityEvent",
@@ -294,10 +302,16 @@ __all__ = [
     "contents",
     "definition_by_command_type",
     "definitions_by_tool_name",
+    "entity_name",
+    "entity_room_id",
     "infer_intent",
     "parse_entity_id",
+    "reachable_component",
+    "reachable_entity",
     "reachable_ids",
     "reference_arg_keys",
     "replace_component",
+    "remove_from_container",
+    "room_id_for",
     "spawn_entity",
 ]

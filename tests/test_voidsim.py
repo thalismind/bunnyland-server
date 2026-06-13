@@ -258,6 +258,22 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
     )
 
 
+def test_voidsim_reachable_component_rejects_missing_character():
+    scenario = build_scenario()
+    result = OpenAirlockHandler().execute(
+        HandlerContext(scenario.actor.world, scenario.actor.epoch),
+        _handler_cmd(
+            scenario,
+            "open-airlock",
+            character_id="entity_999999",
+            airlock_id=str(scenario.room_a),
+        ),
+    )
+
+    assert not result.ok
+    assert result.reason == "character does not exist"
+
+
 def _spawn_in_room_a(scenario, components):
     entity = spawn_entity(scenario.actor.world, components)
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(

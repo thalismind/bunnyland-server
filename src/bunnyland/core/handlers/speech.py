@@ -87,6 +87,8 @@ class SayHandler:
         text = str(payload.get("text", "")).strip()
         if speaker_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(speaker_id):
+            return rejected("speaker does not exist")
         if not text:
             return rejected("nothing to say")
 
@@ -127,6 +129,8 @@ class TellHandler:
         text = str(payload.get("text", "")).strip()
         if speaker_id is None or target_id is None:
             return rejected("invalid speaker or target id")
+        if not ctx.world.has_entity(speaker_id):
+            return rejected("speaker does not exist")
         if not text:
             return rejected("nothing to say")
         if not ctx.world.has_entity(target_id):

@@ -58,6 +58,8 @@ class TakeHandler:
         item_id = parse_entity_id(payload.get("item_id"))
         if character_id is None or item_id is None:
             return rejected("invalid character or item id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if not ctx.world.has_entity(item_id):
             return rejected("item does not exist")
 
@@ -117,6 +119,8 @@ class PutHandler:
         item_id = parse_entity_id(payload.get("item_id"))
         if character_id is None or item_id is None:
             return rejected("invalid character or item id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if not ctx.world.has_entity(item_id):
             return rejected("item does not exist")
 
@@ -195,6 +199,8 @@ def _inventory_item(ctx: HandlerContext, command: SubmittedCommand):
     item_id = parse_entity_id(payload.get("item_id"))
     if character_id is None or item_id is None:
         return None, None, rejected("invalid character or item id")
+    if not ctx.world.has_entity(character_id):
+        return None, None, rejected("character does not exist")
     if not ctx.world.has_entity(item_id):
         return None, None, rejected("item does not exist")
     character = ctx.entity(character_id)

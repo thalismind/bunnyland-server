@@ -89,12 +89,82 @@ def reachable_ids(world: World, character: Entity) -> set[EntityId]:
     """Entities a character can interact with: itself, its inventory, its room, and the
     room's direct contents (MVP reachability — no nested containers yet)."""
     reachable: set[EntityId] = {character.id}
-    reachable.update(contents(character))
+    reachable.update(item_id for item_id in contents(character) if world.has_entity(item_id))
     room_id = container_of(character)
     if room_id is not None:
-        reachable.add(room_id)
-        reachable.update(contents(world.get_entity(room_id)))
+        if world.has_entity(room_id):
+            reachable.add(room_id)
+            reachable.update(
+                item_id
+                for item_id in contents(world.get_entity(room_id))
+                if world.has_entity(item_id)
+            )
     return reachable
+
+
+def entity_name(entity: Entity) -> str:
+    """Return an entity's display name, falling back to its id."""
+    from .components import IdentityComponent
+
+    if entity.has_component(IdentityComponent):
+        return entity.get_component(IdentityComponent).name
+    return str(entity.id)
+
+
+def room_id_for(world: World, entity_id: EntityId) -> str | None:
+    """Return the containing room id string for an existing entity, if any."""
+    if not world.has_entity(entity_id):
+        return None
+    raw = container_of(world.get_entity(entity_id))
+    return str(raw) if raw is not None else None
+
+
+def entity_room_id(entity: Entity) -> str | None:
+    """Return the containing room id string for an entity, if any."""
+    raw = container_of(entity)
+    return str(raw) if raw is not None else None
+
+
+def remove_from_container(world: World, entity_id: EntityId) -> None:
+    """Remove an entity from its direct container when both still exist."""
+    from .edges import Contains
+
+    if not world.has_entity(entity_id):
+        return
+    parent_id = container_of(world.get_entity(entity_id))
+    if parent_id is not None and world.has_entity(parent_id):
+        world.get_entity(parent_id).remove_relationship(Contains, entity_id)
+
+
+def reachable_entity(world: World, character_id: EntityId, target_id: EntityId) -> Entity | None:
+    """Resolve a reachable entity without raising on dangling ids."""
+    if not world.has_entity(character_id) or not world.has_entity(target_id):
+        return None
+    character = world.get_entity(character_id)
+    if target_id not in reachable_ids(world, character):
+        return None
+    return world.get_entity(target_id)
+
+
+def reachable_component(
+    world: World,
+    character_id: EntityId,
+    target_id: object,
+    component_type: type[Component],
+) -> tuple[Entity | None, str | None]:
+    """Resolve a reachable target carrying ``component_type`` with stable rejection text."""
+    parsed = parse_entity_id(target_id)
+    if not world.has_entity(character_id):
+        return None, "character does not exist"
+    if parsed is None or not world.has_entity(parsed):
+        return None, "target does not exist"
+    character = world.get_entity(character_id)
+    if parsed not in reachable_ids(world, character):
+        return None, "target is not reachable"
+    entity = world.get_entity(parsed)
+    if not entity.has_component(component_type):
+        return None, "target is the wrong kind"
+    return entity, None
 
 
 __all__ = [
@@ -105,10 +175,16 @@ __all__ = [
     "World",
     "container_of",
     "contents",
+    "entity_name",
+    "entity_room_id",
     "ensure_blank_prefab",
-    "reachable_ids",
     "get_or_none",
     "parse_entity_id",
+    "reachable_component",
+    "reachable_entity",
+    "reachable_ids",
     "replace_component",
+    "remove_from_container",
+    "room_id_for",
     "spawn_entity",
 ]

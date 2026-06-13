@@ -334,30 +334,18 @@ def test_memory_handlers_reject_invalid_character_ids():
     scenario, store = memory_scenario()
     ctx = handler_context(scenario)
 
-    assert (
-        TakeNoteHandler(store)
-        .execute(ctx, with_character_id(note_cmd(scenario, "note"), scenario, "not-an-id"))
-        .reason
-        == "invalid character id"
+    handlers = (
+        (TakeNoteHandler(store), note_cmd(scenario, "note")),
+        (RememberHandler(store), remember_cmd(scenario)),
+        (ForgetHandler(store), forget_cmd(scenario, "note-1")),
+        (ReflectHandler(store), reflect_cmd(scenario, text="x")),
     )
-    assert (
-        RememberHandler(store)
-        .execute(ctx, with_character_id(remember_cmd(scenario), scenario, "not-an-id"))
-        .reason
-        == "invalid character id"
-    )
-    assert (
-        ForgetHandler(store)
-        .execute(ctx, with_character_id(forget_cmd(scenario, "note-1"), scenario, "not-an-id"))
-        .reason
-        == "invalid character id"
-    )
-    assert (
-        ReflectHandler(store)
-        .execute(ctx, with_character_id(reflect_cmd(scenario, text="x"), scenario, "not-an-id"))
-        .reason
-        == "invalid character id"
-    )
+    for handler, command in handlers:
+        invalid = with_character_id(command, scenario, "not-an-id")
+        missing = with_character_id(command, scenario, "entity_999")
+
+        assert handler.execute(ctx, invalid).reason == "invalid character id"
+        assert handler.execute(ctx, missing).reason == "character does not exist"
 
 
 def test_take_note_rejects_blank_text_and_bad_memory_scopes():

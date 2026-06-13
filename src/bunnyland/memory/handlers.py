@@ -57,6 +57,8 @@ class TakeNoteHandler:
         text = str(payload.get("text", "")).strip()
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if not text:
             return rejected("nothing to note")
         try:
@@ -93,6 +95,8 @@ class RememberHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         try:
             collection, scope = _collection(ctx, character_id, payload)
         except ValueError as exc:
@@ -130,6 +134,8 @@ class ForgetHandler:
         note_id = str(payload.get("note_id", "")).strip()
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if not note_id:
             return rejected("note id is required")
         try:
@@ -162,6 +168,8 @@ class ReflectHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         character = ctx.entity(character_id)
         if not character.has_component(MemoryProfileComponent):
             return rejected("character has no memory profile")

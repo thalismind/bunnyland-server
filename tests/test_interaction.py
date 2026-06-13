@@ -224,6 +224,10 @@ def test_look_rejects_invalid_character_and_missing_room_directly():
     assert LookHandler().execute(handler_context(scenario), invalid).reason == (
         "invalid character id"
     )
+    missing_character = command_with_payload(scenario, "look", {}, character_id="entity_999")
+    assert LookHandler().execute(handler_context(scenario), missing_character).reason == (
+        "character does not exist"
+    )
 
     scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
         Contains,
@@ -300,6 +304,16 @@ def test_reachable_target_rejects_invalid_and_missing_target_directly():
     assert InspectHandler().execute(handler_context(scenario), invalid).reason == (
         "invalid character or target id"
     )
+
+    missing_character = command_with_payload(
+        scenario,
+        "inspect",
+        {"target_id": str(scenario.room_a)},
+        character_id="entity_999",
+    )
+    assert InspectHandler().execute(
+        handler_context(scenario), missing_character
+    ).reason == "character does not exist"
 
     missing = target_cmd(scenario, "inspect", "entity_999")
     assert InspectHandler().execute(handler_context(scenario), missing).reason == (
@@ -729,6 +743,9 @@ def test_use_rejects_invalid_missing_and_unreachable_targets():
     assert execute_use(scenario, target.id, character_id="not-an-id").reason == (
         "invalid character or target id"
     )
+    assert execute_use(scenario, target.id, character_id="entity_999").reason == (
+        "character does not exist"
+    )
     assert execute_use(scenario, "entity_999").reason == "target does not exist"
     assert execute_use(scenario, far.id).reason == "target is not reachable"
 
@@ -834,6 +851,9 @@ def test_write_rejects_invalid_empty_missing_unreachable_and_oversized_text():
 
     assert execute_write(scenario, paper.id, "hi", character_id="not-an-id").reason == (
         "invalid character or target id"
+    )
+    assert execute_write(scenario, paper.id, "hi", character_id="entity_999").reason == (
+        "character does not exist"
     )
     assert execute_write(scenario, paper.id, "   ").reason == "nothing to write"
     assert execute_write(scenario, "entity_999", "hi").reason == "target does not exist"

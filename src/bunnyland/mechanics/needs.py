@@ -346,6 +346,8 @@ class _RecoverNeedHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         character = ctx.entity(character_id)
         if not character.has_component(self.component_type):
             return rejected(f"character has no {self.need} need")

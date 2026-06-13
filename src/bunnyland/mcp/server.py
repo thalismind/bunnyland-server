@@ -13,6 +13,13 @@ from urllib.parse import quote, unquote
 from pydantic import AnyUrl
 from relics import EntityId
 
+from ..claims import (
+    claimable_characters,
+    controlled_character,
+    is_child_character,
+    match_character_by_name,
+    matching_controller,
+)
 from ..core import (
     CharacterComponent,
     ControlledBy,
@@ -26,7 +33,6 @@ from ..core import (
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
 from ..core.ecs import parse_entity_id
 from ..core.events import CharacterClaimedEvent, DomainEvent
-from ..mechanics.lifesim import LifeStageComponent
 from ..plugins.builtin import MCP
 from ..prompts import PromptBuilder, render_prompt
 from ..server.models import (
@@ -57,7 +63,6 @@ if TYPE_CHECKING:  # pragma: no cover - import-only typing aliases
 
 MCP_MOUNT_PATH = "/mcp"
 ADMIN_TOKEN_ENV = "BUNNYLAND_MCP_ADMIN_TOKEN"
-CHILD_LIFE_STAGES = frozenset({"baby", "infant", "toddler", "child"})
 EVENTS_RESOURCE_URI = "bunnyland://events/recent"
 
 
@@ -200,10 +205,7 @@ class MCPEventBridge:
 
 
 def _is_child_character(character) -> bool:
-    if not character.has_component(LifeStageComponent):
-        return False
-    stage = character.get_component(LifeStageComponent).stage
-    return stage.lower() in CHILD_LIFE_STAGES
+    return is_child_character(character)
 
 
 def _match_character(
@@ -224,26 +226,9 @@ def _match_character(
                 return character
         raise RuntimeError(f"no character with id {character_id!r} exists in the world")
     if character_name:
-        lowered = character_name.lower()
-        exact = [
-            character
-            for character in characters
-            if character.get_component(IdentityComponent).name.lower() == lowered
-        ]
-        if exact:
-            return exact[0]
-        prefix = [
-            character
-            for character in characters
-            if character.get_component(IdentityComponent).name.lower().startswith(lowered)
-        ]
-        if len(prefix) == 1:
-            return prefix[0]
-        if len(prefix) > 1:
-            names = ", ".join(
-                character.get_component(IdentityComponent).name for character in prefix
-            )
-            raise RuntimeError(f"multiple characters match {character_name!r}: {names}")
+        matched = match_character_by_name(characters, character_name)
+        if matched is not None:
+            return matched
         names = ", ".join(
             character.get_component(IdentityComponent).name for character in characters
         )
@@ -251,31 +236,26 @@ def _match_character(
             f"no character named {character_name!r} exists in the world. "
             f"Available characters: {names}"
         )
-    for character in characters:
-        if character.has_component(SuspendedComponent) and (
-            allow_child_claims or not _is_child_character(character)
-        ):
-            return character
+    claimable = claimable_characters(characters, allow_child_claims=allow_child_claims)
+    if claimable:
+        return claimable[0]
     raise RuntimeError("no suspended claimable character exists in the world")
 
 
 def _mcp_controller_for(actor: WorldActor, agent_id: str):
-    controllers = actor.world.query().with_all([MCPControllerComponent])
-    for entity in sorted(controllers.execute_entities(), key=lambda item: str(item.id)):
-        if entity.get_component(MCPControllerComponent).agent_id == agent_id:
-            return entity
-    return None
+    return matching_controller(
+        actor,
+        MCPControllerComponent,
+        lambda controller: controller.agent_id == agent_id,
+    )
 
 
 def mcp_controlled_character(actor: WorldActor, agent_id: str):
-    controller = _mcp_controller_for(actor, agent_id)
-    if controller is None:
-        return None
-    for character in actor.world.query().with_all([CharacterComponent]).execute_entities():
-        for edge, controller_id in character.get_relationships(ControlledBy):
-            if controller_id == controller.id:
-                return character.id, controller.id, edge.generation
-    return None
+    return controlled_character(
+        actor,
+        MCPControllerComponent,
+        lambda controller: controller.agent_id == agent_id,
+    )
 
 
 def assign_mcp_controller(

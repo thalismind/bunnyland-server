@@ -29,6 +29,8 @@ class MoveHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
 
         character = ctx.entity(character_id)
         current_room_id = container_of(character)
@@ -53,6 +55,8 @@ class MoveHandler:
 
         if destination_id is None:
             return rejected("no matching exit")
+        if not ctx.world.has_entity(destination_id):
+            return rejected("destination does not exist")
 
         # Transfer containment: remove from old room, add to new room.
         current_room.remove_relationship(Contains, character_id)

@@ -133,6 +133,18 @@ def test_lifecycle_handlers_reject_invalid_character_ids():
     assert WakeHandler().execute(ctx, invalid).reason == "invalid character id"
     assert WaitHandler().execute(ctx, invalid).reason == "invalid character id"
 
+    missing = build_submitted_command(
+        character_id="entity_999",
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="sleep",
+        cost=CommandCost(),
+        lane=Lane.WORLD,
+    )
+    assert SleepHandler().execute(ctx, missing).reason == "character does not exist"
+    assert WakeHandler().execute(ctx, missing).reason == "character does not exist"
+    assert WaitHandler().execute(ctx, missing).reason == "character does not exist"
+
 
 def test_sleep_and_wake_reject_repeated_or_unmatched_state():
     scenario = lifecycle_scenario()

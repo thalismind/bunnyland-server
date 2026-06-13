@@ -8,9 +8,7 @@ storyteller support. It intentionally does not add park guests or attraction man
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
 from random import Random
-from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
 from relics import Component, Entity, EntityId, World
@@ -23,9 +21,28 @@ from ..core.components import (
     RegionComponent,
     RoomComponent,
 )
-from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component, spawn_entity
+from ..core.ecs import (
+    container_of,
+    parse_entity_id,
+    reachable_ids,
+    replace_component,
+    spawn_entity,
+)
+from ..core.ecs import (
+    entity_room_id as _entity_room_id,
+)
+from ..core.ecs import (
+    reachable_entity as _safe_reachable_entity,
+)
+from ..core.ecs import (
+    remove_from_container as _remove_from_container,
+)
+from ..core.ecs import (
+    room_id_for as _room_id,
+)
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility
+from ..core.events import event_base as _event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .colonysim import ResourceStackComponent
 from .lifesim import AgeComponent, LifeStageComponent
@@ -40,16 +57,6 @@ _KAIJU_NAMES = (
 )
 
 _KAIJU_ATTACKS = ("trample", "tail sweep", "sky roar", "building crush")
-
-
-def _event_base(epoch: int, **kwargs) -> dict:
-    base = {
-        "event_id": uuid4().hex,
-        "world_epoch": epoch,
-        "created_at": datetime.now(UTC),
-    }
-    base.update(kwargs)
-    return base
 
 
 @dataclass(frozen=True)
@@ -845,28 +852,8 @@ class GuardAssignedEvent(DomainEvent):
     location_id: str
 
 
-def _room_id(world: World, character_id: EntityId) -> str | None:
-    raw = container_of(world.get_entity(character_id))
-    return str(raw) if raw is not None else None
-
-
-def _entity_room_id(entity: Entity) -> str | None:
-    raw = container_of(entity)
-    return str(raw) if raw is not None else None
-
-
 def _reachable_entity(ctx: HandlerContext, character_id: EntityId, target_id: EntityId):
-    character = ctx.entity(character_id)
-    if target_id not in reachable_ids(ctx.world, character):
-        return None
-    return ctx.entity(target_id)
-
-
-def _remove_from_container(world: World, entity_id: EntityId) -> None:
-    entity = world.get_entity(entity_id)
-    parent_id = container_of(entity)
-    if parent_id is not None:
-        world.get_entity(parent_id).remove_relationship(Contains, entity_id)
+    return _safe_reachable_entity(ctx.world, character_id, target_id)
 
 
 def _hatch_room_id(world: World, actor: Entity, egg: Entity) -> EntityId | None:

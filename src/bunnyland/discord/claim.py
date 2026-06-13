@@ -5,6 +5,13 @@ from __future__ import annotations
 import os
 import time
 
+from ..claims import (
+    claimable_characters,
+    controlled_character,
+    is_child_character,
+    match_character_by_name,
+    matching_controller,
+)
 from ..core import (
     CharacterComponent,
     ControlledBy,
@@ -19,9 +26,6 @@ from ..core import (
 from ..core.claim_timeout import apply_claim_timeout_settings, normalize_claim_fallback
 from ..core.world_actor import WorldActor
 from ..llm_agents import DEFAULT_MODEL
-from ..mechanics.lifesim import LifeStageComponent
-
-CHILD_LIFE_STAGES = frozenset({"baby", "infant", "toddler", "child"})
 
 
 def list_character_names(actor: WorldActor) -> list[str]:
@@ -75,53 +79,26 @@ def render_character_list(actor: WorldActor) -> str:
 
 
 def _match_character(characters, character_name: str):
-    lowered = character_name.lower()
-    exact = [
-        character
-        for character in characters
-        if character.get_component(IdentityComponent).name.lower() == lowered
-    ]
-    if exact:
-        return exact[0]
-    prefix = [
-        character
-        for character in characters
-        if character.get_component(IdentityComponent).name.lower().startswith(lowered)
-    ]
-    if len(prefix) == 1:
-        return prefix[0]
-    if len(prefix) > 1:
-        names = ", ".join(character.get_component(IdentityComponent).name for character in prefix)
-        raise RuntimeError(f"multiple characters match {character_name!r}: {names}")
-    return None
+    return match_character_by_name(characters, character_name)
 
 
 def _is_child_character(character) -> bool:
-    if not character.has_component(LifeStageComponent):
-        return False
-    stage = character.get_component(LifeStageComponent).stage
-    return stage.lower() in CHILD_LIFE_STAGES
+    return is_child_character(character)
 
 
 def _claimable_characters(characters, *, allow_child_claims: bool):
-    return [
-        character
-        for character in characters
-        if character.has_component(SuspendedComponent)
-        and (allow_child_claims or not _is_child_character(character))
-    ]
+    return claimable_characters(characters, allow_child_claims=allow_child_claims)
 
 
 def _discord_controller_for(actor: WorldActor, discord_user_id: int, default_channel_id: int):
-    controllers = actor.world.query().with_all([DiscordControllerComponent])
-    for entity in sorted(controllers.execute_entities(), key=lambda item: str(item.id)):
-        controller = entity.get_component(DiscordControllerComponent)
-        if (
+    return matching_controller(
+        actor,
+        DiscordControllerComponent,
+        lambda controller: (
             controller.discord_user_id == discord_user_id
             and controller.default_channel_id == default_channel_id
-        ):
-            return entity
-    return None
+        ),
+    )
 
 
 def assign_discord_controller(
@@ -202,16 +179,11 @@ def assign_discord_controller(
 def discord_controlled_character(actor: WorldActor, discord_user_id: int):
     """Find the character controlled by a Discord user, if any."""
 
-    controllers = actor.world.query().with_all([DiscordControllerComponent]).execute_entities()
-    for entity in controllers:
-        if entity.get_component(DiscordControllerComponent).discord_user_id != discord_user_id:
-            continue
-        controller_id = entity.id
-        for character in actor.world.query().with_all([]).execute_entities():
-            for edge, target in character.get_relationships(ControlledBy):
-                if target == controller_id:
-                    return character.id, controller_id, edge.generation
-    return None
+    return controlled_character(
+        actor,
+        DiscordControllerComponent,
+        lambda controller: controller.discord_user_id == discord_user_id,
+    )
 
 
 def _controlled_character(actor: WorldActor, discord_user_id: int):

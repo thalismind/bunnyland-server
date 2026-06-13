@@ -10,14 +10,12 @@ publishes; points are spent only when a handler succeeds.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Protocol
-from uuid import uuid4
 
 from relics import EntityId, World
 
 from ..commands import SubmittedCommand
-from ..events import DomainEvent
+from ..events import DomainEvent, event_base
 
 
 @dataclass(frozen=True)
@@ -46,13 +44,7 @@ class HandlerContext:
         return self.world.get_entity(entity_id)
 
     def event_base(self, **kwargs: Any) -> dict[str, Any]:
-        base = {
-            "event_id": uuid4().hex,
-            "world_epoch": self.epoch,
-            "created_at": datetime.now(UTC),
-        }
-        base.update(kwargs)
-        return base
+        return event_base(self.epoch, **kwargs)
 
 
 class CommandHandler(Protocol):

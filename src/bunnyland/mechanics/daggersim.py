@@ -21,6 +21,12 @@ from ..core.ecs import (
     reachable_ids,
     replace_component,
 )
+from ..core.ecs import (
+    entity_name as _name,
+)
+from ..core.ecs import (
+    room_id_for as _room_id,
+)
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility, SpeechSaidEvent, SpeechToldEvent
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
@@ -851,17 +857,6 @@ class DungeonObjectiveFoundEvent(DomainEvent):
 
 class DungeonExitedEvent(DomainEvent):
     dungeon_id: str
-
-
-def _room_id(world: World, character_id: EntityId) -> str | None:
-    raw = container_of(world.get_entity(character_id))
-    return str(raw) if raw is not None else None
-
-
-def _name(entity: Entity) -> str:
-    if entity.has_component(IdentityComponent):
-        return entity.get_component(IdentityComponent).name
-    return str(entity.id)
 
 
 def _adjust_institution_reputation(character: Entity, institution_id: EntityId, delta: int) -> int:

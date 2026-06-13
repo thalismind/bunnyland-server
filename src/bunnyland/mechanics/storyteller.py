@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
-from uuid import uuid4
+from functools import partial
 
 from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
@@ -23,7 +22,7 @@ from ..core.components import (
 )
 from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains
-from ..core.events import DomainEvent, EventVisibility
+from ..core.events import DomainEvent, EventVisibility, event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .barbariansim import BarbarianSimPolicyComponent
 from .colonysim import ColonySimComponent, PrisonerComponent
@@ -124,15 +123,7 @@ class IncidentGeneratedEvent(DomainEvent):
         return self.generation.needs
 
 
-def _event_base(epoch: int, **kwargs) -> dict:
-    base = {
-        "event_id": uuid4().hex,
-        "world_epoch": epoch,
-        "created_at": datetime.now(UTC),
-        "visibility": EventVisibility.SYSTEM,
-    }
-    base.update(kwargs)
-    return base
+_event_base = partial(event_base, default_visibility=EventVisibility.SYSTEM)
 
 
 def _target_room(world: World):

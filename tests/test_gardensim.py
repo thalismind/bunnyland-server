@@ -206,6 +206,22 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
     )
 
 
+def test_gardensim_reachable_entity_rejects_missing_character_without_crashing():
+    scenario = build_scenario()
+    result = TillHandler().execute(
+        HandlerContext(scenario.actor.world, scenario.actor.epoch),
+        _handler_cmd(
+            scenario,
+            "till",
+            character_id="entity_999999",
+            soil_id=str(scenario.room_a),
+        ),
+    )
+
+    assert not result.ok
+    assert result.reason == "soil is not reachable"
+
+
 def _soil(scenario, name="garden bed"):
     soil = spawn_entity(
         scenario.actor.world,

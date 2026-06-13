@@ -7,8 +7,7 @@ intentionally does not include base building or hidden job automation.
 from __future__ import annotations
 
 from dataclasses import field, replace
-from datetime import UTC, datetime
-from uuid import uuid4
+from functools import partial
 
 from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, Frequency, System, World
@@ -34,6 +33,9 @@ from ..core.ecs import (
     replace_component,
     spawn_entity,
 )
+from ..core.ecs import (
+    room_id_for as _room_id,
+)
 from ..core.edges import ContainmentMode, Contains, HasInjury
 from ..core.events import (
     DomainEvent,
@@ -52,6 +54,7 @@ from ..core.events import (
     StackSplitEvent,
     StockpileCreatedEvent,
     StorageFilterChangedEvent,
+    event_base,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .consumables import ConsumableComponent, DrinkableComponent, FoodComponent
@@ -434,15 +437,7 @@ class ResourceRegenSystem(System):
             )
 
 
-def _event_base(epoch: int, **kwargs) -> dict:
-    base = {
-        "event_id": uuid4().hex,
-        "world_epoch": epoch,
-        "created_at": datetime.now(UTC),
-        "visibility": EventVisibility.ROOM,
-    }
-    base.update(kwargs)
-    return base
+_event_base = partial(event_base, default_visibility=EventVisibility.ROOM)
 
 
 class RoomQualityConsequence:
@@ -705,11 +700,6 @@ def _assigned_by_other(entity: Entity, character_id: EntityId) -> bool:
 def _owner(entity: Entity) -> EntityId | None:
     owners = entity.get_incoming_relationships(Owns)
     return owners[0][0] if owners else None
-
-
-def _room_id(world: World, character_id: EntityId) -> str | None:
-    raw = container_of(world.get_entity(character_id))
-    return str(raw) if raw is not None else None
 
 
 def _same_room_or_self(world: World, left_id: EntityId, right_id: EntityId) -> bool:

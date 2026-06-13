@@ -22,6 +22,8 @@ class SleepHandler:
         character_id: EntityId | None = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         character = ctx.entity(character_id)
         if character.has_component(SleepingComponent):
             return rejected("already asleep")
@@ -36,6 +38,8 @@ class WakeHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         character = ctx.entity(character_id)
         if not character.has_component(SleepingComponent):
             return rejected("not asleep")
@@ -49,8 +53,11 @@ class WaitHandler:
     command_type = "wait"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        if parse_entity_id(command.character_id) is None:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         return ok()
 
 

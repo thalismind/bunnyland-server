@@ -48,6 +48,8 @@ def _reachable_target(ctx: HandlerContext, command: SubmittedCommand, key: str =
     target_id = parse_entity_id(payload.get(key))
     if character_id is None or target_id is None:
         return None, None, None, rejected("invalid character or target id")
+    if not ctx.world.has_entity(character_id):
+        return None, None, None, rejected("character does not exist")
     if not ctx.world.has_entity(target_id):
         return None, None, None, rejected("target does not exist")
     character = ctx.entity(character_id)
@@ -108,6 +110,8 @@ class UseHandler:
         tool_id = parse_entity_id(payload.get("tool_id"))
         if character_id is None or target_id is None:
             return rejected("invalid character or target id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if not ctx.world.has_entity(target_id):
             return rejected("target does not exist")
 
@@ -170,6 +174,8 @@ class LookHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         character = ctx.entity(character_id)
         room_id = container_of(character)
         if room_id is None:
@@ -390,6 +396,8 @@ class WriteHandler:
         text = str(payload.get("text", ""))
         if character_id is None or target_id is None:
             return rejected("invalid character or target id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if not text.strip():
             return rejected("nothing to write")
         if not ctx.world.has_entity(target_id):

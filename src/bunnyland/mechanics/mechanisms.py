@@ -10,15 +10,14 @@ components, so the components stay simple and these transient timers reset clean
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 from relics import EntityId, World
 
 from ..core.components import ButtonComponent, DoorComponent, WorldClockComponent
 from ..core.ecs import container_of, replace_component
 from ..core.events import DomainEvent, EventVisibility
+from ..core.events import event_base as _event_base
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -30,12 +29,6 @@ class DoorAutoClosedEvent(DomainEvent):
 
 class ButtonResetEvent(DomainEvent):
     button_id: str
-
-
-def _event_base(epoch: int, **kwargs) -> dict:
-    base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
-    base.update(kwargs)
-    return base
 
 
 def _current_tick(world: World) -> int:

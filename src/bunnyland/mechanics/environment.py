@@ -10,9 +10,8 @@ turns over, which the controller layer can relay ("dusk settles over the marsh")
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from relics import Component, World
@@ -29,7 +28,7 @@ from ..core.components import (
 )
 from ..core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
 from ..core.edges import Contains
-from ..core.events import DomainEvent, EventVisibility
+from ..core.events import DomainEvent, EventVisibility, event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 
 if TYPE_CHECKING:
@@ -149,15 +148,7 @@ def weather_for(day: int) -> tuple[str, float]:
     return condition, _WEATHER_INTENSITY[condition]
 
 
-def _event_base(epoch: int, **kwargs) -> dict:
-    base = {
-        "event_id": uuid4().hex,
-        "world_epoch": epoch,
-        "created_at": datetime.now(UTC),
-        "visibility": EventVisibility.ROOM,
-    }
-    base.update(kwargs)
-    return base
+_event_base = partial(event_base, default_visibility=EventVisibility.ROOM)
 
 
 # -- consequence ------------------------------------------------------------------------

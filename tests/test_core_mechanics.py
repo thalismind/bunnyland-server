@@ -21,6 +21,7 @@ from bunnyland.core import (
     DiscordControllerComponent,
     DownedComponent,
     EncumbranceComponent,
+    ExitTo,
     GenerationIntentComponent,
     HandlerResult,
     HasInjury,
@@ -172,6 +173,9 @@ def test_move_handler_rejects_invalid_detached_and_unmatched_exits():
     invalid = _command(scenario, character_id="not-an-id")
     assert handler.execute(ctx, invalid).reason == "invalid character id"
 
+    missing = _command(scenario, character_id="entity_999")
+    assert handler.execute(ctx, missing).reason == "character does not exist"
+
     scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
         Contains,
         scenario.character,
@@ -186,6 +190,18 @@ def test_move_handler_rejects_invalid_detached_and_unmatched_exits():
         handler.execute(ctx, _command(scenario, payload={"direction": "west"})).reason
         == "no matching exit"
     )
+
+
+def test_move_handler_rejects_dangling_exit_target():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    scenario.actor.world._relationships.setdefault(scenario.room_a, {}).setdefault(ExitTo, {})[
+        parse_entity_id("entity_999")
+    ] = ExitTo(direction="down")
+
+    result = MoveHandler().execute(ctx, _command(scenario, payload={"direction": "down"}))
+
+    assert result.reason == "destination does not exist"
 
 
 def test_move_handler_can_select_exit_by_target_id_and_custom_noise():

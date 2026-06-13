@@ -26,6 +26,12 @@ from ..core.ecs import (
     replace_component,
     spawn_entity,
 )
+from ..core.ecs import (
+    entity_name as _name,
+)
+from ..core.ecs import (
+    room_id_for as _room_id,
+)
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
@@ -492,17 +498,6 @@ class VoicePhraseInscribedEvent(DomainEvent):
 class VoiceInscriptionStudiedEvent(DomainEvent):
     target_id: str
     word_id: str
-
-
-def _room_id(world: World, character_id: EntityId) -> str | None:
-    raw = container_of(world.get_entity(character_id))
-    return str(raw) if raw is not None else None
-
-
-def _name(entity: Entity) -> str:
-    if entity.has_component(IdentityComponent):
-        return entity.get_component(IdentityComponent).name
-    return str(entity.id)
 
 
 def _quest_by_key(world: World, quest_key: str) -> tuple[EntityId, Entity] | None:

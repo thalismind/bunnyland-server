@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import field, replace
-from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
@@ -46,6 +44,9 @@ from ..core.events import (
     PartnershipEndedEvent,
     PartnershipStartedEvent,
     PregnancyStartedEvent,
+)
+from ..core.events import (
+    event_base as _event_base,
 )
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .policy import BoundaryTag, PolicyGate
@@ -638,12 +639,6 @@ def _owns_or_claims_room(character_id: EntityId, room: Entity) -> bool:
         room.has_component(RoomClaimComponent)
         and room.get_component(RoomClaimComponent).claimed_by_id == cid
     )
-
-
-def _event_base(epoch: int, **kwargs) -> dict[str, Any]:
-    base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
-    base.update(kwargs)
-    return base
 
 
 def _active_character(entity: Entity) -> bool:

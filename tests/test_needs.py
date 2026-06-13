@@ -213,6 +213,16 @@ def test_daily_need_recovery_handler_rejects_invalid_missing_and_unreachable_tar
         payload={},
     )
     assert BatheHandler().execute(ctx, invalid_command).reason == "invalid character id"
+    missing_command = build_submitted_command(
+        character_id="entity_999",
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="bathe",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={},
+    )
+    assert BatheHandler().execute(ctx, missing_command).reason == "character does not exist"
     assert BatheHandler().execute(ctx, verb(scenario, "bathe")).reason == (
         "character has no hygiene need"
     )

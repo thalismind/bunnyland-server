@@ -298,6 +298,23 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
     )
 
 
+def test_dinosim_reachable_entity_rejects_missing_character_without_crashing():
+    scenario = build_scenario()
+    result = IdentifyFossilHandler().execute(
+        HandlerContext(scenario.actor.world, scenario.actor.epoch),
+        _handler_cmd(
+            scenario,
+            "identify-fossil",
+            character_id="entity_999999",
+            fossil_id=str(scenario.room_a),
+            species_name="triceratops",
+        ),
+    )
+
+    assert not result.ok
+    assert result.reason == "fossil is not reachable"
+
+
 def _room_contents(scenario):
     room = scenario.actor.world.get_entity(scenario.room_a)
     return [

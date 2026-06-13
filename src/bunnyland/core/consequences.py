@@ -51,22 +51,15 @@ from .events import (
     PainChangedEvent,
 )
 from .events import EventVisibility as _Vis
+from .events import (
+    event_base as _event_base,
+)
 
 DEFAULT_RECOVERY_CHECKS = 3
 
 
 class Consequence(Protocol):
     def process(self, world: World, epoch: int) -> list[DomainEvent]: ...
-
-
-def _event_base(epoch: int, **kwargs) -> dict:
-    from datetime import UTC, datetime
-    from uuid import uuid4
-
-    base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
-    base.update(kwargs)
-    return base
-
 
 class HealthConsequence:
     """Down, revive, and kill characters based on ``HealthComponent`` (spec 8.3-8.4)."""

@@ -66,6 +66,7 @@ from .events import (
     DomainEvent,
     EventBus,
     FocusPointsChangedEvent,
+    event_base,
 )
 from .handlers import CommandHandler, HandlerContext
 from .handlers.lifecycle import WakeHandler
@@ -558,16 +559,7 @@ class WorldActor:
     # -- events -------------------------------------------------------------------------
 
     def _event_base(self, **kwargs) -> dict:
-        from datetime import UTC, datetime
-        from uuid import uuid4
-
-        base = {
-            "event_id": uuid4().hex,
-            "world_epoch": self.epoch,
-            "created_at": datetime.now(UTC),
-        }
-        base.update(kwargs)
-        return base
+        return event_base(self.epoch, **kwargs)
 
     async def _publish(self, event: DomainEvent) -> None:
         await self.bus.publish(event)

@@ -22,6 +22,12 @@ from bunnyland.core import (
     SuspendedComponent,
     WorldClockComponent,
     build_submitted_command,
+    entity_name,
+    entity_room_id,
+    event_base,
+    parse_entity_id,
+    remove_from_container,
+    room_id_for,
     spawn_entity,
 )
 from bunnyland.core.claim_timeout import (
@@ -45,6 +51,7 @@ from bunnyland.core.events import (
     CommandRejectedEvent,
     ControllerChangedEvent,
     EventBus,
+    EventVisibility,
 )
 from bunnyland.core.systems import ClaimTimeoutSystem
 
@@ -93,6 +100,43 @@ def test_get_or_none_and_nowait_submission_cover_absent_paths():
     command = move_command(scenario)
     scenario.actor.submit_nowait(command)
     assert scenario.actor._inbox.get_nowait() is command
+
+
+def test_event_base_defaults_visibility_only_when_requested():
+    system_payload = event_base(7)
+    public_payload = event_base(
+        8, default_visibility=EventVisibility.PUBLIC, actor_id="entity_1"
+    )
+
+    assert system_payload["world_epoch"] == 7
+    assert "visibility" not in system_payload
+    assert public_payload["world_epoch"] == 8
+    assert public_payload["visibility"] == "public"
+    assert public_payload["actor_id"] == "entity_1"
+
+
+def test_safe_entity_helpers_cover_missing_and_dangling_paths(monkeypatch):
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    loose = spawn_entity(world)
+
+    assert entity_name(character) == "Juniper"
+    assert entity_name(loose) == str(loose.id)
+    assert room_id_for(world, scenario.character) == str(scenario.room_a)
+    assert room_id_for(world, parse_entity_id("entity_999999")) is None
+    assert entity_room_id(character) == str(scenario.room_a)
+
+    original_has_entity = world.has_entity
+
+    def has_entity(entity_id):
+        if entity_id == scenario.room_a:
+            return False
+        return original_has_entity(entity_id)
+
+    monkeypatch.setattr(world, "has_entity", has_entity)
+    remove_from_container(world, scenario.character)
+    assert entity_room_id(character) == str(scenario.room_a)
 
 
 # -- regeneration -----------------------------------------------------------------------

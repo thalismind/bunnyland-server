@@ -32,8 +32,18 @@ from ..core.ecs import (
     replace_component,
     spawn_entity,
 )
+from ..core.ecs import (
+    entity_name as _name,
+)
+from ..core.ecs import (
+    reachable_component as _safe_reachable_component,
+)
+from ..core.ecs import (
+    room_id_for as _room_id,
+)
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility
+from ..core.events import event_base as _void_event
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .barbariansim import CorruptionComponent, CorruptionGainedEvent
 from .colonysim import ResourceStackComponent, TechUnlockComponent
@@ -601,38 +611,9 @@ class ChaosInfluenceAppliedEvent(DomainEvent):
     mutation_pressure: float
 
 
-def _room_id(world: World, character_id: EntityId) -> str | None:
-    raw = container_of(world.get_entity(character_id))
-    return str(raw) if raw is not None else None
-
-
-def _name(entity: Entity) -> str:
-    if entity.has_component(IdentityComponent):
-        return entity.get_component(IdentityComponent).name
-    return str(entity.id)
-
-
-def _void_event(epoch: int, **kwargs) -> dict:
-    from datetime import UTC, datetime
-    from uuid import uuid4
-
-    base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
-    base.update(kwargs)
-    return base
-
-
 def _reachable_component(ctx: HandlerContext, character_id: EntityId, target_id, component):
     """Resolve a reachable entity that carries ``component``; return (entity, error)."""
-    parsed = parse_entity_id(target_id)
-    if parsed is None or not ctx.world.has_entity(parsed):
-        return None, "target does not exist"
-    character = ctx.entity(character_id)
-    if parsed not in reachable_ids(ctx.world, character):
-        return None, "target is not reachable"
-    entity = ctx.entity(parsed)
-    if not entity.has_component(component):
-        return None, "target is the wrong kind"
-    return entity, None
+    return _safe_reachable_component(ctx.world, character_id, target_id, component)
 
 
 class OpenAirlockHandler:
@@ -2319,6 +2300,8 @@ def _reachable_entity_with(ctx: HandlerContext, character_id: EntityId, raw_id, 
     target_id = parse_entity_id(raw_id)
     if target_id is None:
         return None, rejected("invalid target id")
+    if not ctx.world.has_entity(character_id):
+        return None, rejected("character does not exist")
     if not ctx.world.has_entity(target_id):
         return None, rejected("target does not exist")
     character = ctx.entity(character_id)

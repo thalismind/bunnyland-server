@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, TypeVar
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -43,6 +44,24 @@ class DomainEvent(BaseModel):
 
     causation_id: str | None = None
     correlation_id: str | None = None
+
+
+def event_base(
+    epoch: int,
+    *,
+    default_visibility: EventVisibility | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Create the common deterministic event payload fields."""
+    base: dict[str, Any] = {
+        "event_id": uuid4().hex,
+        "world_epoch": epoch,
+        "created_at": datetime.now(UTC),
+    }
+    if default_visibility is not None:
+        base["visibility"] = default_visibility
+    base.update(kwargs)
+    return base
 
 
 # --------------------------------------------------------------------------------------
@@ -614,6 +633,7 @@ __all__ = [
     "EntityUnlockedEvent",
     "EventBus",
     "EventVisibility",
+    "event_base",
     "FortificationBuiltEvent",
     "FocusPointsChangedEvent",
     "GeneratedEntityEvent",

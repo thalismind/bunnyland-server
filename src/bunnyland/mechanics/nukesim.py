@@ -9,8 +9,7 @@ interoperate without sharing one large mutation system.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
-from uuid import uuid4
+from functools import partial
 
 from pydantic.dataclasses import dataclass
 from relics import Component, Entity, EntityId, World
@@ -24,14 +23,25 @@ from ..core.components import (
     SuspendedComponent,
 )
 from ..core.ecs import (
-    container_of,
+    entity_name as _name,
+)
+from ..core.ecs import (
     parse_entity_id,
     reachable_ids,
     replace_component,
     spawn_entity,
 )
+from ..core.ecs import (
+    reachable_component as _safe_reachable_component,
+)
+from ..core.ecs import (
+    remove_from_container as _remove_from_container,
+)
+from ..core.ecs import (
+    room_id_for as _room_id,
+)
 from ..core.edges import ContainmentMode, Contains
-from ..core.events import DomainEvent, EventVisibility
+from ..core.events import DomainEvent, EventVisibility, event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .barbariansim import DurabilityComponent
 from .colonysim import ResourceStackComponent
@@ -407,46 +417,11 @@ class TerminalBootedEvent(DomainEvent):
     access_level: int
 
 
-def _event_base(epoch: int, **kwargs) -> dict:
-    base = {
-        "event_id": uuid4().hex,
-        "world_epoch": epoch,
-        "created_at": datetime.now(UTC),
-        "visibility": EventVisibility.ROOM,
-    }
-    base.update(kwargs)
-    return base
-
-
-def _room_id(world: World, character_id: EntityId) -> str | None:
-    raw = container_of(world.get_entity(character_id))
-    return str(raw) if raw is not None else None
-
-
-def _name(entity: Entity) -> str:
-    if entity.has_component(IdentityComponent):
-        return entity.get_component(IdentityComponent).name
-    return str(entity.id)
+_event_base = partial(event_base, default_visibility=EventVisibility.ROOM)
 
 
 def _reachable_component(ctx: HandlerContext, character_id: EntityId, target_id, component):
-    parsed = parse_entity_id(target_id)
-    if parsed is None or not ctx.world.has_entity(parsed):
-        return None, "target does not exist"
-    character = ctx.entity(character_id)
-    if parsed not in reachable_ids(ctx.world, character):
-        return None, "target is not reachable"
-    entity = ctx.entity(parsed)
-    if not entity.has_component(component):
-        return None, "target is the wrong kind"
-    return entity, None
-
-
-def _remove_from_container(world: World, entity_id: EntityId) -> None:
-    entity = world.get_entity(entity_id)
-    parent_id = container_of(entity)
-    if parent_id is not None and world.has_entity(parent_id):
-        world.get_entity(parent_id).remove_relationship(Contains, entity_id)
+    return _safe_reachable_component(ctx.world, character_id, target_id, component)
 
 
 def _stack_name(resource_type: str, quantity: int) -> str:

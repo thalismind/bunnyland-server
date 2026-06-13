@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..claims import matching_controller
 from ..content import load_content_library
 from ..core import (
     CharacterComponent,
@@ -190,11 +191,11 @@ def create_app(
         )
 
     def _web_controller_for_client(client_id: str):
-        for entity in actor.world.query().with_all([WebControllerComponent]).execute_entities():
-            component = entity.get_component(WebControllerComponent)
-            if component.client_id == client_id:
-                return entity
-        return None
+        return matching_controller(
+            actor,
+            WebControllerComponent,
+            lambda controller: controller.client_id == client_id,
+        )
 
     async def _claim_web_controller_request(
         request: WebControllerClaimRequest,

@@ -264,6 +264,18 @@ def test_equipment_handlers_reject_invalid_missing_and_unheld_items_directly():
     assert HoldHandler().execute(handler_context(scenario), invalid).reason == (
         "invalid character or item id"
     )
+    missing_character = build_submitted_command(
+        character_id="entity_999",
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="hold",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"item_id": str(item)},
+    )
+    assert HoldHandler().execute(handler_context(scenario), missing_character).reason == (
+        "character does not exist"
+    )
     assert execute_item_handler(HoldHandler(), scenario, "entity_999").reason == (
         "item does not exist"
     )
@@ -396,6 +408,9 @@ def test_take_rejects_invalid_and_missing_item_ids():
     assert execute_take(scenario, item, character_id="not-an-id").reason == (
         "invalid character or item id"
     )
+    assert execute_take(scenario, item, character_id="entity_999").reason == (
+        "character does not exist"
+    )
     assert execute_take(scenario, "entity_999").reason == "item does not exist"
 
 
@@ -470,6 +485,9 @@ def test_put_rejects_invalid_and_missing_item_ids():
 
     assert execute_put(scenario, item, character_id="not-an-id").reason == (
         "invalid character or item id"
+    )
+    assert execute_put(scenario, item, character_id="entity_999").reason == (
+        "character does not exist"
     )
     assert execute_put(scenario, "entity_999").reason == "item does not exist"
 

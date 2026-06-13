@@ -178,6 +178,22 @@ def _room_entity(scenario, name, kind, components):
     return entity.id
 
 
+def test_nukesim_reachable_component_rejects_missing_character():
+    scenario = build_scenario()
+    result = ScanRadiationHandler().execute(
+        HandlerContext(scenario.actor.world, scenario.actor.epoch),
+        _handler_cmd(
+            scenario,
+            "scan-radiation",
+            character_id="entity_999999",
+            target_id=str(scenario.room_a),
+        ),
+    )
+
+    assert not result.ok
+    assert result.reason == "character does not exist"
+
+
 def _inventory_entity(scenario, name, kind, components):
     entity = spawn_entity(
         scenario.actor.world,

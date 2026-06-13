@@ -209,6 +209,9 @@ def test_say_rejects_invalid_empty_and_detached_speaker():
     assert execute_say(scenario, "hello", character_id="not-an-id").reason == (
         "invalid character id"
     )
+    assert execute_say(scenario, "hello", character_id="entity_999").reason == (
+        "speaker does not exist"
+    )
     assert execute_say(scenario, "   ").reason == "nothing to say"
 
     scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
@@ -292,6 +295,9 @@ def test_tell_rejects_invalid_empty_missing_absent_and_inactive_targets():
 
     assert execute_tell(scenario, listener, "hello", character_id="not-an-id").reason == (
         "invalid speaker or target id"
+    )
+    assert execute_tell(scenario, listener, "hello", character_id="entity_999").reason == (
+        "speaker does not exist"
     )
     assert execute_tell(
         scenario,
