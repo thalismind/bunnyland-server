@@ -1056,7 +1056,6 @@ from ..mechanics.neonsim import (
     DistrictEnteredEvent,
     DoorUnlockedEvent,
     DoubleCrossRevealedEvent,
-    DroneComponent,
     DroneDeployedEvent,
     EnterDistrictHandler,
     EscalatePrivilegesHandler,
@@ -3157,7 +3156,7 @@ def neonsim_plugin() -> Plugin:
         id=NEONSIM,
         name="Neon Sim",
         dependencies=DependencyContribution(
-            requires=(CORE_VERBS, COLONYSIM, DAGGERSIM),
+            requires=(CORE_VERBS, COLONYSIM, DAGGERSIM, VOIDSIM),
         ),
         ecs=EcsContribution(
             components=(
@@ -3171,7 +3170,6 @@ def neonsim_plugin() -> Plugin:
                 DeviceComponent,
                 CameraComponent,
                 SurveillanceCoverageComponent,
-                DroneComponent,
                 RecordedEvidenceComponent,
                 BlindSpotComponent,
                 HackableComponent,

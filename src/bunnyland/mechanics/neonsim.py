@@ -46,6 +46,7 @@ from ..core.events import DomainEvent, EventVisibility
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from .colonysim import ResourceStackComponent
 from .daggersim import BountyComponent, BountyPostedEvent, DebtComponent
+from .voidsim import DroneComponent
 
 SCRIP_RESOURCE = "scrip"
 SECONDS_PER_HOUR = 60 * 60
@@ -628,11 +629,6 @@ class SurveillanceCoverageComponent(Component):
 
 
 @dataclass(frozen=True)
-class DroneComponent(Component):
-    deployed: bool = False
-
-
-@dataclass(frozen=True)
 class RecordedEvidenceComponent(Component):
     subject_id: str
     device_id: str
@@ -939,9 +935,9 @@ class DeployDroneHandler:
         if device is None:
             return rejected(error if error else "target is not a drone")
         drone = device.get_component(DroneComponent)
-        if drone.deployed:
+        if drone.active:
             return rejected("drone is already deployed")
-        replace_component(device, replace(drone, deployed=True))
+        replace_component(device, replace(drone, active=True))
         if device.has_component(DeviceComponent):
             dev = device.get_component(DeviceComponent)
             if not dev.powered:
@@ -3354,7 +3350,6 @@ __all__ = [
     "DisableCameraHandler",
     "DistrictEnteredEvent",
     "DoorUnlockedEvent",
-    "DroneComponent",
     "DroneDeployedEvent",
     "EnterDistrictHandler",
     "EscalatePrivilegesHandler",

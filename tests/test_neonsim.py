@@ -77,7 +77,6 @@ from bunnyland.mechanics.neonsim import (
     DistrictEnteredEvent,
     DoorUnlockedEvent,
     DoubleCrossRevealedEvent,
-    DroneComponent,
     DroneDeployedEvent,
     EnterDistrictHandler,
     EscalatePrivilegesHandler,
@@ -172,6 +171,7 @@ from bunnyland.mechanics.neonsim import (
     install_neonsim,
     neonsim_fragments,
 )
+from bunnyland.mechanics.voidsim import DroneComponent
 
 
 def _install(actor):
@@ -1169,7 +1169,7 @@ async def test_deploy_drone_activates_and_powers_it():
 
     assert deployed[0].device_id == str(drone)
     entity = scenario.actor.world.get_entity(drone)
-    assert entity.get_component(DroneComponent).deployed is True
+    assert entity.get_component(DroneComponent).active is True
     assert entity.get_component(DeviceComponent).powered is True
 
 
@@ -1391,7 +1391,7 @@ async def test_deploy_drone_rejects_when_already_deployed():
         scenario,
         "drone",
         "device",
-        [DeviceComponent(device_type="drone"), DroneComponent(deployed=True)],
+        [DeviceComponent(device_type="drone"), DroneComponent(active=True)],
     )
     rejects = await _reject(scenario, _cmd(scenario, "deploy-drone", target_id=str(drone)))
     assert any("already deployed" in event.reason for event in rejects)
