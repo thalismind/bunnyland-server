@@ -18,6 +18,7 @@ from ..core.components import IdentityComponent, PortableComponent
 from ..core.ecs import (
     container_of,
     contents,
+    entity_name,
     parse_entity_id,
     reachable_ids,
     replace_component,
@@ -38,6 +39,7 @@ from ..core.ecs import (
 from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility, event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ..prompts import ComponentPromptContext
 from .colonysim import ResourceStackComponent, _consume_resource_stack
 from .consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from .environment import CalendarComponent
@@ -48,6 +50,20 @@ SECONDS_PER_DAY = 24 * 60 * 60
 @pydantic_dataclass(frozen=True)
 class SoilComponent(Component):
     quality: float = 1.0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        soil_name = entity_name(ctx.entity, "soil")
+        if ctx.entity.has_component(CropComponent):
+            crop = ctx.entity.get_component(CropComponent)
+            state = "dead" if crop.dead else "ready" if crop.ready else f"stage {crop.stage}"
+            if ctx.entity.has_component(PestComponent):
+                state += ", pests"
+            if ctx.entity.has_component(WeedComponent):
+                state += ", weeds"
+            return (f"Nearby crop: {crop.crop_type} in {soil_name} ({state}).",)
+        if ctx.entity.has_component(TilledComponent):
+            return (f"Nearby tilled soil: {soil_name}.",)
+        return (f"Nearby soil: {soil_name}.",)
 
 
 @pydantic_dataclass(frozen=True)
@@ -140,6 +156,16 @@ class MachineComponent(Component):
     busy: bool = False
     quality: float = 1.0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.entity.has_component(MachineBreakdownComponent):
+            state = "broken"
+        elif ctx.entity.has_component(ProcessingTaskComponent):
+            task = ctx.entity.get_component(ProcessingTaskComponent)
+            state = "ready" if task.ready else f"processing {task.recipe_id}"
+        else:
+            state = "idle"
+        return (f"Nearby machine: {self.machine_type} ({state}).",)
+
 
 @pydantic_dataclass(frozen=True)
 class MachineBreakdownComponent(Component):
@@ -182,6 +208,19 @@ class FarmAnimalComponent(Component):
     last_petted_epoch: int | None = None
     sick: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        product = (
+            ctx.entity.get_component(AnimalProductComponent)
+            if ctx.entity.has_component(AnimalProductComponent)
+            else None
+        )
+        product_text = f", {product.product_type} ready" if product and product.ready else ""
+        breeding_text = ", bred" if ctx.entity.has_component(AnimalBreedingComponent) else ""
+        return (
+            f"Nearby animal: {self.species}, mood {self.mood:.0f}, "
+            f"friendship {self.friendship:.0f}{product_text}{breeding_text}.",
+        )
+
 
 @pydantic_dataclass(frozen=True)
 class AnimalProductComponent(Component):
@@ -207,6 +246,10 @@ class FishingSpotComponent(Component):
     season: str | None = None
     required_bait: str | None = None
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby fishing spot: {self.fish_type}.",)
+
 
 @pydantic_dataclass(frozen=True)
 class MiningNodeComponent(Component):
@@ -214,10 +257,18 @@ class MiningNodeComponent(Component):
     quantity: int = 1
     hardness: int = 1
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby mining node: {self.resource_type} x{self.quantity}.",)
+
 
 @pydantic_dataclass(frozen=True)
 class MineLevelComponent(Component):
     level: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Mine level {self.level}.",)
 
 
 @pydantic_dataclass(frozen=True)
@@ -225,11 +276,20 @@ class LadderComponent(Component):
     target_room_id: str
     discovered: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "discovered" if self.discovered else "hidden"
+        return (f"Nearby ladder: {state}.",)
+
 
 @pydantic_dataclass(frozen=True)
 class GeodeComponent(Component):
     resource_type: str = "gem"
     quantity: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby geode: {self.resource_type} x{self.quantity}.",)
 
 
 @pydantic_dataclass(frozen=True)
@@ -237,6 +297,10 @@ class ForageComponent(Component):
     resource_type: str
     quantity: int = 1
     seasons: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby forage: {self.resource_type} x{self.quantity}.",)
 
 
 @pydantic_dataclass(frozen=True)
@@ -258,6 +322,10 @@ class FestivalComponent(Component):
     day: int = 1
     joined_character_ids: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby festival: {self.name} ({self.season}).",)
+
 
 @pydantic_dataclass(frozen=True)
 class BundleComponent(Component):
@@ -265,6 +333,11 @@ class BundleComponent(Component):
     requirements: dict[str, int]
     contributed: dict[str, int] = field(default_factory=dict)
     completed: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "complete" if self.completed else "open"
+        return (f"Nearby bundle: {self.bundle_id} ({state}).",)
 
 
 @pydantic_dataclass(frozen=True)
@@ -275,6 +348,12 @@ class MailComponent(Component):
     reward_resource: str | None = None
     reward_quantity: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.claimed:
+            return ()
+        return (f"Nearby mail: {self.subject}.",)
+
 
 @pydantic_dataclass(frozen=True)
 class FarmQuestComponent(Component):
@@ -284,21 +363,40 @@ class FarmQuestComponent(Component):
     reward_quantity: int = 0
     completed: bool = False
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.completed:
+            return ()
+        return (f"Nearby farm quest: {self.quest_id}.",)
+
 
 @pydantic_dataclass(frozen=True)
 class ShippingBinComponent(Component):
     shipped: dict[str, int] = field(default_factory=dict)
     earnings: int = 0
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby shipping bin: {self.earnings} earnings recorded.",)
+
 
 @pydantic_dataclass(frozen=True)
 class CollectionComponent(Component):
     entries: tuple[str, ...] = ()
 
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or not self.entries:
+            return ()
+        return ("Collection entries: " + ", ".join(self.entries) + ".",)
+
 
 @pydantic_dataclass(frozen=True)
 class MuseumCollectionComponent(Component):
     donated: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Nearby museum collection: {len(self.donated)} donations.",)
 
 
 @pydantic_dataclass(frozen=True)
@@ -306,6 +404,12 @@ class RewardComponent(Component):
     resource_type: str
     quantity: int = 1
     claimed: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        if self.claimed:
+            return ()
+        return (f"Nearby reward: {self.resource_type} x{self.quantity}.",)
 
 
 @pydantic_dataclass(frozen=True)
@@ -325,6 +429,23 @@ class TreeComponent(Component):
     maturity_days: float
     mature: bool = False
     dead: bool = False
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        tree_name = entity_name(ctx.entity, "tree")
+        if self.dead:
+            state = "dead"
+        elif not self.mature:
+            state = "growing"
+        elif not ctx.entity.has_component(TreeTapComponent):
+            state = "ready to tap"
+        elif (
+            ctx.entity.has_component(HarvestableComponent)
+            and ctx.entity.get_component(HarvestableComponent).ready
+        ):
+            state = "sap ready"
+        else:
+            state = "tapped"
+        return (f"Nearby tree: {self.tree_type} in {tree_name} ({state}).",)
 
 
 @pydantic_dataclass(frozen=True)
@@ -2451,112 +2572,35 @@ class ClaimRewardHandler:
 
 def gardensim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
+    ctx = ComponentPromptContext.for_entity(world, character)
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
-        name = None
-        if entity.has_component(IdentityComponent):
-            name = entity.get_component(IdentityComponent).name
-        if entity.has_component(SoilComponent):
-            soil_name = name or "soil"
-            if entity.has_component(CropComponent):
-                crop = entity.get_component(CropComponent)
-                state = "dead" if crop.dead else "ready" if crop.ready else f"stage {crop.stage}"
-                if entity.has_component(PestComponent):
-                    state += ", pests"
-                if entity.has_component(WeedComponent):
-                    state += ", weeds"
-                lines.append(f"Nearby crop: {crop.crop_type} in {soil_name} ({state}).")
-            elif entity.has_component(TilledComponent):
-                lines.append(f"Nearby tilled soil: {soil_name}.")
-            else:
-                lines.append(f"Nearby soil: {soil_name}.")
-        if entity.has_component(TreeComponent):
-            tree = entity.get_component(TreeComponent)
-            tree_name = name or "tree"
-            if tree.dead:
-                state = "dead"
-            elif not tree.mature:
-                state = "growing"
-            elif not entity.has_component(TreeTapComponent):
-                state = "ready to tap"
-            elif entity.has_component(HarvestableComponent) and entity.get_component(
-                HarvestableComponent
-            ).ready:
-                state = "sap ready"
-            else:
-                state = "tapped"
-            lines.append(f"Nearby tree: {tree.tree_type} in {tree_name} ({state}).")
-        if entity.has_component(MachineComponent):
-            machine = entity.get_component(MachineComponent)
-            if entity.has_component(MachineBreakdownComponent):
-                state = "broken"
-            elif entity.has_component(ProcessingTaskComponent):
-                task = entity.get_component(ProcessingTaskComponent)
-                state = "ready" if task.ready else f"processing {task.recipe_id}"
-            else:
-                state = "idle"
-            lines.append(f"Nearby machine: {machine.machine_type} ({state}).")
-        if entity.has_component(FarmAnimalComponent):
-            animal = entity.get_component(FarmAnimalComponent)
-            product = (
-                entity.get_component(AnimalProductComponent)
-                if entity.has_component(AnimalProductComponent)
-                else None
-            )
-            product_text = f", {product.product_type} ready" if product and product.ready else ""
-            breeding_text = ", bred" if entity.has_component(AnimalBreedingComponent) else ""
-            lines.append(
-                f"Nearby animal: {animal.species}, mood {animal.mood:.0f}, "
-                f"friendship {animal.friendship:.0f}{product_text}{breeding_text}."
-            )
-        if entity.has_component(FishingSpotComponent):
-            spot = entity.get_component(FishingSpotComponent)
-            lines.append(f"Nearby fishing spot: {spot.fish_type}.")
-        if entity.has_component(MiningNodeComponent):
-            node = entity.get_component(MiningNodeComponent)
-            lines.append(f"Nearby mining node: {node.resource_type} x{node.quantity}.")
-        if entity.has_component(MineLevelComponent):
-            level = entity.get_component(MineLevelComponent)
-            lines.append(f"Mine level {level.level}.")
-        if entity.has_component(LadderComponent):
-            ladder = entity.get_component(LadderComponent)
-            state = "discovered" if ladder.discovered else "hidden"
-            lines.append(f"Nearby ladder: {state}.")
-        if entity.has_component(GeodeComponent):
-            geode = entity.get_component(GeodeComponent)
-            lines.append(f"Nearby geode: {geode.resource_type} x{geode.quantity}.")
-        if entity.has_component(ForageComponent):
-            forage = entity.get_component(ForageComponent)
-            lines.append(f"Nearby forage: {forage.resource_type} x{forage.quantity}.")
-        if entity.has_component(FestivalComponent):
-            festival = entity.get_component(FestivalComponent)
-            lines.append(f"Nearby festival: {festival.name} ({festival.season}).")
-        if entity.has_component(BundleComponent):
-            bundle = entity.get_component(BundleComponent)
-            state = "complete" if bundle.completed else "open"
-            lines.append(f"Nearby bundle: {bundle.bundle_id} ({state}).")
-        if entity.has_component(MailComponent):
-            mail = entity.get_component(MailComponent)
-            if not mail.claimed:
-                lines.append(f"Nearby mail: {mail.subject}.")
-        if entity.has_component(FarmQuestComponent):
-            quest = entity.get_component(FarmQuestComponent)
-            if not quest.completed:
-                lines.append(f"Nearby farm quest: {quest.quest_id}.")
-        if entity.has_component(ShippingBinComponent):
-            shipping_bin = entity.get_component(ShippingBinComponent)
-            lines.append(f"Nearby shipping bin: {shipping_bin.earnings} earnings recorded.")
-        if entity.has_component(MuseumCollectionComponent):
-            museum = entity.get_component(MuseumCollectionComponent)
-            lines.append(f"Nearby museum collection: {len(museum.donated)} donations.")
-        if entity.has_component(RewardComponent):
-            reward = entity.get_component(RewardComponent)
-            if not reward.claimed:
-                lines.append(f"Nearby reward: {reward.resource_type} x{reward.quantity}.")
+        entity_ctx = ComponentPromptContext.for_entity(
+            world, entity, perspective=ctx.perspective, room=ctx.room, target=character
+        )
+        for component_type in (
+            SoilComponent,
+            TreeComponent,
+            MachineComponent,
+            FarmAnimalComponent,
+            FishingSpotComponent,
+            MiningNodeComponent,
+            MineLevelComponent,
+            LadderComponent,
+            GeodeComponent,
+            ForageComponent,
+            FestivalComponent,
+            BundleComponent,
+            MailComponent,
+            FarmQuestComponent,
+            ShippingBinComponent,
+            MuseumCollectionComponent,
+            RewardComponent,
+        ):
+            if entity.has_component(component_type):
+                lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     if character.has_component(CollectionComponent):
-        collection = character.get_component(CollectionComponent)
-        if collection.entries:
-            lines.append("Collection entries: " + ", ".join(collection.entries) + ".")
+        lines.extend(character.get_component(CollectionComponent).prompt_fragments(ctx))
     return sorted(lines)
 
 

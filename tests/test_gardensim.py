@@ -127,6 +127,7 @@ from bunnyland.mechanics.gardensim import (
     WeedCropHandler,
     gardensim_fragments,
 )
+from bunnyland.prompts import ComponentPromptContext
 
 DAY = 24 * 60 * 60
 HOUR = 60 * 60
@@ -2438,6 +2439,37 @@ def test_gardensim_fragments_show_farm_loop_affordances():
     )
     for line in expected:
         assert line in fragments
+
+
+def test_gardensim_component_prompt_fragments_cover_compound_entity_state():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    soil = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="ready bed", kind="soil"),
+            SoilComponent(),
+            CropComponent(crop_type="turnip", planted_at_epoch=0, ready=True),
+            PestComponent(),
+        ],
+    )
+    machine = spawn_entity(
+        world,
+        [
+            MachineComponent(machine_type="preserves-jar"),
+            ProcessingTaskComponent(recipe_id="jam", started_at_epoch=0, ready_at_epoch=10),
+        ],
+    )
+
+    soil_ctx = ComponentPromptContext.for_entity(world, soil)
+    machine_ctx = ComponentPromptContext.for_entity(world, machine)
+
+    assert soil.get_component(SoilComponent).prompt_fragments(soil_ctx) == (
+        "Nearby crop: turnip in ready bed (ready, pests).",
+    )
+    assert machine.get_component(MachineComponent).prompt_fragments(machine_ctx) == (
+        "Nearby machine: preserves-jar (processing jam).",
+    )
 
 
 async def test_gardensim_catalogue_crops_machines_animals_mines_and_collections():
