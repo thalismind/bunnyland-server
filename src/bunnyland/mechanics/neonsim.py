@@ -8,7 +8,9 @@ zones, access control, checkpoints, safehouses, and deterministic trespass detec
 blind spots (catalogue 10.2); hacking, credentials, exploits, backdoors, data exfiltration,
 sabotage, and a counter-intrusion trace timer (catalogue 10.3); and a street economy with
 contraband, data fencing, favors, informants, debt, bounties, and a heat/wanted/law-response
-loop that reuses dagger-sim debt and bounty state (catalogue 10.5).
+loop that reuses dagger-sim debt and bounty state (catalogue 10.5); and cybernetic implants
+with augmentation slots, clinics/street surgeons, maintenance, overclocking, legality, and
+hacking vulnerability that reuses the hacking and heat systems (catalogue 10.6).
 """
 
 from __future__ import annotations
@@ -2218,6 +2220,512 @@ def _in_claimed_safehouse(world: World, character_id: EntityId) -> bool:
     return False
 
 
+# --- Components (catalogue 10.6: cybernetics, implants, tradeoffs) --------------------
+
+
+@dataclass(frozen=True)
+class ImplantComponent(Component):
+    """A cybernetic implant. Each type defines its own tradeoff mix (catalogue 10.6)."""
+
+    implant_type: str = "implant"
+    slot: str = "body"
+    slot_cost: int = 1
+    power_draw: float = 1.0
+    legal: bool = True
+    install_heat: float = 0.0
+    maintenance_interval: float = 0.0
+    side_effect: str = ""
+    active: bool = True
+    overclocked: bool = False
+    serviced_epoch: int = 0
+    maintenance_due_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class AugmentationSlotsComponent(Component):
+    capacity: int = 3
+
+
+@dataclass(frozen=True)
+class ClinicComponent(Component):
+    """A clinic or street surgeon. Licensed clinics refuse illegal implants."""
+
+    licensed: bool = True
+    install_cost: int = 50
+    service_cost: int = 20
+
+
+@dataclass(frozen=True)
+class HasImplant(Edge):
+    """character -> implant entity installed in their body."""
+
+    slot: str = "body"
+    installed_epoch: int = 0
+
+
+DEFAULT_AUG_CAPACITY = 3
+OVERCLOCK_POWER_BONUS = 1.0
+
+
+# --- Events (catalogue 10.6) ---------------------------------------------------------
+
+
+class ImplantInstalledEvent(DomainEvent):
+    character_id: str
+    implant_id: str
+    implant_type: str
+
+
+class ImplantRemovedEvent(DomainEvent):
+    character_id: str
+    implant_id: str
+
+
+class ImplantServicedEvent(DomainEvent):
+    character_id: str
+    implant_id: str
+
+
+class ImplantOverclockedEvent(DomainEvent):
+    character_id: str
+    implant_id: str
+
+
+class ImplantDisabledEvent(DomainEvent):
+    character_id: str
+    implant_id: str
+
+
+class ImplantScannedEvent(DomainEvent):
+    character_id: str
+    subject_id: str
+    implant_count: int
+
+
+class ImplantLicensedEvent(DomainEvent):
+    character_id: str
+    implant_id: str
+
+
+class ImplantExploitedEvent(DomainEvent):
+    character_id: str
+    subject_id: str
+    implant_id: str
+
+
+class SideEffectTriggeredEvent(DomainEvent):
+    character_id: str
+    implant_id: str
+    side_effect: str
+
+
+# --- Cybernetics helpers -------------------------------------------------------------
+
+
+def _installed_implants(character: Entity, world: World) -> list[tuple[object, Entity]]:
+    found: list[tuple[object, Entity]] = []
+    for edge, implant_id in character.get_relationships(HasImplant):
+        if world.has_entity(implant_id) and world.get_entity(implant_id).has_component(
+            ImplantComponent
+        ):
+            found.append((edge, world.get_entity(implant_id)))
+    return found
+
+
+def _own_implant(character: Entity, world: World, implant_id) -> Entity | None:
+    parsed = parse_entity_id(implant_id)
+    if parsed is None or not world.has_entity(parsed):
+        return None
+    if not character.has_relationship(HasImplant, parsed):
+        return None
+    implant = world.get_entity(parsed)
+    return implant if implant.has_component(ImplantComponent) else None
+
+
+def _augmentation_capacity(character: Entity) -> int:
+    if character.has_component(AugmentationSlotsComponent):
+        return character.get_component(AugmentationSlotsComponent).capacity
+    return DEFAULT_AUG_CAPACITY
+
+
+# --- Consequences (catalogue 10.6 systems) -------------------------------------------
+
+
+class ImplantMaintenanceConsequence:
+    """Neglected active implants periodically misfire, triggering their side effect."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for character in (
+            world.query()
+            .with_all([CharacterComponent])
+            .with_none([DeadComponent, SuspendedComponent])
+            .execute_entities()
+        ):
+            for _edge, implant in _installed_implants(character, world):
+                comp = implant.get_component(ImplantComponent)
+                if not comp.active or comp.maintenance_interval <= 0:
+                    continue
+                if epoch < comp.maintenance_due_epoch:
+                    continue
+                replace_component(
+                    implant,
+                    replace(comp, maintenance_due_epoch=epoch + int(comp.maintenance_interval)),
+                )
+                if not comp.side_effect:
+                    continue
+                events.append(
+                    SideEffectTriggeredEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            room_id=_room_id(world, character.id),
+                            target_ids=(str(implant.id),),
+                            character_id=str(character.id),
+                            implant_id=str(implant.id),
+                            side_effect=comp.side_effect,
+                        )
+                    )
+                )
+        return events
+
+
+# --- Handlers (catalogue 10.6 actions) -----------------------------------------------
+
+
+class InstallImplantHandler:
+    command_type = "install-implant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        clinic, error = _reachable_component(
+            ctx, character_id, command.payload.get("clinic_id"), ClinicComponent
+        )
+        if clinic is None:
+            return rejected(error if error else "target is not a clinic")
+        character = ctx.entity(character_id)
+        item = _inventory_item(
+            character, ctx.world, command.payload.get("implant_id"), ImplantComponent
+        )
+        if item is None:
+            return rejected("you are not carrying that implant")
+        implant = item.get_component(ImplantComponent)
+        used = sum(
+            impl.get_component(ImplantComponent).slot_cost
+            for _e, impl in _installed_implants(character, ctx.world)
+        )
+        if used + implant.slot_cost > _augmentation_capacity(character):
+            return rejected("no free augmentation slots")
+        clinic_comp = clinic.get_component(ClinicComponent)
+        if not implant.legal and clinic_comp.licensed:
+            return rejected("a licensed clinic will not fit an illegal implant")
+        if not _spend_scrip(character, ctx.world, clinic_comp.install_cost):
+            return rejected("not enough scrip for the procedure")
+        character.remove_relationship(Contains, item.id)
+        character.add_relationship(
+            HasImplant(slot=implant.slot, installed_epoch=ctx.epoch), item.id
+        )
+        replace_component(
+            item,
+            replace(
+                implant,
+                active=True,
+                serviced_epoch=ctx.epoch,
+                maintenance_due_epoch=ctx.epoch + int(implant.maintenance_interval),
+            ),
+        )
+        events: list[DomainEvent] = [
+            ImplantInstalledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item.id), str(clinic.id)),
+                    character_id=str(character_id),
+                    implant_id=str(item.id),
+                    implant_type=implant.implant_type,
+                )
+            )
+        ]
+        if not implant.legal and not clinic_comp.licensed and implant.install_heat > 0:
+            heat = _add_heat(character, ctx.epoch, implant.install_heat)
+            events.append(
+                HeatChangedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        character_id=str(character_id),
+                        amount=heat,
+                    )
+                )
+            )
+        return ok(*events)
+
+
+class RemoveImplantHandler:
+    command_type = "remove-implant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        implant = _own_implant(character, ctx.world, command.payload.get("implant_id"))
+        if implant is None:
+            return rejected("you have no such implant")
+        character.remove_relationship(HasImplant, implant.id)
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), implant.id)
+        return ok(
+            ImplantRemovedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(implant.id),),
+                    character_id=str(character_id),
+                    implant_id=str(implant.id),
+                )
+            )
+        )
+
+
+class ServiceImplantHandler:
+    command_type = "service-implant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        clinic, error = _reachable_component(
+            ctx, character_id, command.payload.get("clinic_id"), ClinicComponent
+        )
+        if clinic is None:
+            return rejected(error if error else "target is not a clinic")
+        character = ctx.entity(character_id)
+        implant = _own_implant(character, ctx.world, command.payload.get("implant_id"))
+        if implant is None:
+            return rejected("you have no such implant")
+        comp = implant.get_component(ImplantComponent)
+        if comp.maintenance_interval <= 0:
+            return rejected("this implant needs no maintenance")
+        service_cost = clinic.get_component(ClinicComponent).service_cost
+        if not _spend_scrip(character, ctx.world, service_cost):
+            return rejected("not enough scrip for the service")
+        replace_component(
+            implant,
+            replace(
+                comp,
+                serviced_epoch=ctx.epoch,
+                maintenance_due_epoch=ctx.epoch + int(comp.maintenance_interval),
+            ),
+        )
+        return ok(
+            ImplantServicedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(implant.id),),
+                    character_id=str(character_id),
+                    implant_id=str(implant.id),
+                )
+            )
+        )
+
+
+class OverclockImplantHandler:
+    command_type = "overclock-implant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        implant = _own_implant(character, ctx.world, command.payload.get("implant_id"))
+        if implant is None:
+            return rejected("you have no such implant")
+        comp = implant.get_component(ImplantComponent)
+        if comp.overclocked:
+            return rejected("implant is already overclocked")
+        interval = comp.maintenance_interval / 2 if comp.maintenance_interval > 0 else 0.0
+        replace_component(
+            implant,
+            replace(
+                comp,
+                overclocked=True,
+                power_draw=comp.power_draw + OVERCLOCK_POWER_BONUS,
+                maintenance_interval=interval,
+                maintenance_due_epoch=(
+                    ctx.epoch + int(interval) if interval > 0 else comp.maintenance_due_epoch
+                ),
+            ),
+        )
+        return ok(
+            ImplantOverclockedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(implant.id),),
+                    character_id=str(character_id),
+                    implant_id=str(implant.id),
+                )
+            )
+        )
+
+
+class DisableImplantHandler:
+    command_type = "disable-implant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        implant = _own_implant(character, ctx.world, command.payload.get("implant_id"))
+        if implant is None:
+            return rejected("you have no such implant")
+        comp = implant.get_component(ImplantComponent)
+        if not comp.active:
+            return rejected("implant is already disabled")
+        replace_component(implant, replace(comp, active=False))
+        return ok(
+            ImplantDisabledEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(implant.id),),
+                    character_id=str(character_id),
+                    implant_id=str(implant.id),
+                )
+            )
+        )
+
+
+class LicenseImplantHandler:
+    command_type = "license-implant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        implant = _own_implant(character, ctx.world, command.payload.get("implant_id"))
+        if implant is None:
+            return rejected("you have no such implant")
+        comp = implant.get_component(ImplantComponent)
+        if comp.legal:
+            return rejected("implant is already licensed")
+        try:
+            fee = int(command.payload.get("fee", comp.install_heat * 10))
+        except (TypeError, ValueError):
+            fee = 0
+        fee = max(0, fee)
+        if not _spend_scrip(character, ctx.world, fee):
+            return rejected("not enough scrip for the license fee")
+        replace_component(implant, replace(comp, legal=True))
+        return ok(
+            ImplantLicensedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(implant.id),),
+                    character_id=str(character_id),
+                    implant_id=str(implant.id),
+                )
+            )
+        )
+
+
+class ScanImplantHandler:
+    command_type = "scan-implant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        subject, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), CharacterComponent
+        )
+        if subject is None:
+            return rejected(error if error else "target is not a person")
+        implants = _installed_implants(subject, ctx.world)
+        return ok(
+            ImplantScannedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(subject.id),),
+                    character_id=str(character_id),
+                    subject_id=str(subject.id),
+                    implant_count=len(implants),
+                )
+            )
+        )
+
+
+class ExploitImplantHandler:
+    command_type = "exploit-implant"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        subject, error = _reachable_component(
+            ctx, character_id, command.payload.get("target_id"), CharacterComponent
+        )
+        if subject is None:
+            return rejected(error if error else "target is not a person")
+        target_implant = None
+        for _edge, implant in _installed_implants(subject, ctx.world):
+            if implant.has_component(HackableComponent) and not implant.get_component(
+                HackableComponent
+            ).breached:
+                target_implant = implant
+                break
+        if target_implant is None:
+            return rejected("target has no exploitable implant")
+        hack = target_implant.get_component(HackableComponent)
+        character = ctx.entity(character_id)
+        power, _item = _best_exploit(character, ctx.world)
+        if power < hack.security:
+            return ok(
+                HackFailedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(target_implant.id),),
+                        character_id=str(character_id),
+                        device_id=str(target_implant.id),
+                    )
+                )
+            )
+        replace_component(target_implant, replace(hack, breached=True))
+        implant_comp = target_implant.get_component(ImplantComponent)
+        replace_component(target_implant, replace(implant_comp, active=False))
+        return ok(
+            ImplantExploitedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(subject.id), str(target_implant.id)),
+                    character_id=str(character_id),
+                    subject_id=str(subject.id),
+                    implant_id=str(target_implant.id),
+                )
+            )
+        )
+
+
 # --- Prompt fragments ----------------------------------------------------------------
 
 
@@ -2301,6 +2809,26 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(f"Informant {_name(entity)} ({informant.faction}): {state}.")
         if entity.has_component(ContrabandComponent):
             lines.append(f"Contraband: {_name(entity)}.")
+        if entity.has_component(ClinicComponent):
+            clinic = entity.get_component(ClinicComponent)
+            kind = "Licensed clinic" if clinic.licensed else "Street surgeon"
+            lines.append(f"{kind} {_name(entity)}: install {clinic.install_cost} scrip.")
+        if entity.has_component(ImplantComponent) and not character.has_relationship(
+            HasImplant, entity_id
+        ):
+            implant = entity.get_component(ImplantComponent)
+            legality = "legal" if implant.legal else "ILLEGAL"
+            lines.append(f"Implant for sale: {_name(entity)} ({implant.implant_type}, {legality}).")
+    for _edge, implant in _installed_implants(character, world):
+        comp = implant.get_component(ImplantComponent)
+        tags = [comp.slot]
+        if not comp.active:
+            tags.append("offline")
+        if comp.overclocked:
+            tags.append("overclocked")
+        if not comp.legal:
+            tags.append("illegal")
+        lines.append(f"Implant {_name(implant)}: {comp.implant_type} ({', '.join(tags)}).")
     if character.has_component(TraceTimerComponent):
         timer = character.get_component(TraceTimerComponent)
         lines.append(f"Counter-intrusion trace closing in: {timer.remaining:g}s left.")
@@ -2325,6 +2853,7 @@ def install_neonsim(actor) -> None:
     actor.register_consequence(TrespassDetectionConsequence())
     actor.register_consequence(TraceTimerConsequence())
     actor.register_consequence(HeatConsequence())
+    actor.register_consequence(ImplantMaintenanceConsequence())
 
 
 __all__ = [
@@ -2428,6 +2957,28 @@ __all__ = [
     "WantedLevelComponent",
     "WarrantClearedEvent",
     "WipeEvidenceHandler",
+    "AugmentationSlotsComponent",
+    "ClinicComponent",
+    "DisableImplantHandler",
+    "ExploitImplantHandler",
+    "HasImplant",
+    "ImplantComponent",
+    "ImplantDisabledEvent",
+    "ImplantExploitedEvent",
+    "ImplantInstalledEvent",
+    "ImplantLicensedEvent",
+    "ImplantMaintenanceConsequence",
+    "ImplantOverclockedEvent",
+    "ImplantRemovedEvent",
+    "ImplantScannedEvent",
+    "ImplantServicedEvent",
+    "InstallImplantHandler",
+    "LicenseImplantHandler",
+    "OverclockImplantHandler",
+    "RemoveImplantHandler",
+    "ScanImplantHandler",
+    "ServiceImplantHandler",
+    "SideEffectTriggeredEvent",
     "install_neonsim",
     "neonsim_fragments",
 ]

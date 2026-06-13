@@ -33,6 +33,7 @@ from bunnyland.mechanics.neonsim import (
     AccessLevelComponent,
     AccessTerminalHandler,
     AlarmRaisedEvent,
+    AugmentationSlotsComponent,
     BackdoorInstalledEvent,
     BlackMarketComponent,
     BlindSpotComponent,
@@ -47,6 +48,7 @@ from bunnyland.mechanics.neonsim import (
     CheckpointPassedEvent,
     ClaimSafehouseHandler,
     ClearWarrantHandler,
+    ClinicComponent,
     ContrabandBoughtEvent,
     ContrabandComponent,
     CredentialComponent,
@@ -61,6 +63,7 @@ from bunnyland.mechanics.neonsim import (
     DeviceComponent,
     DeviceInspectedEvent,
     DisableCameraHandler,
+    DisableImplantHandler,
     DistrictEnteredEvent,
     DoorUnlockedEvent,
     DroneComponent,
@@ -72,41 +75,59 @@ from bunnyland.mechanics.neonsim import (
     EvidenceWipedEvent,
     ExfiltrateDataHandler,
     ExploitComponent,
+    ExploitImplantHandler,
     FavorCalledEvent,
     HackableComponent,
     HackFailedEvent,
     HackSucceededEvent,
+    HasImplant,
     HeatChangedEvent,
     HeatComponent,
     HideFromLawHandler,
     IdentitySpoofedEvent,
+    ImplantComponent,
+    ImplantDisabledEvent,
+    ImplantExploitedEvent,
+    ImplantInstalledEvent,
+    ImplantLicensedEvent,
+    ImplantOverclockedEvent,
+    ImplantRemovedEvent,
+    ImplantScannedEvent,
+    ImplantServicedEvent,
     InformantComponent,
     InformantTurnedEvent,
     InsideZone,
     InspectDeviceHandler,
     InstallBackdoorHandler,
+    InstallImplantHandler,
     JamSensorHandler,
     LawResponseEvent,
+    LicenseImplantHandler,
     LocationCasedEvent,
     LoopCameraHandler,
     NetworkScannedEvent,
     NetworkTracedEvent,
+    OverclockImplantHandler,
     OwesFavor,
     PayDebtHandler,
     PostBountyHandler,
     PrivilegesEscalatedEvent,
     PublicAccessComponent,
     RecordedEvidenceComponent,
+    RemoveImplantHandler,
     RestrictedAreaComponent,
     RunExploitHandler,
     SabotageSystemHandler,
     SafehouseClaimedEvent,
     SafehouseComponent,
+    ScanImplantHandler,
     ScanNetworkHandler,
     SecurityZoneComponent,
     SellDataHandler,
     SensorJammedEvent,
+    ServiceImplantHandler,
     ShowCredentialsHandler,
+    SideEffectTriggeredEvent,
     SneakCheckpointHandler,
     SpoofIdentityHandler,
     SurveillanceCoverageComponent,
@@ -162,7 +183,40 @@ def _install(actor):
     actor.register_handler(TurnInformantHandler())
     actor.register_handler(HideFromLawHandler())
     actor.register_handler(ClearWarrantHandler())
+    actor.register_handler(InstallImplantHandler())
+    actor.register_handler(RemoveImplantHandler())
+    actor.register_handler(ServiceImplantHandler())
+    actor.register_handler(OverclockImplantHandler())
+    actor.register_handler(DisableImplantHandler())
+    actor.register_handler(LicenseImplantHandler())
+    actor.register_handler(ScanImplantHandler())
+    actor.register_handler(ExploitImplantHandler())
     install_neonsim(actor)
+
+
+def _implant_item(scenario, name="cyberdeck", **kwargs):
+    return _inventory_entity(scenario, name, "implant", [ImplantComponent(**kwargs)])
+
+
+def _install_implant(scenario, *, components=(), slot="body"):
+    """Spawn an implant already installed on the character via a HasImplant edge."""
+    implant = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="installed aug", kind="implant"), *components],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        HasImplant(slot=slot), implant.id
+    )
+    return implant.id
+
+
+def _clinic(scenario, *, licensed=True, install_cost=50, service_cost=20):
+    return _room_entity(
+        scenario,
+        "ripperdoc" if not licensed else "med clinic",
+        "clinic",
+        [ClinicComponent(licensed=licensed, install_cost=install_cost, service_cost=service_cost)],
+    )
 
 
 def _other_character(scenario, *, room=None, components=()):
@@ -2489,3 +2543,500 @@ async def test_sell_data_rejects_data_not_in_inventory():
         scenario, _cmd(scenario, "sell-data", broker_id=str(broker), data_id=str(loose_data))
     )
     assert any("not carrying that data" in event.reason for event in rejects)
+
+
+# --- cybernetics & implants (10.6) ---------------------------------------------------
+
+
+async def test_install_implant_consumes_scrip_and_links_it():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 100)
+    clinic = _clinic(scenario, install_cost=50)
+    implant = _implant_item(scenario, "reflex booster", implant_type="reflex", slot="neural")
+    installed: list[ImplantInstalledEvent] = []
+    scenario.actor.bus.subscribe(ImplantInstalledEvent, installed.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    await scenario.actor.tick(1.0)
+
+    assert installed[0].implant_type == "reflex"
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_relationship(HasImplant, implant)
+    assert not character.has_relationship(Contains, implant)
+    assert _scrip_quantity(scenario) == 50
+
+
+async def test_illegal_implant_from_street_surgeon_adds_heat():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 100)
+    surgeon = _clinic(scenario, licensed=False, install_cost=40)
+    implant = _implant_item(
+        scenario, "wired claws", implant_type="claws", legal=False, install_heat=5.0
+    )
+    heat: list[HeatChangedEvent] = []
+    scenario.actor.bus.subscribe(HeatChangedEvent, heat.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(surgeon))
+    )
+    await scenario.actor.tick(1.0)
+
+    assert heat[0].amount == 5.0
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(HeatComponent).amount == 5.0
+
+
+async def test_remove_implant_returns_it_to_inventory():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _install_implant(scenario, components=[ImplantComponent(implant_type="eye")])
+    removed: list[ImplantRemovedEvent] = []
+    scenario.actor.bus.subscribe(ImplantRemovedEvent, removed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "remove-implant", implant_id=str(implant)))
+    await scenario.actor.tick(1.0)
+
+    assert removed[0].implant_id == str(implant)
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_relationship(HasImplant, implant)
+    assert character.has_relationship(Contains, implant)
+
+
+async def test_service_implant_resets_maintenance():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 50)
+    clinic = _clinic(scenario, service_cost=20)
+    implant = _install_implant(
+        scenario,
+        components=[
+            ImplantComponent(
+                implant_type="liver", maintenance_interval=3600.0, side_effect="nausea"
+            )
+        ],
+    )
+    serviced: list[ImplantServicedEvent] = []
+    scenario.actor.bus.subscribe(ImplantServicedEvent, serviced.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "service-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    await scenario.actor.tick(1.0)
+
+    assert serviced[0].implant_id == str(implant)
+    assert _scrip_quantity(scenario) == 30
+
+
+async def test_overclock_implant_increases_power_and_risk():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _install_implant(
+        scenario,
+        components=[
+            ImplantComponent(implant_type="cortex", power_draw=2.0, maintenance_interval=4000.0)
+        ],
+    )
+    overclocked: list[ImplantOverclockedEvent] = []
+    scenario.actor.bus.subscribe(ImplantOverclockedEvent, overclocked.append)
+
+    await scenario.actor.submit(_cmd(scenario, "overclock-implant", implant_id=str(implant)))
+    await scenario.actor.tick(1.0)
+
+    assert overclocked[0].implant_id == str(implant)
+    comp = scenario.actor.world.get_entity(implant).get_component(ImplantComponent)
+    assert comp.overclocked is True
+    assert comp.power_draw == 3.0
+    assert comp.maintenance_interval == 2000.0
+
+
+async def test_disable_implant_stops_it():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _install_implant(scenario, components=[ImplantComponent(implant_type="optic")])
+    disabled: list[ImplantDisabledEvent] = []
+    scenario.actor.bus.subscribe(ImplantDisabledEvent, disabled.append)
+
+    await scenario.actor.submit(_cmd(scenario, "disable-implant", implant_id=str(implant)))
+    await scenario.actor.tick(1.0)
+
+    assert disabled[0].implant_id == str(implant)
+    assert scenario.actor.world.get_entity(implant).get_component(ImplantComponent).active is False
+
+
+async def test_license_implant_makes_it_legal():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 100)
+    implant = _install_implant(
+        scenario, components=[ImplantComponent(implant_type="smartlink", legal=False)]
+    )
+    licensed: list[ImplantLicensedEvent] = []
+    scenario.actor.bus.subscribe(ImplantLicensedEvent, licensed.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "license-implant", implant_id=str(implant), fee=40)
+    )
+    await scenario.actor.tick(1.0)
+
+    assert licensed[0].implant_id == str(implant)
+    assert scenario.actor.world.get_entity(implant).get_component(ImplantComponent).legal is True
+    assert _scrip_quantity(scenario) == 60
+
+
+async def test_scan_implant_counts_targets_augs():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    other = _other_character(scenario)
+    aug = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="aug", kind="implant"), ImplantComponent(implant_type="arm")],
+    )
+    scenario.actor.world.get_entity(other).add_relationship(HasImplant(), aug.id)
+    scanned: list[ImplantScannedEvent] = []
+    scenario.actor.bus.subscribe(ImplantScannedEvent, scanned.append)
+
+    await scenario.actor.submit(_cmd(scenario, "scan-implant", target_id=str(other)))
+    await scenario.actor.tick(1.0)
+
+    assert scanned[0].implant_count == 1
+
+
+async def test_exploit_implant_breaches_and_disables_it():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_exploit(scenario, 5)
+    other = _other_character(scenario)
+    aug = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="netdriver", kind="implant"),
+            ImplantComponent(implant_type="neural"),
+            HackableComponent(security=3),
+        ],
+    )
+    scenario.actor.world.get_entity(other).add_relationship(HasImplant(), aug.id)
+    exploited: list[ImplantExploitedEvent] = []
+    scenario.actor.bus.subscribe(ImplantExploitedEvent, exploited.append)
+
+    await scenario.actor.submit(_cmd(scenario, "exploit-implant", target_id=str(other)))
+    await scenario.actor.tick(1.0)
+
+    assert exploited[0].implant_id == str(aug.id)
+    assert scenario.actor.world.get_entity(aug.id).get_component(HackableComponent).breached is True
+    assert scenario.actor.world.get_entity(aug.id).get_component(ImplantComponent).active is False
+
+
+async def test_exploit_implant_fails_with_weak_exploit():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_exploit(scenario, 1)
+    other = _other_character(scenario)
+    aug = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="netdriver", kind="implant"),
+            ImplantComponent(implant_type="neural"),
+            HackableComponent(security=5),
+        ],
+    )
+    scenario.actor.world.get_entity(other).add_relationship(HasImplant(), aug.id)
+    failed: list[HackFailedEvent] = []
+    scenario.actor.bus.subscribe(HackFailedEvent, failed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "exploit-implant", target_id=str(other)))
+    await scenario.actor.tick(1.0)
+
+    assert failed[0].device_id == str(aug.id)
+    hack = scenario.actor.world.get_entity(aug.id).get_component(HackableComponent)
+    assert hack.breached is False
+
+
+async def test_neglected_implant_triggers_side_effect():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _install_implant(
+        scenario,
+        components=[
+            ImplantComponent(
+                implant_type="liver",
+                maintenance_interval=3600.0,
+                side_effect="toxin buildup",
+                maintenance_due_epoch=0,
+            )
+        ],
+    )
+    effects: list[SideEffectTriggeredEvent] = []
+    scenario.actor.bus.subscribe(SideEffectTriggeredEvent, effects.append)
+
+    await scenario.actor.tick(3600.0)
+
+    assert any(event.side_effect == "toxin buildup" for event in effects)
+
+
+async def test_disabled_implant_does_not_misfire():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _install_implant(
+        scenario,
+        components=[
+            ImplantComponent(
+                implant_type="liver",
+                maintenance_interval=3600.0,
+                side_effect="toxin",
+                active=False,
+            )
+        ],
+    )
+    effects: list[SideEffectTriggeredEvent] = []
+    scenario.actor.bus.subscribe(SideEffectTriggeredEvent, effects.append)
+
+    await scenario.actor.tick(3600.0)
+
+    assert effects == []
+
+
+def test_implant_fragments_describe_clinics_and_augs():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _clinic(scenario, licensed=False, install_cost=40)
+    _implant_item(scenario, "spare optic", implant_type="optic", legal=False)
+    _install_implant(
+        scenario,
+        components=[ImplantComponent(implant_type="reflex", slot="neural", overclocked=True)],
+    )
+
+    joined = "\n".join(
+        neonsim_fragments(scenario.actor.world, scenario.actor.world.get_entity(scenario.character))
+    )
+
+    assert "Street surgeon ripperdoc: install 40 scrip." in joined
+    assert "Implant for sale: spare optic (optic, ILLEGAL)." in joined
+    assert "Implant installed aug: reflex (neural, overclocked)." in joined
+
+
+# --- error paths: cybernetics --------------------------------------------------------
+
+
+def test_implant_handlers_reject_invalid_character_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = str(scenario.room_a)
+    cases = [
+        (InstallImplantHandler(), "install-implant"),
+        (RemoveImplantHandler(), "remove-implant"),
+        (ServiceImplantHandler(), "service-implant"),
+        (OverclockImplantHandler(), "overclock-implant"),
+        (DisableImplantHandler(), "disable-implant"),
+        (LicenseImplantHandler(), "license-implant"),
+        (ScanImplantHandler(), "scan-implant"),
+        (ExploitImplantHandler(), "exploit-implant"),
+    ]
+    for handler, command_type in cases:
+        result = handler.execute(
+            ctx,
+            _cmd(scenario, command_type, character_id="not-an-id", target_id=target),
+        )
+        assert result.ok is False
+        assert result.reason == "invalid character id"
+
+
+async def test_install_implant_rejects_non_clinic():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _implant_item(scenario)
+    site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
+    rejects = await _reject(
+        scenario, _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(site))
+    )
+    assert any("wrong kind" in event.reason for event in rejects)
+
+
+async def test_install_implant_rejects_missing_implant():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    clinic = _clinic(scenario)
+    rejects = await _reject(
+        scenario, _cmd(scenario, "install-implant", implant_id="999999", clinic_id=str(clinic))
+    )
+    assert any("not carrying that implant" in event.reason for event in rejects)
+
+
+async def test_install_implant_rejects_when_slots_full():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 200)
+    clinic = _clinic(scenario)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        AugmentationSlotsComponent(capacity=1)
+    )
+    _install_implant(scenario, components=[ImplantComponent(slot_cost=1)])
+    implant = _implant_item(scenario, "extra", slot_cost=1)
+    rejects = await _reject(
+        scenario, _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    assert any("no free augmentation slots" in event.reason for event in rejects)
+
+
+async def test_licensed_clinic_refuses_illegal_implant():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 200)
+    clinic = _clinic(scenario, licensed=True)
+    implant = _implant_item(scenario, "wired claws", legal=False)
+    rejects = await _reject(
+        scenario, _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    assert any("will not fit an illegal implant" in event.reason for event in rejects)
+
+
+async def test_install_implant_rejects_without_scrip():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    clinic = _clinic(scenario, install_cost=50)
+    implant = _implant_item(scenario)
+    rejects = await _reject(
+        scenario, _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    assert any("not enough scrip" in event.reason for event in rejects)
+
+
+async def test_remove_implant_rejects_unknown_implant():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    rejects = await _reject(scenario, _cmd(scenario, "remove-implant", implant_id="999999"))
+    assert any("no such implant" in event.reason for event in rejects)
+
+
+async def test_service_implant_rejects_when_no_maintenance():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 50)
+    clinic = _clinic(scenario)
+    implant = _install_implant(
+        scenario, components=[ImplantComponent(maintenance_interval=0.0)]
+    )
+    rejects = await _reject(
+        scenario, _cmd(scenario, "service-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    assert any("needs no maintenance" in event.reason for event in rejects)
+
+
+async def test_overclock_implant_rejects_when_already_overclocked():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _install_implant(scenario, components=[ImplantComponent(overclocked=True)])
+    rejects = await _reject(scenario, _cmd(scenario, "overclock-implant", implant_id=str(implant)))
+    assert any("already overclocked" in event.reason for event in rejects)
+
+
+async def test_disable_implant_rejects_when_already_disabled():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _install_implant(scenario, components=[ImplantComponent(active=False)])
+    rejects = await _reject(scenario, _cmd(scenario, "disable-implant", implant_id=str(implant)))
+    assert any("already disabled" in event.reason for event in rejects)
+
+
+async def test_license_implant_rejects_when_already_legal():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _install_implant(scenario, components=[ImplantComponent(legal=True)])
+    rejects = await _reject(scenario, _cmd(scenario, "license-implant", implant_id=str(implant)))
+    assert any("already licensed" in event.reason for event in rejects)
+
+
+async def test_exploit_implant_rejects_without_exploitable_implant():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_exploit(scenario, 5)
+    other = _other_character(scenario)
+    rejects = await _reject(scenario, _cmd(scenario, "exploit-implant", target_id=str(other)))
+    assert any("no exploitable implant" in event.reason for event in rejects)
+
+
+async def test_implant_target_handlers_reject_missing_and_unreachable():
+    for command_type, key in (("scan-implant", "target_id"), ("exploit-implant", "target_id")):
+        scenario = build_scenario()
+        _install(scenario.actor)
+        missing = await _reject(scenario, _cmd(scenario, command_type, **{key: "999999"}))
+        assert any("does not exist" in event.reason for event in missing), command_type
+        far = _far_entity(scenario, "distant mark", "person", [CharacterComponent(species="bunny")])
+        unreachable = await _reject(scenario, _cmd(scenario, command_type, **{key: str(far)}))
+        assert any("not reachable" in event.reason for event in unreachable), command_type
+
+
+async def test_own_implant_handlers_reject_unknown_implant():
+    for command_type in (
+        "remove-implant",
+        "overclock-implant",
+        "disable-implant",
+        "license-implant",
+    ):
+        scenario = build_scenario()
+        _install(scenario.actor)
+        rejects = await _reject(scenario, _cmd(scenario, command_type, implant_id="999999"))
+        assert any("no such implant" in event.reason for event in rejects), command_type
+
+
+async def test_install_and_service_reject_missing_clinic():
+    for command_type in ("install-implant", "service-implant"):
+        scenario = build_scenario()
+        _install(scenario.actor)
+        rejects = await _reject(
+            scenario,
+            _cmd(scenario, command_type, implant_id="999999", clinic_id="999999"),
+        )
+        assert any("does not exist" in event.reason for event in rejects), command_type
+
+
+async def test_service_implant_rejects_unknown_implant():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    clinic = _clinic(scenario)
+    rejects = await _reject(
+        scenario, _cmd(scenario, "service-implant", implant_id="999999", clinic_id=str(clinic))
+    )
+    assert any("no such implant" in event.reason for event in rejects)
+
+
+async def test_service_implant_rejects_without_scrip():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    clinic = _clinic(scenario, service_cost=20)
+    implant = _install_implant(
+        scenario, components=[ImplantComponent(maintenance_interval=3600.0)]
+    )
+    rejects = await _reject(
+        scenario, _cmd(scenario, "service-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    assert any("not enough scrip for the service" in event.reason for event in rejects)
+
+
+async def test_license_implant_rejects_without_scrip():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _install_implant(scenario, components=[ImplantComponent(legal=False)])
+    rejects = await _reject(
+        scenario, _cmd(scenario, "license-implant", implant_id=str(implant), fee=100)
+    )
+    assert any("not enough scrip for the license fee" in event.reason for event in rejects)
+
+
+async def test_license_implant_tolerates_non_numeric_fee():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    implant = _install_implant(scenario, components=[ImplantComponent(legal=False)])
+    licensed: list[ImplantLicensedEvent] = []
+    scenario.actor.bus.subscribe(ImplantLicensedEvent, licensed.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "license-implant", implant_id=str(implant), fee="free")
+    )
+    await scenario.actor.tick(1.0)
+
+    assert licensed  # bad fee parses to 0 and the licensing still completes
