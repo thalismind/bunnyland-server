@@ -33,11 +33,17 @@ from bunnyland.mechanics.neonsim import (
     AccessLevelComponent,
     AccessTerminalHandler,
     AlarmRaisedEvent,
+    AssetExtractedEvent,
+    AssetExtractionComponent,
     AugmentationSlotsComponent,
     BackdoorInstalledEvent,
+    BlackmailAppliedEvent,
+    BlackmailFileComponent,
+    BlackmailTargetHandler,
     BlackMarketComponent,
     BlindSpotComponent,
     BribeCheckpointHandler,
+    BurnContactHandler,
     BuyContrabandHandler,
     CallFavorHandler,
     CameraComponent,
@@ -49,16 +55,20 @@ from bunnyland.mechanics.neonsim import (
     ClaimSafehouseHandler,
     ClearWarrantHandler,
     ClinicComponent,
+    CollectPayoutHandler,
+    ContactBurnedEvent,
     ContrabandBoughtEvent,
     ContrabandComponent,
     CredentialComponent,
     CredentialUsedEvent,
     CyberpunkSiteComponent,
     DataBrokerComponent,
+    DataDeliveredEvent,
     DataExfiltratedEvent,
     DataPayloadComponent,
     DataSoldEvent,
     DebtPaidEvent,
+    DeliverDataHandler,
     DeployDroneHandler,
     DeviceComponent,
     DeviceInspectedEvent,
@@ -66,20 +76,28 @@ from bunnyland.mechanics.neonsim import (
     DisableImplantHandler,
     DistrictEnteredEvent,
     DoorUnlockedEvent,
+    DoubleCrossRevealedEvent,
     DroneComponent,
     DroneDeployedEvent,
     EnterDistrictHandler,
     EscalatePrivilegesHandler,
     EvadeTraceHandler,
+    EvidencePlantedEvent,
     EvidenceRecordedEvent,
     EvidenceWipedEvent,
     ExfiltrateDataHandler,
     ExploitComponent,
     ExploitImplantHandler,
+    ExtractAssetHandler,
     FavorCalledEvent,
+    FileLeakedEvent,
+    FixerComponent,
+    FixerJobAcceptedEvent,
     HackableComponent,
     HackFailedEvent,
     HackSucceededEvent,
+    HandlerComponent,
+    HandlerMetEvent,
     HasImplant,
     HeatChangedEvent,
     HeatComponent,
@@ -102,14 +120,18 @@ from bunnyland.mechanics.neonsim import (
     InstallImplantHandler,
     JamSensorHandler,
     LawResponseEvent,
+    LeakFileHandler,
     LicenseImplantHandler,
     LocationCasedEvent,
     LoopCameraHandler,
+    MeetHandlerHandler,
     NetworkScannedEvent,
     NetworkTracedEvent,
     OverclockImplantHandler,
     OwesFavor,
     PayDebtHandler,
+    PayoutCollectedEvent,
+    PlantEvidenceHandler,
     PostBountyHandler,
     PrivilegesEscalatedEvent,
     PublicAccessComponent,
@@ -117,6 +139,7 @@ from bunnyland.mechanics.neonsim import (
     RemoveImplantHandler,
     RestrictedAreaComponent,
     RunExploitHandler,
+    RunnerContractComponent,
     SabotageSystemHandler,
     SafehouseClaimedEvent,
     SafehouseComponent,
@@ -132,6 +155,7 @@ from bunnyland.mechanics.neonsim import (
     SpoofIdentityHandler,
     SurveillanceCoverageComponent,
     SystemSabotagedEvent,
+    TakeFixerJobHandler,
     TerminalAccessedEvent,
     TraceEvadedEvent,
     TraceNetworkHandler,
@@ -191,7 +215,32 @@ def _install(actor):
     actor.register_handler(LicenseImplantHandler())
     actor.register_handler(ScanImplantHandler())
     actor.register_handler(ExploitImplantHandler())
+    actor.register_handler(TakeFixerJobHandler())
+    actor.register_handler(MeetHandlerHandler())
+    actor.register_handler(DeliverDataHandler())
+    actor.register_handler(CollectPayoutHandler())
+    actor.register_handler(BurnContactHandler())
+    actor.register_handler(PlantEvidenceHandler())
+    actor.register_handler(BlackmailTargetHandler())
+    actor.register_handler(LeakFileHandler())
+    actor.register_handler(ExtractAssetHandler())
     install_neonsim(actor)
+
+
+def _contract(scenario, *, payout=100, status="offered", accepted_by=None, double_cross=False):
+    return _room_entity(
+        scenario,
+        "data run",
+        "contract",
+        [
+            RunnerContractComponent(
+                payout=payout,
+                status=status,
+                accepted_by=accepted_by,
+                double_cross=double_cross,
+            )
+        ],
+    )
 
 
 def _implant_item(scenario, name="cyberdeck", **kwargs):
@@ -2818,6 +2867,21 @@ def test_implant_fragments_describe_clinics_and_augs():
     assert "Implant installed aug: reflex (neural, overclocked)." in joined
 
 
+def test_offline_illegal_implant_fragment_tags():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _install_implant(
+        scenario,
+        components=[ImplantComponent(implant_type="bootleg", active=False, legal=False)],
+    )
+
+    joined = "\n".join(
+        neonsim_fragments(scenario.actor.world, scenario.actor.world.get_entity(scenario.character))
+    )
+
+    assert "Implant installed aug: bootleg (body, offline, illegal)." in joined
+
+
 # --- error paths: cybernetics --------------------------------------------------------
 
 
@@ -3040,3 +3104,407 @@ async def test_license_implant_tolerates_non_numeric_fee():
     await scenario.actor.tick(1.0)
 
     assert licensed  # bad fee parses to 0 and the licensing still completes
+
+
+# --- fixers, missions & corporate intrigue (10.4) ------------------------------------
+
+
+async def test_take_fixer_job_accepts_contract():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(scenario, payout=250)
+    accepted: list[FixerJobAcceptedEvent] = []
+    scenario.actor.bus.subscribe(FixerJobAcceptedEvent, accepted.append)
+
+    await scenario.actor.submit(_cmd(scenario, "take-fixer-job", target_id=str(contract)))
+    await scenario.actor.tick(1.0)
+
+    assert accepted[0].payout == 250
+    state = scenario.actor.world.get_entity(contract).get_component(RunnerContractComponent)
+    assert state.status == "accepted"
+    assert state.accepted_by == str(scenario.character)
+
+
+async def test_meet_handler_emits_event():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    handler = _room_entity(scenario, "the broker", "handler", [HandlerComponent()])
+    met: list[HandlerMetEvent] = []
+    scenario.actor.bus.subscribe(HandlerMetEvent, met.append)
+
+    await scenario.actor.submit(_cmd(scenario, "meet-handler", target_id=str(handler)))
+    await scenario.actor.tick(1.0)
+
+    assert met[0].handler_id == str(handler)
+
+
+async def test_deliver_data_completes_contract():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(scenario, status="accepted", accepted_by=str(scenario.character))
+    data = _inventory_entity(
+        scenario, "the goods", "data", [DataPayloadComponent(name="schematics")]
+    )
+    delivered: list[DataDeliveredEvent] = []
+    scenario.actor.bus.subscribe(DataDeliveredEvent, delivered.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "deliver-data", contract_id=str(contract), data_id=str(data))
+    )
+    await scenario.actor.tick(1.0)
+
+    assert delivered[0].contract_id == str(contract)
+    assert not scenario.actor.world.has_entity(data)
+    state = scenario.actor.world.get_entity(contract).get_component(RunnerContractComponent)
+    assert state.status == "delivered"
+
+
+async def test_collect_payout_pays_scrip():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(
+        scenario, payout=300, status="delivered", accepted_by=str(scenario.character)
+    )
+    paid: list[PayoutCollectedEvent] = []
+    scenario.actor.bus.subscribe(PayoutCollectedEvent, paid.append)
+
+    await scenario.actor.submit(_cmd(scenario, "collect-payout", target_id=str(contract)))
+    await scenario.actor.tick(1.0)
+
+    assert paid[0].amount == 300
+    assert _scrip_quantity(scenario) == 300
+
+
+async def test_collect_payout_double_cross_burns_and_heats():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(
+        scenario,
+        payout=300,
+        status="delivered",
+        accepted_by=str(scenario.character),
+        double_cross=True,
+    )
+    crossed: list[DoubleCrossRevealedEvent] = []
+    scenario.actor.bus.subscribe(DoubleCrossRevealedEvent, crossed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "collect-payout", target_id=str(contract)))
+    await scenario.actor.tick(1.0)
+
+    assert crossed[0].contract_id == str(contract)
+    assert _scrip_quantity(scenario) == 0  # no payout on a double-cross
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(HeatComponent).amount == 5.0
+    state = scenario.actor.world.get_entity(contract).get_component(RunnerContractComponent)
+    assert state.status == "burned"
+
+
+async def test_burn_contact_marks_fixer_burned():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    fixer = _room_entity(scenario, "padre", "fixer", [FixerComponent(name="padre")])
+    burned: list[ContactBurnedEvent] = []
+    scenario.actor.bus.subscribe(ContactBurnedEvent, burned.append)
+
+    await scenario.actor.submit(_cmd(scenario, "burn-contact", target_id=str(fixer)))
+    await scenario.actor.tick(1.0)
+
+    assert burned[0].contact_id == str(fixer)
+    assert scenario.actor.world.get_entity(fixer).get_component(FixerComponent).burned is True
+
+
+async def test_plant_evidence_creates_a_blackmail_file():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    mark = _other_character(scenario)
+    planted: list[EvidencePlantedEvent] = []
+    scenario.actor.bus.subscribe(EvidencePlantedEvent, planted.append)
+
+    await scenario.actor.submit(_cmd(scenario, "plant-evidence", target_id=str(mark)))
+    await scenario.actor.tick(1.0)
+
+    assert planted[0].target_id == str(mark)
+    file_entity = scenario.actor.world.get_entity(parse_entity_id(planted[0].file_id))
+    assert file_entity.get_component(BlackmailFileComponent).target_id == str(mark)
+
+
+async def test_blackmail_target_extracts_a_favor():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    mark = _other_character(scenario)
+    file = _inventory_entity(
+        scenario, "the photos", "evidence", [BlackmailFileComponent(target_id=str(mark))]
+    )
+    applied: list[BlackmailAppliedEvent] = []
+    scenario.actor.bus.subscribe(BlackmailAppliedEvent, applied.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "blackmail-target", target_id=str(mark), file_id=str(file))
+    )
+    await scenario.actor.tick(1.0)
+
+    assert applied[0].target_id == str(mark)
+    assert scenario.actor.world.get_entity(mark).has_relationship(OwesFavor, scenario.character)
+    assert scenario.actor.world.get_entity(file).get_component(BlackmailFileComponent).used is True
+
+
+async def test_leak_file_burns_the_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    mark = _other_character(scenario)
+    file = _room_entity(
+        scenario, "leaked dossier", "evidence", [BlackmailFileComponent(target_id=str(mark))]
+    )
+    leaked: list[FileLeakedEvent] = []
+    scenario.actor.bus.subscribe(FileLeakedEvent, leaked.append)
+
+    await scenario.actor.submit(_cmd(scenario, "leak-file", target_id=str(file)))
+    await scenario.actor.tick(1.0)
+
+    assert leaked[0].file_id == str(file)
+    file_state = scenario.actor.world.get_entity(file).get_component(BlackmailFileComponent)
+    assert file_state.leaked is True
+    assert scenario.actor.world.get_entity(mark).get_component(HeatComponent).amount == 4.0
+
+
+async def test_extract_asset_marks_it_extracted():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    asset = _room_entity(scenario, "defector", "asset", [AssetExtractionComponent()])
+    extracted: list[AssetExtractedEvent] = []
+    scenario.actor.bus.subscribe(AssetExtractedEvent, extracted.append)
+
+    await scenario.actor.submit(_cmd(scenario, "extract-asset", target_id=str(asset)))
+    await scenario.actor.tick(1.0)
+
+    assert extracted[0].asset_id == str(asset)
+    assert scenario.actor.world.get_entity(asset).get_component(AssetExtractionComponent).extracted
+
+
+def test_intrigue_fragments():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _room_entity(scenario, "padre", "fixer", [FixerComponent(name="padre")])
+    _room_entity(scenario, "the broker", "handler", [HandlerComponent()])
+    _contract(scenario, payout=150)
+    _room_entity(scenario, "dossier", "evidence", [BlackmailFileComponent(target_id="x")])
+    _room_entity(scenario, "defector", "asset", [AssetExtractionComponent()])
+
+    joined = "\n".join(
+        neonsim_fragments(scenario.actor.world, scenario.actor.world.get_entity(scenario.character))
+    )
+
+    assert "Fixer padre: open for work." in joined
+    assert "Handler the broker waiting for a hand-off." in joined
+    assert "Contract data run: courier, 150 scrip (offered)." in joined
+    assert "Blackmail file dossier: leverage." in joined
+    assert "Asset defector: awaiting extraction." in joined
+
+
+# --- error paths: intrigue -----------------------------------------------------------
+
+
+def test_intrigue_handlers_reject_invalid_character_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = str(scenario.room_a)
+    cases = [
+        (TakeFixerJobHandler(), "take-fixer-job"),
+        (MeetHandlerHandler(), "meet-handler"),
+        (DeliverDataHandler(), "deliver-data"),
+        (CollectPayoutHandler(), "collect-payout"),
+        (BurnContactHandler(), "burn-contact"),
+        (PlantEvidenceHandler(), "plant-evidence"),
+        (BlackmailTargetHandler(), "blackmail-target"),
+        (LeakFileHandler(), "leak-file"),
+        (ExtractAssetHandler(), "extract-asset"),
+    ]
+    for handler, command_type in cases:
+        result = handler.execute(
+            ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
+        )
+        assert result.ok is False
+        assert result.reason == "invalid character id"
+
+
+async def test_take_fixer_job_rejects_unavailable_contract():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(scenario, status="accepted", accepted_by="someone")
+    rejects = await _reject(scenario, _cmd(scenario, "take-fixer-job", target_id=str(contract)))
+    assert any("no longer available" in event.reason for event in rejects)
+
+
+async def test_deliver_data_rejects_unowned_contract():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(scenario, status="accepted", accepted_by="someone-else")
+    data = _inventory_entity(scenario, "goods", "data", [DataPayloadComponent(name="db")])
+    rejects = await _reject(
+        scenario, _cmd(scenario, "deliver-data", contract_id=str(contract), data_id=str(data))
+    )
+    assert any("did not take this job" in event.reason for event in rejects)
+
+
+async def test_deliver_data_rejects_when_not_awaiting_delivery():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(scenario, status="delivered", accepted_by=str(scenario.character))
+    data = _inventory_entity(scenario, "goods", "data", [DataPayloadComponent(name="db")])
+    rejects = await _reject(
+        scenario, _cmd(scenario, "deliver-data", contract_id=str(contract), data_id=str(data))
+    )
+    assert any("not awaiting delivery" in event.reason for event in rejects)
+
+
+async def test_deliver_data_rejects_without_the_data():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(scenario, status="accepted", accepted_by=str(scenario.character))
+    rejects = await _reject(
+        scenario, _cmd(scenario, "deliver-data", contract_id=str(contract), data_id="999999")
+    )
+    assert any("not carrying that data" in event.reason for event in rejects)
+
+
+async def test_collect_payout_rejects_other_peoples_job():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(scenario, status="delivered", accepted_by="someone")
+    rejects = await _reject(scenario, _cmd(scenario, "collect-payout", target_id=str(contract)))
+    assert any("not your job" in event.reason for event in rejects)
+
+
+async def test_collect_payout_rejects_before_delivery():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    contract = _contract(scenario, status="accepted", accepted_by=str(scenario.character))
+    rejects = await _reject(scenario, _cmd(scenario, "collect-payout", target_id=str(contract)))
+    assert any("nothing to collect yet" in event.reason for event in rejects)
+
+
+async def test_burn_contact_rejects_when_already_burned():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    fixer = _room_entity(scenario, "padre", "fixer", [FixerComponent(burned=True)])
+    rejects = await _reject(scenario, _cmd(scenario, "burn-contact", target_id=str(fixer)))
+    assert any("already burned" in event.reason for event in rejects)
+
+
+async def test_blackmail_rejects_wrong_file():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    mark = _other_character(scenario)
+    other = _other_character(scenario)
+    file = _inventory_entity(
+        scenario, "wrong photos", "evidence", [BlackmailFileComponent(target_id=str(other))]
+    )
+    rejects = await _reject(
+        scenario, _cmd(scenario, "blackmail-target", target_id=str(mark), file_id=str(file))
+    )
+    assert any("not about them" in event.reason for event in rejects)
+
+
+async def test_blackmail_rejects_without_file():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    mark = _other_character(scenario)
+    rejects = await _reject(
+        scenario, _cmd(scenario, "blackmail-target", target_id=str(mark), file_id="999999")
+    )
+    assert any("not holding that file" in event.reason for event in rejects)
+
+
+async def test_blackmail_rejects_spent_file():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    mark = _other_character(scenario)
+    file = _inventory_entity(
+        scenario,
+        "used photos",
+        "evidence",
+        [BlackmailFileComponent(target_id=str(mark), used=True)],
+    )
+    rejects = await _reject(
+        scenario, _cmd(scenario, "blackmail-target", target_id=str(mark), file_id=str(file))
+    )
+    assert any("already spent" in event.reason for event in rejects)
+
+
+async def test_leak_file_rejects_when_already_leaked():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    file = _room_entity(scenario, "old leak", "evidence", [BlackmailFileComponent(leaked=True)])
+    rejects = await _reject(scenario, _cmd(scenario, "leak-file", target_id=str(file)))
+    assert any("already leaked" in event.reason for event in rejects)
+
+
+async def test_extract_asset_rejects_when_already_extracted():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    asset = _room_entity(scenario, "defector", "asset", [AssetExtractionComponent(extracted=True)])
+    rejects = await _reject(scenario, _cmd(scenario, "extract-asset", target_id=str(asset)))
+    assert any("already extracted" in event.reason for event in rejects)
+
+
+async def test_intrigue_target_handlers_reject_missing_and_unreachable():
+    commands = (
+        ("take-fixer-job", "target_id"),
+        ("meet-handler", "target_id"),
+        ("collect-payout", "target_id"),
+        ("burn-contact", "target_id"),
+        ("plant-evidence", "target_id"),
+        ("leak-file", "target_id"),
+        ("extract-asset", "target_id"),
+    )
+    for command_type, key in commands:
+        scenario = build_scenario()
+        _install(scenario.actor)
+        missing = await _reject(scenario, _cmd(scenario, command_type, **{key: "999999"}))
+        assert any("does not exist" in event.reason for event in missing), command_type
+        far = _far_entity(scenario, "distant", "thing", [CharacterComponent(species="bunny")])
+        unreachable = await _reject(scenario, _cmd(scenario, command_type, **{key: str(far)}))
+        assert any("not reachable" in event.reason for event in unreachable), command_type
+
+
+async def test_deliver_data_rejects_missing_and_unreachable_contract():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    missing = await _reject(
+        scenario, _cmd(scenario, "deliver-data", contract_id="999999", data_id="999999")
+    )
+    assert any("does not exist" in event.reason for event in missing)
+    far = _far_entity(scenario, "far contract", "contract", [RunnerContractComponent()])
+    unreachable = await _reject(
+        scenario, _cmd(scenario, "deliver-data", contract_id=str(far), data_id="1")
+    )
+    assert any("not reachable" in event.reason for event in unreachable)
+
+
+async def test_blackmail_rejects_missing_and_unreachable_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    missing = await _reject(
+        scenario, _cmd(scenario, "blackmail-target", target_id="999999", file_id="1")
+    )
+    assert any("does not exist" in event.reason for event in missing)
+    far = _far_entity(scenario, "far mark", "person", [CharacterComponent(species="bunny")])
+    unreachable = await _reject(
+        scenario, _cmd(scenario, "blackmail-target", target_id=str(far), file_id="1")
+    )
+    assert any("not reachable" in event.reason for event in unreachable)
+
+
+async def test_leak_file_with_non_character_target_skips_heat():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    # A planted file with no real character behind target_id must leak without crashing.
+    file = _room_entity(scenario, "anon leak", "evidence", [BlackmailFileComponent(target_id="")])
+    leaked: list[FileLeakedEvent] = []
+    scenario.actor.bus.subscribe(FileLeakedEvent, leaked.append)
+
+    await scenario.actor.submit(_cmd(scenario, "leak-file", target_id=str(file)))
+    await scenario.actor.tick(1.0)
+
+    assert leaked[0].file_id == str(file)
