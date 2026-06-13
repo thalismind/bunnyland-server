@@ -1065,8 +1065,13 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "CredentialComponent",
         "DataPayloadComponent",
         "TraceTimerComponent",
+        "BlackMarketComponent",
+        "ContrabandComponent",
+        "HeatComponent",
+        "WantedLevelComponent",
+        "InformantComponent",
     } <= {component.__name__ for component in neon.ecs.components}
-    assert "InsideZone" in {edge.__name__ for edge in neon.ecs.edges}
+    assert {"InsideZone", "OwesFavor"} <= {edge.__name__ for edge in neon.ecs.edges}
     assert {
         "enter-district",
         "show-credentials",
@@ -1091,6 +1096,14 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "unlock-door",
         "evade-trace",
         "spoof-identity",
+        "buy-contraband",
+        "sell-data",
+        "call-favor",
+        "pay-debt",
+        "post-bounty",
+        "turn-informant",
+        "hide-from-law",
+        "clear-warrant",
     } <= {handler.command_type for handler in neon.commands.action_handlers}
     assert {
         "DistrictEnteredEvent",
@@ -1116,6 +1129,15 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "DataExfiltratedEvent",
         "SystemSabotagedEvent",
         "AlarmRaisedEvent",
+        "ContrabandBoughtEvent",
+        "DataSoldEvent",
+        "FavorCalledEvent",
+        "DebtPaidEvent",
+        "HeatChangedEvent",
+        "WantedLevelChangedEvent",
+        "WarrantClearedEvent",
+        "InformantTurnedEvent",
+        "LawResponseEvent",
     } <= {event.__name__ for event in neon.commands.typed_events}
 
 

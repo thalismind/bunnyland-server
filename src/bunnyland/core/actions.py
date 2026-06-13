@@ -1677,6 +1677,39 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     _definition("evade-trace", (), tool_name="evade_trace", patterns=("evade the trace",)),
     _definition("spoof-identity", (), tool_name="spoof_identity", patterns=("spoof your id",)),
+    _definition(
+        "buy-contraband",
+        ("target_id",),
+        tool_name="buy_contraband",
+        patterns=("buy contraband from {target_id}",),
+    ),
+    _definition(
+        "sell-data",
+        ("broker_id", "data_id"),
+        tool_name="sell_data",
+        patterns=("sell {data_id} to {broker_id}",),
+    ),
+    _definition(
+        "call-favor",
+        ("target_id",),
+        tool_name="call_favor",
+        patterns=("call in a favor from {target_id}",),
+    ),
+    _definition("pay-debt", (), tool_name="pay_debt", patterns=("pay off your debt",)),
+    _definition("hide-from-law", (), tool_name="hide_from_law", patterns=("lay low",)),
+    _definition("clear-warrant", (), tool_name="clear_warrant", patterns=("clear your warrant",)),
+    _definition(
+        "post-bounty",
+        ("target_id", "amount"),
+        tool_name="post_bounty",
+        patterns=("post a bounty on {target_id}",),
+    ),
+    _definition(
+        "turn-informant",
+        ("target_id",),
+        tool_name="turn_informant",
+        patterns=("turn {target_id} into an informant",),
+    ),
 )
 
 
