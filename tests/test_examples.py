@@ -103,6 +103,7 @@ from bunnyland.worldgen.examples import (
     POP_CULTURE_DEMOS,
     SCENE_DEMOS,
     STORM_LIGHTHOUSE_DEMO,
+    VACANCY_MOTEL_DEMO,
     VOIDSIM_DEMO,
 )
 from bunnyland.worldgen.generators import GenOptions, collect_generators
@@ -322,6 +323,34 @@ async def test_storm_lighthouse_demo_keeps_a_beacon_burning_through_a_squall():
     clock = list(actor.world.query().with_all([WeatherComponent]).execute_entities())[0]
     assert clock.get_component(WeatherComponent).condition == "rain"
     assert actor.world.get_entity(world.rooms["jetty"]).get_component(LightComponent).level <= 0.25
+
+
+async def test_vacancy_motel_demo_room_six_is_a_night_gated_secret():
+    actor = WorldActor()
+
+    world = await VACANCY_MOTEL_DEMO.generate(actor, "vacancy-motel-demo", GenOptions())
+
+    # Guests check in by daylight — Room 6 is not dangerous yet.
+    clock = list(actor.world.query().with_all([TimeOfDayComponent]).execute_entities())[0]
+    assert clock.get_component(TimeOfDayComponent).phase == "day"
+
+    # The secret: a hungry night clerk and a sealed, pitch-dark Room 6 off the corridor.
+    motel_clerk = list(
+        actor.world.query().with_all([SupernaturalAfflictionComponent]).execute_entities()
+    )[0]
+    assert motel_clerk.get_component(SupernaturalAfflictionComponent).affliction_type == (
+        "after-dark hunger"
+    )
+    assert motel_clerk.has_component(FeedingNeedComponent)
+    assert _has(actor, SecretDoorComponent)
+    room6 = actor.world.get_entity(world.rooms["room6"])
+    assert room6.has_component(PointOfInterestComponent)
+    assert room6.get_component(LightComponent).level <= 0.1
+
+    # As the night cycle runs the motel tips into the dangerous small hours.
+    install_environment(actor)
+    await actor.tick(5 * 3600)  # 16:00 -> 21:00
+    assert clock.get_component(TimeOfDayComponent).phase == "night"
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)
