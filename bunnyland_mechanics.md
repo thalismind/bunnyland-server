@@ -499,6 +499,7 @@ RoomSummaryComponent
 WorldHistoryRecordComponent
 PhysicalMarkComponent
 CreatorSignatureComponent
+DeedReputationComponent
 ```
 
 ### Services and projections
@@ -515,6 +516,7 @@ MemoryPromptPart
 WorldHistoryPromptPart
 PhysicalMarkPromptPart
 CreatorSignaturePromptPart
+DeedReputationPromptPart
 ActionPromptPart
 PolicyPromptPart
 ```
@@ -593,6 +595,7 @@ WorldHistoryReactor
 WorldHistoryRecordComponent
 PhysicalMarkComponent
 CreatorSignatureComponent
+DeedReputationComponent
 HistoryActor
 HistoryTarget
 MarkOn
@@ -606,7 +609,8 @@ recorded sources include physical writing, crafting, and death. Physical marks a
 separate mark entities linked with `MarkOn`, so one object can accumulate several visible
 marks without duplicate components. Crafted outputs and authored mark entities carry
 `CreatorSignatureComponent` and `CreatedBy` links so visible artifacts can expose maker
-and circumstance.
+and circumstance. History records also project `DeedReputationComponent` onto actors, so
+later services, guards, and dialogue can react to explicit deed tags and scores.
 
 ---
 
@@ -4002,6 +4006,7 @@ FactionReputationComponent
 InstitutionReputationComponent
 LegalReputationComponent
 ServiceAccessComponent
+DeedReputationComponent
 RankEligibilityComponent
 ReputationDecayComponent
 ```
@@ -4017,6 +4022,7 @@ ServiceAccessSystem
 QuestEligibilitySystem
 RankEligibilitySystem
 NPCDispositionSystem
+DeedRequirementGate
 ```
 
 ### Events

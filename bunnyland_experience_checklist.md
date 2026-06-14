@@ -328,7 +328,7 @@ deterministic harnesses.
   - **Acceptance check:** inspecting an artifact exposes maker/lore when visible.
   - **Verification:** direct mechanic and prompt-fragment tests.
 
-- [ ] **Reputation and deed references**
+- [x] **Reputation and deed references**
   - **Goal:** factions, regions, services, and NPC behavior can react to known deeds.
   - **Depends on:** world history, gossip propagation, social memory, daggersim-style
     reputation hooks.

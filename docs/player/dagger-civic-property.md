@@ -24,6 +24,9 @@ institution service:
 Using a service can create an output item, grants service access, and raises reputation
 with that service's institution. If you use the same service again, the access record stays
 unlocked; the reputation change still records that you worked with the institution again.
+Some services can also require explicit deed reputation, such as known crafted work or
+authored marks. If a service has that requirement, complete visible deeds first so the
+world history projection can record them on your character.
 
 Your context can show:
 

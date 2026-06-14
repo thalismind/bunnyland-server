@@ -31,6 +31,7 @@ from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility, SpeechSaidEvent, SpeechToldEvent
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
 from ..prompts import ComponentPromptContext
+from .history import DeedReputationComponent
 
 
 @dataclass(frozen=True)
@@ -148,10 +149,18 @@ class InstitutionServiceComponent(Component):
     service_name: str
     required_rank: str = "member"
     output_item_name: str | None = None
+    required_deed_tag: str = ""
+    required_deed_score: float = 0.0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         del ctx
-        return (f"Service directory entry: {self.service_name}.",)
+        requirement = (
+            f" requires {self.required_deed_tag} deed reputation "
+            f"{self.required_deed_score:g}"
+            if self.required_deed_tag
+            else ""
+        )
+        return (f"Service directory entry: {self.service_name}{requirement}.",)
 
 
 @dataclass(frozen=True)
@@ -1184,6 +1193,12 @@ def _grant_service_access(character: Entity, service_id: EntityId) -> bool:
     return len(service_ids) != len(current.service_ids)
 
 
+def _deed_reputation_score(character: Entity, tag: str) -> float:
+    if not tag or not character.has_component(DeedReputationComponent):
+        return 0.0
+    return character.get_component(DeedReputationComponent).scores.get(tag, 0.0)
+
+
 class ExpandSiteHandler:
     command_type = "expand-site"
 
@@ -1580,6 +1595,12 @@ class UseInstitutionServiceHandler:
         service = service_entity.get_component(InstitutionServiceComponent)
         if not _rank_allows(membership.rank, service.required_rank):
             return rejected("institution rank is too low")
+        if (
+            service.required_deed_tag
+            and _deed_reputation_score(character, service.required_deed_tag)
+            < service.required_deed_score
+        ):
+            return rejected("required deed reputation is too low")
 
         output_item_id: str | None = None
         if service.output_item_name:

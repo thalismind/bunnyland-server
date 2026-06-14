@@ -68,6 +68,15 @@ class CreatorSignatureComponent(Component):
 
 
 @dataclass(frozen=True)
+class DeedReputationComponent(Component):
+    """Explicit reputation derived from durable deeds."""
+
+    scores: dict[str, float]
+    deed_ids: tuple[str, ...] = ()
+    known_for: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class HistoryActor(Edge):
     """history record -> actor involved in the deed."""
 
@@ -307,6 +316,44 @@ def record_creator_signature(
     return True
 
 
+def apply_deed_reputation(
+    world: World,
+    *,
+    actor_id: str,
+    deed_id: str,
+    summary: str,
+    tags: tuple[str, ...],
+    score: float,
+) -> bool:
+    """Project a history record onto an actor's explicit deed reputation."""
+
+    parsed_actor = parse_entity_id(actor_id)
+    if parsed_actor is None or not world.has_entity(parsed_actor) or not deed_id:
+        return False
+    actor = world.get_entity(parsed_actor)
+    current = (
+        actor.get_component(DeedReputationComponent)
+        if actor.has_component(DeedReputationComponent)
+        else DeedReputationComponent(scores={})
+    )
+    if deed_id in current.deed_ids:
+        return False
+    scores = dict(current.scores)
+    for tag in tags:
+        if tag:
+            scores[tag] = round(scores.get(tag, 0.0) + score, 3)
+    known_for = tuple(dict.fromkeys((*current.known_for, _truncate(summary, 80))))
+    replace_component(
+        actor,
+        DeedReputationComponent(
+            scores=scores,
+            deed_ids=tuple(dict.fromkeys((*current.deed_ids, deed_id))),
+            known_for=known_for,
+        ),
+    )
+    return True
+
+
 def history_fragments(world: World, character: Entity) -> list[str]:
     """Prompt lines for relevant world history near a character."""
 
@@ -323,6 +370,22 @@ def history_fragments(world: World, character: Entity) -> list[str]:
         if len(fragments) >= _HISTORY_PROMPT_LIMIT:
             break
     return fragments
+
+
+def deed_reputation_fragments(world: World, character: Entity) -> list[str]:
+    """Prompt lines for explicit deed reputation on the character."""
+
+    del world
+    if not character.has_component(DeedReputationComponent):
+        return []
+    reputation = character.get_component(DeedReputationComponent)
+    lines = [
+        f"Deed reputation {tag}: {score:g}."
+        for tag, score in sorted(reputation.scores.items())
+        if score
+    ]
+    lines.extend(f"Known deed: {summary}." for summary in reputation.known_for[-3:])
+    return lines
 
 
 def creator_fragments(world: World, character: Entity) -> list[str]:
@@ -410,7 +473,18 @@ class WorldHistoryReactor:
         payload = _history_payload(self.world, event)
         if payload is None:
             return
-        record_world_history(self.world, **payload)
+        record = record_world_history(self.world, **payload)
+        if record is None:
+            return
+        for actor_id in payload.get("actor_ids", ()):
+            apply_deed_reputation(
+                self.world,
+                actor_id=actor_id,
+                deed_id=str(record.id),
+                summary=payload["summary"],
+                tags=payload.get("tags", ()),
+                score=float(payload.get("salience", 0.0)),
+            )
 
 
 def _history_payload(world: World, event: DomainEvent) -> dict | None:
@@ -520,14 +594,17 @@ def _truncate(text: str, limit: int) -> str:
 __all__ = [
     "CreatedBy",
     "CreatorSignatureComponent",
+    "DeedReputationComponent",
     "HistoryActor",
     "HistoryTarget",
     "MarkOn",
     "PhysicalMarkComponent",
     "WorldHistoryReactor",
     "WorldHistoryRecordComponent",
+    "apply_deed_reputation",
     "creator_fragments",
     "creator_signature_for_event",
+    "deed_reputation_fragments",
     "history_fragments",
     "history_record_for_event",
     "install_history",

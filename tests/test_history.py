@@ -27,13 +27,16 @@ from bunnyland.core.events import (
 from bunnyland.mechanics.history import (
     CreatedBy,
     CreatorSignatureComponent,
+    DeedReputationComponent,
     HistoryActor,
     HistoryTarget,
     MarkOn,
     PhysicalMarkComponent,
     WorldHistoryRecordComponent,
+    apply_deed_reputation,
     creator_fragments,
     creator_signature_for_event,
+    deed_reputation_fragments,
     history_fragments,
     mark_fragments,
     marks_on,
@@ -119,12 +122,19 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
     assert signature.creator_id == str(scenario.character)
     assert signature.circumstance == "writing on watch sign"
     assert mark_entity.get_relationships(CreatedBy)[0][1] == scenario.character
+    deed_reputation = world.get_entity(scenario.character).get_component(
+        DeedReputationComponent
+    )
+    assert deed_reputation.scores["writing"] == 0.7
+    assert deed_reputation.scores["authored"] == 0.7
+    assert deed_reputation.known_for == (record.summary,)
 
     ctx = PromptBuilder(
         world, fragment_providers=collect_prompt_fragments(plugins)
     ).build(scenario.character)
     assert any("Juniper kept watch through the storm" in line for line in ctx.conditions)
     assert any("watch sign bears writing by Juniper" in line for line in ctx.conditions)
+    assert any("Deed reputation writing: 0.7." in line for line in ctx.conditions)
 
     path = tmp_path / "world.json"
     save_world(scenario.actor, path, meta=WorldMeta(seed="history"))
@@ -430,6 +440,71 @@ def test_record_creator_signature_skips_invalid_and_duplicate_sources():
     )
     assert updated is True
     assert artifact.get_component(CreatorSignatureComponent).source_event_id == "sig-b"
+
+
+def test_apply_deed_reputation_accumulates_tags_and_skips_duplicates():
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    assert (
+        apply_deed_reputation(
+            world,
+            actor_id="not-an-id",
+            deed_id="deed-a",
+            summary="nope",
+            tags=("crafted",),
+            score=1.0,
+        )
+        is False
+    )
+    assert (
+        apply_deed_reputation(
+            world,
+            actor_id=str(scenario.character),
+            deed_id="",
+            summary="nope",
+            tags=("crafted",),
+            score=1.0,
+        )
+        is False
+    )
+    first = apply_deed_reputation(
+        world,
+        actor_id=str(scenario.character),
+        deed_id="deed-a",
+        summary="crafted a camp kit",
+        tags=("crafted", "artifact", ""),
+        score=0.8,
+    )
+    duplicate = apply_deed_reputation(
+        world,
+        actor_id=str(scenario.character),
+        deed_id="deed-a",
+        summary="crafted a camp kit again",
+        tags=("crafted",),
+        score=0.8,
+    )
+    second = apply_deed_reputation(
+        world,
+        actor_id=str(scenario.character),
+        deed_id="deed-b",
+        summary="crafted a bridge brace",
+        tags=("crafted",),
+        score=0.4,
+    )
+
+    assert first is True
+    assert duplicate is False
+    assert second is True
+    reputation = world.get_entity(scenario.character).get_component(DeedReputationComponent)
+    assert reputation.scores == {"crafted": 1.2, "artifact": 0.8}
+    assert reputation.deed_ids == ("deed-a", "deed-b")
+    assert deed_reputation_fragments(world, world.get_entity(scenario.character)) == [
+        "Deed reputation artifact: 0.8.",
+        "Deed reputation crafted: 1.2.",
+        "Known deed: crafted a camp kit.",
+        "Known deed: crafted a bridge brace.",
+    ]
 
 
 def test_history_fragments_only_show_relevant_records():

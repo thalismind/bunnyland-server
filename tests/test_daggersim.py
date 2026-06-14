@@ -226,6 +226,7 @@ from bunnyland.mechanics.daggersim import (
     daggersim_fragments,
     install_daggersim,
 )
+from bunnyland.mechanics.history import DeedReputationComponent
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 60 * 60
@@ -1262,7 +1263,13 @@ def _travel_route(scenario, *, travel_seconds=2 * HOUR):
     )
 
 
-def _institution(scenario, *, required_rank="member"):
+def _institution(
+    scenario,
+    *,
+    required_rank="member",
+    required_deed_tag="",
+    required_deed_score=0.0,
+):
     institution = spawn_entity(
         scenario.actor.world,
         [
@@ -1278,6 +1285,8 @@ def _institution(scenario, *, required_rank="member"):
                 service_name="local map",
                 required_rank=required_rank,
                 output_item_name="moss road map",
+                required_deed_tag=required_deed_tag,
+                required_deed_score=required_deed_score,
             ),
         ],
     )
@@ -3337,6 +3346,44 @@ async def test_institution_service_rejects_insufficient_rank():
     await scenario.actor.tick(HOUR)
 
     assert any(event.reason == "institution rank is too low" for event in rejects)
+
+
+async def test_institution_service_can_require_deed_reputation():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    institution_id, service_id = _institution(
+        scenario, required_deed_tag="crafted", required_deed_score=1.0
+    )
+    rejects: list[CommandRejectedEvent] = []
+    used: list[InstitutionServiceUsedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+    scenario.actor.bus.subscribe(InstitutionServiceUsedEvent, used.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "join-institution", institution_id=str(institution_id))
+    )
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "use-institution-service", service_id=str(service_id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert any(event.reason == "required deed reputation is too low" for event in rejects)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(
+        DeedReputationComponent(
+            scores={"crafted": 1.25},
+            deed_ids=("history_1",),
+            known_for=("crafted a camp kit",),
+        )
+    )
+    await scenario.actor.submit(
+        _cmd(scenario, "use-institution-service", service_id=str(service_id))
+    )
+    await scenario.actor.tick(HOUR)
+
+    assert used[0].service_id == str(service_id)
 
 
 async def test_generated_quest_can_be_accepted_completed_and_rewarded():
