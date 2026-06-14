@@ -113,6 +113,11 @@ The status endpoint reports `running`, `succeeded`, `failed`, or `idle`. If `sav
 and the server has a configured save path, the completed generated world is saved before
 the status flips to `succeeded`.
 
+Generated rooms, characters, items, events, and manual admin edits are applied as
+validated world patches. The server preflights the whole patch before mutating ECS state,
+so an invalid generated proposal fails without leaving partial rooms, entities, components,
+or edges behind.
+
 ## After generation
 
 Check the generated world before inviting players:

@@ -98,7 +98,7 @@ deterministic harnesses.
     preserving the same factual claims.
   - **Verification:** deterministic renderer tests or mocked narrator prompt tests.
 
-- [ ] **Validated DM world proposals**
+- [x] **Validated DM world proposals**
   - **Goal:** allow DM-authored world edits without granting direct unvalidated mutation.
   - **Depends on:** worldgen proposal validation, admin patch pipeline, plugin type
     registries.

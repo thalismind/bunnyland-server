@@ -1555,6 +1555,201 @@ def test_world_patch_rejects_duplicate_client_entity_ids(scenario):
         )
 
 
+def test_world_patch_preflight_prevents_partial_mutation(scenario):
+    world = scenario.actor.world
+    before_entities = len(list(world.query().execute_entities()))
+    before_identity = world.get_entity(scenario.character).get_component(IdentityComponent)
+
+    with pytest.raises(WorldPatchError, match="entity 'entity_999' does not exist"):
+        apply_world_patch(
+            scenario.actor,
+            WorldPatchRequest.model_validate(
+                {
+                    "operations": [
+                        {
+                            "op": "add_entity",
+                            "client_id": "$lantern",
+                            "components": [
+                                {
+                                    "type": "IdentityComponent",
+                                    "fields": {"name": "Lantern", "kind": "item"},
+                                }
+                            ],
+                        },
+                        {
+                            "op": "set_component",
+                            "entity_id": str(scenario.character),
+                            "component": {
+                                "type": "IdentityComponent",
+                                "fields": {"name": "Hazel", "kind": "character"},
+                            },
+                        },
+                        {
+                            "op": "set_edge",
+                            "source_id": "$lantern",
+                            "target_id": "entity_999",
+                            "edge": {"type": "Contains", "fields": {}},
+                        },
+                    ]
+                }
+            ),
+        )
+
+    identities = [
+        entity.get_component(IdentityComponent).name
+        for entity in world.query().with_all([IdentityComponent]).execute_entities()
+    ]
+    after_identity = world.get_entity(scenario.character).get_component(IdentityComponent)
+    assert len(list(world.query().execute_entities())) == before_entities
+    assert after_identity == before_identity
+    assert "Lantern" not in identities
+
+
+@pytest.mark.parametrize(
+    ("operations", "message"),
+    [
+        (
+            [
+                {
+                    "op": "add_entity",
+                    "client_id": "$new",
+                    "components": [
+                        {
+                            "type": "IdentityComponent",
+                            "fields": {"name": "One", "kind": "item"},
+                        },
+                        {
+                            "type": "IdentityComponent",
+                            "fields": {"name": "Two", "kind": "item"},
+                        },
+                    ],
+                }
+            ],
+            "duplicate component 'IdentityComponent'",
+        ),
+        (
+            [
+                {"op": "add_entity", "client_id": "$new"},
+                {
+                    "op": "add_component",
+                    "entity_id": "$new",
+                    "component": {
+                        "type": "IdentityComponent",
+                        "fields": {"name": "One", "kind": "item"},
+                    },
+                },
+                {
+                    "op": "add_component",
+                    "entity_id": "$new",
+                    "component": {
+                        "type": "IdentityComponent",
+                        "fields": {"name": "Two", "kind": "item"},
+                    },
+                },
+            ],
+            r"entity '\$new' already has component IdentityComponent",
+        ),
+        (
+            [
+                {"op": "add_entity", "client_id": "$new"},
+                {
+                    "op": "remove_component",
+                    "entity_id": "$new",
+                    "component_type": "IdentityComponent",
+                }
+            ],
+            r"entity '\$new' does not have component IdentityComponent",
+        ),
+        (
+            [
+                {"op": "add_entity", "client_id": "$new"},
+                {"op": "delete_entity", "entity_id": "$new"},
+                {
+                    "op": "set_component",
+                    "entity_id": "$new",
+                    "component": {
+                        "type": "IdentityComponent",
+                        "fields": {"name": "Gone", "kind": "item"},
+                    },
+                },
+            ],
+            r"entity '\$new' does not exist",
+        ),
+    ],
+)
+def test_world_patch_preflight_rejects_alias_component_errors_atomically(
+    scenario, operations, message
+):
+    before_entities = len(list(scenario.actor.world.query().execute_entities()))
+
+    with pytest.raises(WorldPatchError, match=message):
+        apply_world_patch(
+            scenario.actor,
+            WorldPatchRequest.model_validate({"operations": operations}),
+        )
+
+    assert len(list(scenario.actor.world.query().execute_entities())) == before_entities
+
+
+def test_world_patch_preflight_rejects_duplicate_existing_component_atomically(scenario):
+    identity = scenario.actor.world.get_entity(scenario.character).get_component(
+        IdentityComponent
+    )
+
+    with pytest.raises(WorldPatchError, match="already has component IdentityComponent"):
+        apply_world_patch(
+            scenario.actor,
+            WorldPatchRequest.model_validate(
+                {
+                    "operations": [
+                        {
+                            "op": "add_component",
+                            "entity_id": str(scenario.character),
+                            "component": {
+                                "type": "IdentityComponent",
+                                "fields": {"name": "Hazel", "kind": "character"},
+                            },
+                        }
+                    ]
+                }
+            ),
+        )
+
+    assert scenario.actor.world.get_entity(scenario.character).get_component(
+        IdentityComponent
+    ) == identity
+
+
+def test_world_patch_preflight_allows_pending_component_add_then_remove(scenario):
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "add_component",
+                        "entity_id": str(scenario.character),
+                        "component": {
+                            "type": "SuspendedComponent",
+                            "fields": {"reason": "editor"},
+                        },
+                    },
+                    {
+                        "op": "remove_component",
+                        "entity_id": str(scenario.character),
+                        "component_type": "SuspendedComponent",
+                    },
+                ]
+            }
+        ),
+    )
+
+    assert response.ok is True
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(
+        SuspendedComponent
+    )
+
+
 def test_worldgen_room_patch_expands_selected_door(scenario):
     door = spawn_entity(
         scenario.actor.world,
