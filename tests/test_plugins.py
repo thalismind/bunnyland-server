@@ -111,7 +111,15 @@ def test_collect_prompt_fragments_gathers_providers():
     from bunnyland.plugins import collect_prompt_fragments
 
     providers = collect_prompt_fragments(bunnyland_plugins())
-    # needs, environment, and social each contribute one.
+    # needs, environment, and sim packs contribute generic prompt state.
+    assert len(providers) >= 3
+    assert all(callable(p) for p in providers)
+
+
+def test_collect_persona_fragments_gathers_stable_persona_providers():
+    from bunnyland.plugins import collect_persona_fragments
+
+    providers = collect_persona_fragments(bunnyland_plugins())
     assert len(providers) >= 3
     assert all(callable(p) for p in providers)
 
@@ -123,16 +131,23 @@ def test_collect_content_items_preserves_plugin_order():
         Plugin(
             id="one",
             name="One",
-            content=ContentContribution(prompt_fragments=(first,)),
+            content=ContentContribution(
+                prompt_fragments=(first,),
+                persona_fragments=(first,),
+            ),
         ),
         Plugin(
             id="two",
             name="Two",
-            content=ContentContribution(prompt_fragments=(second,)),
+            content=ContentContribution(
+                prompt_fragments=(second,),
+                persona_fragments=(second,),
+            ),
         ),
     ]
 
     assert collect_content_items(plugins, "prompt_fragments") == (first, second)
+    assert collect_content_items(plugins, "persona_fragments") == (first, second)
     assert collect_content_items([], "prompt_fragments") == ()
 
 

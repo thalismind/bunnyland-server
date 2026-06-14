@@ -17,6 +17,24 @@ from ..prompts import ComponentPromptContext
 
 
 @dataclass(frozen=True)
+class PersonaProfileComponent(Component):
+    """Stable roleplay profile fields that should survive prompt/model swaps."""
+
+    voice: str = ""
+    role: str = ""
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        lines: list[str] = []
+        if self.voice:
+            lines.append(f"Your voice: {self.voice}.")
+        if self.role:
+            lines.append(f"Your current role: {self.role}.")
+        return tuple(lines)
+
+
+@dataclass(frozen=True)
 class TraitSetComponent(Component):
     traits: tuple[str, ...] = ()
 
@@ -95,6 +113,8 @@ def persona_fragments(world: World, character: Entity) -> list[str]:
     """Foundation-prompt lines describing who the character is and what they want."""
     lines: list[str] = []
     ctx = ComponentPromptContext.for_entity(world, character)
+    if character.has_component(PersonaProfileComponent):
+        lines.extend(character.get_component(PersonaProfileComponent).prompt_fragments(ctx))
     if character.has_component(TraitSetComponent):
         lines.extend(character.get_component(TraitSetComponent).prompt_fragments(ctx))
     if character.has_component(PreferenceComponent):
@@ -106,6 +126,7 @@ def persona_fragments(world: World, character: Entity) -> list[str]:
 
 __all__ = [
     "GoalComponent",
+    "PersonaProfileComponent",
     "PreferenceComponent",
     "TraitSetComponent",
     "persona_fragments",

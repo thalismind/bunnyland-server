@@ -3,6 +3,11 @@
 Bunnyland prompt fragments are projections from ECS state into short, deterministic lines
 for a character prompt. Fragment providers still decide what is visible. Component methods
 can format state after the provider has selected the entity/component that should be shown.
+`PromptContext.persona` is the stable identity surface: the builder always includes
+programmatic name, kind, and status facts, then appends plugin-provided persona fragments
+for profile, relationships, and boundaries. Generic `prompt_fragments` remain in
+`PromptContext.conditions` for changing mechanic state such as needs, weather, and local
+services.
 
 Narration follows the same boundary. `NarrationProjection` reads typed domain events,
 `RoomSummaryProjection`, and per-character perception, then stores a volatile presentation

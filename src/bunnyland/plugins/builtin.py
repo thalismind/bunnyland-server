@@ -1258,6 +1258,7 @@ from ..mechanics.nukesim import (
 )
 from ..mechanics.persona import (
     GoalComponent,
+    PersonaProfileComponent,
     PreferenceComponent,
     TraitSetComponent,
     persona_fragments,
@@ -1265,6 +1266,7 @@ from ..mechanics.persona import (
 from ..mechanics.policy import (
     CharacterBoundaryComponent,
     WorldPolicyComponent,
+    boundary_fragments,
     install_policy,
 )
 from ..mechanics.social import SocialBond, install_social, relationship_fragments
@@ -1820,7 +1822,7 @@ def social_plugin() -> Plugin:
         dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(edges=(SocialBond,)),
         runtime=RuntimeContribution(service_factories=(_social_factory,)),
-        content=ContentContribution(prompt_fragments=(relationship_fragments,)),
+        content=ContentContribution(persona_fragments=(relationship_fragments,)),
     )
 
 
@@ -1835,6 +1837,7 @@ def policy_plugin() -> Plugin:
         dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(components=(WorldPolicyComponent, CharacterBoundaryComponent)),
         runtime=RuntimeContribution(service_factories=(_policy_factory,)),
+        content=ContentContribution(persona_fragments=(boundary_fragments,)),
     )
 
 
@@ -1842,8 +1845,15 @@ def persona_plugin() -> Plugin:
     return Plugin(
         id=PERSONA,
         name="Persona",
-        ecs=EcsContribution(components=(TraitSetComponent, PreferenceComponent, GoalComponent)),
-        content=ContentContribution(prompt_fragments=(persona_fragments,)),
+        ecs=EcsContribution(
+            components=(
+                PersonaProfileComponent,
+                TraitSetComponent,
+                PreferenceComponent,
+                GoalComponent,
+            )
+        ),
+        content=ContentContribution(persona_fragments=(persona_fragments,)),
     )
 
 

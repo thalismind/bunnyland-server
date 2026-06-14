@@ -5,6 +5,7 @@ from __future__ import annotations
 from bunnyland.core import WorldActor, spawn_entity
 from bunnyland.mechanics.persona import (
     GoalComponent,
+    PersonaProfileComponent,
     PreferenceComponent,
     TraitSetComponent,
     persona_fragments,
@@ -20,11 +21,14 @@ def test_persona_fragments_describe_traits_preferences_and_goals():
         world,
         [
             TraitSetComponent(traits=("curious", "talkative")),
+            PersonaProfileComponent(voice="warm and direct", role="forager"),
             PreferenceComponent(likes=("berries",), dislikes=("storms",)),
             GoalComponent(active_goals=("find the elder",)),
         ],
     )
     lines = persona_fragments(world, character)
+    assert "Your voice: warm and direct." in lines
+    assert "Your current role: forager." in lines
     assert "You are curious and talkative." in lines
     assert "You like berries." in lines
     assert "You dislike storms." in lines
@@ -65,6 +69,10 @@ def test_persona_component_fragments_support_perspective_styles():
     assert GoalComponent(active_goals=("find shelter",)).prompt_fragments(first) == (
         "My goal: find shelter.",
     )
+    assert PersonaProfileComponent(voice="soft", role="guide").prompt_fragments(first) == (
+        "Your voice: soft.",
+        "Your current role: guide.",
+    )
 
 
 def test_persona_component_fragments_are_self_view_only():
@@ -78,6 +86,7 @@ def test_persona_component_fragments_are_self_view_only():
     )
 
     assert TraitSetComponent(traits=("secretive",)).prompt_fragments(ctx) == ()
+    assert PersonaProfileComponent(voice="secretive").prompt_fragments(ctx) == ()
     assert PreferenceComponent(likes=("moonlight",)).prompt_fragments(ctx) == ()
     assert GoalComponent(active_goals=("hide the map",)).prompt_fragments(ctx) == ()
 

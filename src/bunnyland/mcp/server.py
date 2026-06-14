@@ -363,12 +363,17 @@ def render_mcp_agent_prompt(
     *,
     agent_id: str,
     fragment_providers: Sequence[Any] = (),
+    persona_providers: Sequence[Any] = (),
 ) -> dict[str, Any]:
     found = mcp_controlled_character(actor, agent_id)
     if found is None:
         raise RuntimeError("agent is not controlling a character yet")
     character_id, _controller_id, generation = found
-    builder = PromptBuilder(actor.world, fragment_providers=fragment_providers)
+    builder = PromptBuilder(
+        actor.world,
+        fragment_providers=fragment_providers,
+        persona_providers=persona_providers,
+    )
     context = builder.build(character_id, epoch=actor.epoch)
     return {
         "ok": True,
@@ -422,6 +427,7 @@ def create_bunnyland_mcp_app(
     generate_item: Callable[[WorldItemGenerationRequest], WorldItemGenerationResponse],
     generate_event: Callable[[WorldEventGenerationRequest], WorldEventGenerationResponse],
     fragment_providers: Sequence[Any] = (),
+    persona_providers: Sequence[Any] = (),
     worldgen_options: GenOptions | None = None,
 ):
     """Create the ASGI MCP app.
@@ -515,6 +521,7 @@ def create_bunnyland_mcp_app(
             actor,
             agent_id=agent_id,
             fragment_providers=fragment_providers,
+            persona_providers=persona_providers,
         )["prompt"]
 
     @mcp.tool()
@@ -549,6 +556,7 @@ def create_bunnyland_mcp_app(
                 actor,
                 agent_id=agent_id,
                 fragment_providers=fragment_providers,
+                persona_providers=persona_providers,
             )
         except RuntimeError as exc:
             raise ToolError(str(exc)) from exc

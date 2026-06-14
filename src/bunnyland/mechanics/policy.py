@@ -16,7 +16,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from pydantic.dataclasses import dataclass
-from relics import Component, World
+from relics import Component, Entity, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import IdentityComponent, WorldClockComponent
@@ -104,6 +104,28 @@ def evaluate(
     return False, f"{tag.value} is not enabled here"
 
 
+def boundary_fragments(world: World, character: Entity) -> list[str]:
+    """Stable prompt lines describing applicable world and character boundaries."""
+
+    lines: list[str] = []
+    policy = _world_policy(world)
+    if policy.enabled:
+        enabled = ", ".join(sorted(tag.value for tag in policy.enabled))
+        lines.append(f"World boundaries enabled: {enabled}.")
+    if policy.disabled:
+        disabled = ", ".join(sorted(tag.value for tag in policy.disabled))
+        lines.append(f"World boundaries disabled: {disabled}.")
+    if character.has_component(CharacterBoundaryComponent):
+        boundary = character.get_component(CharacterBoundaryComponent)
+        if boundary.allowed:
+            allowed = ", ".join(sorted(tag.value for tag in boundary.allowed))
+            lines.append(f"Your allowed boundaries: {allowed}.")
+        if boundary.denied:
+            denied = ", ".join(sorted(tag.value for tag in boundary.denied))
+            lines.append(f"Your denied boundaries: {denied}.")
+    return lines
+
+
 def flirt_classifier(command: SubmittedCommand):
     """Flirtatious speech requires the FLIRTING boundary between speaker and target."""
     if command.command_type not in ("say", "tell"):
@@ -161,6 +183,7 @@ __all__ = [
     "CharacterBoundaryComponent",
     "PolicyGate",
     "WorldPolicyComponent",
+    "boundary_fragments",
     "evaluate",
     "flirt_classifier",
     "install_policy",

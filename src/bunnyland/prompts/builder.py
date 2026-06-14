@@ -48,6 +48,7 @@ class PromptContext:
     inventory: tuple[str, ...] = ()
     held: tuple[str, ...] = ()
     worn: tuple[str, ...] = ()
+    persona: tuple[str, ...] = ()
     conditions: tuple[str, ...] = ()  # domain fragments: needs, weather, relationships, ...
     feelings: tuple[str, ...] = ()
     recent: tuple[str, ...] = ()
@@ -83,6 +84,7 @@ class PromptBuilder:
         recent_context: RecentContextProjection | None = None,
         memory_store=None,
         fragment_providers: Sequence[FragmentProvider] = (),
+        persona_providers: Sequence[FragmentProvider] = (),
     ) -> None:
         self.world = world
         # Attach the projection's ECS observers so its cache invalidates as the room
@@ -91,6 +93,7 @@ class PromptBuilder:
         self.recent_context = recent_context
         self.memory_store = memory_store
         self.fragment_providers = tuple(fragment_providers)
+        self.persona_providers = tuple(persona_providers)
 
     def build(self, character_id: EntityId, *, epoch: int = 0) -> PromptContext:
         character = self.world.get_entity(character_id)
@@ -126,6 +129,9 @@ class PromptBuilder:
         conditions: list[str] = []
         for provider in self.fragment_providers:
             conditions.extend(provider(self.world, character))
+        persona = self._persona_facts(character, identity)
+        for provider in self.persona_providers:
+            persona.extend(provider(self.world, character))
 
         recent = ()
         if self.recent_context is not None and room_id is not None:
@@ -153,6 +159,7 @@ class PromptBuilder:
             inventory=inventory,
             held=held,
             worn=worn,
+            persona=tuple(dict.fromkeys(persona)),
             conditions=tuple(conditions),
             feelings=feelings,
             recent=tuple(recent),
@@ -191,6 +198,17 @@ class PromptBuilder:
                 kind = "suspended"
             break
         return f"{status}, {kind}"
+
+    def _persona_facts(
+        self, character: Entity, identity: IdentityComponent | None
+    ) -> list[str]:
+        name = identity.name if identity else "Unknown"
+        kind = identity.kind if identity else "character"
+        return [
+            f"Your name is {name}.",
+            f"Your kind is {kind}.",
+            f"Your current status is {self._status_line(character)}.",
+        ]
 
     @staticmethod
     def _exit_label(exit_: RoomExit) -> str:
@@ -261,6 +279,7 @@ def render_prompt(context: PromptContext) -> str:
     section("You are carrying", context.inventory)
     section("You are holding", context.held)
     section("You are wearing", context.worn)
+    section("Persona", context.persona)
     section("You feel", context.feelings)
     section("Currently", context.conditions)
     section("Recent context", context.recent)

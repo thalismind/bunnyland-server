@@ -31,6 +31,7 @@ from .plugins import (
     PluginError,
     apply_plugins,
     bunnyland_plugins,
+    collect_persona_fragments,
     collect_prompt_fragments,
     load_modules,
     resolve_order,
@@ -633,7 +634,11 @@ async def _serve(args) -> None:
     _configure_actor_backends(actor, args, lifesim_natural_aging)
     agent = _build_serve_agent(args, credentials, models)
     autosave = _make_autosave(actor, args, meta)
-    builder = PromptBuilder(actor.world, fragment_providers=collect_prompt_fragments(plugins))
+    builder = PromptBuilder(
+        actor.world,
+        fragment_providers=collect_prompt_fragments(plugins),
+        persona_providers=collect_persona_fragments(plugins),
+    )
     dispatch = ControllerDispatch(actor, builder, agent)
     _configure_claim_timeout(actor, args, models)
     loop = GameLoop(

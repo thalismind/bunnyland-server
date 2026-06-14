@@ -97,9 +97,10 @@ verbs. Implemented sims also include a ready-to-play `<sim>-demo` world generato
 `serve --generator voidsim-demo`. See [world creation](../developer/world-creation.md) for
 the full list.
 
-Each mechanic surfaces itself to characters where it can — needs, weather/time, and
-relationships all appear in a "Currently" block in the agent's prompt, and changes (light,
-door state, ...) flow into the room summary an agent perceives.
+Each mechanic surfaces itself to characters where it can. Stable identity state, persona
+profile, social bonds, and boundaries appear in the agent prompt's "Persona" block. Needs,
+weather/time, and other changing mechanic state appear in "Currently", while room changes
+(light, door state, ...) flow into the room summary an agent perceives.
 
 ### Enabling a subset
 

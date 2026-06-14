@@ -115,6 +115,11 @@ def collect_prompt_fragments(plugins: Sequence[Plugin]) -> list:
     return list(collect_content_items(plugins, "prompt_fragments"))
 
 
+def collect_persona_fragments(plugins: Sequence[Plugin]) -> list:
+    """Gather stable persona fragment providers contributed by the given plugins."""
+    return list(collect_content_items(plugins, "persona_fragments"))
+
+
 def _instantiate(item):
     """Allow contributions to be classes (instantiated) or ready instances."""
     return item() if isinstance(item, type) else item
@@ -187,6 +192,7 @@ __all__ = [
     "PluginError",
     "apply_plugin",
     "apply_plugins",
+    "collect_persona_fragments",
     "collect_prompt_fragments",
     "load_and_apply",
     "load_modules",

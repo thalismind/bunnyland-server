@@ -128,7 +128,7 @@ deterministic harnesses.
 
 ## Stage 2 - Character Identity, Autonomy, and True Recall
 
-- [ ] **Persistent persona prompt surface**
+- [x] **Persistent persona prompt surface**
   - **Goal:** consistently feed each LLM controller its identity, voice, relationships,
     boundaries, and current role.
   - **Depends on:** prompt builder, identity/persona components, relationship components.

@@ -111,7 +111,13 @@ class LocalBackend(Backend):
         from ..engine import GameLoop
         from ..llm_agents import ControllerDispatch, ScriptedAgent
         from ..persistence import WorldMeta
-        from ..plugins import apply_plugins, bunnyland_plugins, collect_prompt_fragments, select
+        from ..plugins import (
+            apply_plugins,
+            bunnyland_plugins,
+            collect_persona_fragments,
+            collect_prompt_fragments,
+            select,
+        )
         from ..prompts.builder import PromptBuilder
         from ..worldgen import GenOptions, collect_generators
 
@@ -128,7 +134,9 @@ class LocalBackend(Backend):
         self.meta = WorldMeta(seed=self.seed, generator=generator.name)
 
         builder = PromptBuilder(
-            self.actor.world, fragment_providers=collect_prompt_fragments(plugins)
+            self.actor.world,
+            fragment_providers=collect_prompt_fragments(plugins),
+            persona_providers=collect_persona_fragments(plugins),
         )
         dispatch = ControllerDispatch(self.actor, builder, ScriptedAgent([]))
         self._loop = GameLoop(

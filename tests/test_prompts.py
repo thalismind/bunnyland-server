@@ -69,7 +69,16 @@ from bunnyland.mechanics.dragonsim import (
 )
 from bunnyland.mechanics.meter import Meter
 from bunnyland.mechanics.needs import HungerComponent, ThirstComponent, need_fragments
+from bunnyland.mechanics.persona import (
+    GoalComponent,
+    PersonaProfileComponent,
+    PreferenceComponent,
+    TraitSetComponent,
+)
+from bunnyland.mechanics.policy import BoundaryTag, CharacterBoundaryComponent
+from bunnyland.mechanics.social import SocialBond
 from bunnyland.memory import InMemoryStore
+from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
 from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
 from bunnyland.prompts import (
     ComponentPromptContext,
@@ -107,6 +116,45 @@ def test_build_context_has_core_sections():
     assert "north" in ctx.exits
     assert "move north" in ctx.commands
     assert "take note" in ctx.commands
+
+
+def test_build_context_has_stable_persona_surface_from_plugins():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character")],
+    )
+    character.add_component(
+        PersonaProfileComponent(voice="warm and direct", role="forager")
+    )
+    character.add_component(TraitSetComponent(traits=("curious",)))
+    character.add_component(PreferenceComponent(likes=("berries",)))
+    character.add_component(GoalComponent(active_goals=("find the elder",)))
+    character.add_component(
+        CharacterBoundaryComponent(denied=frozenset({BoundaryTag.PREGNANCY}))
+    )
+    character.add_relationship(SocialBond(affinity=0.5, familiarity=0.5), hazel.id)
+    builder = PromptBuilder(
+        world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+
+    ctx = builder.build(scenario.character)
+    prompt = render_prompt(ctx)
+
+    assert "Your name is Juniper." in ctx.persona
+    assert "Your current status is active, controlled by an agent." in ctx.persona
+    assert "Your voice: warm and direct." in ctx.persona
+    assert "Your current role: forager." in ctx.persona
+    assert "You are curious." in ctx.persona
+    assert "You like berries." in ctx.persona
+    assert "Your goal: find the elder." in ctx.persona
+    assert "You are fond of Hazel." in ctx.persona
+    assert "Your denied boundaries: pregnancy." in ctx.persona
+    assert "Persona:" in prompt
+    assert "- Your voice: warm and direct." in prompt
 
 
 def test_status_helper_uses_condition_precedence(scenario):

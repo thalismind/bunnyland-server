@@ -66,6 +66,8 @@ class ContentContribution(BaseModel):
     world_generators: tuple[Any, ...] = ()
     #: Prompt fragment providers ``(world, character) -> list[str]`` (spec 16.3).
     prompt_fragments: tuple[Any, ...] = ()
+    #: Stable persona fragment providers for identity, role, bonds, and boundaries.
+    persona_fragments: tuple[Any, ...] = ()
 
 
 class PolicyContribution(BaseModel):

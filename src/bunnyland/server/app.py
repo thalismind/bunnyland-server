@@ -24,7 +24,7 @@ from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
 from ..core.world_actor import WorldActor
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
 from ..persistence import WorldMeta
-from ..plugins import collect_prompt_fragments
+from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .models import (
@@ -534,6 +534,7 @@ def create_app(
             generate_item=_generate_item_request,
             generate_event=_generate_event_request,
             fragment_providers=collect_prompt_fragments(plugins or ()),
+            persona_providers=collect_persona_fragments(plugins or ()),
             worldgen_options=worldgen_options,
         )
         mcp_session_manager = getattr(mcp_app, "bunnyland_mcp_session_manager", None)
