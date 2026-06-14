@@ -105,6 +105,10 @@ Agent decisions also carry advisory `persona_issues` when a tool call contradict
 persona facts, such as claiming another character's name, denying a known bond, or claiming
 an impossible status. These issues are logged for review; valid commands still enter the
 normal queue and are validated by handlers.
+When a memory store is attached, prompts also include contextual `Recall` lines selected
+from the character's private memory collection by matching current location, visible
+entities, and recent room context. Recall entries include memory id, source, and score
+metadata so operators can audit why a past note surfaced.
 
 ### Enabling a subset
 

@@ -147,7 +147,7 @@ deterministic harnesses.
     valid actions.
   - **Verification:** mocked controller output tests.
 
-- [ ] **True recall gate: memory surfacing**
+- [x] **True recall gate: memory surfacing**
   - **Goal:** relevant past memories are retrieved and injected into character prompts at
     the right time.
   - **Depends on:** memory store, note/memory entries, `RecentContext`, prompt builder,

@@ -7,6 +7,7 @@ useful — spec 11.16). The vector backend (ChromaDB) implements the same interf
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Protocol
@@ -46,8 +47,32 @@ class MemoryStore(Protocol):
     def delete(self, collection: str, note_id: str) -> bool: ...
 
 
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "at",
+        "by",
+        "for",
+        "in",
+        "is",
+        "of",
+        "on",
+        "the",
+        "to",
+        "with",
+    }
+)
+
+
 def _tokens(text: str) -> set[str]:
-    return {token for token in text.lower().replace(",", " ").split() if token}
+    return {
+        token
+        for token in re.findall(r"[a-z0-9']+", text.lower())
+        if token not in _STOPWORDS
+    }
 
 
 class InMemoryStore:

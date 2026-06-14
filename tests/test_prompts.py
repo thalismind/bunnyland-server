@@ -201,6 +201,39 @@ def test_build_context_includes_needs_feelings_and_notes():
     assert "The basin water is unsafe." in ctx.notes
 
 
+def test_build_context_surfaces_relevant_memory_with_audit_metadata():
+    scenario = build_scenario()
+    add_item(scenario, scenario.room_a, "stone basin")
+    char = scenario.actor.world.get_entity(scenario.character)
+    char.add_component(MemoryProfileComponent(vector_collection="juniper"))
+    store = InMemoryStore()
+    unsafe = store.add(
+        "juniper",
+        text="The basin water is unsafe.",
+        tags=("basin", "water"),
+        created_at_epoch=1,
+        source="manual",
+    )
+    store.add(
+        "juniper",
+        text="Hazel hid turnips in the attic.",
+        tags=("attic",),
+        created_at_epoch=2,
+        source="manual",
+    )
+
+    ctx = PromptBuilder(scenario.actor.world, memory_store=store).build(scenario.character)
+    prompt = render_prompt(ctx)
+
+    assert len(ctx.recall) == 1
+    assert "The basin water is unsafe." in ctx.recall[0]
+    assert f"memory:{unsafe.id}" in ctx.recall[0]
+    assert "source:manual" in ctx.recall[0]
+    assert "score:" in ctx.recall[0]
+    assert "turnips" not in " ".join(ctx.recall)
+    assert "Recall:" in prompt
+
+
 def test_component_prompt_context_lazy_room_siblings_and_inventory_helpers():
     scenario = build_scenario()
     world = scenario.actor.world

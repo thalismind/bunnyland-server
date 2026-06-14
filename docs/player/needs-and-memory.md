@@ -55,6 +55,13 @@ Create a reflection from matching notes:
 
 Reflections become new private memory entries tagged as reflections.
 
+## Contextual recall
+
+Agent prompts can also surface a private `Recall` section automatically when current
+location, visible people/items, or recent room context match older memories. Recall lines
+include source metadata so operators can audit why a memory appeared. Irrelevant notes stay
+out of recall even though you can still find them with `!remember`.
+
 ## Forget
 
 When Discord shows a note id in a memory search, forget that note by id:

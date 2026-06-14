@@ -12,6 +12,10 @@ services.
 string arguments. It records name, relationship, and impossible self-claim issues on the
 observable `Decision.persona_issues` while still submitting valid commands through the
 normal command pipeline.
+Memory-backed prompts keep recent notes and relevant recall separate. `PromptContext.notes`
+shows the latest private notes, while `PromptContext.recall` keyword-searches the
+character's memory collection using current location, visible entities, and recent room
+context. Rendered recall lines include memory id, source, and score metadata for audit.
 
 Narration follows the same boundary. `NarrationProjection` reads typed domain events,
 `RoomSummaryProjection`, and per-character perception, then stores a volatile presentation

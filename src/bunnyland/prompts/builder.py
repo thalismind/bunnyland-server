@@ -53,6 +53,7 @@ class PromptContext:
     feelings: tuple[str, ...] = ()
     recent: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
+    recall: tuple[str, ...] = ()
     commands: tuple[str, ...] = ()
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
@@ -138,6 +139,13 @@ class PromptBuilder:
             recent = self.recent_context.recent(room_id)
 
         notes = self._notes(character)
+        recall = self._recall(
+            character,
+            location_title=location_title,
+            visible_characters=visible_characters,
+            visible_objects=visible_objects,
+            recent=tuple(recent),
+        )
         commands = self._available_commands(
             exits=exits,
             visible_objects=visible_objects,
@@ -164,6 +172,7 @@ class PromptBuilder:
             feelings=feelings,
             recent=tuple(recent),
             notes=notes,
+            recall=recall,
             commands=commands,
         )
 
@@ -238,6 +247,36 @@ class PromptBuilder:
         entries = self.memory_store.search(collection, mode="recent", limit=3)
         return tuple(entry.text for entry in entries)
 
+    def _recall(
+        self,
+        character: Entity,
+        *,
+        location_title: str,
+        visible_characters: tuple[str, ...],
+        visible_objects: tuple[str, ...],
+        recent: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if self.memory_store is None or not character.has_component(MemoryProfileComponent):
+            return ()
+        query = " ".join(
+            value
+            for value in (
+                location_title,
+                *visible_characters,
+                *visible_objects,
+                *recent,
+            )
+            if value
+        )
+        if not query.strip():
+            return ()
+        collection = character.get_component(MemoryProfileComponent).vector_collection
+        entries = self.memory_store.search(collection, query=query, mode="keyword", limit=3)
+        return tuple(
+            f"{entry.text} [memory:{entry.id} source:{entry.source} score:{entry.score or 0.0:.1f}]"
+            for entry in entries
+        )
+
     @staticmethod
     def _available_commands(
         *,
@@ -284,6 +323,7 @@ def render_prompt(context: PromptContext) -> str:
     section("Currently", context.conditions)
     section("Recent context", context.recent)
     section("Notes", context.notes)
+    section("Recall", context.recall)
 
     lines.append("Points:")
     lines.append(f"Action: {context.action[0]}/{context.action[1]}")

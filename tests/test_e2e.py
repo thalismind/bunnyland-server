@@ -113,7 +113,7 @@ from bunnyland.mechanics.nukesim import (
     ScavengeSiteComponent,
     nukesim_fragments,
 )
-from bunnyland.memory import install_memory
+from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
 from bunnyland.narration import NarrationProjection, check_grounding
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_prompt_fragments
@@ -956,6 +956,57 @@ async def test_llm_agent_notes_can_be_found_by_chroma_vector_synonyms():
     assert searched[0].results == (flower_note,)
     assert searched[1].query == kettle_query
     assert searched[1].results == (kettle_note,)
+
+
+async def test_prompt_recall_surfaces_memory_when_context_becomes_relevant():
+    actor, _proposal, result = await _new_world()
+    hazel_id = result.characters["hazel"]
+    hazel = actor.world.get_entity(hazel_id)
+    replace_component(hazel, MemoryProfileComponent(vector_collection="hazel-recall"))
+    start_room_id = container_of(hazel)
+    assert start_room_id is not None
+    direction, destination_id = actor.world.get_entity(start_room_id).get_relationships(ExitTo)[0]
+    destination = actor.world.get_entity(destination_id)
+    store = install_memory(actor, InMemoryStore())
+    relevant = store.add(
+        "hazel-recall",
+        text="The moon dial marks a cobalt glyph.",
+        tags=("moon", "dial", "cobalt"),
+        created_at_epoch=1,
+    )
+    store.add(
+        "hazel-recall",
+        text="The pantry shelf squeaks in summer.",
+        tags=("pantry",),
+        created_at_epoch=2,
+    )
+    builder = PromptBuilder(actor.world, memory_store=store)
+
+    before = builder.build(hazel_id)
+    recall_marker = spawn_entity(
+        actor.world,
+        [IdentityComponent(name="moon dial", kind="item"), PortableComponent()],
+    )
+    destination.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), recall_marker.id)
+    edge, controller_id = hazel.get_relationships(ControlledBy)[0]
+    await actor.submit(
+        build_submitted_command(
+            character_id=str(hazel_id),
+            controller_id=str(controller_id),
+            controller_generation=edge.generation,
+            command_type="move",
+            cost=CommandCost(action=1),
+            lane=Lane.WORLD,
+            payload={"direction": direction.direction},
+        )
+    )
+    await actor.tick(0.0)
+    after = builder.build(hazel_id)
+
+    assert all("cobalt glyph" not in item for item in before.recall)
+    assert any("cobalt glyph" in item for item in after.recall)
+    assert any(f"memory:{relevant.id}" in item for item in after.recall)
+    assert all("pantry shelf" not in item for item in after.recall)
 
 
 async def test_unreachable_target_is_not_processed_and_coaches_the_agent():
