@@ -1507,6 +1507,114 @@ async def gothic_count_example(actor, seed: str, options: GenOptions) -> Instant
     return world
 
 
+async def midnight_burger_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """An inner-city burger shack whose back cellar is only dangerous after dark."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.daggersim import (
+        FeedingNeedComponent,
+        SecretDoorComponent,
+        SupernaturalAfflictionComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="lot", title="Neon Corner Lot", biome="city-street",
+                     light=0.1, celsius=14.0),
+            RoomSpec(key="counter", title="Patty Stack Counter", biome="diner",
+                     indoor=True, light=0.55, celsius=24.0),
+            RoomSpec(key="kitchen", title="Greasy Back Kitchen", biome="diner",
+                     indoor=True, light=0.4, celsius=29.0),
+            RoomSpec(key="cellar", title="Cold-Iron Cellar", biome="cellar",
+                     indoor=True, light=0.05, celsius=4.0),
+        ],
+        exits=[
+            ExitSpec(from_key="lot", direction="in", to_key="counter"),
+            ExitSpec(from_key="counter", direction="out", to_key="lot"),
+            ExitSpec(from_key="counter", direction="back", to_key="kitchen"),
+            ExitSpec(from_key="kitchen", direction="front", to_key="counter"),
+            ExitSpec(from_key="kitchen", direction="down", to_key="cellar"),
+            ExitSpec(from_key="cellar", direction="up", to_key="kitchen"),
+        ],
+        objects=[
+            ObjectSpec(key="smash_burgers", room_key="counter",
+                       name="a tray of double smash burgers", kind="food",
+                       nutrition=6.0, satiety=24.0, portable=True),
+            ObjectSpec(key="fries", room_key="counter", name="a paper boat of salted fries",
+                       kind="food", nutrition=3.0, satiety=10.0, portable=True),
+            ObjectSpec(key="soda", room_key="counter", name="a sweating fountain soda",
+                       kind="water", hydration=14.0, portable=True),
+            ObjectSpec(key="menu", room_key="counter", name="a grease-spotted menu board",
+                       kind="paper", writable=False, portable=False),
+            ObjectSpec(key="freezer", room_key="kitchen", name="a padlocked chest freezer",
+                       kind="container", portable=False, open=False),
+        ],
+        characters=[
+            CharacterSpec(key="regular", name="Tessa Lane", room_key="counter",
+                          controller="suspended", traits=("hungry", "cheerful", "oblivious"),
+                          goals=("get a late-night burger", "head home before close")),
+            CharacterSpec(key="cook", name="Mort Greaves", room_key="kitchen",
+                          species="nightfolk", controller="llm", llm_profile="night-cook",
+                          traits=("genial", "ravenous", "secretive"),
+                          goals=("keep the grill hot", "keep guests out of the cellar after dark")),
+            CharacterSpec(key="manager", name="Owen Park", room_key="counter",
+                          controller="llm", llm_profile="closing-manager",
+                          traits=("tired", "decent"),
+                          goals=("hurry the last order", "warn Tessa without naming the danger")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        # Open in the late-afternoon dinner rush so the day/night cycle visibly rolls into
+        # night within a few hourly ticks — the cellar's danger is only real once it is dark.
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=17 * 3600))
+            clock[0].add_component(TimeOfDayComponent(phase="day"))
+            clock[0].add_component(CalendarComponent(day=1, season="autumn", hour=17))
+
+        kitchen, cellar = world.rooms["kitchen"], world.rooms["cellar"]
+        _augment(actor, cellar,
+                 PointOfInterestComponent(location_type="meat cellar", region="Sixth Ward"),
+                 DiscoveryComponent())
+        _augment(actor, world.characters["cook"],
+                 SupernaturalAfflictionComponent(affliction_type="nocturnal hunger",
+                                                 contracted_at_epoch=0,
+                                                 stage="mastered"),
+                 FeedingNeedComponent(current=8.0, maximum=10.0))
+        _add(actor, kitchen, [
+            IdentityComponent(name="a steel walk-in door held shut by a meat hook",
+                              kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(cellar), direction="behind the walk-in",
+                                hint="The walk-in only latches from the cellar side."),
+        ])
+        _add(actor, cellar, [
+            IdentityComponent(name="a stained butcher's ledger", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Butcher's Ledger",
+                              text="Day shift buys beef. Night shift never does, and the "
+                                   "regulars who stay past close never sign out."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["menu"]),
+            ReadableComponent(title="Menu Board",
+                              text="ALL DAY: double smash, fries, soda. AFTER MIDNIGHT: ask "
+                                   "Mort for the off-menu special. Staff only past the counter "
+                                   "once the sign goes dark."),
+        )
+    return world
+
+
 # --------------------------------------------------------------------------------------
 # dungeon showcases — hand-built text-adventure crawls with maps, secrets, and objectives
 # --------------------------------------------------------------------------------------
@@ -1840,6 +1948,653 @@ async def dungeon_crypt_example(actor, seed: str, options: GenOptions) -> Instan
     return world
 
 
+# --------------------------------------------------------------------------------------
+# scene vignettes — original atmospheric one-room dramas that lean on the shared
+# environment, weather, and cross-package mechanics rather than a single sim pack
+# --------------------------------------------------------------------------------------
+
+
+async def storm_lighthouse_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A coastal lighthouse riding out a squall, with a beacon to feed and a buried sin."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.daggersim import SecretDoorComponent
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import (
+        CalendarComponent,
+        FireComponent,
+        FlammableComponent,
+        TimeOfDayComponent,
+        WeatherComponent,
+    )
+
+    # Day 61 at 18:00 is an autumn rain day, so the deterministic weather cycle keeps the
+    # squall blowing and the outdoor jetty dim as the demo ticks forward.
+    storm_dusk_seconds = 60 * 24 * 3600 + 18 * 3600
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="jetty", title="Spray-Lashed Jetty", biome="coast",
+                     light=0.2, celsius=7.0),
+            RoomSpec(key="watch", title="Keeper's Watch Room", biome="lighthouse",
+                     indoor=True, light=0.45, celsius=14.0),
+            RoomSpec(key="lamp", title="Lantern Room", biome="lighthouse",
+                     indoor=True, light=0.6, celsius=9.0),
+            RoomSpec(key="niche", title="Below the Lens", biome="lighthouse",
+                     indoor=True, light=0.05, celsius=8.0),
+        ],
+        exits=[
+            ExitSpec(from_key="jetty", direction="in", to_key="watch"),
+            ExitSpec(from_key="watch", direction="out", to_key="jetty"),
+            ExitSpec(from_key="watch", direction="up", to_key="lamp"),
+            ExitSpec(from_key="lamp", direction="down", to_key="watch"),
+            ExitSpec(from_key="niche", direction="up", to_key="lamp"),
+        ],
+        objects=[
+            ObjectSpec(key="stew", room_key="watch", name="a dented pot of fish stew",
+                       kind="food", nutrition=5.0, satiety=18.0, portable=False),
+            ObjectSpec(key="kettle", room_key="watch", name="a kettle of rainwater tea",
+                       kind="water", hydration=14.0, portable=False),
+            ObjectSpec(key="oil_can", room_key="lamp", name="a heavy can of lamp oil",
+                       kind="item", portable=True),
+            ObjectSpec(key="logbook", room_key="watch", name="the keeper's logbook",
+                       kind="paper", writable=True, portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="keeper", name="Edda Voss", room_key="watch",
+                          controller="suspended", traits=("dutiful", "weathered", "haunted"),
+                          goals=("keep the beacon burning", "ride out the squall")),
+            CharacterSpec(key="sailor", name="Cole Renner", room_key="watch",
+                          controller="llm", llm_profile="stranded-sailor",
+                          traits=("soaked", "grateful", "curious"),
+                          goals=("get warm", "learn why ships keep wrecking on this point")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=storm_dusk_seconds))
+            clock[0].add_component(TimeOfDayComponent(phase="dusk"))
+            clock[0].add_component(CalendarComponent(day=61, season="autumn", hour=18))
+            clock[0].add_component(WeatherComponent(condition="rain", intensity=0.7))
+
+        lamp, niche = world.rooms["lamp"], world.rooms["niche"]
+        # The beacon is lit but burns its own fuel down — feed it or it dies before dawn.
+        _add(actor, lamp, [
+            IdentityComponent(name="the great lamp", kind="beacon"),
+            FlammableComponent(fuel=6.0),
+            FireComponent(intensity=0.6, fuel=6.0, last_updated_epoch=0),
+        ])
+        # The buried sin: a wrecker's niche hidden beneath the lens.
+        _augment(actor, niche,
+                 PointOfInterestComponent(location_type="wrecker's niche", region="Gallows Point"),
+                 DiscoveryComponent())
+        _add(actor, lamp, [
+            IdentityComponent(name="a hatch under the lens pedestal", kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(niche), direction="under the pedestal",
+                                hint="The brass pedestal sits a finger's width off the floor."),
+        ])
+        _add(actor, niche, [
+            IdentityComponent(name="a salt-stiff wrecking ledger", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Wrecking Ledger",
+                              text="When the lamp goes dark on a bad night, the rocks do the "
+                                   "rest, and whatever washes up on Gallows Point is ours."),
+        ])
+    return world
+
+
+async def vacancy_motel_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A roadside motel where Room 6 only opens after dark, and the clerk gets hungry."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.daggersim import (
+        FeedingNeedComponent,
+        SecretDoorComponent,
+        SupernaturalAfflictionComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="lot", title="Gravel Lot Under the Vacancy Sign", biome="roadside",
+                     light=0.2, celsius=15.0),
+            RoomSpec(key="office", title="Wood-Paneled Front Office", biome="motel",
+                     indoor=True, light=0.5, celsius=22.0),
+            RoomSpec(key="corridor", title="Carpeted Motel Corridor", biome="motel",
+                     indoor=True, light=0.35, celsius=20.0),
+            RoomSpec(key="room6", title="Room 6", biome="motel",
+                     indoor=True, light=0.05, celsius=12.0),
+        ],
+        exits=[
+            ExitSpec(from_key="lot", direction="in", to_key="office"),
+            ExitSpec(from_key="office", direction="out", to_key="lot"),
+            ExitSpec(from_key="office", direction="inside", to_key="corridor"),
+            ExitSpec(from_key="corridor", direction="lobby", to_key="office"),
+            ExitSpec(from_key="room6", direction="out", to_key="corridor"),
+        ],
+        objects=[
+            ObjectSpec(key="vending", room_key="corridor", name="a humming vending machine",
+                       kind="food", nutrition=3.0, satiety=9.0, portable=False),
+            ObjectSpec(key="ice", room_key="corridor", name="a cloudy ice machine",
+                       kind="water", hydration=12.0, portable=False),
+            ObjectSpec(key="register", room_key="office", name="the guest register",
+                       kind="paper", writable=True, portable=False),
+            ObjectSpec(key="key6", room_key="office", name="a brass key on a Room 6 fob",
+                       kind="item", portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="guest", name="Nadia Frost", room_key="office",
+                          controller="suspended", traits=("road-weary", "skeptical", "tired"),
+                          goals=("sleep off the drive", "check out by morning")),
+            CharacterSpec(key="clerk", name="Vernon Pike", room_key="office",
+                          species="nightfolk", controller="llm", llm_profile="night-clerk",
+                          traits=("courteous", "unblinking", "hungry-after-dark"),
+                          goals=("keep guests in their rooms after midnight",
+                                 "never rent out Room 6")),
+            CharacterSpec(key="maid", name="Lupe Ramos", room_key="corridor",
+                          controller="llm", llm_profile="frightened-housekeeper",
+                          traits=("kind", "frightened"),
+                          goals=("warn Nadia off Room 6 without naming what is in it",)),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        # The motel checks in by daylight; the cycle rolls it into the dangerous small hours.
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=16 * 3600))
+            clock[0].add_component(TimeOfDayComponent(phase="day"))
+            clock[0].add_component(CalendarComponent(day=1, season="summer", hour=16))
+
+        corridor, room6 = world.rooms["corridor"], world.rooms["room6"]
+        _augment(actor, room6,
+                 PointOfInterestComponent(location_type="sealed room", region="Route 9"),
+                 DiscoveryComponent())
+        _augment(actor, world.characters["clerk"],
+                 SupernaturalAfflictionComponent(affliction_type="after-dark hunger",
+                                                 contracted_at_epoch=0,
+                                                 stage="mastered"),
+                 FeedingNeedComponent(current=7.0, maximum=10.0))
+        _add(actor, corridor, [
+            IdentityComponent(name="a door numbered 6 that is not on the daytime map",
+                              kind="secret-door"),
+            SecretDoorComponent(target_room_id=str(room6), direction="end of the corridor",
+                                hint="The corridor has five doors by day and six after dark."),
+        ])
+        _add(actor, room6, [
+            IdentityComponent(name="a warped drawer hymnal", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Drawer Hymnal",
+                              text="Margins full of names and dates in different hands, each one "
+                                   "checked in after midnight and never checked out."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["register"]),
+            ReadableComponent(title="Guest Register",
+                              text="House rule, underlined twice: do not assign Room 6, and do "
+                                   "not let a guest wander the corridor after midnight."),
+        )
+    return world
+
+
+async def frozen_greenhouse_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A greenhouse dome on a frozen plain, fighting the cold around a too-eager specimen."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.colonysim import (
+        JobComponent,
+        ResourceStackComponent,
+        StockpileComponent,
+        WorkstationComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent, WeatherComponent
+    from ..mechanics.gardensim import (
+        CropComponent,
+        CropGrowthComponent,
+        CropQualityComponent,
+        HarvestableComponent,
+        SeedComponent,
+        ShippingBinComponent,
+        SoilComponent,
+        TilledComponent,
+    )
+
+    # Day 88 at 10:00 is an overcast winter day, so the season and sky stay bleak as it ticks.
+    winter_morning_seconds = 87 * 24 * 3600 + 10 * 3600
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="tundra", title="Wind-Scoured Tundra", biome="tundra",
+                     light=0.6, celsius=-24.0),
+            RoomSpec(key="dome", title="Geodesic Greenhouse Dome", biome="greenhouse",
+                     indoor=True, light=0.9, celsius=19.0),
+            RoomSpec(key="boiler", title="Boiler and Seed Vault", biome="greenhouse",
+                     indoor=True, light=0.5, celsius=11.0),
+        ],
+        exits=[
+            ExitSpec(from_key="tundra", direction="in", to_key="dome"),
+            ExitSpec(from_key="dome", direction="out", to_key="tundra"),
+            ExitSpec(from_key="dome", direction="down", to_key="boiler"),
+            ExitSpec(from_key="boiler", direction="up", to_key="dome"),
+        ],
+        objects=[
+            ObjectSpec(key="greens", room_key="boiler", name="a tray of ration greens",
+                       kind="food", nutrition=4.0, satiety=12.0, portable=True),
+            ObjectSpec(key="meltwater", room_key="boiler", name="a meltwater tank",
+                       kind="water", hydration=15.0, portable=False),
+            ObjectSpec(key="peat", room_key="boiler", name="a sack of dried peat fuel",
+                       kind="item", portable=True),
+            ObjectSpec(key="journal", room_key="boiler", name="a station research journal",
+                       kind="paper", writable=True, portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="botanist", name="Dr. Imala Sorn", room_key="dome",
+                          controller="suspended", traits=("meticulous", "cold-numbed", "uneasy"),
+                          goals=("keep the dome above freezing", "catalogue the new specimen")),
+            CharacterSpec(key="tech", name="Bo Anders", room_key="boiler",
+                          controller="llm", llm_profile="station-tech",
+                          traits=("practical", "tired"),
+                          goals=("keep the boiler fed", "stop the specimen spreading")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(
+                clock[0], WorldClockComponent(game_time_seconds=winter_morning_seconds))
+            clock[0].add_component(TimeOfDayComponent(phase="day"))
+            clock[0].add_component(CalendarComponent(day=88, season="winter", hour=10))
+            clock[0].add_component(WeatherComponent(condition="overcast", intensity=0.5))
+
+        dome, boiler = world.rooms["dome"], world.rooms["boiler"]
+        _add(actor, dome, [
+            IdentityComponent(name="a raised bed of warmed soil", kind="soil"),
+            SoilComponent(quality=1.1),
+            TilledComponent(tilled_at_epoch=0),
+        ])
+        # An ordinary winter crop, growing at a sane pace.
+        _add(actor, dome, [
+            IdentityComponent(name="a row of winter kale", kind="crop"),
+            CropComponent(crop_type="kale", planted_at_epoch=0, stage=1),
+            CropGrowthComponent(progress_days=1.0, required_days=6.0, last_updated_epoch=0),
+            HarvestableComponent(yield_item="kale", quantity=3),
+            CropQualityComponent(quality=1.0),
+        ])
+        # The specimen: it should not grow in this cold, in the dark, this fast.
+        _augment(actor, dome,
+                 PointOfInterestComponent(location_type="quarantine bed", region="Station Drift-9"),
+                 DiscoveryComponent())
+        _add(actor, dome, [
+            IdentityComponent(name="a pale specimen that grew overnight", kind="crop"),
+            CropComponent(crop_type="specimen", planted_at_epoch=0, stage=2),
+            CropGrowthComponent(progress_days=0.4, required_days=0.5, last_updated_epoch=0),
+            HarvestableComponent(yield_item="spore pod", quantity=4),
+            CropQualityComponent(quality=1.6),
+        ])
+        _add(actor, boiler, [
+            IdentityComponent(name="a packet of saved seed", kind="item"),
+            PortableComponent(can_pick_up=True),
+            SeedComponent(crop_type="kale", growth_days=6.0, yield_item="kale", yield_quantity=3),
+        ])
+        _add(actor, boiler, [
+            IdentityComponent(name="the dome boiler", kind="workstation"),
+            WorkstationComponent(station_type="boiler"),
+        ])
+        _add(actor, boiler, [
+            IdentityComponent(name="stoke the boiler job", kind="job"),
+            JobComponent(job_type="haul", priority=4),
+        ])
+        _add(actor, boiler, [
+            IdentityComponent(name="a peat fuel bin", kind="stockpile"),
+            StockpileComponent(capacity=20),
+            ResourceStackComponent(resource_type="peat", quantity=9),
+        ])
+        _add(actor, dome, [
+            IdentityComponent(name="a frosted harvest crate", kind="shipping-bin"),
+            ShippingBinComponent(),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["journal"]),
+            ReadableComponent(title="Research Journal",
+                              text="Specimen doubled again with the heat off and the sun down. "
+                                   "It does not need us. Recommend we stop feeding the bed."),
+        )
+    return world
+
+
+async def stuck_subway_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A subway car stalled between stations, strangers and failing systems in the dark."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+    from ..mechanics.lifesim import WhimComponent
+    from ..mechanics.voidsim import (
+        DistressSignalComponent,
+        LifeSupportComponent,
+        OxygenComponent,
+        PowerGridComponent,
+        ShipSystemComponent,
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="car", title="Stalled Subway Car", biome="subway",
+                     indoor=True, light=0.3, celsius=27.0),
+            RoomSpec(key="cab", title="Operator's Cab", biome="subway",
+                     indoor=True, light=0.45, celsius=26.0),
+            RoomSpec(key="tunnel", title="Dark Tunnel Catwalk", biome="tunnel",
+                     indoor=True, light=0.05, celsius=18.0),
+        ],
+        exits=[
+            ExitSpec(from_key="car", direction="fore", to_key="cab"),
+            ExitSpec(from_key="cab", direction="aft", to_key="car"),
+            ExitSpec(from_key="car", direction="emergency-door", to_key="tunnel"),
+            ExitSpec(from_key="tunnel", direction="back-aboard", to_key="car"),
+        ],
+        objects=[
+            ObjectSpec(key="pretzel", room_key="car", name="a half-eaten soft pretzel",
+                       kind="food", nutrition=3.0, satiety=8.0, portable=True),
+            ObjectSpec(key="bottle", room_key="car", name="a sweating water bottle",
+                       kind="water", hydration=10.0, portable=True),
+            ObjectSpec(key="notice", room_key="car", name="a laminated service notice",
+                       kind="paper", writable=False, portable=False),
+            ObjectSpec(key="map", room_key="car", name="a strip map of the line",
+                       kind="paper", writable=False, portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="commuter", name="Priya Nadeau", room_key="car",
+                          controller="suspended", traits=("anxious", "polite", "practical"),
+                          goals=("get home tonight", "keep everyone calm")),
+            CharacterSpec(key="operator", name="Gus Holloway", room_key="cab",
+                          controller="llm", llm_profile="transit-operator",
+                          traits=("gruff", "reassuring"),
+                          goals=("restart the car", "keep passengers seated")),
+            CharacterSpec(key="busker", name="Remy Osei", room_key="car",
+                          controller="llm", llm_profile="stuck-busker",
+                          traits=("easygoing", "talkative"),
+                          goals=("lighten the mood", "busk for transfer fare")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=18 * 3600))
+            clock[0].add_component(TimeOfDayComponent(phase="dusk"))
+            clock[0].add_component(CalendarComponent(day=1, season="summer", hour=18))
+
+        car, cab, tunnel = world.rooms["car"], world.rooms["cab"], world.rooms["tunnel"]
+        # The car's systems are failing: dim power, ventilation off, air going stale.
+        _augment(actor, car,
+                 PowerGridComponent(capacity=100.0, available=18.0),
+                 LifeSupportComponent(online=False),
+                 OxygenComponent(level=82.0, maximum=100.0))
+        # The dead traction motor up front, and the intercom crackling at control.
+        _add(actor, cab, [
+            IdentityComponent(name="the traction motor", kind="ship-system"),
+            ShipSystemComponent(system_type="traction motor", integrity=40.0, online=False),
+        ])
+        _add(actor, cab, [
+            IdentityComponent(name="the cab intercom", kind="signal"),
+            DistressSignalComponent(text="Control, car 1142 dead in the tube past Junction St."),
+        ])
+        # The clamped social want that makes the wait bite: a transfer she may now miss.
+        _augment(actor, world.characters["commuter"],
+                 WhimComponent(want="make the last cross-town transfer"))
+        # The tunnel is pitch-dark and not somewhere passengers should wander.
+        _augment(actor, tunnel,
+                 PointOfInterestComponent(location_type="service tunnel", region="Junction St"),
+                 DiscoveryComponent())
+        _add(actor, car, [
+            IdentityComponent(name="a strip map marked at the dead spot", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Strip Map",
+                              text="Someone has circled the same stretch of tunnel three times "
+                                   "and written: it always stops here."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["notice"]),
+            ReadableComponent(title="Service Notice",
+                              text="In the event of an extended hold, remain in the car. Do not "
+                                   "open the emergency door onto the trackway."),
+        )
+    return world
+
+
+async def midnight_laundromat_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A 24-hour laundromat in the small hours: strangers, a broken dryer, a lost-and-found."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+    from ..mechanics.lifesim import WhimComponent
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="sidewalk", title="Buzzing Sidewalk", biome="city-street",
+                     light=0.1, celsius=13.0),
+            RoomSpec(key="floor", title="All-Night Laundromat", biome="laundromat",
+                     indoor=True, light=0.6, celsius=26.0),
+            RoomSpec(key="back", title="Back Folding Room", biome="laundromat",
+                     indoor=True, light=0.4, celsius=24.0),
+        ],
+        exits=[
+            ExitSpec(from_key="sidewalk", direction="in", to_key="floor"),
+            ExitSpec(from_key="floor", direction="out", to_key="sidewalk"),
+            ExitSpec(from_key="floor", direction="back", to_key="back"),
+            ExitSpec(from_key="back", direction="front", to_key="floor"),
+        ],
+        objects=[
+            ObjectSpec(key="coffee", room_key="floor", name="a paper cup of machine coffee",
+                       kind="water", hydration=10.0, portable=True),
+            ObjectSpec(key="crackers", room_key="floor", name="a sleeve of vending crackers",
+                       kind="food", nutrition=3.0, satiety=9.0, portable=True),
+            ObjectSpec(key="dryer", room_key="floor", name="an out-of-order dryer",
+                       kind="item", portable=False),
+            ObjectSpec(key="lostbin", room_key="back", name="the lost-and-found bin",
+                       kind="container", portable=False, open=False),
+            ObjectSpec(key="mitten", room_key="back", name="a child's red mitten, unclaimed",
+                       kind="item", portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="patron", name="Marisol Vega", room_key="floor",
+                          controller="suspended", traits=("sleepless", "friendly", "curious"),
+                          goals=("finish the wash in peace", "figure out the back room")),
+            CharacterSpec(key="attendant", name="Sam Okafor", room_key="back",
+                          controller="llm", llm_profile="night-attendant",
+                          traits=("quiet", "watchful", "kind"),
+                          goals=("keep the machines running", "mind the lost-and-found")),
+            CharacterSpec(key="regular", name="Dot Pell", room_key="floor",
+                          controller="llm", llm_profile="lonely-regular",
+                          traits=("chatty", "lonely"),
+                          goals=("talk to someone", "put off going home")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        # It is already the small hours; the cycle carries the scene on toward dawn.
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=1 * 3600))
+            clock[0].add_component(TimeOfDayComponent(phase="night"))
+            clock[0].add_component(CalendarComponent(day=1, season="autumn", hour=1))
+
+        back = world.rooms["back"]
+        # The night's small wants are what give the liminal hour its pull.
+        _augment(actor, world.characters["patron"],
+                 WhimComponent(want="get one full load done before dawn"))
+        _augment(actor, world.characters["regular"],
+                 WhimComponent(want="not be alone at two in the morning"))
+        # The lost-and-found is the quiet mystery: things no one remembers leaving.
+        _augment(actor, back,
+                 PointOfInterestComponent(location_type="lost and found", region="Eighth Street"),
+                 DiscoveryComponent())
+        _add(actor, back, [
+            IdentityComponent(name="a lost-and-found ledger", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Lost and Found Ledger",
+                              text="Half the entries are in the attendant's hand, half in none "
+                                   "he recognizes, logging coats and keys nobody came back for."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["dryer"]),
+            ReadableComponent(title="Taped-On Sign",
+                              text="OUT OF ORDER. It still rumbles and turns some nights. Do not "
+                                   "use it; do not open it while it does."),
+        )
+    return world
+
+
+async def county_fair_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """Closing night of a county fair: a pie contest, a prize pumpkin, and a blue ribbon."""
+
+    del options
+    from ..core.components import IdentityComponent, ReadableComponent, WorldClockComponent
+    from ..mechanics.dragonsim import (
+        QuestComponent,
+        QuestObjectiveComponent,
+        QuestRewardComponent,
+    )
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+    from ..mechanics.gardensim import (
+        CropComponent,
+        CropGrowthComponent,
+        CropQualityComponent,
+        HarvestableComponent,
+        ShippingBinComponent,
+    )
+
+    # Day 57 at 19:00 is a clear autumn dusk, so the harvest-season closing night holds.
+    fair_dusk_seconds = 56 * 24 * 3600 + 19 * 3600
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="midway", title="Fairground Midway", biome="fairground",
+                     light=0.4, celsius=16.0),
+            RoomSpec(key="hall", title="Exhibition Hall", biome="fairground",
+                     indoor=True, light=0.7, celsius=20.0),
+            RoomSpec(key="barn", title="Livestock Barn", biome="fairground",
+                     indoor=True, light=0.5, celsius=18.0),
+        ],
+        exits=[
+            ExitSpec(from_key="midway", direction="in", to_key="hall"),
+            ExitSpec(from_key="hall", direction="out", to_key="midway"),
+            ExitSpec(from_key="hall", direction="barn", to_key="barn"),
+            ExitSpec(from_key="barn", direction="hall", to_key="hall"),
+        ],
+        objects=[
+            ObjectSpec(key="pie", room_key="hall", name="a blue-ribbon contender pie",
+                       kind="food", nutrition=5.0, satiety=16.0, portable=True),
+            ObjectSpec(key="lemonade", room_key="midway", name="a cup of fresh lemonade",
+                       kind="water", hydration=13.0, portable=True),
+            ObjectSpec(key="ferris", room_key="midway", name="the lit Ferris wheel",
+                       kind="item", portable=False),
+            ObjectSpec(key="ribbon", room_key="hall", name="an unawarded blue ribbon",
+                       kind="item", portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="grower", name="Hattie Boone", room_key="hall",
+                          controller="suspended", traits=("proud", "nervous", "green-thumbed"),
+                          goals=("win the blue ribbon", "outgrow her rival's entry")),
+            CharacterSpec(key="judge", name="Inez Coulter", room_key="hall",
+                          controller="llm", llm_profile="fair-judge",
+                          traits=("fair", "theatrical"),
+                          goals=("crown a winner before the lights go out",)),
+            CharacterSpec(key="rival", name="Cyrus Webb", room_key="barn",
+                          controller="llm", llm_profile="fair-rival",
+                          traits=("smug", "competitive"),
+                          goals=("take the ribbon from Hattie", "show off his prize hog")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=fair_dusk_seconds))
+            clock[0].add_component(TimeOfDayComponent(phase="dusk"))
+            clock[0].add_component(CalendarComponent(day=57, season="autumn", hour=19))
+
+        hall = world.rooms["hall"]
+        # The star entry: a prize pumpkin grown to championship quality.
+        _add(actor, hall, [
+            IdentityComponent(name="a championship prize pumpkin", kind="crop"),
+            CropComponent(crop_type="pumpkin", planted_at_epoch=0, stage=3),
+            CropGrowthComponent(progress_days=120.0, required_days=120.0, last_updated_epoch=0),
+            HarvestableComponent(yield_item="pumpkin", quantity=1),
+            CropQualityComponent(quality=2.0),
+        ])
+        # The judging table where entries are weighed and scored.
+        _add(actor, hall, [
+            IdentityComponent(name="the judging entry table", kind="shipping-bin"),
+            ShippingBinComponent(),
+        ])
+        # The blue-ribbon quest, still up for grabs on closing night.
+        _add(actor, hall, [
+            IdentityComponent(name="Win the Blue Ribbon", kind="quest"),
+            QuestComponent(quest_id="blue-ribbon", title="Win the Blue Ribbon",
+                           status="offered"),
+            QuestObjectiveComponent(quest_id="blue-ribbon",
+                                    description="Enter the best produce before judging closes"),
+            QuestRewardComponent(quest_id="blue-ribbon",
+                                 description="the county fair blue ribbon and bragging rights"),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["ribbon"]),
+            ReadableComponent(title="Blue Ribbon",
+                              text="FIRST PLACE — to be pinned to the winning entry at the close "
+                                   "of judging. The card beneath it is still blank."),
+        )
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -1903,6 +2658,11 @@ GOTHIC_COUNT_DEMO = WorldGenerator(
     name="gothic-count-demo", generate=gothic_count_example,
     description="A legally distinct gothic night-host castle with papers, secrets, and hunger.",
     uses_seed=False)
+MIDNIGHT_BURGER_DEMO = WorldGenerator(
+    name="midnight-burger-demo", generate=midnight_burger_example,
+    description="An inner-city burger shack that opens at dusk and rolls into night, with a "
+                "hungry night cook and a hidden cellar that is only dangerous after dark.",
+    uses_seed=False)
 DUNGEON_VAULT_DEMO = WorldGenerator(
     name="dungeon-vault-demo", generate=dungeon_vault_example,
     description="A torchlit hand-built vault with a hidden relic room and dungeon map.",
@@ -1915,12 +2675,43 @@ DUNGEON_CRYPT_DEMO = WorldGenerator(
     name="dungeon-crypt-demo", generate=dungeon_crypt_example,
     description="A chapel crypt with locked passages, readable clues, and a reliquary.",
     uses_seed=False)
+STORM_LIGHTHOUSE_DEMO = WorldGenerator(
+    name="storm-lighthouse-demo", generate=storm_lighthouse_example,
+    description="A coastal lighthouse in an autumn squall, with a beacon to keep fueled, a "
+                "stranded sailor, and a wrecker's secret hidden under the lens.",
+    uses_seed=False)
+VACANCY_MOTEL_DEMO = WorldGenerator(
+    name="vacancy-motel-demo", generate=vacancy_motel_example,
+    description="A roadside motel that checks in by day and rolls into night, where Room 6 "
+                "only opens after dark and the night clerk gets hungry.",
+    uses_seed=False)
+FROZEN_GREENHOUSE_DEMO = WorldGenerator(
+    name="frozen-greenhouse-demo", generate=frozen_greenhouse_example,
+    description="A greenhouse dome on a frozen winter plain with crops to keep warm, a boiler "
+                "to stoke, and a specimen that grows too fast in the dark and cold.",
+    uses_seed=False)
+STUCK_SUBWAY_DEMO = WorldGenerator(
+    name="stuck-subway-demo", generate=stuck_subway_example,
+    description="A subway car stalled between stations with dim power, dead ventilation, a "
+                "dead traction motor, and strangers waiting out the hold in the dark.",
+    uses_seed=False)
+MIDNIGHT_LAUNDROMAT_DEMO = WorldGenerator(
+    name="midnight-laundromat-demo", generate=midnight_laundromat_example,
+    description="A 24-hour laundromat in the small hours rolling toward dawn, with late-night "
+                "strangers, a broken dryer, and a lost-and-found nobody remembers filling.",
+    uses_seed=False)
+COUNTY_FAIR_DEMO = WorldGenerator(
+    name="county-fair-demo", generate=county_fair_example,
+    description="Closing night of an autumn county fair, with a pie contest, a championship "
+                "prize pumpkin, a smug rival, and a blue ribbon still up for grabs.",
+    uses_seed=False)
 
 POP_CULTURE_DEMOS = (
     CLUE_SNACK_DEMO,
     DIVE_SCHEME_DEMO,
     STAR_OPERA_DEMO,
     GOTHIC_COUNT_DEMO,
+    MIDNIGHT_BURGER_DEMO,
 )
 
 DUNGEON_DEMOS = (
@@ -1929,11 +2720,21 @@ DUNGEON_DEMOS = (
     DUNGEON_CRYPT_DEMO,
 )
 
+SCENE_DEMOS = (
+    STORM_LIGHTHOUSE_DEMO,
+    VACANCY_MOTEL_DEMO,
+    FROZEN_GREENHOUSE_DEMO,
+    STUCK_SUBWAY_DEMO,
+    MIDNIGHT_LAUNDROMAT_DEMO,
+    COUNTY_FAIR_DEMO,
+)
+
 
 __all__ = [
     "BARBARIANSIM_DEMO",
     "CLUE_SNACK_DEMO",
     "COLONYSIM_DEMO",
+    "COUNTY_FAIR_DEMO",
     "DAGGERSIM_DEMO",
     "DINOSIM_DEMO",
     "DRAGONSIM_DEMO",
@@ -1942,18 +2743,26 @@ __all__ = [
     "DUNGEON_MAZE_DEMO",
     "DUNGEON_VAULT_DEMO",
     "DIVE_SCHEME_DEMO",
+    "FROZEN_GREENHOUSE_DEMO",
     "GARDENSIM_DEMO",
     "GOTHIC_COUNT_DEMO",
     "LIFESIM_DEMO",
     "MAPLE_FARM_DEMO",
+    "MIDNIGHT_BURGER_DEMO",
+    "MIDNIGHT_LAUNDROMAT_DEMO",
     "NEONSIM_DEMO",
     "NUKESIM_DEMO",
     "POP_CULTURE_DEMOS",
+    "SCENE_DEMOS",
     "STAR_OPERA_DEMO",
+    "STORM_LIGHTHOUSE_DEMO",
+    "STUCK_SUBWAY_DEMO",
+    "VACANCY_MOTEL_DEMO",
     "VOIDSIM_DEMO",
     "barbariansim_example",
     "clue_snack_example",
     "colonysim_example",
+    "county_fair_example",
     "daggersim_example",
     "dinosim_example",
     "dragonsim_example",
@@ -1961,12 +2770,18 @@ __all__ = [
     "dungeon_maze_example",
     "dungeon_vault_example",
     "dive_scheme_example",
+    "frozen_greenhouse_example",
     "gardensim_example",
     "gothic_count_example",
     "lifesim_example",
     "maple_farm_example",
+    "midnight_burger_example",
+    "midnight_laundromat_example",
     "neonsim_example",
     "nukesim_example",
     "star_opera_example",
+    "storm_lighthouse_example",
+    "stuck_subway_example",
+    "vacancy_motel_example",
     "voidsim_example",
 ]

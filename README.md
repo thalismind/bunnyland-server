@@ -233,11 +233,24 @@ There is also a larger life-sim showcase, `apartment-demo`: a quirky NYC apartme
 building of eccentric tenants with backstories, homes, and daily routines, a rat-man in
 the warren below, and hidden corners.
 For lighter genre-spoof setups, the worldgen plugin also ships `clue-snack-demo`,
-`dive-scheme-demo`, `star-opera-demo`, and `gothic-count-demo`, all using new names,
-locations, and props.
+`dive-scheme-demo`, `star-opera-demo`, `gothic-count-demo`, and `midnight-burger-demo`
+(an inner-city burger shack that opens at dusk and rolls into night through the world's
+day/night cycle, with a hungry night cook and a hidden cellar that is only dangerous
+after dark), all using new names, locations, and props.
 For hand-crafted dungeon-crawler setups, use `dungeon-vault-demo`, `dungeon-maze-demo`,
 or `dungeon-crypt-demo`. These are small deterministic crawls with room maps, secrets,
 readable clues, food, water, and dungeon objectives.
+For atmospheric scene vignettes that lean on the shared environment and weather mechanics,
+the worldgen plugin ships `storm-lighthouse-demo` (a coastal lighthouse in an autumn squall
+with a beacon to keep fueled and a wrecker's secret under the lens), `vacancy-motel-demo`
+(a roadside motel where Room 6 only opens after dark and the night clerk gets hungry), and
+`frozen-greenhouse-demo` (a greenhouse dome on a frozen plain with crops to keep warm and a
+specimen that grows too fast in the dark and cold), `stuck-subway-demo` (a subway car
+stalled between stations with dim power, dead ventilation, a dead motor, and strangers
+waiting out the hold), `midnight-laundromat-demo` (a 24-hour laundromat drifting from
+night toward dawn, with late-night strangers and a lost-and-found nobody remembers filling),
+and `county-fair-demo` (closing night of an autumn county fair with a pie contest, a prize
+pumpkin, a smug rival, and a blue ribbon still up for grabs).
 The `fortresssim` package is a planned catalogue package and does not have a plugin or demo
 generator yet.
 

@@ -1483,8 +1483,10 @@ from ..worldgen.examples import (
     GOTHIC_COUNT_DEMO,
     LIFESIM_DEMO,
     MAPLE_FARM_DEMO,
+    MIDNIGHT_BURGER_DEMO,
     NEONSIM_DEMO,
     NUKESIM_DEMO,
+    SCENE_DEMOS,
     STAR_OPERA_DEMO,
     VOIDSIM_DEMO,
 )
@@ -1882,7 +1884,9 @@ def worldgen_plugin() -> Plugin:
                 DIVE_SCHEME_DEMO,
                 STAR_OPERA_DEMO,
                 GOTHIC_COUNT_DEMO,
+                MIDNIGHT_BURGER_DEMO,
                 *DUNGEON_DEMOS,
+                *SCENE_DEMOS,
                 WorldGenerator(
                     "oneshot", oneshot_generator, "single LLM proposal, instantiated at once"
                 ),

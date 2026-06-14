@@ -11,8 +11,10 @@ from bunnyland.core import SuspendedComponent, WorldActor, container_of
 from bunnyland.core.components import (
     DescriptionComponent,
     IdentityComponent,
+    LightComponent,
     ReadableComponent,
     RoomComponent,
+    TemperatureComponent,
 )
 from bunnyland.mechanics.barbariansim import WeaponComponent
 from bunnyland.mechanics.colonysim import (
@@ -35,8 +37,10 @@ from bunnyland.mechanics.daggersim import (
     DungeonComponent,
     DungeonObjectiveComponent,
     DungeonRoomComponent,
+    FeedingNeedComponent,
     RestRiskComponent,
     SecretDoorComponent,
+    SupernaturalAfflictionComponent,
 )
 from bunnyland.mechanics.dinosim import (
     CreatureProductComponent,
@@ -46,10 +50,18 @@ from bunnyland.mechanics.dinosim import (
     FossilFragmentComponent,
     ReptileProcreationComponent,
 )
-from bunnyland.mechanics.dragonsim import QuestComponent
-from bunnyland.mechanics.environment import CalendarComponent
+from bunnyland.mechanics.dragonsim import PointOfInterestComponent, QuestComponent
+from bunnyland.mechanics.environment import (
+    CalendarComponent,
+    FireComponent,
+    FlammableComponent,
+    TimeOfDayComponent,
+    WeatherComponent,
+    install_environment,
+)
 from bunnyland.mechanics.gardensim import (
     CropComponent,
+    CropGrowthComponent,
     CropQualityComponent,
     FarmQuestComponent,
     GeodeComponent,
@@ -75,21 +87,35 @@ from bunnyland.mechanics.lifesim import (
 from bunnyland.mechanics.needs import HungerComponent
 from bunnyland.mechanics.neonsim import CyberpunkSiteComponent
 from bunnyland.mechanics.nukesim import RadiationSourceComponent
-from bunnyland.mechanics.voidsim import HabitatModuleComponent, ShipComponent
+from bunnyland.mechanics.voidsim import (
+    HabitatModuleComponent,
+    LifeSupportComponent,
+    PowerGridComponent,
+    ShipComponent,
+    ShipSystemComponent,
+)
 from bunnyland.plugins.builtin import bunnyland_plugins
 from bunnyland.worldgen.examples import (
     BARBARIANSIM_DEMO,
     COLONYSIM_DEMO,
+    COUNTY_FAIR_DEMO,
     DAGGERSIM_DEMO,
     DINOSIM_DEMO,
     DRAGONSIM_DEMO,
     DUNGEON_DEMOS,
+    FROZEN_GREENHOUSE_DEMO,
     GARDENSIM_DEMO,
     LIFESIM_DEMO,
     MAPLE_FARM_DEMO,
+    MIDNIGHT_BURGER_DEMO,
+    MIDNIGHT_LAUNDROMAT_DEMO,
     NEONSIM_DEMO,
     NUKESIM_DEMO,
     POP_CULTURE_DEMOS,
+    SCENE_DEMOS,
+    STORM_LIGHTHOUSE_DEMO,
+    STUCK_SUBWAY_DEMO,
+    VACANCY_MOTEL_DEMO,
     VOIDSIM_DEMO,
 )
 from bunnyland.worldgen.generators import GenOptions, collect_generators
@@ -106,7 +132,9 @@ PACKAGE_DEMOS = [
     NEONSIM_DEMO,
     DINOSIM_DEMO,
 ]
-ALL_DEMOS = [*PACKAGE_DEMOS, MAPLE_FARM_DEMO, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS]
+ALL_DEMOS = [
+    *PACKAGE_DEMOS, MAPLE_FARM_DEMO, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS, *SCENE_DEMOS,
+]
 
 # Each demo's hallmark component — proof its package's mechanics are present.
 HALLMARKS = {
@@ -260,6 +288,162 @@ async def test_maple_farm_demo_is_a_functional_canadian_sugarbush():
         and not tree.get_component(HarvestableComponent).ready
         for tree in trees
     )
+
+
+async def test_midnight_burger_demo_secret_is_gated_by_a_running_night_cycle():
+    actor = WorldActor()
+
+    world = await MIDNIGHT_BURGER_DEMO.generate(actor, "midnight-burger-demo", GenOptions())
+
+    # The shack opens during the day — the world is not frozen at night.
+    clock = list(actor.world.query().with_all([TimeOfDayComponent]).execute_entities())[0]
+    assert clock.get_component(TimeOfDayComponent).phase == "day"
+    assert clock.get_component(CalendarComponent).hour == 17
+
+    # The dark secret: a hungry night cook and a hidden, pitch-dark cellar behind the kitchen.
+    cook = list(
+        actor.world.query().with_all([SupernaturalAfflictionComponent]).execute_entities()
+    )[0]
+    assert cook.get_component(SupernaturalAfflictionComponent).affliction_type == "nocturnal hunger"
+    assert cook.has_component(FeedingNeedComponent)
+    assert _has(actor, SecretDoorComponent)
+    cellar = actor.world.get_entity(world.rooms["cellar"])
+    assert cellar.has_component(PointOfInterestComponent)
+    assert cellar.get_component(LightComponent).level <= 0.1
+
+    # Let the clock run: within a few hourly ticks the shack tips into the dangerous night.
+    install_environment(actor)
+    await actor.tick(3 * 3600)  # 17:00 -> 20:00
+    assert clock.get_component(TimeOfDayComponent).phase == "night"
+
+
+async def test_storm_lighthouse_demo_keeps_a_beacon_burning_through_a_squall():
+    actor = WorldActor()
+
+    world = await STORM_LIGHTHOUSE_DEMO.generate(actor, "storm-lighthouse-demo", GenOptions())
+
+    # A lit beacon that burns its own fuel down — something to keep feeding.
+    assert _has(actor, FireComponent)
+    assert _has(actor, FlammableComponent)
+    # The buried sin: a wrecker's niche behind a secret hatch under the lens.
+    assert _has(actor, SecretDoorComponent)
+    assert actor.world.get_entity(world.rooms["niche"]).has_component(PointOfInterestComponent)
+
+    # The deterministic weather cycle keeps the squall blowing and the jetty dim as it ticks.
+    install_environment(actor)
+    await actor.tick(3600)  # day 61, 18:00 -> 19:00, still a rain day
+    clock = list(actor.world.query().with_all([WeatherComponent]).execute_entities())[0]
+    assert clock.get_component(WeatherComponent).condition == "rain"
+    assert actor.world.get_entity(world.rooms["jetty"]).get_component(LightComponent).level <= 0.25
+
+
+async def test_vacancy_motel_demo_room_six_is_a_night_gated_secret():
+    actor = WorldActor()
+
+    world = await VACANCY_MOTEL_DEMO.generate(actor, "vacancy-motel-demo", GenOptions())
+
+    # Guests check in by daylight — Room 6 is not dangerous yet.
+    clock = list(actor.world.query().with_all([TimeOfDayComponent]).execute_entities())[0]
+    assert clock.get_component(TimeOfDayComponent).phase == "day"
+
+    # The secret: a hungry night clerk and a sealed, pitch-dark Room 6 off the corridor.
+    motel_clerk = list(
+        actor.world.query().with_all([SupernaturalAfflictionComponent]).execute_entities()
+    )[0]
+    assert motel_clerk.get_component(SupernaturalAfflictionComponent).affliction_type == (
+        "after-dark hunger"
+    )
+    assert motel_clerk.has_component(FeedingNeedComponent)
+    assert _has(actor, SecretDoorComponent)
+    room6 = actor.world.get_entity(world.rooms["room6"])
+    assert room6.has_component(PointOfInterestComponent)
+    assert room6.get_component(LightComponent).level <= 0.1
+
+    # As the night cycle runs the motel tips into the dangerous small hours.
+    install_environment(actor)
+    await actor.tick(5 * 3600)  # 16:00 -> 21:00
+    assert clock.get_component(TimeOfDayComponent).phase == "night"
+
+
+async def test_frozen_greenhouse_demo_grows_crops_against_the_cold():
+    actor = WorldActor()
+
+    world = await FROZEN_GREENHOUSE_DEMO.generate(actor, "frozen-greenhouse-demo", GenOptions())
+
+    # Crops to tend and a boiler to stoke against the freeze.
+    assert _has(actor, CropComponent)
+    assert _has(actor, WorkstationComponent)
+    assert actor.world.get_entity(world.rooms["tundra"]).get_component(
+        TemperatureComponent
+    ).celsius <= -10.0
+
+    # The unnatural specimen grows far faster than the ordinary winter crop.
+    growths = [
+        entity.get_component(CropGrowthComponent).required_days
+        for entity in actor.world.query().with_all([CropGrowthComponent]).execute_entities()
+    ]
+    assert any(required <= 1.0 for required in growths)
+    assert actor.world.get_entity(world.rooms["dome"]).has_component(PointOfInterestComponent)
+
+
+async def test_stuck_subway_demo_is_a_failing_car_full_of_strangers():
+    actor = WorldActor()
+
+    world = await STUCK_SUBWAY_DEMO.generate(actor, "stuck-subway-demo", GenOptions())
+
+    # The car's systems are failing: dim power and dead ventilation.
+    car = actor.world.get_entity(world.rooms["car"])
+    assert car.has_component(PowerGridComponent)
+    assert car.get_component(LifeSupportComponent).online is False
+
+    # A dead traction motor up front.
+    motor = list(actor.world.query().with_all([ShipSystemComponent]).execute_entities())[0]
+    assert motor.get_component(ShipSystemComponent).online is False
+
+    # The clamped social want that makes the wait bite.
+    assert _has(actor, WhimComponent)
+
+
+async def test_midnight_laundromat_demo_drifts_from_night_toward_dawn():
+    actor = WorldActor()
+
+    world = await MIDNIGHT_LAUNDROMAT_DEMO.generate(
+        actor, "midnight-laundromat-demo", GenOptions())
+
+    # It is already the small hours, and late-night wants give the scene its pull.
+    clock = list(actor.world.query().with_all([TimeOfDayComponent]).execute_entities())[0]
+    assert clock.get_component(TimeOfDayComponent).phase == "night"
+    whims = list(actor.world.query().with_all([WhimComponent]).execute_entities())
+    assert len(whims) >= 2
+
+    # The quiet mystery: a lost-and-found nobody remembers filling.
+    assert actor.world.get_entity(world.rooms["back"]).has_component(PointOfInterestComponent)
+
+    # The cycle carries the small hours on toward morning.
+    install_environment(actor)
+    await actor.tick(4 * 3600)  # 01:00 -> 05:00
+    assert clock.get_component(TimeOfDayComponent).phase == "dawn"
+
+
+async def test_county_fair_demo_has_a_blue_ribbon_contest_and_a_prize_entry():
+    actor = WorldActor()
+
+    world = await COUNTY_FAIR_DEMO.generate(actor, "county-fair-demo", GenOptions())
+
+    # The blue-ribbon quest is still up for grabs on closing night.
+    quest = list(actor.world.query().with_all([QuestComponent]).execute_entities())[0]
+    assert quest.get_component(QuestComponent).quest_id == "blue-ribbon"
+    assert quest.get_component(QuestComponent).status == "offered"
+
+    # A championship-quality produce entry to win it with.
+    qualities = [
+        entity.get_component(CropQualityComponent).quality
+        for entity in actor.world.query().with_all([CropQualityComponent]).execute_entities()
+    ]
+    assert any(quality >= 1.5 for quality in qualities)
+
+    # A rival to beat: the fair is a social contest, not a solo scene.
+    assert len(world.characters) >= 3
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)
