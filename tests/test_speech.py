@@ -499,6 +499,36 @@ def test_conversation_line_advances_turn_and_reuses_speech_metadata_without_acto
     assert conversation.get_component(ConversationComponent).active_turn == 2
 
 
+def test_three_person_conversation_rotates_turns_and_targets_other_participants():
+    scenario = speech_scenario()
+    hazel = add_listener(scenario, scenario.room_a, name="Hazel")
+    clover = add_listener(scenario, scenario.room_a, name="Clover")
+    start = execute_start_conversation(scenario, [hazel, clover])
+    conversation_id = start.events[0].conversation_id
+
+    first = execute_conversation_line(scenario, conversation_id, "I will take first watch.")
+    second = execute_conversation_line(
+        scenario,
+        conversation_id,
+        "I will take second watch.",
+        character_id=str(hazel),
+    )
+    third = execute_conversation_line(
+        scenario,
+        conversation_id,
+        "I will cover dawn.",
+        character_id=str(clover),
+    )
+
+    assert start.events[0].participant_ids == (str(scenario.character), str(hazel), str(clover))
+    assert first.events[0].next_participant_id == str(hazel)
+    assert first.events[0].target_ids == (str(hazel), str(clover))
+    assert second.events[0].next_participant_id == str(clover)
+    assert second.events[0].target_ids == (str(scenario.character), str(clover))
+    assert third.events[0].next_participant_id == str(scenario.character)
+    assert third.events[0].target_ids == (str(scenario.character), str(hazel))
+
+
 def test_conversation_line_rejects_wrong_turn_and_timeout_ends_conversation():
     scenario = speech_scenario()
     listener = add_listener(scenario, scenario.room_a)

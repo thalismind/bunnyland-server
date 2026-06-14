@@ -216,6 +216,17 @@ async def test_conversation_lines_become_retrievable_participant_memories():
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
     )
+    clover = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(),
+            MemoryProfileComponent(vector_collection="clover"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), clover.id
+    )
 
     await scenario.actor.bus.publish(
         ConversationLineEvent(
@@ -224,7 +235,7 @@ async def test_conversation_lines_become_retrievable_participant_memories():
             created_at="2026-01-01T00:00:00Z",
             actor_id=str(scenario.character),
             room_id=str(scenario.room_a),
-            target_ids=(str(hazel.id),),
+            target_ids=(str(hazel.id), str(clover.id)),
             conversation_id="conversation_1",
             speaker_id=str(scenario.character),
             text="Please watch the east tunnel.",
@@ -239,9 +250,11 @@ async def test_conversation_lines_become_retrievable_participant_memories():
 
     juniper_results = store.search("juniper", query="east tunnel", mode="keyword")
     hazel_results = store.search("hazel", query="Juniper east tunnel", mode="keyword")
+    clover_results = store.search("clover", query="Hazel Clover east tunnel", mode="keyword")
     assert juniper_results[0].source == "conversation"
-    assert "Juniper said to Hazel" in juniper_results[0].text
+    assert "Juniper said to Hazel, Clover" in juniper_results[0].text
     assert "landed as request; approach urgent" in hazel_results[0].text
+    assert clover_results[0].source == "conversation"
     assert "conversation" in hazel_results[0].tags
 
     prompt = render_prompt(

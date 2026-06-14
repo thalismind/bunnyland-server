@@ -268,7 +268,7 @@ deterministic harnesses.
     speaker/listener context.
   - **Verification:** memory retrieval scenario tests.
 
-- [ ] **Multi-party scene support**
+- [x] **Multi-party scene support**
   - **Goal:** several characters can participate in one coherent conversation scene.
   - **Depends on:** conversation micro-loop, social interpretation.
   - **Implementation notes:** turn order and interruptions must be explicit and bounded.
