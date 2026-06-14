@@ -89,6 +89,10 @@ Social obligations are persisted ECS state as well. Speech can create
 resolution updates the component status and relationship state instead of relying on
 remembered prose alone.
 
+Cross-player impact should be validated the same way: one controller changes shared ECS
+state, the world is saved and reloaded, and another controller's prompt reads that state
+through normal prompt fragments.
+
 ## From Python
 
 The same operations are available programmatically:

@@ -366,7 +366,7 @@ deterministic harnesses.
     relationships, or services.
   - **Verification:** social/reputation tests.
 
-- [ ] **Cross-player impact**
+- [x] **Cross-player impact**
   - **Goal:** one player's actions visibly change the world another player later
     inhabits.
   - **Depends on:** persistence, history, marks, reputation, prompt rendering.

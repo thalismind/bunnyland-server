@@ -121,6 +121,7 @@ from bunnyland.mechanics.persona import GoalComponent
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
 from bunnyland.narration import NarrationProjection, check_grounding
+from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import (
     apply_plugins,
     bunnyland_plugins,
@@ -414,6 +415,60 @@ async def test_threaded_conversation_micro_loop_e2e():
     assert lines[0].next_participant_id == str(clover.id)
     assert lines[1].next_participant_id == str(hazel)
     assert ended[0].reason == "agreed"
+
+
+async def test_cross_player_persisted_mark_visible_after_reload_e2e(tmp_path):
+    actor, _proposal, result = await _new_world()
+    plugins = bunnyland_plugins()
+    hazel = result.characters["hazel"]
+    room = actor.world.get_entity(container_of(actor.world.get_entity(hazel)))
+    clover = spawn_entity(
+        actor.world,
+        [
+            ActionPointsComponent(current=3.0, maximum=3.0),
+            FocusPointsComponent(current=3.0, maximum=3.0),
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), clover.id)
+    clover_controller = spawn_entity(actor.world)
+    actor.assign_controller(clover.id, clover_controller.id)
+    sign = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="watch board", kind="sign"),
+            WritableComponent(),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), sign.id)
+    hazel_controller, hazel_generation = _controller_generation(actor.world.get_entity(hazel))
+
+    await actor.submit(
+        build_submitted_command(
+            character_id=str(hazel),
+            controller_id=str(hazel_controller),
+            controller_generation=hazel_generation,
+            command_type="write",
+            cost=CommandCost(action=1, focus=1),
+            lane=Lane.WORLD,
+            payload={
+                "target_id": str(sign.id),
+                "text": "Hazel sealed the east tunnel after moonrise.",
+            },
+        )
+    )
+    await actor.tick(1.0)
+
+    path = tmp_path / "cross-player.json"
+    save_world(actor, path, meta=WorldMeta(seed="cross-player"))
+    loaded, _meta = load_world(path, plugins=plugins)
+    prompt = PromptBuilder(
+        loaded.world, fragment_providers=collect_prompt_fragments(plugins)
+    ).build(clover.id)
+
+    assert any("watch board bears writing by Hazel" in line for line in prompt.conditions)
+    assert any("Hazel sealed the east tunnel after moonrise" in line for line in prompt.conditions)
 
 
 async def test_scripted_playthrough_processes_actions_each_round():
