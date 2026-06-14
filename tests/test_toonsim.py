@@ -8,11 +8,13 @@ from bunnyland.core import (
     ActionPointsComponent,
     CommandCost,
     ContainerComponent,
+    Contains,
     DoorComponent,
     IdentityComponent,
     Lane,
     PortableComponent,
     build_submitted_command,
+    container_of,
     spawn_entity,
 )
 from bunnyland.core.handlers import HandlerContext
@@ -22,15 +24,21 @@ from bunnyland.mechanics.toonsim import (
     LAYER_FURNITURE,
     LAYER_ITEM,
     MoveSpriteHandler,
+    PlacedOn,
     SpriteBackfillConsequence,
+    SpriteBounds,
     SpriteImage,
     SpriteLayer,
     SpriteMovedEvent,
     SpritePosition,
     SpriteScale,
+    ToonRoomComponent,
     default_layer_for,
     install_toonsim,
 )
+from bunnyland.plugins import apply_plugins
+from bunnyland.plugins.builtin import toonsim_plugin
+from bunnyland.worldgen import ObjectSpec, RoomSpec, WorldProposal, instantiate
 
 
 def _backfill(world) -> None:
@@ -165,6 +173,47 @@ async def test_install_registers_consequence_and_runs_on_tick():
 
     room = scenario.actor.world.get_entity(scenario.room_a)
     assert room.get_component(SpriteLayer).layer == LAYER_BACKGROUND
+
+
+async def test_worldgen_hook_places_items_on_table_without_changing_containment():
+    scenario = build_scenario()
+    actor = scenario.actor
+    apply_plugins([toonsim_plugin()], actor)
+    proposal = WorldProposal(
+        seed="toon table",
+        rooms=[RoomSpec(key="room", title="Breakfast Nook")],
+        objects=[
+            ObjectSpec(
+                key="table",
+                room_key="room",
+                name="oak table",
+                kind="table",
+                portable=False,
+            ),
+            ObjectSpec(key="apple", room_key="room", name="red apple", kind="food"),
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+
+    room = actor.world.get_entity(result.rooms["room"])
+    table = actor.world.get_entity(result.objects["table"])
+    apple = actor.world.get_entity(result.objects["apple"])
+    assert room.has_component(ToonRoomComponent)
+    assert room.has_component(SpriteBounds)
+    assert table.get_component(SpriteLayer).layer == LAYER_FURNITURE
+    assert apple.get_component(SpriteLayer).layer == LAYER_ITEM
+    assert container_of(table) == room.id
+    assert container_of(apple) == room.id
+    assert room.has_relationship(Contains, table.id)
+    assert room.has_relationship(Contains, apple.id)
+    assert apple.has_relationship(PlacedOn, table.id)
+
+    table_pos = table.get_component(SpritePosition)
+    table_bounds = table.get_component(SpriteBounds)
+    apple_pos = apple.get_component(SpritePosition)
+    assert abs(apple_pos.x - table_pos.x) <= table_bounds.width / 2.0
+    assert abs(apple_pos.y - table_pos.y) <= table_bounds.height / 2.0
 
 
 def _move_sprite(scenario, **payload):

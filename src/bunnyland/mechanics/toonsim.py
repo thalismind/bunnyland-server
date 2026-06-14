@@ -18,8 +18,10 @@ here -- this only produces the data they consume.
 
 from __future__ import annotations
 
+from hashlib import sha256
+
 from pydantic.dataclasses import dataclass as pydantic_dataclass
-from relics import Component, Entity, World
+from relics import Component, Edge, Entity, World
 
 from ..core.commands import SubmittedCommand
 from ..core.components import (
@@ -31,7 +33,14 @@ from ..core.components import (
     RoomComponent,
 )
 from ..core.ecs import container_of, parse_entity_id, replace_component
-from ..core.events import DomainEvent, EventVisibility
+from ..core.edges import Contains
+from ..core.events import (
+    CharacterGeneratedEvent,
+    DomainEvent,
+    EventVisibility,
+    ObjectGeneratedEvent,
+    RoomGeneratedEvent,
+)
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 
 # Draw layers, spaced so new tiers can slot between existing ones (spec: low draws
@@ -41,6 +50,9 @@ LAYER_FURNITURE = 10  # furniture and static background props
 LAYER_ITEM = 20  # interactive items and doors
 LAYER_CHARACTER = 30  # characters
 LAYER_EFFECT = 40  # reserved for client-side effects/particles (added later)
+
+ROOM_WIDTH = 100.0
+ROOM_HEIGHT = 100.0
 
 #: Kinds that read as furniture/background props but carry no distinguishing component.
 FURNITURE_KINDS = frozenset(
@@ -63,6 +75,8 @@ FURNITURE_KINDS = frozenset(
         "bench",
     }
 )
+
+SURFACE_KINDS = frozenset({"table", "desk", "shelf", "counter", "workbench", "workstation"})
 
 
 @pydantic_dataclass(frozen=True)
@@ -101,10 +115,26 @@ class SpriteScale(Component):
 
 
 @pydantic_dataclass(frozen=True)
+class SpriteBounds(Component):
+    """Axis-aligned sprite footprint in the same coordinate space as ``SpritePosition``."""
+
+    width: float = 4.0
+    height: float = 4.0
+    solid: bool = False
+
+
+@pydantic_dataclass(frozen=True)
 class ToonRoomComponent(Component):
     """Room-level presentation hints consumed by the toon client."""
 
     default_start: bool = False
+
+
+@pydantic_dataclass(frozen=True)
+class PlacedOn(Edge):
+    """Presentation edge: the source item is visually resting on the target surface."""
+
+    surface: str = "top"
 
 
 def default_layer_for(entity: Entity) -> int | None:
@@ -131,6 +161,29 @@ def default_layer_for(entity: Entity) -> int | None:
     return None
 
 
+def default_bounds_for(entity: Entity) -> SpriteBounds | None:
+    """Return the default sprite footprint for ``entity``."""
+    if entity.has_component(RoomComponent):
+        return SpriteBounds(width=ROOM_WIDTH, height=ROOM_HEIGHT)
+    if entity.has_component(CharacterComponent):
+        return SpriteBounds(width=5.0, height=8.0, solid=True)
+
+    kind = (
+        entity.get_component(IdentityComponent).kind
+        if entity.has_component(IdentityComponent)
+        else None
+    )
+    if kind in SURFACE_KINDS:
+        return SpriteBounds(width=22.0, height=12.0, solid=True)
+    if kind in FURNITURE_KINDS or entity.has_component(ContainerComponent):
+        return SpriteBounds(width=14.0, height=10.0, solid=True)
+    if entity.has_component(DoorComponent):
+        return SpriteBounds(width=10.0, height=8.0)
+    if entity.has_component(PortableComponent):
+        return SpriteBounds(width=4.0, height=4.0)
+    return None
+
+
 class SpriteBackfillConsequence:
     """Attach sprite components to renderable entities that are missing them.
 
@@ -153,7 +206,179 @@ class SpriteBackfillConsequence:
                 entity.add_component(SpriteImage())
             if not entity.has_component(SpriteScale):
                 entity.add_component(SpriteScale())
+            if not entity.has_component(SpriteBounds):
+                bounds = default_bounds_for(entity)
+                if bounds is not None:
+                    entity.add_component(bounds)
         return []
+
+
+def _kind(entity: Entity) -> str:
+    if entity.has_component(IdentityComponent):
+        return entity.get_component(IdentityComponent).kind
+    return ""
+
+
+def _stable_unit(*parts: object) -> float:
+    digest = sha256("|".join(str(part) for part in parts).encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") / 0xFFFFFFFF
+
+
+def _stable_range(low: float, high: float, *parts: object) -> float:
+    return low + (high - low) * _stable_unit(*parts)
+
+
+def _clamp_position(x: float, y: float, bounds: SpriteBounds) -> SpritePosition:
+    half_w = bounds.width / 2.0
+    half_h = bounds.height / 2.0
+    return SpritePosition(
+        x=max(half_w, min(ROOM_WIDTH - half_w, x)),
+        y=max(half_h, min(ROOM_HEIGHT - half_h, y)),
+    )
+
+
+def _surface_entities(world: World, room: Entity, exclude_id) -> list[Entity]:
+    surfaces: list[Entity] = []
+    for _edge, child_id in room.get_relationships(Contains):
+        if child_id == exclude_id or not world.has_entity(child_id):
+            continue
+        child = world.get_entity(child_id)
+        if _kind(child) in SURFACE_KINDS and child.has_component(SpritePosition):
+            surfaces.append(child)
+    return sorted(surfaces, key=lambda entity: str(entity.id))
+
+
+def _position_on_surface(entity: Entity, surface: Entity) -> SpritePosition:
+    surface_pos = surface.get_component(SpritePosition)
+    surface_bounds = surface.get_component(SpriteBounds)
+    entity_bounds = entity.get_component(SpriteBounds)
+    usable_w = max(0.0, surface_bounds.width - entity_bounds.width)
+    usable_h = max(0.0, surface_bounds.height - entity_bounds.height)
+    x = surface_pos.x - usable_w / 2.0 + _stable_range(0.0, usable_w, entity.id, "x")
+    y = surface_pos.y - usable_h / 2.0 + _stable_range(0.0, usable_h, entity.id, "y")
+    return _clamp_position(x, y, entity_bounds)
+
+
+def _generated_position(
+    world: World, entity: Entity, room: Entity, event_key: str
+) -> SpritePosition:
+    bounds = entity.get_component(SpriteBounds)
+    kind = _kind(entity)
+    if entity.has_component(CharacterComponent):
+        return _clamp_position(
+            _stable_range(30.0, 70.0, event_key, "character-x"),
+            _stable_range(55.0, 86.0, event_key, "character-y"),
+            bounds,
+        )
+    if entity.has_component(DoorComponent) or kind == "door":
+        name = (
+            entity.get_component(IdentityComponent).name.lower()
+            if entity.has_component(IdentityComponent)
+            else ""
+        )
+        if "north" in name:
+            return _clamp_position(50.0, 4.0, bounds)
+        if "south" in name:
+            return _clamp_position(50.0, 96.0, bounds)
+        if "east" in name:
+            return _clamp_position(96.0, 50.0, bounds)
+        if "west" in name:
+            return _clamp_position(4.0, 50.0, bounds)
+        return _clamp_position(
+            _stable_range(10.0, 90.0, event_key, "door-x"),
+            _stable_range(8.0, 16.0, event_key, "door-y"),
+            bounds,
+        )
+    if kind in FURNITURE_KINDS or entity.has_component(ContainerComponent):
+        return _clamp_position(
+            _stable_range(14.0, 86.0, event_key, "furniture-x"),
+            _stable_range(18.0, 72.0, event_key, "furniture-y"),
+            bounds,
+        )
+    surfaces = _surface_entities(world, room, entity.id)
+    if entity.has_component(PortableComponent) and surfaces:
+        surface = surfaces[int(_stable_unit(event_key, "surface") * len(surfaces)) % len(surfaces)]
+        if not entity.has_relationship(PlacedOn, surface.id):
+            entity.add_relationship(PlacedOn(), surface.id)
+        return _position_on_surface(entity, surface)
+    return _clamp_position(
+        _stable_range(18.0, 82.0, event_key, "item-x"),
+        _stable_range(58.0, 90.0, event_key, "item-y"),
+        bounds,
+    )
+
+
+class ToonWorldgenHook:
+    """Attach deterministic toon placement to generated rooms, objects, and characters."""
+
+    def subscribe(self, actor) -> None:
+        self.actor = actor
+        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
+        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
+        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
+
+    def _ensure_renderable(self, entity: Entity) -> None:
+        layer = default_layer_for(entity)
+        if layer is not None and not entity.has_component(SpriteLayer):
+            replace_component(entity, SpriteLayer(layer=layer))
+        if not entity.has_component(SpriteImage):
+            replace_component(entity, SpriteImage())
+        if not entity.has_component(SpriteScale):
+            replace_component(entity, SpriteScale())
+        if not entity.has_component(SpriteBounds):
+            bounds = default_bounds_for(entity)
+            if bounds is not None:
+                replace_component(entity, bounds)
+
+    def _on_room(self, event: RoomGeneratedEvent) -> None:
+        entity_id = parse_entity_id(event.entity_id)
+        if entity_id is None or not self.actor.world.has_entity(entity_id):
+            return
+        room = self.actor.world.get_entity(entity_id)
+        self._ensure_renderable(room)
+        if not room.has_component(ToonRoomComponent):
+            replace_component(room, ToonRoomComponent())
+        if not room.has_component(SpritePosition):
+            replace_component(room, SpritePosition())
+
+    def _on_object(self, event: ObjectGeneratedEvent) -> None:
+        if event.room_id is None or event.container_id != event.room_id:
+            return
+        entity_id = parse_entity_id(event.entity_id)
+        room_id = parse_entity_id(event.room_id)
+        if (
+            entity_id is None
+            or room_id is None
+            or not self.actor.world.has_entity(entity_id)
+            or not self.actor.world.has_entity(room_id)
+        ):
+            return
+        entity = self.actor.world.get_entity(entity_id)
+        room = self.actor.world.get_entity(room_id)
+        self._ensure_renderable(entity)
+        if not entity.has_component(SpritePosition) and entity.has_component(SpriteBounds):
+            replace_component(
+                entity, _generated_position(self.actor.world, entity, room, event.object_key)
+            )
+
+    def _on_character(self, event: CharacterGeneratedEvent) -> None:
+        entity_id = parse_entity_id(event.entity_id)
+        room_id = parse_entity_id(event.room_id)
+        if (
+            entity_id is None
+            or room_id is None
+            or not self.actor.world.has_entity(entity_id)
+            or not self.actor.world.has_entity(room_id)
+        ):
+            return
+        entity = self.actor.world.get_entity(entity_id)
+        room = self.actor.world.get_entity(room_id)
+        self._ensure_renderable(entity)
+        if not entity.has_component(SpritePosition) and entity.has_component(SpriteBounds):
+            replace_component(
+                entity,
+                _generated_position(self.actor.world, entity, room, event.character_key),
+            )
 
 
 class SpriteMovedEvent(DomainEvent):
@@ -214,13 +439,18 @@ __all__ = [
     "LAYER_FURNITURE",
     "LAYER_ITEM",
     "MoveSpriteHandler",
+    "PlacedOn",
     "SpriteBackfillConsequence",
+    "SpriteBounds",
     "SpriteImage",
     "SpriteLayer",
     "SpriteMovedEvent",
     "SpritePosition",
     "SpriteScale",
+    "SURFACE_KINDS",
     "ToonRoomComponent",
+    "ToonWorldgenHook",
+    "default_bounds_for",
     "default_layer_for",
     "install_toonsim",
 ]

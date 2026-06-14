@@ -1285,12 +1285,15 @@ from ..mechanics.storyteller import (
 )
 from ..mechanics.toonsim import (
     MoveSpriteHandler,
+    PlacedOn,
+    SpriteBounds,
     SpriteImage,
     SpriteLayer,
     SpriteMovedEvent,
     SpritePosition,
     SpriteScale,
     ToonRoomComponent,
+    ToonWorldgenHook,
     install_toonsim,
 )
 from ..mechanics.voidsim import (
@@ -2478,14 +2481,17 @@ def toonsim_plugin() -> Plugin:
                 SpriteImage,
                 SpriteLayer,
                 SpriteScale,
+                SpriteBounds,
                 ToonRoomComponent,
             ),
+            edges=(PlacedOn,),
         ),
         commands=CommandContribution(
             action_handlers=(MoveSpriteHandler,),
             typed_events=(SpriteMovedEvent,),
         ),
         runtime=RuntimeContribution(service_factories=(install_toonsim,)),
+        content=ContentContribution(worldgen_hooks=(ToonWorldgenHook,)),
     )
 
 
