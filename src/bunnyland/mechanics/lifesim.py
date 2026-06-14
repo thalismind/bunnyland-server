@@ -40,6 +40,7 @@ from ..core.events import (
     AdoptionCompletedEvent,
     BirthDueEvent,
     BirthResolvedEvent,
+    CharacterDiedEvent,
     DomainEvent,
     EventVisibility,
     PartnershipEndedEvent,
@@ -373,6 +374,25 @@ class BirthDueComponent(Component):
 
 
 @dataclass(frozen=True)
+class InheritanceRecordComponent(Component):
+    """Durable audit state for inheritance transferred after a death."""
+
+    decedent_id: str
+    heir_id: str
+    source_event_id: str
+    created_at_epoch: int
+    relationship: str = ""
+    inherited_item_ids: tuple[str, ...] = ()
+    inherited_business_ids: tuple[str, ...] = ()
+    inherited_home_ids: tuple[str, ...] = ()
+    inherited_room_claim_ids: tuple[str, ...] = ()
+    inherited_property_ids: tuple[str, ...] = ()
+    inherited_ownership_ids: tuple[str, ...] = ()
+    inherited_funds: int = 0
+    summary: str = ""
+
+
+@dataclass(frozen=True)
 class ParentOf(Edge):
     pass
 
@@ -428,6 +448,14 @@ class JealousOf(Edge):
     partner_id: str
     intensity: float = 0.0
     triggered_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class InheritedFrom(Edge):
+    source_event_id: str
+    inherited_at_epoch: int
+    relationship: str = ""
+    record_id: str = ""
 
 
 class AspirationChosenEvent(DomainEvent):
@@ -943,6 +971,227 @@ def kinship_label(world: World, source_id: EntityId, target_id: EntityId) -> str
     if source_parents and source_parents == target_parents:
         return "sibling"
     return None
+
+
+def inheritance_record_for_event(world: World, source_event_id: str) -> Entity | None:
+    """Return the inheritance record created from ``source_event_id``, if any."""
+
+    for entity in world.query().with_all([InheritanceRecordComponent]).execute_entities():
+        record = entity.get_component(InheritanceRecordComponent)
+        if record.source_event_id == source_event_id:
+            return entity
+    return None
+
+
+def project_inheritance_for_death(world: World, event: CharacterDiedEvent) -> Entity | None:
+    """Transfer explicit inheritable state from a dead character to one heir."""
+
+    decedent_id = parse_entity_id(event.actor_id) if event.actor_id else None
+    if decedent_id is None or not world.has_entity(decedent_id) or not event.event_id:
+        return None
+    if inheritance_record_for_event(world, event.event_id) is not None:
+        return None
+    decedent = world.get_entity(decedent_id)
+    heir_data = _select_heir(world, decedent)
+    if heir_data is None:
+        return None
+    heir, relationship = heir_data
+
+    inherited_item_ids = _transfer_inventory(decedent, heir)
+    inherited_business_ids = _transfer_businesses(decedent, heir)
+    inherited_home_ids = _transfer_homes(world, decedent, heir)
+    inherited_room_claim_ids = _transfer_room_claims(world, decedent, heir, event.world_epoch)
+    inherited_property_ids = _transfer_property_deeds(world, decedent, heir, event.world_epoch)
+    inherited_ownership_ids = _transfer_colony_ownership(decedent, heir, event.world_epoch)
+    inherited_funds = _transfer_household_funds(decedent, heir)
+
+    decedent_name = entity_name(decedent, "someone")
+    heir_name = entity_name(heir, "someone")
+    summary = f"{heir_name} inherited {relationship} legacy from {decedent_name}."
+    record = spawn_entity(
+        world,
+        [
+            IdentityComponent(name=f"Inheritance from {decedent_name}", kind="inheritance"),
+            InheritanceRecordComponent(
+                decedent_id=str(decedent.id),
+                heir_id=str(heir.id),
+                source_event_id=event.event_id,
+                created_at_epoch=event.world_epoch,
+                relationship=relationship,
+                inherited_item_ids=inherited_item_ids,
+                inherited_business_ids=inherited_business_ids,
+                inherited_home_ids=inherited_home_ids,
+                inherited_room_claim_ids=inherited_room_claim_ids,
+                inherited_property_ids=inherited_property_ids,
+                inherited_ownership_ids=inherited_ownership_ids,
+                inherited_funds=inherited_funds,
+                summary=summary,
+            ),
+        ],
+    )
+    heir.add_relationship(
+        InheritedFrom(
+            source_event_id=event.event_id,
+            inherited_at_epoch=event.world_epoch,
+            relationship=relationship,
+            record_id=str(record.id),
+        ),
+        decedent.id,
+    )
+    return record
+
+
+def _select_heir(world: World, decedent: Entity) -> tuple[Entity, str] | None:
+    for raw_child_id in children_of(world, decedent.id):
+        child_id = parse_entity_id(raw_child_id)
+        if child_id is not None and _living_character(world, child_id):
+            return world.get_entity(child_id), "child"
+    for raw_partner_id in partners_of(world, decedent.id):
+        partner_id = parse_entity_id(raw_partner_id)
+        if partner_id is not None and _living_character(world, partner_id):
+            return world.get_entity(partner_id), "partner"
+    if decedent.has_component(HouseholdComponent):
+        household_id = decedent.get_component(HouseholdComponent).household_id
+        members = []
+        members_query = world.query().with_all([CharacterComponent, HouseholdComponent])
+        for member in members_query.execute_entities():
+            if member.id == decedent.id or not _living_character(world, member.id):
+                continue
+            if member.get_component(HouseholdComponent).household_id == household_id:
+                members.append(member)
+        if members:
+            return sorted(members, key=lambda entity: str(entity.id))[0], "household"
+    return None
+
+
+def _living_character(world: World, entity_id: EntityId) -> bool:
+    if not world.has_entity(entity_id):
+        return False
+    entity = world.get_entity(entity_id)
+    return entity.has_component(CharacterComponent) and not entity.has_component(DeadComponent)
+
+
+def _transfer_inventory(decedent: Entity, heir: Entity) -> tuple[str, ...]:
+    inherited = []
+    for edge, target_id in list(decedent.get_relationships(Contains)):
+        if edge.mode != ContainmentMode.INVENTORY:
+            continue
+        decedent.remove_relationship(Contains, target_id)
+        if not heir.has_relationship(Contains, target_id):
+            heir.add_relationship(edge, target_id)
+        inherited.append(str(target_id))
+    return tuple(sorted(inherited))
+
+
+def _transfer_businesses(decedent: Entity, heir: Entity) -> tuple[str, ...]:
+    inherited = []
+    for _edge, business_id in list(decedent.get_relationships(OwnsBusiness)):
+        decedent.remove_relationship(OwnsBusiness, business_id)
+        if not heir.has_relationship(OwnsBusiness, business_id):
+            heir.add_relationship(OwnsBusiness(), business_id)
+        inherited.append(str(business_id))
+    return tuple(sorted(inherited))
+
+
+def _transfer_homes(world: World, decedent: Entity, heir: Entity) -> tuple[str, ...]:
+    inherited = []
+    for room in world.query().with_all([HomeComponent]).execute_entities():
+        home = room.get_component(HomeComponent)
+        if home.owner_id != str(decedent.id):
+            continue
+        replace_component(room, replace(home, owner_id=str(heir.id)))
+        inherited.append(str(room.id))
+    return tuple(sorted(inherited))
+
+
+def _transfer_room_claims(
+    world: World, decedent: Entity, heir: Entity, inherited_at_epoch: int
+) -> tuple[str, ...]:
+    inherited = []
+    for room in world.query().with_all([RoomClaimComponent]).execute_entities():
+        claim = room.get_component(RoomClaimComponent)
+        if claim.claimed_by_id != str(decedent.id):
+            continue
+        replace_component(
+            room,
+            RoomClaimComponent(
+                claimed_by_id=str(heir.id),
+                claimed_at_epoch=inherited_at_epoch,
+            ),
+        )
+        inherited.append(str(room.id))
+    return tuple(sorted(inherited))
+
+
+def _transfer_household_funds(decedent: Entity, heir: Entity) -> int:
+    if not decedent.has_component(HouseholdFundsComponent):
+        return 0
+    funds = decedent.get_component(HouseholdFundsComponent)
+    if funds.balance <= 0:
+        return 0
+    heir_funds = _funds(heir)
+    replace_component(heir, replace(heir_funds, balance=heir_funds.balance + funds.balance))
+    replace_component(decedent, replace(funds, balance=0))
+    return funds.balance
+
+
+def _transfer_property_deeds(
+    world: World, decedent: Entity, heir: Entity, inherited_at_epoch: int
+) -> tuple[str, ...]:
+    try:
+        from .daggersim import OwnsProperty, PropertyDeedComponent
+    except ImportError:
+        return ()
+
+    inherited = []
+    for edge, property_id in list(decedent.get_relationships(OwnsProperty)):
+        if not world.has_entity(property_id):
+            continue
+        property_entity = world.get_entity(property_id)
+        if property_entity.has_component(PropertyDeedComponent):
+            deed = property_entity.get_component(PropertyDeedComponent)
+            replace_component(
+                property_entity,
+                replace(deed, owner_id=str(heir.id), purchased_at_epoch=inherited_at_epoch),
+            )
+        decedent.remove_relationship(OwnsProperty, property_id)
+        if not heir.has_relationship(OwnsProperty, property_id):
+            heir.add_relationship(
+                OwnsProperty(deed_id=edge.deed_id, purchased_at_epoch=inherited_at_epoch),
+                property_id,
+            )
+        inherited.append(str(property_id))
+    return tuple(sorted(inherited))
+
+
+def _transfer_colony_ownership(
+    decedent: Entity, heir: Entity, inherited_at_epoch: int
+) -> tuple[str, ...]:
+    try:
+        from .colonysim import Owns
+    except ImportError:
+        return ()
+
+    inherited = []
+    for _edge, target_id in list(decedent.get_relationships(Owns)):
+        decedent.remove_relationship(Owns, target_id)
+        if not heir.has_relationship(Owns, target_id):
+            heir.add_relationship(Owns(since_epoch=inherited_at_epoch), target_id)
+        inherited.append(str(target_id))
+    return tuple(sorted(inherited))
+
+
+class LifeInheritanceReactor:
+    """Project character death events into lineage and inheritance state."""
+
+    def __init__(self, world: World) -> None:
+        self.world = world
+
+    def subscribe(self, bus) -> None:
+        bus.subscribe(CharacterDiedEvent, self._on_death)
+
+    def _on_death(self, event: CharacterDiedEvent) -> None:
+        project_inheritance_for_death(self.world, event)
 
 
 class ChooseAspirationHandler:
@@ -2660,6 +2909,24 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
             parents.append(entity_name(parent, "someone"))
     if parents:
         lines.append("Your parents: " + ", ".join(sorted(parents)) + ".")
+    inheritances = []
+    for edge, decedent_id in character.get_relationships(InheritedFrom):
+        decedent_name = (
+            entity_name(world.get_entity(decedent_id), "someone")
+            if world.has_entity(decedent_id)
+            else "someone"
+        )
+        record_id = parse_entity_id(edge.record_id)
+        if record_id is not None and world.has_entity(record_id):
+            record_entity = world.get_entity(record_id)
+            if record_entity.has_component(InheritanceRecordComponent):
+                inheritances.append(
+                    record_entity.get_component(InheritanceRecordComponent).summary
+                )
+                continue
+        inheritances.append(f"You inherited {edge.relationship} legacy from {decedent_name}.")
+    if inheritances:
+        lines.extend(sorted(inheritances))
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
         if entity.has_component(HomeObjectComponent):
@@ -2675,6 +2942,7 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
 
 def install_lifesim(actor, *, natural_aging: bool | None = None) -> None:
     configure_lifesim_aging(actor, natural_aging=natural_aging)
+    LifeInheritanceReactor(actor.world).subscribe(actor.bus)
     actor.register_consequence(AgingConsequence())
     actor.register_consequence(PregnancyDueConsequence())
     actor.register_consequence(RoutineDueConsequence())
@@ -2725,6 +2993,8 @@ __all__ = [
     "HouseholdComponent",
     "HouseholdFundsComponent",
     "HouseholdJoinedEvent",
+    "InheritedFrom",
+    "InheritanceRecordComponent",
     "InvitationSentEvent",
     "InviteOverHandler",
     "JoinHouseholdHandler",
@@ -2733,6 +3003,7 @@ __all__ = [
     "JealousyTriggeredEvent",
     "AgeComponent",
     "AgingConsequence",
+    "LifeInheritanceReactor",
     "LifeStageComponent",
     "LifesimAgingPolicyChangedEvent",
     "LifesimAgingPolicyComponent",
@@ -2790,11 +3061,13 @@ __all__ = [
     "adult_classifier",
     "children_of",
     "configure_lifesim_aging",
+    "inheritance_record_for_event",
     "install_lifesim",
     "kinship_label",
     "lifesim_fragments",
     "parents_of",
     "partners_of",
+    "project_inheritance_for_death",
     "pregnancy_classifier",
     "romance_classifier",
 ]

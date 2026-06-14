@@ -80,6 +80,10 @@ stored with `DeathConsequenceComponent` and `DeathOf`.
 They are created from notable domain events such as writing, crafting, and death; prompts
 read those records as presentation state rather than inventing history.
 
+Life-sim inheritance is also normal ECS state. A death can transfer existing ownership
+links and balances to an heir, then store `InheritanceRecordComponent` plus an
+`InheritedFrom` edge so the lineage/audit trail survives save and reload.
+
 ## From Python
 
 The same operations are available programmatically:

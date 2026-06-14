@@ -34,8 +34,11 @@ from bunnyland.core.events import (
     CommandRejectedEvent,
     PartnershipEndedEvent,
     PartnershipStartedEvent,
+    event_base,
 )
 from bunnyland.core.handlers import HandlerContext
+from bunnyland.mechanics.colonysim import Owns
+from bunnyland.mechanics.daggersim import OwnsProperty, PropertyDeedComponent
 from bunnyland.mechanics.lifesim import (
     AddWhimHandler,
     AdoptChildHandler,
@@ -76,6 +79,8 @@ from bunnyland.mechanics.lifesim import (
     HouseholdComponent,
     HouseholdFundsComponent,
     HouseholdJoinedEvent,
+    InheritanceRecordComponent,
+    InheritedFrom,
     InvitationSentEvent,
     InviteOverHandler,
     JealousOf,
@@ -138,9 +143,11 @@ from bunnyland.mechanics.lifesim import (
     _status_edge,
     children_of,
     configure_lifesim_aging,
+    inheritance_record_for_event,
     install_lifesim,
     kinship_label,
     lifesim_fragments,
+    project_inheritance_for_death,
 )
 from bunnyland.mechanics.policy import (
     BoundaryTag,
@@ -1310,6 +1317,268 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
     )
     assert result.ok is False
     assert result.reason == "already parent of child"
+
+
+async def test_death_projects_inheritance_to_child_with_assets_and_persistence(tmp_path):
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    decedent = world.get_entity(scenario.character)
+    heir_id = _child(scenario)
+    heir = world.get_entity(heir_id)
+    decedent.add_relationship(ParentOf(), heir_id)
+    decedent.add_component(HouseholdFundsComponent(balance=17))
+    heir.add_component(HouseholdFundsComponent(balance=5))
+
+    keepsake = spawn_entity(world, [IdentityComponent(name="silver thimble", kind="item")])
+    decedent.add_relationship(Contains(mode=ContainmentMode.INVENTORY), keepsake.id)
+    business = spawn_entity(world, [BusinessOwnerComponent(name="Jam Stand")])
+    decedent.add_relationship(OwnsBusiness(), business.id)
+    world.get_entity(scenario.room_a).add_component(
+        HomeComponent(owner_id=str(decedent.id), household_id="moss")
+    )
+    world.get_entity(scenario.room_b).add_component(
+        RoomClaimComponent(claimed_by_id=str(decedent.id), claimed_at_epoch=1)
+    )
+    deed = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Moss Road Cottage", kind="property"),
+            PropertyDeedComponent(owner_id=str(decedent.id), purchased_at_epoch=2),
+        ],
+    )
+    decedent.add_relationship(OwnsProperty(deed_id=str(deed.id), purchased_at_epoch=2), deed.id)
+    workbench = spawn_entity(world, [IdentityComponent(name="family workbench", kind="station")])
+    decedent.add_relationship(Owns(since_epoch=3), workbench.id)
+
+    event = CharacterDiedEvent(
+        **event_base(
+            42,
+            actor_id=str(decedent.id),
+            target_ids=(str(decedent.id),),
+            cause="old age",
+        )
+    )
+    await scenario.actor.bus.publish(event)
+
+    record_entity = inheritance_record_for_event(world, event.event_id)
+    assert record_entity is not None
+    record = record_entity.get_component(InheritanceRecordComponent)
+    assert record.decedent_id == str(decedent.id)
+    assert record.heir_id == str(heir.id)
+    assert record.relationship == "child"
+    assert record.inherited_item_ids == (str(keepsake.id),)
+    assert record.inherited_business_ids == (str(business.id),)
+    assert record.inherited_home_ids == (str(scenario.room_a),)
+    assert record.inherited_room_claim_ids == (str(scenario.room_b),)
+    assert record.inherited_property_ids == (str(deed.id),)
+    assert record.inherited_ownership_ids == (str(workbench.id),)
+    assert record.inherited_funds == 17
+    assert heir.has_relationship(Contains, keepsake.id)
+    assert not decedent.has_relationship(Contains, keepsake.id)
+    assert heir.has_relationship(OwnsBusiness, business.id)
+    assert heir.has_relationship(OwnsProperty, deed.id)
+    assert heir.has_relationship(Owns, workbench.id)
+    assert heir.get_component(HouseholdFundsComponent).balance == 22
+    assert decedent.get_component(HouseholdFundsComponent).balance == 0
+    assert world.get_entity(scenario.room_a).get_component(HomeComponent).owner_id == str(heir.id)
+    assert world.get_entity(scenario.room_b).get_component(RoomClaimComponent).claimed_by_id == str(
+        heir.id
+    )
+    assert world.get_entity(deed.id).get_component(PropertyDeedComponent).owner_id == str(heir.id)
+    inherited_edge = heir.get_relationships(InheritedFrom)[0][0]
+    assert inherited_edge.source_event_id == event.event_id
+    assert inherited_edge.record_id == str(record_entity.id)
+    assert any(
+        "inherited child legacy from Juniper" in line
+        for line in lifesim_fragments(world, heir)
+    )
+
+    path = tmp_path / "world.json"
+    save_world(scenario.actor, path, meta=WorldMeta(seed="inheritance"))
+    loaded, _meta = load_world(path)
+    loaded_record = inheritance_record_for_event(loaded.world, event.event_id)
+    assert loaded_record is not None
+    assert loaded_record.get_component(InheritanceRecordComponent).inherited_funds == 17
+    loaded_heir = loaded.world.get_entity(heir.id)
+    assert loaded_heir.has_relationship(InheritedFrom, decedent.id)
+    assert any(
+        "inherited child legacy from Juniper" in line
+        for line in lifesim_fragments(loaded.world, loaded_heir)
+    )
+
+
+def test_inheritance_is_idempotent_and_falls_back_to_household_member():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    decedent = world.get_entity(scenario.character)
+    decedent.add_component(HouseholdComponent(household_id="moss", name="Moss Burrow"))
+    dead_child_id = _child(scenario, name="Bramble")
+    world.get_entity(dead_child_id).add_component(
+        DeadComponent(died_at_epoch=1, cause="past loss")
+    )
+    decedent.add_relationship(ParentOf(), dead_child_id)
+    housemate_id = _co_parent(scenario)
+    housemate = world.get_entity(housemate_id)
+    housemate.add_component(HouseholdComponent(household_id="moss", name="Moss Burrow"))
+    charm = spawn_entity(world, [IdentityComponent(name="house charm", kind="item")])
+    decedent.add_relationship(Contains(mode=ContainmentMode.INVENTORY), charm.id)
+    event = CharacterDiedEvent(
+        **event_base(
+            50,
+            actor_id=str(decedent.id),
+            target_ids=(str(decedent.id),),
+            cause="winter fever",
+        )
+    )
+
+    first = project_inheritance_for_death(world, event)
+    duplicate = project_inheritance_for_death(world, event)
+
+    assert first is not None
+    assert duplicate is None
+    record = first.get_component(InheritanceRecordComponent)
+    assert record.heir_id == str(housemate.id)
+    assert record.relationship == "household"
+    assert housemate.has_relationship(Contains, charm.id)
+
+
+def test_inheritance_skips_deaths_without_living_heirs():
+    scenario = build_scenario()
+    event = CharacterDiedEvent(
+        **event_base(
+            50,
+            actor_id=str(scenario.character),
+            target_ids=(str(scenario.character),),
+            cause="winter fever",
+        )
+    )
+
+    assert project_inheritance_for_death(scenario.actor.world, event) is None
+
+
+def test_inheritance_covers_partner_existing_links_and_prompt_fallback():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    decedent = world.get_entity(scenario.character)
+    partner_id = _co_parent(scenario)
+    partner = world.get_entity(partner_id)
+    decedent.add_relationship(PartnerOf(since_epoch=1), partner.id)
+    partner.add_relationship(PartnerOf(since_epoch=1), decedent.id)
+    decedent.add_component(HouseholdFundsComponent(balance=0))
+
+    shared_keepsake = spawn_entity(world, [IdentityComponent(name="shared pin", kind="item")])
+    decedent.add_relationship(Contains(mode=ContainmentMode.INVENTORY), shared_keepsake.id)
+    partner.add_relationship(Contains(mode=ContainmentMode.INVENTORY), shared_keepsake.id)
+    container = spawn_entity(world, [IdentityComponent(name="locked box", kind="container")])
+    decedent.add_relationship(Contains(mode=ContainmentMode.CONTAINER), container.id)
+
+    business = spawn_entity(world, [BusinessOwnerComponent(name="Soup Cart")])
+    decedent.add_relationship(OwnsBusiness(), business.id)
+    partner.add_relationship(OwnsBusiness(), business.id)
+    world.get_entity(scenario.room_a).add_component(HomeComponent(owner_id="someone-else"))
+    world.get_entity(scenario.room_b).add_component(
+        RoomClaimComponent(claimed_by_id="someone-else", claimed_at_epoch=3)
+    )
+
+    undecorated_property = spawn_entity(
+        world, [IdentityComponent(name="paper deed", kind="property")]
+    )
+    decedent.add_relationship(
+        OwnsProperty(deed_id=str(undecorated_property.id), purchased_at_epoch=2),
+        undecorated_property.id,
+    )
+    shared_property = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Shared Cottage", kind="property"),
+            PropertyDeedComponent(owner_id=str(decedent.id), purchased_at_epoch=4),
+        ],
+    )
+    decedent.add_relationship(
+        OwnsProperty(deed_id=str(shared_property.id), purchased_at_epoch=4),
+        shared_property.id,
+    )
+    partner.add_relationship(
+        OwnsProperty(deed_id=str(shared_property.id), purchased_at_epoch=4),
+        shared_property.id,
+    )
+    shared_station = spawn_entity(world, [IdentityComponent(name="shared bench", kind="station")])
+    decedent.add_relationship(Owns(since_epoch=5), shared_station.id)
+    partner.add_relationship(Owns(since_epoch=5), shared_station.id)
+    event = CharacterDiedEvent(
+        **event_base(
+            60,
+            actor_id=str(decedent.id),
+            target_ids=(str(decedent.id),),
+            cause="winter fever",
+        )
+    )
+
+    record_entity = project_inheritance_for_death(world, event)
+
+    assert record_entity is not None
+    record = record_entity.get_component(InheritanceRecordComponent)
+    assert record.relationship == "partner"
+    assert record.inherited_item_ids == (str(shared_keepsake.id),)
+    assert record.inherited_business_ids == (str(business.id),)
+    assert record.inherited_home_ids == ()
+    assert record.inherited_room_claim_ids == ()
+    assert record.inherited_funds == 0
+    assert record.inherited_property_ids == tuple(
+        sorted((str(shared_property.id), str(undecorated_property.id)))
+    )
+    assert record.inherited_ownership_ids == (str(shared_station.id),)
+    assert partner.has_relationship(Contains, shared_keepsake.id)
+    assert decedent.has_relationship(Contains, container.id)
+    assert partner.has_relationship(OwnsBusiness, business.id)
+    assert partner.has_relationship(OwnsProperty, shared_property.id)
+    assert partner.has_relationship(Owns, shared_station.id)
+
+    fallback_record_id = parse_entity_id("entity_998")
+    assert fallback_record_id is not None
+    lost_ancestor = spawn_entity(
+        world, [IdentityComponent(name="Lost Ancestor", kind="character")]
+    )
+    partner.add_relationship(
+        InheritedFrom(
+            source_event_id="fallback",
+            inherited_at_epoch=61,
+            relationship="household",
+            record_id=str(fallback_record_id),
+        ),
+        lost_ancestor.id,
+    )
+
+    fragments = lifesim_fragments(world, partner)
+
+    assert any("inherited partner legacy from Juniper" in line for line in fragments)
+    assert any("You inherited household legacy from Lost Ancestor." in line for line in fragments)
+
+
+def test_inheritance_skips_invalid_death_events():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    missing_event = CharacterDiedEvent(
+        **event_base(
+            70,
+            actor_id="entity_999",
+            target_ids=("entity_999",),
+            cause="winter fever",
+        )
+    )
+    anonymous_event = CharacterDiedEvent(
+        **event_base(
+            71,
+            actor_id=None,
+            target_ids=(),
+            cause="winter fever",
+        )
+    )
+
+    assert project_inheritance_for_death(world, missing_event) is None
+    assert project_inheritance_for_death(world, anonymous_event) is None
+    assert inheritance_record_for_event(world, "missing") is None
 
 
 def test_lifesim_handlers_reject_invalid_character_ids_directly():

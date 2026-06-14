@@ -347,7 +347,7 @@ deterministic harnesses.
     without killing suspended characters.
   - **Verification:** lifecycle tests, persistence tests, narration input tests.
 
-- [ ] **Inheritance and lineage**
+- [x] **Inheritance and lineage**
   - **Goal:** property, items, money, names, and relationships can pass through family or
     household structures.
   - **Depends on:** lifesim family/household/property mechanics.

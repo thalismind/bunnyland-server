@@ -158,6 +158,12 @@ These commands create durable family relationships and prompt context. Pregnancy
 relationship commands may require the world policy to allow romance, adult, and pregnancy
 mechanics.
 
+When a character dies and life-sim is enabled, their living child inherits first. If no
+living child is available, a partner or household member can inherit. Inheritance moves
+explicit ECS ownership state such as inventory items, household funds, homes, claimed
+rooms, businesses, property deeds, and colony ownership links, then leaves a durable
+inheritance record that surviving characters can reference in prompts.
+
 ## Rent a home
 
 Rent is represented as a bill. A landlord and tenant must be in the same room when rent is charged:
