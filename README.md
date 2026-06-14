@@ -247,8 +247,10 @@ with a beacon to keep fueled and a wrecker's secret under the lens), `vacancy-mo
 `frozen-greenhouse-demo` (a greenhouse dome on a frozen plain with crops to keep warm and a
 specimen that grows too fast in the dark and cold), `stuck-subway-demo` (a subway car
 stalled between stations with dim power, dead ventilation, a dead motor, and strangers
-waiting out the hold), and `midnight-laundromat-demo` (a 24-hour laundromat drifting from
-night toward dawn, with late-night strangers and a lost-and-found nobody remembers filling).
+waiting out the hold), `midnight-laundromat-demo` (a 24-hour laundromat drifting from
+night toward dawn, with late-night strangers and a lost-and-found nobody remembers filling),
+and `county-fair-demo` (closing night of an autumn county fair with a pie contest, a prize
+pumpkin, a smug rival, and a blue ribbon still up for grabs).
 The `fortresssim` package is a planned catalogue package and does not have a plugin or demo
 generator yet.
 
