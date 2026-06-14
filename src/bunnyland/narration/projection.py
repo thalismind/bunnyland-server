@@ -290,6 +290,51 @@ def check_grounding(scene: SceneInput, text: str) -> tuple[NarrationIssue, ...]:
     return tuple(issues)
 
 
+def evaluate_narration_quality(scene: SceneInput, text: str) -> tuple[NarrationIssue, ...]:
+    """Run deterministic narration quality checks before subjective prose review."""
+
+    issues = list(check_grounding(scene, text))
+    lowered = text.lower()
+    contradiction_checks = (
+        (
+            scene.visible_characters,
+            ("alone", "no one else is here", "nobody is here"),
+            "narration contradicted visible characters",
+        ),
+        (
+            scene.visible_objects,
+            ("nothing is visible", "nothing to see", "no objects"),
+            "narration contradicted visible objects",
+        ),
+        (
+            scene.exits,
+            ("no exits", "nowhere to go"),
+            "narration contradicted visible exits",
+        ),
+    )
+    for visible_values, phrases, detail in contradiction_checks:
+        if visible_values and any(phrase in lowered for phrase in phrases):
+            issues.append(NarrationIssue(kind="contradiction", detail=detail))
+
+    for event in scene.events:
+        if event.salience > LOW_SALIENCE_CUTOFF and event.summary not in text:
+            issues.append(
+                NarrationIssue(
+                    kind="missing-high-salience-event",
+                    detail=f"narration omitted high-salience event {event.event_id}",
+                )
+            )
+
+    if scene.voice.lead_in and scene.voice.lead_in.lower() not in lowered:
+        issues.append(
+            NarrationIssue(
+                kind="style-drift",
+                detail=f"narration omitted voice lead-in {scene.voice.lead_in!r}",
+            )
+        )
+    return tuple(issues)
+
+
 def render_scene(scene: SceneInput) -> str:
     """Render deterministic fallback narration from scene facts."""
 
@@ -657,5 +702,6 @@ __all__ = [
     "SceneInput",
     "SceneNarration",
     "check_grounding",
+    "evaluate_narration_quality",
     "render_scene",
 ]

@@ -19,6 +19,9 @@ When renderer latency should not affect ticks, `NarrationProjection(non_blocking
 queues delivery after the scene input is assembled. The queued job may use an async
 renderer and falls back to deterministic `render_scene` on timeout or renderer failure;
 the fallback is still a presentation of the same state facts, not a world-state update.
+Use `evaluate_narration_quality(scene, text)` before subjective review of model prose. The
+deterministic harness reports hidden-state leakage, obvious contradictions of visible
+characters/objects/exits, omitted high-salience event summaries, and scenario voice drift.
 
 ## Context Shape
 

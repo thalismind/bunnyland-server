@@ -116,7 +116,7 @@ deterministic harnesses.
   - **Acceptance check:** world ticks proceed when narration is slow or unavailable.
   - **Verification:** async timeout/fallback tests.
 
-- [ ] **Narration quality harness**
+- [x] **Narration quality harness**
   - **Goal:** evaluate whether narration is grounded, POV-correct, and useful.
   - **Depends on:** deterministic scenarios and mocked model output.
   - **Implementation notes:** check factual grounding before literary quality.

@@ -38,6 +38,7 @@ from bunnyland.narration import (
     NarrationVoiceRegistry,
     SceneInput,
     check_grounding,
+    evaluate_narration_quality,
     render_scene,
 )
 
@@ -466,6 +467,80 @@ def test_narration_voice_controls_style_without_changing_facts(scenario):
     assert cozy_scene.voice.name == "cozy"
     assert render_scene(plain_scene) != render_scene(cozy_scene)
     assert 'You said, "The kettle is singing."' in render_scene(cozy_scene)
+
+
+def test_narration_quality_harness_reports_grounding_and_style_issues(scenario):
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    pebble = spawn_entity(world, [IdentityComponent(name="smooth pebble", kind="item")])
+    hidden = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="buried clue", kind="item"),
+            StealthComponent(visibility_level=0.0, hidden_threshold=0.1, hiding=True),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), pebble.id
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hidden.id
+    )
+    event = SpeechSaidEvent(
+        **event_base(
+            8,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            text="The bridge is falling.",
+        )
+    )
+    projection = NarrationProjection(
+        world,
+        voice=NarrationVoiceRegistry().get("cozy"),
+    )
+    scene = projection.assemble(world.get_entity(scenario.character), (event,))
+
+    issues = evaluate_narration_quality(
+        scene,
+        "Mosslit Burrow: You are alone. Nothing is visible. There are no exits. "
+        "The buried clue shines.",
+    )
+    kinds = {issue.kind for issue in issues}
+
+    assert "hidden-state-leak" in kinds
+    assert "contradiction" in kinds
+    assert "missing-high-salience-event" in kinds
+    assert "style-drift" in kinds
+
+
+def test_narration_quality_harness_accepts_grounded_voice_render(scenario):
+    event = SpeechSaidEvent(
+        **event_base(
+            9,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            text="The kettle is singing.",
+        )
+    )
+    projection = NarrationProjection(
+        scenario.actor.world,
+        voice=NarrationVoiceRegistry().get("cozy"),
+    )
+    scene = projection.assemble(
+        scenario.actor.world.get_entity(scenario.character),
+        (event,),
+    )
+    text = render_scene(scene)
+
+    assert evaluate_narration_quality(scene, text) == ()
 
 
 def test_narration_handles_no_pending_events_and_orphan_viewer(scenario):

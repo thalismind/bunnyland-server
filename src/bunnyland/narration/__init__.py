@@ -13,6 +13,7 @@ from .projection import (
     SceneInput,
     SceneNarration,
     check_grounding,
+    evaluate_narration_quality,
     render_scene,
 )
 
@@ -29,5 +30,6 @@ __all__ = [
     "SceneInput",
     "SceneNarration",
     "check_grounding",
+    "evaluate_narration_quality",
     "render_scene",
 ]

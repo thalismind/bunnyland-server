@@ -194,3 +194,6 @@ The projection queues delivery from the already-assembled scene facts, exposes
 `pending_deliveries()` for monitoring, and records timeout or renderer errors while
 falling back to deterministic prose. This affects presentation delivery only; ticks and
 ECS state continue through the normal command/event pipeline.
+`evaluate_narration_quality(scene, text)` provides a deterministic audit pass for rendered
+prose. It reports hidden-state leakage, contradictions of visible scene facts, omitted
+high-salience events, and voice drift before any human or model-based quality review.
