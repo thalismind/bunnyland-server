@@ -178,5 +178,10 @@ behavior.
 
 Subscribe to typed events on `actor.bus` for monitoring or moderation — for example
 `CommandRejectedEvent`, `ControllerChangedEvent`, `SpeechSaidEvent`, `ActorMovedEvent`,
-`CharacterDiedEvent`. `--verbose` (see [running a server](running-a-server.md)) logs
+or `CharacterDiedEvent`. `--verbose` (see [running a server](running-a-server.md)) logs
 decisions and rejections at INFO.
+
+`NarrationProjection` can also subscribe to the same bus and keep a volatile read-side
+presentation transcript keyed by viewer id. It assembles scene facts from current ECS
+projections and visible domain events, so a renderer failure is recorded on the projection
+and should not mutate the world.

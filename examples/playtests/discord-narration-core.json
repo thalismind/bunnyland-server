@@ -1,0 +1,23 @@
+{
+  "name": "discord-narration-core",
+  "ticks": 3,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {
+      "tick": 0,
+      "content": "!claim Juniper",
+      "expect": ["You are now controlling Juniper."]
+    },
+    {
+      "tick": 1,
+      "content": "!say The tunnel can wait.",
+      "expect": ["Speech said: text The tunnel can wait."]
+    },
+    {
+      "tick": 2,
+      "content": "!move north",
+      "expect": ["You are now in North Tunnel"]
+    }
+  ]
+}

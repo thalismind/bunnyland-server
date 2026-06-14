@@ -131,6 +131,7 @@ from bunnyland.mechanics.storyteller import (
 )
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.memory.store import MemoryEntry
+from bunnyland.narration import NarrationProjection, check_grounding
 from bunnyland.plugins import apply_plugins, load_modules, select
 from bunnyland.prompts.builder import PromptBuilder
 
@@ -1344,6 +1345,25 @@ async def test_discord_playtest_core_actions_loop(scenario):
     assert hazel_bond is not None
     assert hazel_bond.affinity > 0
     assert hazel_bond.familiarity > 0
+
+
+async def test_discord_playtest_core_narration_transcript(scenario):
+    scenario.actor.register_handler(SayHandler())
+    projection = NarrationProjection(scenario.actor.world).attach(scenario.actor)
+
+    result = await run_discord_playtest(
+        _loop(scenario.actor),
+        load_discord_playtest(_run_path("discord-narration-core.json")),
+    )
+
+    narrations = projection.narrations(str(scenario.character))
+    assert result.ticks == 3
+    assert len(narrations) >= 2
+    assert any('You said, "The tunnel can wait."' in item.text for item in narrations)
+    latest = projection.latest(str(scenario.character))
+    assert latest is not None
+    assert "You moved north to North Tunnel." in latest.text
+    assert check_grounding(latest.scene, latest.text) == ()
 
 
 async def test_discord_playtest_needs_and_memory_loop(scenario):

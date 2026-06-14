@@ -115,6 +115,7 @@ from bunnyland.mechanics.nukesim import (
 )
 from bunnyland.memory import install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
+from bunnyland.narration import NarrationProjection, check_grounding
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_prompt_fragments
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.worldgen import GenOptions, StubWorldBuilder, collect_generators, instantiate
@@ -357,6 +358,31 @@ async def test_scripted_playthrough_processes_actions_each_round():
     world = actor.world
     assert container_of(world.get_entity(result.objects["paper"])) == hazel
     assert container_of(world.get_entity(hazel)) == result.rooms["tunnel"]
+
+
+async def test_scripted_playthrough_produces_grounded_pov_narration():
+    actor, _proposal, result = await _new_world()
+    hazel = result.characters["hazel"]
+    projection = NarrationProjection(actor.world).attach(actor)
+    agent = ScriptedAgent(
+        [
+            ToolCall("say", {"text": "Hello, burrow.", "intent": "conversation"}),
+            ToolCall("move", {"direction": "north"}),
+        ]
+    )
+    dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), agent)
+    loop = GameLoop(actor, dispatch, tick_seconds=1.0, time_scale=3600.0)
+
+    await loop.run(max_ticks=3)
+
+    narrations = projection.narrations(str(hazel))
+    assert len(narrations) >= 2
+    assert any('You said, "Hello, burrow."' in item.text for item in narrations)
+    latest = projection.latest(str(hazel))
+    assert latest is not None
+    assert "You moved north to North Tunnel." in latest.text
+    assert latest.scene.location_title == "North Tunnel"
+    assert check_grounding(latest.scene, latest.text) == ()
 
 
 async def test_character_controller_lifecycle_e2e():

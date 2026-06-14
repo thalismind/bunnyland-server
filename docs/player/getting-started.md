@@ -32,6 +32,15 @@ You are carrying:
 
 If something is not shown in the room summary or your inventory, your character usually cannot target it by name.
 
+## Narration
+
+Some clients and scenarios can show narration after a turn. Narration is a presentation of
+what your character can currently perceive: nearby events, the room summary, visible
+characters and objects, and exits. It does not create facts or change the world.
+
+If another character acts in a different room, or an object is hidden from your character,
+that remote or hidden fact should not appear in your narration.
+
 ## Move
 
 Move through an exit by direction:

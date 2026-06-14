@@ -4,6 +4,12 @@ Bunnyland prompt fragments are projections from ECS state into short, determinis
 for a character prompt. Fragment providers still decide what is visible. Component methods
 can format state after the provider has selected the entity/component that should be shown.
 
+Narration follows the same boundary. `NarrationProjection` reads typed domain events,
+`RoomSummaryProjection`, and per-character perception, then stores a volatile presentation
+message for each viewer. It does not write ECS state. A future prose renderer can style
+the message, but the scene facts it receives should already be visibility-filtered and
+auditable through source event ids.
+
 ## Context Shape
 
 Component prompt methods receive a `ComponentPromptContext`:
