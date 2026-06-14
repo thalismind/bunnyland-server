@@ -10,6 +10,12 @@ controllers, and the game clock.
 > The volatile command queues are intentionally **not** saved — a reloaded world resumes
 > with empty queues and keeps playing from the saved game time.
 
+Offline life is explicit and bounded. After loading, callers may run
+`advance_offline_life(actor, elapsed_seconds)` to advance a capped number of coarse ticks
+with cheap background controllers. The helper uses the normal actor tick, controller
+dispatch, command validation, and handlers; any resulting changes are persisted by the next
+`save_world(...)`.
+
 ## Saving from the server
 
 ```bash
@@ -70,6 +76,7 @@ reload with the same `--plugin`/`--module` flags you generated with.
 The same operations are available programmatically:
 
 ```python
+from bunnyland.offline import advance_offline_life
 from bunnyland.persistence import save_world, load_world, WorldMeta
 from bunnyland.plugins import bunnyland_plugins
 
@@ -81,6 +88,7 @@ save_world(actor, "worlds/marsh.json",
 # reconstruct their types and re-register their handlers/systems:
 actor, meta = load_world("worlds/marsh.json", plugins=bunnyland_plugins())
 print(meta.seed, meta.generator, meta.saved_at_epoch)
+await advance_offline_life(actor, elapsed_seconds=6 * 3600)
 ```
 
 `load_world` returns a ready `WorldActor` (clock rebound, plugins applied) and the

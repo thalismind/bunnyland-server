@@ -26,6 +26,7 @@ from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.mechanics.needs import HungerComponent
 from bunnyland.mechanics.toonsim import ToonRoomComponent
+from bunnyland.offline import advance_offline_life
 from bunnyland.persistence import (
     WorldMeta,
     YAMLPersistenceDriver,
@@ -127,6 +128,35 @@ async def test_reloaded_world_keeps_playing(tmp_path):
     await GameLoop(actor2, dispatch).run(max_ticks=2)
 
     assert container_of(actor2.world.get_entity(hazel)) == result.rooms["tunnel"]
+
+
+async def test_offline_life_advances_reloaded_world_and_persists_changes(tmp_path):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    result = await instantiate(actor, StubWorldBuilder().propose("a quiet marsh"))
+    hazel = result.characters["hazel"]
+    path = tmp_path / "world.json"
+    save_world(actor, path, meta=WorldMeta(seed="offline"))
+
+    loaded, meta = load_world(path, plugins=bunnyland_plugins())
+    ticks = await advance_offline_life(loaded, 2 * 3600.0, max_ticks=2)
+    save_world(loaded, path, meta=meta)
+    reloaded, _meta = load_world(path, plugins=bunnyland_plugins())
+
+    assert ticks == 2
+    assert "a scrap of paper" in _inventory(reloaded, hazel)
+    assert reloaded.epoch > actor.epoch
+
+
+async def test_offline_life_is_bounded_by_max_ticks(tmp_path):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    await instantiate(actor, StubWorldBuilder().propose("a quiet marsh"))
+
+    ticks = await advance_offline_life(actor, 24 * 3600.0, step_seconds=3600.0, max_ticks=3)
+
+    assert ticks == 3
+    assert actor.epoch == 3 * 3600
 
 
 async def test_save_file_embeds_ecs_and_provenance(tmp_path):

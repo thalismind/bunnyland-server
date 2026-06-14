@@ -133,6 +133,10 @@ Relationship facts also influence those cheap profiles: fear tends toward avoida
 fondness tends toward warm speech, and resentment or dislike tends toward guarded speech.
 The controller still submits ordinary tool calls; the relationship state is prompt input,
 not a bypass around command validation.
+For saved worlds, `advance_offline_life(actor, elapsed_seconds)` can run a bounded offline
+catch-up pass after reload. It uses cheap background controllers and normal command
+validation, then the next save persists any resulting movement, inventory, needs, or memory
+changes.
 
 ### Enabling a subset
 

@@ -217,7 +217,7 @@ deterministic harnesses.
     memory and can be retrieved later.
   - **Verification:** memory persistence and retrieval tests.
 
-- [ ] **Offline life mechanism**
+- [x] **Offline life mechanism**
   - **Goal:** characters continue limited needs/goals/social activity while players are
     away.
   - **Depends on:** cheap background controllers, persistence, autonomy scoring.
