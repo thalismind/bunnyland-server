@@ -878,9 +878,12 @@ from ..mechanics.gardensim import (
 from ..mechanics.history import (
     HistoryActor,
     HistoryTarget,
+    MarkOn,
+    PhysicalMarkComponent,
     WorldHistoryRecordComponent,
     history_fragments,
     install_history,
+    mark_fragments,
 )
 from ..mechanics.lifesim import (
     AddWhimHandler,
@@ -1866,11 +1869,11 @@ def history_plugin() -> Plugin:
         name="World History",
         dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(
-            components=(WorldHistoryRecordComponent,),
-            edges=(HistoryActor, HistoryTarget),
+            components=(PhysicalMarkComponent, WorldHistoryRecordComponent),
+            edges=(HistoryActor, HistoryTarget, MarkOn),
         ),
         runtime=RuntimeContribution(service_factories=(_history_factory,)),
-        content=ContentContribution(prompt_fragments=(history_fragments,)),
+        content=ContentContribution(prompt_fragments=(history_fragments, mark_fragments)),
     )
 
 

@@ -20,6 +20,7 @@ from ..core.events import (
 )
 
 _HISTORY_PROMPT_LIMIT = 5
+_MARK_PROMPT_LIMIT = 5
 _SUMMARY_LIMIT = 180
 _QUOTE_LIMIT = 90
 
@@ -38,6 +39,17 @@ class WorldHistoryRecordComponent(Component):
 
 
 @dataclass(frozen=True)
+class PhysicalMarkComponent(Component):
+    """A durable authored mark on another entity."""
+
+    text: str
+    mark_type: str = "writing"
+    author_id: str = ""
+    source_event_id: str = ""
+    created_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
 class HistoryActor(Edge):
     """history record -> actor involved in the deed."""
 
@@ -49,6 +61,13 @@ class HistoryTarget(Edge):
     """history record -> target or artifact involved in the deed."""
 
     role: str = "target"
+
+
+@dataclass(frozen=True)
+class MarkOn(Edge):
+    """physical mark -> entity carrying the mark."""
+
+    surface: str = "default"
 
 
 def install_history(actor) -> None:
@@ -86,6 +105,31 @@ def history_record_for_event(world: World, source_event_id: str) -> Entity | Non
         if record.source_event_id == source_event_id:
             return entity
     return None
+
+
+def physical_mark_for_event(world: World, source_event_id: str) -> Entity | None:
+    """Return the physical mark created from ``source_event_id``, if any."""
+
+    for entity in world.query().with_all([PhysicalMarkComponent]).execute_entities():
+        mark = entity.get_component(PhysicalMarkComponent)
+        if mark.source_event_id == source_event_id:
+            return entity
+    return None
+
+
+def marks_on(world: World, target_id: EntityId) -> list[tuple[Entity, PhysicalMarkComponent]]:
+    """Return marks on ``target_id``, newest first."""
+
+    marks: list[tuple[Entity, PhysicalMarkComponent]] = []
+    for entity in world.query().with_all([PhysicalMarkComponent]).execute_entities():
+        if not any(target == target_id for _edge, target in entity.get_relationships(MarkOn)):
+            continue
+        marks.append((entity, entity.get_component(PhysicalMarkComponent)))
+    return sorted(
+        marks,
+        key=lambda item: (item[1].created_at_epoch, item[1].source_event_id),
+        reverse=True,
+    )
 
 
 def record_world_history(
@@ -139,6 +183,51 @@ def record_world_history(
     return record
 
 
+def record_physical_mark(
+    world: World,
+    *,
+    target_id: str,
+    text: str,
+    source_event_id: str,
+    created_at_epoch: int,
+    mark_type: str = "writing",
+    author_id: str = "",
+) -> Entity | None:
+    """Create a durable mark entity linked to its marked target."""
+
+    parsed_target = parse_entity_id(target_id)
+    clean_text = _clean(text)
+    if (
+        parsed_target is None
+        or not world.has_entity(parsed_target)
+        or not clean_text
+        or not source_event_id
+    ):
+        return None
+    if physical_mark_for_event(world, source_event_id) is not None:
+        return None
+
+    target_name = _name(world, target_id)
+    mark = spawn_entity(
+        world,
+        [
+            IdentityComponent(
+                name=f"{mark_type.title()} on {target_name}",
+                kind="physical-mark",
+            ),
+            PhysicalMarkComponent(
+                text=_truncate(clean_text, _SUMMARY_LIMIT),
+                mark_type=mark_type,
+                author_id=author_id,
+                source_event_id=source_event_id,
+                created_at_epoch=created_at_epoch,
+            ),
+        ],
+    )
+    mark.add_relationship(MarkOn(), parsed_target)
+    return mark
+
+
 def history_fragments(world: World, character: Entity) -> list[str]:
     """Prompt lines for relevant world history near a character."""
 
@@ -157,6 +246,25 @@ def history_fragments(world: World, character: Entity) -> list[str]:
     return fragments
 
 
+def mark_fragments(world: World, character: Entity) -> list[str]:
+    """Prompt lines for physical marks on reachable entities."""
+
+    fragments: list[str] = []
+    for target_id in sorted(reachable_ids(world, character), key=str):
+        if not world.has_entity(target_id):
+            continue
+        target_name = entity_name(world.get_entity(target_id))
+        for mark_entity, mark in marks_on(world, target_id):
+            author = _name(world, mark.author_id) if mark.author_id else "someone"
+            fragments.append(
+                f"{target_name} bears {mark.mark_type} by {author}: {mark.text} "
+                f"[mark:{mark_entity.id} source:{mark.source_event_id}]"
+            )
+            if len(fragments) >= _MARK_PROMPT_LIMIT:
+                return fragments
+    return fragments
+
+
 class WorldHistoryReactor:
     """Project selected domain events into durable shared history."""
 
@@ -167,6 +275,15 @@ class WorldHistoryReactor:
         bus.subscribe(DomainEvent, self._on_event)
 
     def _on_event(self, event: DomainEvent) -> None:
+        if isinstance(event, PhysicalWriteEvent):
+            record_physical_mark(
+                self.world,
+                target_id=event.item_id,
+                text=event.text,
+                source_event_id=event.event_id,
+                created_at_epoch=event.world_epoch,
+                author_id=event.actor_id or "",
+            )
         payload = _history_payload(self.world, event)
         if payload is None:
             return
@@ -280,11 +397,17 @@ def _truncate(text: str, limit: int) -> str:
 __all__ = [
     "HistoryActor",
     "HistoryTarget",
+    "MarkOn",
+    "PhysicalMarkComponent",
     "WorldHistoryReactor",
     "WorldHistoryRecordComponent",
     "history_fragments",
     "history_record_for_event",
     "install_history",
+    "mark_fragments",
+    "marks_on",
+    "physical_mark_for_event",
+    "record_physical_mark",
     "record_world_history",
     "world_history_records",
 ]

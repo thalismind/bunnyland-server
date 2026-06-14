@@ -309,7 +309,7 @@ deterministic harnesses.
     reload.
   - **Verification:** persistence and prompt tests.
 
-- [ ] **Physical marks and authored artifacts**
+- [x] **Physical marks and authored artifacts**
   - **Goal:** writing, carving, created artifacts, claimed spaces, and damage persist and
     remain discoverable.
   - **Depends on:** existing write/use/property/crafting mechanics.

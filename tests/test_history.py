@@ -8,6 +8,7 @@ from bunnyland.core import (
     CommandCost,
     ContainmentMode,
     Contains,
+    EntityInspectedEvent,
     IdentityComponent,
     Lane,
     ReadableComponent,
@@ -25,8 +26,14 @@ from bunnyland.core.events import (
 from bunnyland.mechanics.history import (
     HistoryActor,
     HistoryTarget,
+    MarkOn,
+    PhysicalMarkComponent,
     WorldHistoryRecordComponent,
     history_fragments,
+    mark_fragments,
+    marks_on,
+    physical_mark_for_event,
+    record_physical_mark,
     record_world_history,
     world_history_records,
 )
@@ -51,6 +58,18 @@ def _write_command(scenario, target_id, text: str):
         cost=CommandCost(action=1, focus=1),
         lane=Lane.WORLD,
         payload={"target_id": str(target_id), "text": text},
+    )
+
+
+def _inspect_command(scenario, target_id):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="inspect",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"target_id": str(target_id)},
     )
 
 
@@ -84,11 +103,18 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
     assert "Juniper wrote on watch sign" in record.summary
     assert record_entity.get_relationships(HistoryActor)[0][1] == scenario.character
     assert record_entity.get_relationships(HistoryTarget)[0][1] == paper.id
+    mark_entity, mark = marks_on(world, paper.id)[0]
+    assert mark.text == "Juniper kept watch through the storm."
+    assert mark.author_id == str(scenario.character)
+    assert mark_entity.get_component(PhysicalMarkComponent) == mark
+    assert mark_entity.get_relationships(MarkOn)[0][1] == paper.id
+    assert physical_mark_for_event(world, mark.source_event_id) == mark_entity
 
     ctx = PromptBuilder(
         world, fragment_providers=collect_prompt_fragments(plugins)
     ).build(scenario.character)
     assert any("Juniper kept watch through the storm" in line for line in ctx.conditions)
+    assert any("watch sign bears writing by Juniper" in line for line in ctx.conditions)
 
     path = tmp_path / "world.json"
     save_world(scenario.actor, path, meta=WorldMeta(seed="history"))
@@ -96,11 +122,22 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
 
     loaded_records = world_history_records(loaded.world)
     assert len(loaded_records) == 1
+    loaded_marks = marks_on(loaded.world, paper.id)
+    assert len(loaded_marks) == 1
+    assert loaded_marks[0][1].text == "Juniper kept watch through the storm."
     loaded_ctx = PromptBuilder(
         loaded.world, fragment_providers=collect_prompt_fragments(plugins)
     ).build(scenario.character)
     assert any("World history:" in line for line in loaded_ctx.conditions)
     assert any("source:" in line for line in loaded_ctx.conditions)
+    assert any("watch sign bears writing by Juniper" in line for line in loaded_ctx.conditions)
+
+    inspected: list[EntityInspectedEvent] = []
+    loaded.bus.subscribe(EntityInspectedEvent, inspected.append)
+    await loaded.submit(_inspect_command(scenario, paper.id))
+    await loaded.tick(HOUR)
+
+    assert inspected[0].text == "Juniper kept watch through the storm."
 
 
 async def test_character_death_event_becomes_history_with_actor_and_target_edges():
@@ -249,6 +286,62 @@ def test_record_world_history_skips_empty_and_duplicate_sources():
     assert created.get_relationships(HistoryTarget)[0][1] == scenario.room_a
 
 
+def test_record_physical_mark_skips_invalid_empty_and_duplicate_sources():
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    assert (
+        record_physical_mark(
+            world,
+            target_id="not-an-id",
+            text="x",
+            source_event_id="mark-a",
+            created_at_epoch=1,
+        )
+        is None
+    )
+    assert (
+        record_physical_mark(
+            world,
+            target_id=str(scenario.room_a),
+            text="",
+            source_event_id="mark-a",
+            created_at_epoch=1,
+        )
+        is None
+    )
+    assert (
+        record_physical_mark(
+            world,
+            target_id=str(scenario.room_a),
+            text="x",
+            source_event_id="",
+            created_at_epoch=1,
+        )
+        is None
+    )
+    created = record_physical_mark(
+        world,
+        target_id=str(scenario.room_a),
+        text="  old chalk   line ",
+        source_event_id="mark-a",
+        created_at_epoch=1,
+        mark_type="carving",
+        author_id=str(scenario.character),
+    )
+    duplicate = record_physical_mark(
+        world,
+        target_id=str(scenario.room_a),
+        text="another line",
+        source_event_id="mark-a",
+        created_at_epoch=2,
+    )
+
+    assert created is not None
+    assert duplicate is None
+    assert marks_on(world, scenario.room_a)[0][1].text == "old chalk line"
+
+
 def test_history_fragments_only_show_relevant_records():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -304,3 +397,40 @@ def test_history_fragments_only_show_relevant_records():
     assert len(fragments) == 5
     assert any("Room deed 5." in fragment for fragment in fragments)
     assert any("source:target" in fragment for fragment in fragments)
+
+
+def test_mark_fragments_show_reachable_marks_with_limit():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    sign = spawn_entity(world, [IdentityComponent(name="notice board", kind="sign")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), sign.id
+    )
+    far_sign = spawn_entity(world, [IdentityComponent(name="far sign", kind="sign")])
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), far_sign.id
+    )
+    for index in range(6):
+        record_physical_mark(
+            world,
+            target_id=str(sign.id),
+            text=f"line {index}",
+            source_event_id=f"mark-{index}",
+            created_at_epoch=index,
+            author_id=str(scenario.character),
+        )
+    record_physical_mark(
+        world,
+        target_id=str(far_sign.id),
+        text="too far",
+        source_event_id="far-mark",
+        created_at_epoch=20,
+        author_id=str(scenario.character),
+    )
+
+    fragments = mark_fragments(world, character)
+
+    assert len(fragments) == 5
+    assert all("notice board bears writing by Juniper" in fragment for fragment in fragments)
+    assert not any("too far" in fragment for fragment in fragments)

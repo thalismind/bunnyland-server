@@ -497,6 +497,7 @@ RecentContextComponent
 MemoryProfileComponent
 RoomSummaryComponent
 WorldHistoryRecordComponent
+PhysicalMarkComponent
 ```
 
 ### Services and projections
@@ -511,6 +512,7 @@ NeedPromptPart
 AffectPromptPart
 MemoryPromptPart
 WorldHistoryPromptPart
+PhysicalMarkPromptPart
 ActionPromptPart
 PolicyPromptPart
 ```
@@ -587,14 +589,18 @@ WorldHistoryReactor
 
 ```python
 WorldHistoryRecordComponent
+PhysicalMarkComponent
 HistoryActor
 HistoryTarget
+MarkOn
 ```
 
 World history records store a concise summary, source event id, event type, epoch,
 location id, tags, and salience. Actor and target links are ECS edges so later mechanics
 can inspect who did what and which artifacts or characters were involved. Current
-recorded sources include physical writing, crafting, and death.
+recorded sources include physical writing, crafting, and death. Physical marks are
+separate mark entities linked with `MarkOn`, so one object can accumulate several visible
+marks without duplicate components.
 
 ---
 
@@ -7197,7 +7203,8 @@ ReadableTextReadEvent
 ```
 
 Physical writing is persisted on the readable object and is also eligible for shared
-world history, so later prompts can cite authored marks after save/reload.
+world history and physical mark projection, so later prompts can cite authored marks
+after save/reload.
 
 ---
 
