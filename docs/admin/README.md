@@ -189,3 +189,8 @@ is recorded on the projection without mutating the world. Noisy scene batches re
 high-salience events and record compressed low-salience event ids on the scene input.
 Scenario voice controls change renderer diction only; audit facts and event ids stay the
 same across voices.
+Use `NarrationProjection(non_blocking=True)` when prose rendering may call a slow model.
+The projection queues delivery from the already-assembled scene facts, exposes
+`pending_deliveries()` for monitoring, and records timeout or renderer errors while
+falling back to deterministic prose. This affects presentation delivery only; ticks and
+ECS state continue through the normal command/event pipeline.

@@ -6,8 +6,10 @@ only to its own volatile transcript. It does not mutate the Relics world.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections import defaultdict, deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from relics import Entity, World
@@ -446,11 +448,15 @@ class NarrationProjection:
     capacity: int = 20
     max_scene_events: int = 8
     voice: NarrationVoice = DEFAULT_VOICE
-    renderer: Callable[[SceneInput], str] = render_scene
+    renderer: Callable[[SceneInput], str | Awaitable[str]] = render_scene
+    fallback_renderer: Callable[[SceneInput], str] = render_scene
+    non_blocking: bool = False
+    render_timeout_seconds: float = 0.25
     _pending: list[DomainEvent] = field(default_factory=list, init=False)
     _transcript: dict[str, deque[SceneNarration]] = field(
         default_factory=lambda: defaultdict(deque), init=False
     )
+    _delivery_tasks: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     errors: list[str] = field(default_factory=list, init=False)
 
     def attach(self, actor: WorldActor) -> NarrationProjection:
@@ -466,6 +472,9 @@ class NarrationProjection:
 
     def narrations(self, viewer_id: str) -> tuple[SceneNarration, ...]:
         return tuple(self._transcript.get(viewer_id, ()))
+
+    def pending_deliveries(self) -> int:
+        return sum(1 for task in self._delivery_tasks if not task.done())
 
     def assemble(self, viewer: Entity, events: tuple[DomainEvent, ...]) -> SceneInput:
         room_id = container_of(viewer)
@@ -561,23 +570,67 @@ class NarrationProjection:
                 scene = self.assemble(viewer, events)
                 if not scene.events:
                     continue
-                text = self.renderer(scene)
-                narration = SceneNarration(
-                    viewer_id=str(viewer.id),
-                    epoch=max(event.world_epoch for event in events),
-                    scene=scene,
-                    text=text,
-                    source_event_ids=tuple(event.event_id for event in scene.events),
-                )
-                entries = self._transcript[str(viewer.id)]
-                entries.append(narration)
-                while len(entries) > self.capacity:
-                    entries.popleft()
+                epoch = max(event.world_epoch for event in events)
+                if self.non_blocking:
+                    self._queue_delivery(str(viewer.id), epoch, scene)
+                else:
+                    self._record_narration(
+                        str(viewer.id),
+                        epoch,
+                        scene,
+                        self._render_text_sync(scene),
+                    )
         except Exception as exc:  # pragma: no cover - exact exception is stored for operators.
             self.errors.append(str(exc))
 
     def _on_event(self, event: DomainEvent) -> None:
         self._pending.append(event)
+
+    def _render_text_sync(self, scene: SceneInput) -> str:
+        text = self.renderer(scene)
+        if inspect.isawaitable(text):
+            raise RuntimeError("async narration renderer requires non_blocking=True")
+        return text
+
+    def _queue_delivery(self, viewer_id: str, epoch: int, scene: SceneInput) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._record_narration(viewer_id, epoch, scene, self.fallback_renderer(scene))
+            return
+        task = loop.create_task(self._deliver(viewer_id, epoch, scene))
+        self._delivery_tasks.add(task)
+        task.add_done_callback(self._delivery_tasks.discard)
+
+    async def _deliver(self, viewer_id: str, epoch: int, scene: SceneInput) -> None:
+        try:
+            rendered = self.renderer(scene)
+            if inspect.isawaitable(rendered):
+                text = await asyncio.wait_for(rendered, timeout=self.render_timeout_seconds)
+            else:
+                text = rendered
+        except TimeoutError:
+            self.errors.append("narration render timed out")
+            text = self.fallback_renderer(scene)
+        except Exception as exc:  # noqa: BLE001 - delivery must fall back, not fail the tick.
+            self.errors.append(str(exc))
+            text = self.fallback_renderer(scene)
+        self._record_narration(viewer_id, epoch, scene, text)
+
+    def _record_narration(
+        self, viewer_id: str, epoch: int, scene: SceneInput, text: str
+    ) -> None:
+        narration = SceneNarration(
+            viewer_id=viewer_id,
+            epoch=epoch,
+            scene=scene,
+            text=text,
+            source_event_ids=tuple(event.event_id for event in scene.events),
+        )
+        entries = self._transcript[viewer_id]
+        entries.append(narration)
+        while len(entries) > self.capacity:
+            entries.popleft()
 
     def _invisible_names(self, viewer: Entity) -> tuple[str, ...]:
         visible = set(perceived.id for perceived in perceive(self.world, viewer).entities)

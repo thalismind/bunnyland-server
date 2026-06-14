@@ -15,6 +15,10 @@ ahead of routine events; when a scene batch is noisy, low-salience event ids mov
 `compressed_event_ids` with a compression fact instead of filling the prompt. Scenario
 voice controls are stored as `NarrationVoice` metadata on the scene input. Voice changes
 can alter renderer diction, but the structured facts and event ids are unchanged.
+When renderer latency should not affect ticks, `NarrationProjection(non_blocking=True)`
+queues delivery after the scene input is assembled. The queued job may use an async
+renderer and falls back to deterministic `render_scene` on timeout or renderer failure;
+the fallback is still a presentation of the same state facts, not a world-state update.
 
 ## Context Shape
 

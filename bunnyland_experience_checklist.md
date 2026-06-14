@@ -108,7 +108,7 @@ deterministic harnesses.
     proposals fail without partial ECS mutation.
   - **Verification:** worldgen/admin patch validation tests.
 
-- [ ] **Non-blocking narration delivery**
+- [x] **Non-blocking narration delivery**
   - **Goal:** narration latency does not stall world ticks.
   - **Depends on:** async task management and websocket/event delivery.
   - **Implementation notes:** queue narration jobs from tick facts; emit fallback

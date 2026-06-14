@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from bunnyland.core import (
     CharacterComponent,
     CommandCost,
@@ -482,6 +484,63 @@ def test_narration_handles_no_pending_events_and_orphan_viewer(scenario):
     assert scene.location_title == "nowhere"
 
 
+def test_narration_sync_mode_rejects_awaitable_renderer(scenario):
+    class AwaitableText:
+        def __await__(self):
+            if False:
+                yield None
+            return "late"
+
+    projection = NarrationProjection(
+        scenario.actor.world,
+        renderer=lambda _scene: AwaitableText(),
+    )
+    event = SpeechSaidEvent(
+        **event_base(
+            6,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            text="Hello.",
+        )
+    )
+    projection._on_event(event)
+
+    projection.after_tick(scenario.actor)
+
+    assert projection.errors == ["async narration renderer requires non_blocking=True"]
+    assert projection.latest(str(scenario.character)) is None
+
+
+def test_narration_non_blocking_without_running_loop_uses_fallback_and_capacity(
+    scenario,
+):
+    projection = NarrationProjection(
+        scenario.actor.world,
+        renderer=lambda _scene: "unavailable",
+        non_blocking=True,
+        capacity=1,
+    )
+    event = SpeechSaidEvent(
+        **event_base(
+            7,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            text="Hello.",
+        )
+    )
+    scene = projection.assemble(scenario.actor.world.get_entity(scenario.character), (event,))
+
+    projection._queue_delivery(str(scenario.character), 7, scene)
+    projection._queue_delivery(str(scenario.character), 8, scene)
+
+    narrations = projection.narrations(str(scenario.character))
+    assert len(narrations) == 1
+    assert narrations[0].epoch == 8
+    assert 'You said, "Hello."' in narrations[0].text
+
+
 async def test_narration_after_tick_records_presentation_without_mutating_world(scenario):
     scenario.actor.register_handler(MoveHandler())
     projection = NarrationProjection(scenario.actor.world).attach(scenario.actor)
@@ -497,6 +556,100 @@ async def test_narration_after_tick_records_presentation_without_mutating_world(
     assert "You moved north to North Tunnel." in narration.text
     assert narration.source_event_ids
     assert narration.scene.room_id == str(scenario.room_b)
+
+
+async def test_narration_non_blocking_delivery_falls_back_on_timeout(scenario):
+    scenario.actor.register_handler(SayHandler())
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_renderer(_scene):
+        started.set()
+        await release.wait()
+        return "late text"
+
+    projection = NarrationProjection(
+        scenario.actor.world,
+        renderer=slow_renderer,
+        non_blocking=True,
+        render_timeout_seconds=0.01,
+    ).attach(scenario.actor)
+
+    await scenario.actor.submit(_command(scenario, "say", {"text": "Hello."}))
+    await scenario.actor.tick(0.0)
+
+    assert projection.latest(str(scenario.character)) is None
+    assert projection.pending_deliveries() == 1
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    await asyncio.sleep(0.05)
+    narration = projection.latest(str(scenario.character))
+
+    assert narration is not None
+    assert 'You said, "Hello."' in narration.text
+    assert projection.pending_deliveries() == 0
+    assert projection.errors == ["narration render timed out"]
+    release.set()
+
+
+async def test_narration_non_blocking_delivery_uses_async_renderer(scenario):
+    scenario.actor.register_handler(SayHandler())
+
+    async def renderer(scene):
+        return f"rendered {scene.location_title}"
+
+    projection = NarrationProjection(
+        scenario.actor.world,
+        renderer=renderer,
+        non_blocking=True,
+    ).attach(scenario.actor)
+
+    await scenario.actor.submit(_command(scenario, "say", {"text": "Hello."}))
+    await scenario.actor.tick(0.0)
+    await asyncio.sleep(0)
+
+    narration = projection.latest(str(scenario.character))
+    assert narration is not None
+    assert narration.text == "rendered Mosslit Burrow"
+    assert narration.source_event_ids
+
+
+async def test_narration_non_blocking_delivery_accepts_sync_renderer(scenario):
+    scenario.actor.register_handler(SayHandler())
+    projection = NarrationProjection(
+        scenario.actor.world,
+        renderer=lambda scene: f"sync rendered {scene.location_title}",
+        non_blocking=True,
+    ).attach(scenario.actor)
+
+    await scenario.actor.submit(_command(scenario, "say", {"text": "Hello."}))
+    await scenario.actor.tick(0.0)
+    await asyncio.sleep(0)
+
+    narration = projection.latest(str(scenario.character))
+    assert narration is not None
+    assert narration.text == "sync rendered Mosslit Burrow"
+
+
+async def test_narration_non_blocking_delivery_falls_back_on_renderer_error(scenario):
+    scenario.actor.register_handler(SayHandler())
+
+    def broken(_scene):
+        raise RuntimeError("renderer down")
+
+    projection = NarrationProjection(
+        scenario.actor.world,
+        renderer=broken,
+        non_blocking=True,
+    ).attach(scenario.actor)
+
+    await scenario.actor.submit(_command(scenario, "say", {"text": "Hello."}))
+    await scenario.actor.tick(0.0)
+    await asyncio.sleep(0)
+
+    narration = projection.latest(str(scenario.character))
+    assert narration is not None
+    assert 'You said, "Hello."' in narration.text
+    assert projection.errors == ["renderer down"]
 
 
 def test_narration_renderer_failure_is_isolated_from_world_state(scenario):
