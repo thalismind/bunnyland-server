@@ -44,6 +44,16 @@ class SceneEvent:
 
 
 @dataclass(frozen=True)
+class SceneFact:
+    """One programmatic fact visible to a narration viewer."""
+
+    category: str
+    text: str
+    entity_id: str | None = None
+    event_id: str | None = None
+
+
+@dataclass(frozen=True)
 class SceneInput:
     """Programmatic, viewer-scoped facts consumed by narration renderers."""
 
@@ -57,6 +67,7 @@ class SceneInput:
     events: tuple[SceneEvent, ...] = ()
     omitted_event_ids: tuple[str, ...] = ()
     invisible_names: tuple[str, ...] = ()
+    facts: tuple[SceneFact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -238,6 +249,81 @@ def render_scene(scene: SceneInput) -> str:
     return "\n".join(lines)
 
 
+def _render_perceived_room_summary(
+    *,
+    title: str,
+    bands: dict[str, str],
+    visible_characters: tuple[str, ...],
+    visible_objects: tuple[str, ...],
+    exits: tuple[str, ...],
+) -> str:
+    lines = [title]
+    if bands:
+        descriptors = ", ".join(bands[key] for key in sorted(bands))
+        lines.append(f"It is {descriptors}.")
+    if visible_characters:
+        lines.append("Here: " + ", ".join(visible_characters) + ".")
+    if visible_objects:
+        lines.append("You see: " + ", ".join(visible_objects) + ".")
+    if exits:
+        lines.append("Exits: " + ", ".join(exits) + ".")
+    return "\n".join(lines)
+
+
+def _scene_facts(
+    *,
+    room_id: str | None,
+    location_title: str,
+    room_summary: str,
+    visible_characters: tuple[tuple[str, str], ...],
+    visible_objects: tuple[tuple[str, str], ...],
+    exits: tuple[str, ...],
+    events: tuple[SceneEvent, ...],
+) -> tuple[SceneFact, ...]:
+    facts: list[SceneFact] = [
+        SceneFact(
+            category="location",
+            text=f"Location: {location_title}.",
+            entity_id=room_id,
+        )
+    ]
+    if room_summary:
+        facts.append(
+            SceneFact(
+                category="room-summary",
+                text=room_summary,
+                entity_id=room_id,
+            )
+        )
+    for entity_id, name in visible_characters:
+        facts.append(
+            SceneFact(
+                category="visible-character",
+                text=f"Visible character: {name}.",
+                entity_id=entity_id,
+            )
+        )
+    for entity_id, name in visible_objects:
+        facts.append(
+            SceneFact(
+                category="visible-object",
+                text=f"Visible object: {name}.",
+                entity_id=entity_id,
+            )
+        )
+    for direction in exits:
+        facts.append(SceneFact(category="exit", text=f"Exit: {direction}.", entity_id=room_id))
+    for event in events:
+        facts.append(
+            SceneFact(
+                category="event",
+                text=event.summary,
+                event_id=event.event_id,
+            )
+        )
+    return tuple(facts)
+
+
 @dataclass
 class NarrationProjection:
     """Collects tick events and emits per-viewer presentation messages."""
@@ -271,20 +357,31 @@ class NarrationProjection:
         location_title = "nowhere"
         room_summary = ""
         exits: tuple[str, ...] = ()
+        bands: dict[str, str] = {}
         if room_id is not None:
             projection = self.room_summary or RoomSummaryProjection(self.world).attach()
             facts = projection.facts(room_id)
             location_title = facts.title
-            room_summary = projection.summary(room_id, 0).visible_summary
+            bands = dict(facts.bands)
             exits = tuple(exit_.direction for exit_ in facts.exits)
 
         perception = perceive(self.world, viewer)
-        visible_characters = tuple(
-            entity.name for entity in perception.entities if entity.is_character
+        visible_character_facts = tuple(
+            (entity.id, entity.name) for entity in perception.entities if entity.is_character
         )
-        visible_objects = tuple(
-            entity.name for entity in perception.entities if not entity.is_character
+        visible_object_facts = tuple(
+            (entity.id, entity.name) for entity in perception.entities if not entity.is_character
         )
+        visible_characters = tuple(name for _entity_id, name in visible_character_facts)
+        visible_objects = tuple(name for _entity_id, name in visible_object_facts)
+        if room_id is not None:
+            room_summary = _render_perceived_room_summary(
+                title=location_title,
+                bands=bands,
+                visible_characters=visible_characters,
+                visible_objects=visible_objects,
+                exits=exits,
+            )
         visible_events: list[SceneEvent] = []
         omitted: list[str] = []
         for event in events:
@@ -316,6 +413,15 @@ class NarrationProjection:
             events=tuple(visible_events),
             omitted_event_ids=tuple(omitted),
             invisible_names=self._invisible_names(viewer),
+            facts=_scene_facts(
+                room_id=str(room_id) if room_id is not None else None,
+                location_title=location_title,
+                room_summary=room_summary,
+                visible_characters=visible_character_facts,
+                visible_objects=visible_object_facts,
+                exits=exits,
+                events=tuple(visible_events),
+            ),
         )
 
     def after_tick(self, actor: WorldActor) -> None:
@@ -363,6 +469,7 @@ __all__ = [
     "NarrationIssue",
     "NarrationProjection",
     "SceneEvent",
+    "SceneFact",
     "SceneInput",
     "SceneNarration",
     "check_grounding",

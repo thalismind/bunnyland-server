@@ -59,7 +59,7 @@ deterministic harnesses.
     command handling.
   - **Verification:** unit tests around no-op/failing narration plus actor tick tests.
 
-- [ ] **Programmatic POV assembly**
+- [x] **Programmatic POV assembly**
   - **Goal:** make each viewer's scene facts come from visibility-aware component
     rendering and projections before any prose styling happens.
   - **Depends on:** prompt fragments, viewer-scoped context, visibility/event privacy.

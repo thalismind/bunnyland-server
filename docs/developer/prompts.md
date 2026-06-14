@@ -6,9 +6,9 @@ can format state after the provider has selected the entity/component that shoul
 
 Narration follows the same boundary. `NarrationProjection` reads typed domain events,
 `RoomSummaryProjection`, and per-character perception, then stores a volatile presentation
-message for each viewer. It does not write ECS state. A future prose renderer can style
-the message, but the scene facts it receives should already be visibility-filtered and
-auditable through source event ids.
+message for each viewer. It does not write ECS state. `SceneInput.facts` is the
+visibility-filtered fact set a prose renderer consumes; source event ids and entity ids
+make the presentation auditable without asking the model to decide what exists.
 
 ## Context Shape
 

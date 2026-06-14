@@ -233,6 +233,72 @@ def test_narration_renders_supported_event_shapes_and_grounding_issues(scenario)
     assert render_scene(empty) == "Mosslit Burrow: Nothing notable changes."
 
 
+def test_narration_programmatic_facts_are_viewer_scoped_for_same_tick(scenario):
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    lantern = spawn_entity(world, [IdentityComponent(name="moss lantern", kind="item")])
+    map_item = spawn_entity(world, [IdentityComponent(name="tunnel map", kind="item")])
+    hidden = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="buried clue", kind="item"),
+            StealthComponent(visibility_level=0.0, hidden_threshold=0.1, hiding=True),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), lantern.id
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), map_item.id
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hidden.id
+    )
+    events = (
+        SpeechSaidEvent(
+            **event_base(
+                2,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+                text="I can see the lantern.",
+            )
+        ),
+        SpeechSaidEvent(
+            **event_base(
+                2,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(hazel.id),
+                room_id=str(scenario.room_b),
+                text="I can see the map.",
+            )
+        ),
+    )
+    projection = NarrationProjection(world)
+
+    juniper_scene = projection.assemble(world.get_entity(scenario.character), events)
+    hazel_scene = projection.assemble(world.get_entity(hazel.id), events)
+    juniper_facts = {fact.text for fact in juniper_scene.facts}
+    hazel_facts = {fact.text for fact in hazel_scene.facts}
+
+    assert "Location: Mosslit Burrow." in juniper_facts
+    assert "Visible object: moss lantern." in juniper_facts
+    assert 'You said, "I can see the lantern."' in juniper_facts
+    assert "Location: North Tunnel." in hazel_facts
+    assert "Visible object: tunnel map." in hazel_facts
+    assert 'You said, "I can see the map."' in hazel_facts
+    assert not any("tunnel map" in fact for fact in juniper_facts)
+    assert not any("moss lantern" in fact for fact in hazel_facts)
+    assert not any("buried clue" in fact for fact in juniper_facts | hazel_facts)
+    assert juniper_facts != hazel_facts
+
+
 def test_narration_handles_no_pending_events_and_orphan_viewer(scenario):
     world = scenario.actor.world
     projection = NarrationProjection(world)
