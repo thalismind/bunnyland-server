@@ -116,6 +116,10 @@ metadata so operators can audit why a past note surfaced.
 Recall is bounded by prompt-builder limits for entry count, total recall characters, and
 per-memory line length. Higher-scored memories are considered first, so low-relevance noise
 falls out before durable relevant entries.
+The memory plugin also installs a bounded reflection loop. Once enough new non-reflection
+private memories accumulate after the configured interval, the loop invokes the normal
+`reflect` handler, stores a private reflection, and updates the character's
+`last_reflection_epoch`.
 For low-cost autonomy, `GoalDirectedAgent` can drive an LLM-controlled character without a
 model call. It reads the same prompt facts an LLM would see, prefers actions tied to
 goals, recalled memories, needs, visible people, visible objects, and available exits, and

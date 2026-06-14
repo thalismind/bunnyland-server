@@ -11,10 +11,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..core.commands import SubmittedCommand
-from ..core.components import MemoryProfileComponent
+from relics import World
+
+from ..core.commands import CommandCost, Lane, SubmittedCommand, build_submitted_command
+from ..core.components import CharacterComponent, MemoryProfileComponent
 from ..core.ecs import parse_entity_id, replace_component
 from ..core.events import (
+    DomainEvent,
     NoteForgottenEvent,
     NotesSearchedEvent,
     NoteTakenEvent,
@@ -22,6 +25,11 @@ from ..core.events import (
 )
 from ..core.handlers.base import HandlerContext, HandlerResult, ok, rejected
 from .store import MemoryStore
+
+DEFAULT_REFLECTION_INTERVAL_SECONDS = 24 * 3600
+DEFAULT_REFLECTION_MIN_ENTRIES = 3
+DEFAULT_REFLECTION_LIMIT = 5
+DEFAULT_REFLECTION_SCAN_LIMIT = 20
 
 
 def _collection(ctx: HandlerContext, character_id, payload: Mapping[str, Any]) -> tuple[str, str]:
@@ -178,11 +186,15 @@ class ReflectHandler:
         limit = int(payload.get("limit", 5))
         if limit <= 0:
             return rejected("reflection limit must be positive")
-        entries = self.store.search(
+        entries = _reflection_source_entries(
+            self.store,
             profile.vector_collection,
             query=payload.get("query"),
             mode=str(payload.get("mode", "recent")),
             limit=limit,
+            since_epoch=_optional_int(payload.get("since_epoch")),
+            exclude_sources=tuple(payload.get("exclude_sources", ()) or ()),
+            scan_limit=int(payload.get("scan_limit", limit)),
         )
         explicit = str(payload.get("text", "")).strip()
         if explicit:
@@ -221,4 +233,99 @@ class ReflectHandler:
         )
 
 
-__all__ = ["ForgetHandler", "ReflectHandler", "RememberHandler", "TakeNoteHandler"]
+class ReflectionLoopConsequence:
+    """Periodically synthesize recent private memories into durable reflections."""
+
+    def __init__(
+        self,
+        store: MemoryStore,
+        *,
+        interval_seconds: int = DEFAULT_REFLECTION_INTERVAL_SECONDS,
+        min_entries: int = DEFAULT_REFLECTION_MIN_ENTRIES,
+        limit: int = DEFAULT_REFLECTION_LIMIT,
+        scan_limit: int = DEFAULT_REFLECTION_SCAN_LIMIT,
+    ) -> None:
+        self.store = store
+        self.interval_seconds = max(0, interval_seconds)
+        self.min_entries = max(1, min_entries)
+        self.limit = max(1, limit)
+        self.scan_limit = max(self.limit, scan_limit)
+        self._handler = ReflectHandler(store)
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = world.query().with_all([CharacterComponent, MemoryProfileComponent])
+        for character in query.execute_entities():
+            profile = character.get_component(MemoryProfileComponent)
+            if epoch - profile.last_reflection_epoch < self.interval_seconds:
+                continue
+            since_epoch = profile.last_reflection_epoch if profile.last_reflection_epoch else None
+            entries = _reflection_source_entries(
+                self.store,
+                profile.vector_collection,
+                mode="recent",
+                limit=self.limit,
+                since_epoch=since_epoch,
+                exclude_sources=("reflection",),
+                scan_limit=self.scan_limit,
+            )
+            if len(entries) < self.min_entries:
+                continue
+            command = build_submitted_command(
+                character_id=str(character.id),
+                controller_id=str(character.id),
+                controller_generation=0,
+                command_type="reflect",
+                cost=CommandCost(focus=1),
+                lane=Lane.FOCUS,
+                payload={
+                    "mode": "recent",
+                    "limit": self.limit,
+                    "scan_limit": self.scan_limit,
+                    "since_epoch": since_epoch,
+                    "exclude_sources": ("reflection",),
+                },
+                submitted_at_epoch=epoch,
+            )
+            result = self._handler.execute(HandlerContext(world, epoch), command)
+            if result.ok:
+                events.extend(result.events)
+        return events
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _reflection_source_entries(
+    store: MemoryStore,
+    collection: str,
+    *,
+    query: str | None = None,
+    mode: str = "recent",
+    limit: int = 5,
+    since_epoch: int | None = None,
+    exclude_sources: tuple[str, ...] = (),
+    scan_limit: int | None = None,
+):
+    scan = max(limit, scan_limit or limit)
+    excluded = set(exclude_sources)
+    entries = store.search(collection, query=query, mode=mode, limit=scan)
+    filtered = [
+        entry
+        for entry in entries
+        if entry.source not in excluded
+        and (since_epoch is None or entry.created_at_epoch > since_epoch)
+    ]
+    return filtered[:limit]
+
+
+__all__ = [
+    "ForgetHandler",
+    "ReflectHandler",
+    "ReflectionLoopConsequence",
+    "RememberHandler",
+    "TakeNoteHandler",
+]

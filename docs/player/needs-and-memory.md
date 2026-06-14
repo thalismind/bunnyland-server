@@ -54,6 +54,9 @@ Create a reflection from matching notes:
 ```
 
 Reflections become new private memory entries tagged as reflections.
+Characters with memory profiles also reflect periodically. The background loop waits for
+enough new non-reflection memories and then creates a bounded reflection through the same
+validated memory path as `!reflect`.
 
 ## Contextual recall
 

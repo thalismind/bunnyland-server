@@ -27,6 +27,7 @@ from bunnyland.memory.chroma import ChromaMemoryStore
 from bunnyland.memory.handlers import (
     ForgetHandler,
     ReflectHandler,
+    ReflectionLoopConsequence,
     RememberHandler,
     TakeNoteHandler,
 )
@@ -286,6 +287,59 @@ async def test_reflect_rejects_without_notes_or_text():
     await scenario.actor.tick(0.0)
 
     assert any(r.reason == "nothing to reflect on" for r in rejects)
+
+
+async def test_reflection_loop_creates_retrievable_private_memory():
+    scenario, store = memory_scenario()
+    reflected = collect(scenario.actor, ReflectionCreatedEvent)
+    scenario.actor.register_consequence(
+        ReflectionLoopConsequence(store, interval_seconds=0, min_entries=2, limit=2)
+    )
+
+    await scenario.actor.submit(note_cmd(scenario, "Hazel found fresh tracks."))
+    await scenario.actor.submit(note_cmd(scenario, "The north bridge cracked."))
+    await scenario.actor.tick(HOUR)
+
+    assert len(reflected) == 1
+    assert reflected[0].visibility == "private"
+    assert "Hazel found fresh tracks" in reflected[0].text
+    assert "north bridge cracked" in reflected[0].text
+    assert len(reflected[0].source_note_ids) == 2
+
+    results = store.search("juniper", query="bridge", mode="keyword", limit=3)
+    assert any(entry.source == "reflection" for entry in results)
+
+
+async def test_reflection_loop_waits_for_interval_and_new_source_notes():
+    scenario, store = memory_scenario()
+    reflected = collect(scenario.actor, ReflectionCreatedEvent)
+    scenario.actor.register_consequence(
+        ReflectionLoopConsequence(
+            store,
+            interval_seconds=int(HOUR),
+            min_entries=2,
+            limit=2,
+            scan_limit=5,
+        )
+    )
+
+    await scenario.actor.submit(note_cmd(scenario, "The lantern went out."))
+    await scenario.actor.submit(note_cmd(scenario, "Hazel carried a spare wick."))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.tick(0.0)
+
+    assert len(reflected) == 1
+
+    await scenario.actor.tick(HOUR)
+    assert len(reflected) == 1
+
+    await scenario.actor.submit(note_cmd(scenario, "The wick fit the lantern."))
+    await scenario.actor.submit(note_cmd(scenario, "Hazel trusted the repair."))
+    await scenario.actor.tick(HOUR)
+
+    assert len(reflected) == 2
+    assert "spare wick" not in reflected[1].text
+    assert "trusted the repair" in reflected[1].text
 
 
 async def test_focus_lane_note_does_not_consume_world_action():

@@ -208,7 +208,7 @@ deterministic harnesses.
     receive different behavior cues and likely actions.
   - **Verification:** social prompt and controller tests.
 
-- [ ] **Reflection loop**
+- [x] **Reflection loop**
   - **Goal:** characters periodically synthesize recent experience into durable insights.
   - **Depends on:** true recall gate, memory hygiene, notes, affect/social state.
   - **Implementation notes:** reflection writes validated memory/note state, not hidden
