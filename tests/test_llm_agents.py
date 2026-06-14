@@ -27,6 +27,7 @@ from bunnyland.core import (
 )
 from bunnyland.llm_agents import (
     ControllerDispatch,
+    GoalDirectedAgent,
     OpenRouterAgent,
     ProviderRouterAgent,
     ScriptedAgent,
@@ -50,6 +51,7 @@ from bunnyland.llm_agents.agent import (
     _openrouter_arguments,
     normalize_model,
 )
+from bunnyland.mechanics.persona import GoalComponent
 from bunnyland.mechanics.social import SocialBond
 from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
 from bunnyland.prompts.builder import PromptBuilder
@@ -416,6 +418,179 @@ def test_scripted_agent_replays_then_waits():
     first = agent.decide("prompt", None, character_id="char_1")
     assert first is not None and first.name == "wait"
     assert agent.decide("prompt", None, character_id="char_1") is None
+
+
+def test_goal_directed_agent_takes_goal_relevant_visible_object():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(GoalComponent(active_goals=("find the silver key",)))
+    _add_item(scenario, "silver key")
+    builder = PromptBuilder(
+        world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+    context = builder.build(scenario.character)
+
+    call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+
+    assert call == ToolCall("take", {"item_id": "silver key"})
+
+
+def test_goal_directed_agent_uses_recall_to_address_visible_character():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    context = PromptBuilder(world).build(scenario.character)
+    context = replace(
+        context,
+        recall=("Hazel hid the basin key under the woven basket. [memory:m1 source:note]",),
+    )
+
+    call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+
+    assert call is not None
+    assert call.name == "say"
+    assert call.arguments["text"].startswith("Hazel, I remember Hazel hid the basin key")
+
+
+def test_goal_directed_agent_uses_goal_to_address_visible_character():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    character = world.get_entity(scenario.character)
+    character.add_component(GoalComponent(active_goals=("ask Hazel about the bridge",)))
+    context = PromptBuilder(
+        world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    ).build(scenario.character)
+
+    call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+
+    assert call == ToolCall(
+        "say", {"text": "Hazel, I am working on ask Hazel about the bridge"}
+    )
+
+
+def test_goal_directed_agent_speaks_from_condition_signal_without_private_goal():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    context = replace(
+        PromptBuilder(world).build(scenario.character),
+        conditions=("Hazel looks distressed.",),
+    )
+
+    call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+
+    assert call == ToolCall("say", {"text": "Hazel, I need to talk with you."})
+
+
+def test_goal_directed_agent_moves_only_when_goal_points_to_exploration():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(GoalComponent(active_goals=("search north for shelter",)))
+    builder = PromptBuilder(
+        world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+    context = builder.build(scenario.character)
+
+    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
+        ToolCall("move", {"direction": "north"})
+    )
+
+
+def test_goal_directed_agent_records_memory_goal_when_no_target_matches():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        persona=("Your goal: remember the cellar glyph.",),
+        visible_objects=(),
+        visible_characters=(),
+        exits=(),
+        commands=("take note",),
+    )
+
+    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
+        ToolCall("take_note", {"text": "Goal matters: remember the cellar glyph"})
+    )
+
+
+def test_goal_directed_agent_records_recall_when_no_target_matches():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_objects=(),
+        visible_characters=(),
+        exits=(),
+        recall=("The cellar glyph opened the bridge. [memory:m1 source:note]",),
+        commands=("take note",),
+    )
+
+    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
+        ToolCall("take_note", {"text": "Recall matters: The cellar glyph opened the bridge"})
+    )
+
+
+def test_goal_directed_agent_does_not_move_through_locked_exploration_exit():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        persona=("Your goal: explore the burrow.",),
+        visible_objects=("plain stone",),
+        exits=("north (locked)",),
+        commands=("take plain stone", "take note"),
+    )
+
+    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) is None
+
+
+def test_goal_directed_agent_waits_without_goal_or_recall_signal():
+    scenario = build_scenario()
+    context = PromptBuilder(scenario.actor.world).build(scenario.character)
+
+    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) is None
+
+
+async def test_dispatch_submits_goal_directed_agent_command():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    world.get_entity(scenario.character).add_component(
+        GoalComponent(active_goals=("find the silver key",))
+    )
+    key_id = _add_item(scenario, "silver key")
+    builder = PromptBuilder(
+        world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+    dispatch = ControllerDispatch(scenario.actor, builder, GoalDirectedAgent())
+
+    decisions = await dispatch.run_once()
+
+    assert len(decisions) == 1
+    assert decisions[0].tool == "take"
+    assert str(key_id) in decisions[0].summary
+    assert not scenario.actor._inbox.empty()
 
 
 async def test_dispatch_submits_a_command_for_an_llm_character():

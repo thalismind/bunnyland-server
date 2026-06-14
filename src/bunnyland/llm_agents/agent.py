@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Awaitable, Iterable
 from collections.abc import Mapping as MappingABC
 from typing import Protocol
@@ -80,6 +81,228 @@ class ScriptedAgent:
         call = self._calls[self._index]
         self._index += 1
         return call
+
+
+_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "again",
+        "with",
+        "your",
+        "you",
+        "are",
+        "the",
+        "and",
+        "for",
+        "from",
+        "into",
+        "that",
+        "this",
+        "they",
+        "their",
+        "them",
+        "then",
+        "was",
+        "were",
+        "will",
+        "have",
+        "has",
+        "had",
+        "goal",
+        "current",
+        "status",
+        "memory",
+        "source",
+        "score",
+    }
+)
+
+_DIRECTION_WORDS = (
+    "north",
+    "south",
+    "east",
+    "west",
+    "up",
+    "down",
+    "inside",
+    "outside",
+    "in",
+    "out",
+)
+
+
+def _tokens(text: str) -> frozenset[str]:
+    return frozenset(
+        token
+        for token in re.findall(r"[a-z0-9']+", text.lower())
+        if len(token) > 2 and token not in _STOPWORDS
+    )
+
+
+def _command_available(context: PromptContext, command: str) -> bool:
+    command_key = command.lower()
+    return any(line.lower() == command_key for line in context.commands)
+
+
+def _first_unlocked_exit(context: PromptContext) -> str | None:
+    for exit_ in context.exits:
+        if "(locked)" not in exit_:
+            return exit_.split(" ", 1)[0]
+    return None
+
+
+class GoalDirectedAgent:
+    """Deterministic background controller driven by prompt facts.
+
+    This agent is intentionally small and auditable: it scores visible affordances from
+    goals, recall, needs, and recent context, then emits a normal tool call for dispatch
+    to resolve and validate. It never reads or writes ECS state directly.
+    """
+
+    def decide(
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> ToolCall | None:
+        del prompt, character_id, model, provider, tools
+        signals = _AutonomySignals.from_context(context)
+        if not signals.has_signal:
+            return None
+
+        item = signals.best_visible(context.visible_objects, min_score=2)
+        if item is not None and _command_available(context, f"take {item}"):
+            return ToolCall("take", {"item_id": item})
+
+        character = signals.best_visible(context.visible_characters, min_score=2)
+        if character is not None and _command_available(context, "say something to the room"):
+            return ToolCall("say", {"text": signals.speech_for(character)})
+
+        direction = signals.direction(context)
+        if direction is not None and _command_available(context, f"move {direction}"):
+            return ToolCall("move", {"direction": direction})
+
+        if signals.should_record and _command_available(context, "take note"):
+            return ToolCall("take_note", {"text": signals.note_text()})
+        return None
+
+
+class _AutonomySignals:
+    def __init__(
+        self,
+        *,
+        goals: tuple[str, ...],
+        recall: tuple[str, ...],
+        conditions: tuple[str, ...],
+        recent: tuple[str, ...],
+        notes: tuple[str, ...],
+    ) -> None:
+        self.goals = goals
+        self.recall = recall
+        self.conditions = conditions
+        self.recent = recent
+        self.notes = notes
+        weighted: list[tuple[str, int]] = []
+        weighted.extend((line, 5) for line in goals)
+        weighted.extend((line, 4) for line in recall)
+        weighted.extend((line, 3) for line in conditions)
+        weighted.extend((line, 2) for line in recent)
+        weighted.extend((line, 1) for line in notes)
+        self._weighted = tuple(weighted)
+
+    @classmethod
+    def from_context(cls, context: PromptContext) -> _AutonomySignals:
+        goals = tuple(
+            line
+            for line in context.persona
+            if line.startswith(("Your goal:", "My goal:", "Their goal:"))
+        )
+        return cls(
+            goals=goals,
+            recall=context.recall,
+            conditions=context.conditions,
+            recent=context.recent,
+            notes=context.notes,
+        )
+
+    @property
+    def has_signal(self) -> bool:
+        return bool(self._weighted)
+
+    @property
+    def should_record(self) -> bool:
+        text = self._joined_signal_text()
+        return any(word in text for word in ("remember", "record", "note", "journal"))
+
+    def best_visible(self, candidates: tuple[str, ...], *, min_score: int) -> str | None:
+        scored = [(self._score(candidate), candidate) for candidate in candidates]
+        scored = [(score, candidate) for score, candidate in scored if score >= min_score]
+        if not scored:
+            return None
+        return max(scored, key=lambda item: (item[0], -len(item[1]), item[1].lower()))[1]
+
+    def direction(self, context: PromptContext) -> str | None:
+        signal_text = self._joined_signal_text()
+        for direction in _DIRECTION_WORDS:
+            if re.search(rf"\b{re.escape(direction)}\b", signal_text):
+                return direction
+        if any(word in signal_text for word in ("explore", "search", "seek", "find", "scout")):
+            return _first_unlocked_exit(context)
+        return None
+
+    def speech_for(self, name: str) -> str:
+        recalled = self._line_mentioning(self.recall, name)
+        if recalled is not None:
+            return f"{name}, I remember {self._clean_memory_line(recalled)}"
+        goal = self._line_mentioning(self.goals, name) or (self.goals[0] if self.goals else "")
+        if goal:
+            return f"{name}, I am working on {self._clean_goal(goal)}"
+        return f"{name}, I need to talk with you."
+
+    def note_text(self) -> str:
+        if self.recall:
+            return f"Recall matters: {self._clean_memory_line(self.recall[0])}"
+        if self.goals:
+            return f"Goal matters: {self._clean_goal(self.goals[0])}"
+        return "Something nearby may matter."
+
+    def _score(self, candidate: str) -> int:
+        candidate_key = candidate.lower()
+        candidate_tokens = _tokens(candidate)
+        score = 0
+        for line, weight in self._weighted:
+            line_key = line.lower()
+            line_tokens = _tokens(line)
+            overlap = candidate_tokens & line_tokens
+            if overlap:
+                score += len(overlap) * weight
+            if candidate_key in line_key:
+                score += weight * 2
+        return score
+
+    def _joined_signal_text(self) -> str:
+        return " ".join(line.lower() for line, _weight in self._weighted)
+
+    @staticmethod
+    def _line_mentioning(lines: tuple[str, ...], name: str) -> str | None:
+        name_key = name.lower()
+        for line in lines:
+            if name_key in line.lower():
+                return line
+        return None
+
+    @staticmethod
+    def _clean_goal(line: str) -> str:
+        return line.split(":", 1)[-1].strip(" .")
+
+    @staticmethod
+    def _clean_memory_line(line: str) -> str:
+        return re.sub(r"\s*\[memory:[^\]]+\]\s*$", "", line).strip(" .")
 
 
 class OllamaAgent:
@@ -390,6 +613,7 @@ __all__ = [
     "LEGACY_DEFAULT_MODEL",
     "Agent",
     "CharacterAgent",
+    "GoalDirectedAgent",
     "OpenRouterAgent",
     "OllamaAgent",
     "ProviderRouterAgent",

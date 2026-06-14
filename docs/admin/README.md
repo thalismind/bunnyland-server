@@ -112,6 +112,11 @@ metadata so operators can audit why a past note surfaced.
 Recall is bounded by prompt-builder limits for entry count, total recall characters, and
 per-memory line length. Higher-scored memories are considered first, so low-relevance noise
 falls out before durable relevant entries.
+For low-cost autonomy, `GoalDirectedAgent` can drive an LLM-controlled character without a
+model call. It reads the same prompt facts an LLM would see, prefers actions tied to
+goals, recalled memories, needs, visible people, visible objects, and available exits, and
+then submits a normal tool call through controller dispatch. If the prompt does not
+contain a clear goal or recall signal, the character waits instead of moving randomly.
 
 ### Enabling a subset
 

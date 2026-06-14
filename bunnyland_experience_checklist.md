@@ -171,7 +171,7 @@ deterministic harnesses.
     important memories.
   - **Verification:** memory retrieval tests with noisy corpora.
 
-- [ ] **Goal-directed autonomy**
+- [x] **Goal-directed autonomy**
   - **Goal:** background LLM or behavior controllers choose actions from goals,
     aspirations, needs, relationships, and memory rather than random movement.
   - **Depends on:** persona prompt surface, true recall gate, available action definitions.

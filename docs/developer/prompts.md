@@ -19,6 +19,11 @@ context. Rendered recall lines include memory id, source, and score metadata for
 `PromptBuilder` bounds recall with `recall_limit`, `recall_budget_chars`, and
 `recall_line_chars`; scored memories are considered in relevance order, low-priority noise
 falls out first, and retained lines stay within the configured character budget.
+`GoalDirectedAgent` uses the structured prompt context as a deterministic background
+controller. It scores visible objects, visible characters, exits, and note-taking from
+persona goals, contextual recall, current conditions, recent context, and notes. It emits
+ordinary tool calls only when those scores line up with available prompt commands; dispatch
+still resolves references, charges points, and lets handlers validate state changes.
 
 Narration follows the same boundary. `NarrationProjection` reads typed domain events,
 `RoomSummaryProjection`, and per-character perception, then stores a volatile presentation

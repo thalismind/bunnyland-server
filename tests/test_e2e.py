@@ -60,6 +60,7 @@ from bunnyland.discord import (
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import (
     ControllerDispatch,
+    GoalDirectedAgent,
     ScriptedAgent,
     ToolCall,
     command_from_tool_call,
@@ -113,10 +114,16 @@ from bunnyland.mechanics.nukesim import (
     ScavengeSiteComponent,
     nukesim_fragments,
 )
+from bunnyland.mechanics.persona import GoalComponent
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
 from bunnyland.narration import NarrationProjection, check_grounding
-from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_prompt_fragments
+from bunnyland.plugins import (
+    apply_plugins,
+    bunnyland_plugins,
+    collect_persona_fragments,
+    collect_prompt_fragments,
+)
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.worldgen import GenOptions, StubWorldBuilder, collect_generators, instantiate
 
@@ -1007,6 +1014,43 @@ async def test_prompt_recall_surfaces_memory_when_context_becomes_relevant():
     assert any("cobalt glyph" in item for item in after.recall)
     assert any(f"memory:{relevant.id}" in item for item in after.recall)
     assert all("pantry shelf" not in item for item in after.recall)
+
+
+async def test_goal_directed_agent_acts_on_goal_through_actor_tick():
+    actor, _proposal, result = await _new_world()
+    hazel_id = result.characters["hazel"]
+    hazel = actor.world.get_entity(hazel_id)
+    goal = GoalComponent(active_goals=("find the silver key",))
+    if hazel.has_component(GoalComponent):
+        replace_component(hazel, goal)
+    else:
+        hazel.add_component(goal)
+    room_id = container_of(hazel)
+    assert room_id is not None
+    key = spawn_entity(
+        actor.world,
+        [IdentityComponent(name="silver key", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    actor.world.get_entity(room_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), key.id
+    )
+    taken: list[ItemTakenEvent] = []
+    actor.bus.subscribe(ItemTakenEvent, taken.append)
+    builder = PromptBuilder(
+        actor.world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+    loop = GameLoop(
+        actor,
+        ControllerDispatch(actor, builder, GoalDirectedAgent()),
+        tick_seconds=1.0,
+        time_scale=0.0,
+    )
+
+    await loop.run(max_ticks=2)
+
+    assert container_of(actor.world.get_entity(key.id)) == hazel_id
+    assert taken and taken[0].item_id == str(key.id)
 
 
 async def test_unreachable_target_is_not_processed_and_coaches_the_agent():
