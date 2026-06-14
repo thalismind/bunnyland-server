@@ -75,7 +75,9 @@ Write on reachable writable objects:
 !write Meet at dawn on blank sign
 ```
 
-Writing changes the physical object, unlike private notes.
+Writing changes the physical object, unlike private notes. Significant writing is also
+recorded as shared world history, so later prompts can cite who marked an object after a
+save and reload.
 
 ## Rest, wait, and talk
 

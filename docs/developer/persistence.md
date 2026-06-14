@@ -66,10 +66,15 @@ If the request uses `"save": true`, the completed replacement is written to the 
 | All entities, components, edges (rooms, items, characters, controllers) | Volatile command queues / inbox |
 | The game clock (epoch) and per-character needs/moods   | Private notes in the memory store*         |
 | Seed, generation prompt, and generator name            | Plugin code (re-applied from `--plugin`/`--module` on load) |
+| Shared world-history records and their actor/target links | Narration-only prose that was never committed to ECS |
 
 \* Vector/notes memory lives in a separate store; persisting it is tracked separately (see
 `PLAN.md`). Plugins are *code*, not data: load re-applies the same plugins, so launch a
 reload with the same `--plugin`/`--module` flags you generated with.
+
+World history is normal ECS state (`WorldHistoryRecordComponent`, `HistoryActor`, and
+`HistoryTarget`). It is created from notable domain events such as writing, crafting, and
+death; prompts read those records as presentation state rather than inventing history.
 
 ## From Python
 

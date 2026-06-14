@@ -299,7 +299,7 @@ deterministic harnesses.
 
 ## Stage 4 - Legacy, Persistence, and Consequence
 
-- [ ] **World history projection**
+- [x] **World history projection**
   - **Goal:** notable deeds become queryable world history independent of one character's
     memory.
   - **Depends on:** domain events, persistence, salience scoring.

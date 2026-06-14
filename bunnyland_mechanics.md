@@ -496,6 +496,7 @@ PromptDirtyComponent
 RecentContextComponent
 MemoryProfileComponent
 RoomSummaryComponent
+WorldHistoryRecordComponent
 ```
 
 ### Services and projections
@@ -509,6 +510,7 @@ InventoryPromptPart
 NeedPromptPart
 AffectPromptPart
 MemoryPromptPart
+WorldHistoryPromptPart
 ActionPromptPart
 PolicyPromptPart
 ```
@@ -530,6 +532,8 @@ PromptFailedEvent
 ### Mechanics
 
 Events are typed models, not arbitrary blobs. They drive projections, memory, notifications, LLM context, and debugging.
+Notable events can also project into durable world-history ECS records, which are shared
+state rather than private memory or narration-only prose.
 
 ### Base classes
 
@@ -576,7 +580,21 @@ EventPersistenceService
 EventVisibilityService
 EventReplayService
 EventSubscriptionRegistry
+WorldHistoryReactor
 ```
+
+### Durable history state
+
+```python
+WorldHistoryRecordComponent
+HistoryActor
+HistoryTarget
+```
+
+World history records store a concise summary, source event id, event type, epoch,
+location id, tags, and salience. Actor and target links are ECS edges so later mechanics
+can inspect who did what and which artifacts or characters were involved. Current
+recorded sources include physical writing, crafting, and death.
 
 ---
 
@@ -7177,6 +7195,9 @@ ReflectionCreatedEvent
 PhysicalTextWrittenEvent
 ReadableTextReadEvent
 ```
+
+Physical writing is persisted on the readable object and is also eligible for shared
+world history, so later prompts can cite authored marks after save/reload.
 
 ---
 

@@ -875,6 +875,13 @@ from ..mechanics.gardensim import (
     gardensim_fragments,
     install_gardensim,
 )
+from ..mechanics.history import (
+    HistoryActor,
+    HistoryTarget,
+    WorldHistoryRecordComponent,
+    history_fragments,
+    install_history,
+)
 from ..mechanics.lifesim import (
     AddWhimHandler,
     AdoptChildHandler,
@@ -1540,6 +1547,7 @@ WORLDGEN = "bunnyland.worldgen"
 ENVIRONMENT = "bunnyland.environment"
 MECHANISMS = "bunnyland.mechanisms"
 SOCIAL = "bunnyland.social"
+HISTORY = "bunnyland.history"
 POLICY = "bunnyland.policy"
 PERSONA = "bunnyland.persona"
 COLONYSIM = "bunnyland.colonysim"
@@ -1846,6 +1854,24 @@ def mechanisms_plugin() -> Plugin:
 
 def _social_factory(actor) -> None:
     install_social(actor)
+
+
+def _history_factory(actor) -> None:
+    install_history(actor)
+
+
+def history_plugin() -> Plugin:
+    return Plugin(
+        id=HISTORY,
+        name="World History",
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
+        ecs=EcsContribution(
+            components=(WorldHistoryRecordComponent,),
+            edges=(HistoryActor, HistoryTarget),
+        ),
+        runtime=RuntimeContribution(service_factories=(_history_factory,)),
+        content=ContentContribution(prompt_fragments=(history_fragments,)),
+    )
 
 
 def social_plugin() -> Plugin:
@@ -3420,6 +3446,7 @@ def bunnyland_plugins() -> list[Plugin]:
         worldgen_plugin(),
         environment_plugin(),
         mechanisms_plugin(),
+        history_plugin(),
         social_plugin(),
         policy_plugin(),
         persona_plugin(),
@@ -3447,6 +3474,7 @@ __all__ = [
     "DRAGONSIM",
     "ENVIRONMENT",
     "GARDENSIM",
+    "HISTORY",
     "LIFESIM",
     "MCP",
     "MECHANISMS",
@@ -3469,6 +3497,7 @@ __all__ = [
     "dragonsim_plugin",
     "environment_plugin",
     "gardensim_plugin",
+    "history_plugin",
     "storyteller_plugin",
     "lifesim_plugin",
     "mechanisms_plugin",
