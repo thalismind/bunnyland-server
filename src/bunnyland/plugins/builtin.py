@@ -876,11 +876,14 @@ from ..mechanics.gardensim import (
     install_gardensim,
 )
 from ..mechanics.history import (
+    CreatedBy,
+    CreatorSignatureComponent,
     HistoryActor,
     HistoryTarget,
     MarkOn,
     PhysicalMarkComponent,
     WorldHistoryRecordComponent,
+    creator_fragments,
     history_fragments,
     install_history,
     mark_fragments,
@@ -1869,11 +1872,17 @@ def history_plugin() -> Plugin:
         name="World History",
         dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(
-            components=(PhysicalMarkComponent, WorldHistoryRecordComponent),
-            edges=(HistoryActor, HistoryTarget, MarkOn),
+            components=(
+                CreatorSignatureComponent,
+                PhysicalMarkComponent,
+                WorldHistoryRecordComponent,
+            ),
+            edges=(CreatedBy, HistoryActor, HistoryTarget, MarkOn),
         ),
         runtime=RuntimeContribution(service_factories=(_history_factory,)),
-        content=ContentContribution(prompt_fragments=(history_fragments, mark_fragments)),
+        content=ContentContribution(
+            prompt_fragments=(creator_fragments, history_fragments, mark_fragments)
+        ),
     )
 
 

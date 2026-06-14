@@ -14,6 +14,7 @@ from bunnyland.core import (
     ReadableComponent,
     WritableComponent,
     build_submitted_command,
+    parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.events import (
@@ -24,15 +25,20 @@ from bunnyland.core.events import (
     event_base,
 )
 from bunnyland.mechanics.history import (
+    CreatedBy,
+    CreatorSignatureComponent,
     HistoryActor,
     HistoryTarget,
     MarkOn,
     PhysicalMarkComponent,
     WorldHistoryRecordComponent,
+    creator_fragments,
+    creator_signature_for_event,
     history_fragments,
     mark_fragments,
     marks_on,
     physical_mark_for_event,
+    record_creator_signature,
     record_physical_mark,
     record_world_history,
     world_history_records,
@@ -109,6 +115,10 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
     assert mark_entity.get_component(PhysicalMarkComponent) == mark
     assert mark_entity.get_relationships(MarkOn)[0][1] == paper.id
     assert physical_mark_for_event(world, mark.source_event_id) == mark_entity
+    signature = mark_entity.get_component(CreatorSignatureComponent)
+    assert signature.creator_id == str(scenario.character)
+    assert signature.circumstance == "writing on watch sign"
+    assert mark_entity.get_relationships(CreatedBy)[0][1] == scenario.character
 
     ctx = PromptBuilder(
         world, fragment_providers=collect_prompt_fragments(plugins)
@@ -125,6 +135,9 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
     loaded_marks = marks_on(loaded.world, paper.id)
     assert len(loaded_marks) == 1
     assert loaded_marks[0][1].text == "Juniper kept watch through the storm."
+    assert loaded_marks[0][0].get_component(CreatorSignatureComponent).circumstance == (
+        "writing on watch sign"
+    )
     loaded_ctx = PromptBuilder(
         loaded.world, fragment_providers=collect_prompt_fragments(plugins)
     ).build(scenario.character)
@@ -199,6 +212,14 @@ async def test_history_reactor_handles_craft_fallback_and_non_notable_events():
         "someone crafted 0 item from recipe empty.",
         "Juniper crafted banner, hook, lamp, and 1 more from recipe camp-kit.",
     ]
+    first_output = world.get_entity(parse_entity_id(outputs[0]))
+    signature = first_output.get_component(CreatorSignatureComponent)
+    assert signature.creator_id == str(scenario.character)
+    assert signature.circumstance == "crafting recipe camp-kit"
+    assert first_output.get_relationships(CreatedBy)[0][1] == scenario.character
+    signed = creator_signature_for_event(world, signature.source_event_id)
+    assert signed is not None
+    assert str(signed.id) in outputs
     assert world_history_records(world, tags={"missing"}) == []
     assert len(world_history_records(world, tags={"crafted"})) == 2
 
@@ -342,6 +363,75 @@ def test_record_physical_mark_skips_invalid_empty_and_duplicate_sources():
     assert marks_on(world, scenario.room_a)[0][1].text == "old chalk line"
 
 
+def test_record_creator_signature_skips_invalid_and_duplicate_sources():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    artifact = spawn_entity(world, [IdentityComponent(name="carved hook", kind="item")])
+
+    assert (
+        record_creator_signature(
+            world,
+            artifact_id="not-an-id",
+            creator_id=str(scenario.character),
+            source_event_id="sig-a",
+            created_at_epoch=1,
+        )
+        is False
+    )
+    assert (
+        record_creator_signature(
+            world,
+            artifact_id=str(artifact.id),
+            creator_id=str(scenario.character),
+            source_event_id="",
+            created_at_epoch=1,
+        )
+        is False
+    )
+    created = record_creator_signature(
+        world,
+        artifact_id=str(artifact.id),
+        creator_id=str(scenario.character),
+        source_event_id="sig-a",
+        created_at_epoch=1,
+        circumstance="  carving moon bone  ",
+    )
+    duplicate = record_creator_signature(
+        world,
+        artifact_id=str(artifact.id),
+        creator_id=str(scenario.character),
+        source_event_id="sig-a",
+        created_at_epoch=2,
+        circumstance="different",
+    )
+
+    assert created is True
+    assert duplicate is False
+    signature = artifact.get_component(CreatorSignatureComponent)
+    assert signature.circumstance == "carving moon bone"
+    assert artifact.get_relationships(CreatedBy)[0][1] == scenario.character
+    assert creator_signature_for_event(world, "missing") is None
+    assert (
+        record_creator_signature(
+            world,
+            artifact_id="entity_999",
+            creator_id=str(scenario.character),
+            source_event_id="sig-missing",
+            created_at_epoch=3,
+        )
+        is False
+    )
+    updated = record_creator_signature(
+        world,
+        artifact_id=str(artifact.id),
+        creator_id="entity_999",
+        source_event_id="sig-b",
+        created_at_epoch=4,
+    )
+    assert updated is True
+    assert artifact.get_component(CreatorSignatureComponent).source_event_id == "sig-b"
+
+
 def test_history_fragments_only_show_relevant_records():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -399,6 +489,21 @@ def test_history_fragments_only_show_relevant_records():
     assert any("source:target" in fragment for fragment in fragments)
 
 
+def test_history_fragments_can_filter_all_records_as_irrelevant():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    record_world_history(
+        world,
+        summary="A far tunnel collapsed.",
+        source_event_id="far-only",
+        event_type="Manual",
+        created_at_epoch=1,
+        location_id=str(scenario.room_b),
+    )
+
+    assert history_fragments(world, world.get_entity(scenario.character)) == []
+
+
 def test_mark_fragments_show_reachable_marks_with_limit():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -434,3 +539,107 @@ def test_mark_fragments_show_reachable_marks_with_limit():
     assert len(fragments) == 5
     assert all("notice board bears writing by Juniper" in fragment for fragment in fragments)
     assert not any("too far" in fragment for fragment in fragments)
+
+
+def test_mark_fragments_use_anonymous_author_without_author_id():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    sign = spawn_entity(world, [IdentityComponent(name="notice board", kind="sign")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), sign.id
+    )
+    record_physical_mark(
+        world,
+        target_id=str(sign.id),
+        text="anonymous line",
+        source_event_id="anon-mark",
+        created_at_epoch=1,
+    )
+
+    assert mark_fragments(world, world.get_entity(scenario.character)) == [
+        (
+            f"notice board bears writing by someone: anonymous line "
+            f"[mark:{marks_on(world, sign.id)[0][0].id} source:anon-mark]"
+        )
+    ]
+
+
+def test_creator_fragments_show_reachable_artifacts_with_limit():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    far_artifact = spawn_entity(world, [IdentityComponent(name="far hook", kind="item")])
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), far_artifact.id
+    )
+    record_creator_signature(
+        world,
+        artifact_id=str(far_artifact.id),
+        creator_id=str(scenario.character),
+        source_event_id="far-sig",
+        created_at_epoch=20,
+        circumstance="crafting far recipe",
+    )
+    for index in range(6):
+        artifact = spawn_entity(
+            world, [IdentityComponent(name=f"visible hook {index}", kind="item")]
+        )
+        world.get_entity(scenario.room_a).add_relationship(
+            Contains(mode=ContainmentMode.ROOM_CONTENT), artifact.id
+        )
+        record_creator_signature(
+            world,
+            artifact_id=str(artifact.id),
+            creator_id=str(scenario.character),
+            source_event_id=f"sig-{index}",
+            created_at_epoch=index,
+            circumstance=f"crafting recipe {index}",
+        )
+
+    fragments = creator_fragments(world, character)
+
+    assert len(fragments) == 5
+    assert all("was made by Juniper while crafting recipe" in line for line in fragments)
+    assert not any("far hook" in line for line in fragments)
+
+
+def test_creator_fragments_use_anonymous_creator_without_circumstance():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    artifact = spawn_entity(world, [IdentityComponent(name="plain hook", kind="item")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), artifact.id
+    )
+    record_creator_signature(
+        world,
+        artifact_id=str(artifact.id),
+        creator_id="",
+        source_event_id="anon-sig",
+        created_at_epoch=1,
+    )
+
+    assert creator_fragments(world, world.get_entity(scenario.character)) == [
+        f"plain hook was made by someone. [signature:{artifact.id} source:anon-sig]"
+    ]
+
+
+async def test_write_event_with_missing_target_records_history_without_mark():
+    scenario = build_scenario()
+    apply_plugins(_plugins(), scenario.actor)
+
+    await scenario.actor.bus.publish(
+        PhysicalWriteEvent(
+            **event_base(
+                5,
+                actor_id=str(scenario.character),
+                target_ids=("entity_999",),
+                item_id="entity_999",
+                text="lost text",
+            )
+        )
+    )
+
+    assert marks_on(scenario.actor.world, scenario.room_a) == []
+    assert world_history_records(scenario.actor.world)[0][1].summary == (
+        'Juniper wrote on someone: "lost text"'
+    )

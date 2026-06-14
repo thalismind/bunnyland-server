@@ -11,7 +11,14 @@ from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.components import IdentityComponent
-from ..core.ecs import container_of, entity_name, parse_entity_id, reachable_ids, spawn_entity
+from ..core.ecs import (
+    container_of,
+    entity_name,
+    parse_entity_id,
+    reachable_ids,
+    replace_component,
+    spawn_entity,
+)
 from ..core.events import (
     CharacterDiedEvent,
     DomainEvent,
@@ -21,6 +28,7 @@ from ..core.events import (
 
 _HISTORY_PROMPT_LIMIT = 5
 _MARK_PROMPT_LIMIT = 5
+_CREATOR_PROMPT_LIMIT = 5
 _SUMMARY_LIMIT = 180
 _QUOTE_LIMIT = 90
 
@@ -50,6 +58,16 @@ class PhysicalMarkComponent(Component):
 
 
 @dataclass(frozen=True)
+class CreatorSignatureComponent(Component):
+    """Creator metadata for a crafted or authored artifact."""
+
+    creator_id: str = ""
+    source_event_id: str = ""
+    created_at_epoch: int = 0
+    circumstance: str = ""
+
+
+@dataclass(frozen=True)
 class HistoryActor(Edge):
     """history record -> actor involved in the deed."""
 
@@ -68,6 +86,15 @@ class MarkOn(Edge):
     """physical mark -> entity carrying the mark."""
 
     surface: str = "default"
+
+
+@dataclass(frozen=True)
+class CreatedBy(Edge):
+    """artifact -> creator."""
+
+    source_event_id: str = ""
+    created_at_epoch: int = 0
+    circumstance: str = ""
 
 
 def install_history(actor) -> None:
@@ -130,6 +157,16 @@ def marks_on(world: World, target_id: EntityId) -> list[tuple[Entity, PhysicalMa
         key=lambda item: (item[1].created_at_epoch, item[1].source_event_id),
         reverse=True,
     )
+
+
+def creator_signature_for_event(world: World, source_event_id: str) -> Entity | None:
+    """Return an artifact signed from ``source_event_id``, if any."""
+
+    for entity in world.query().with_all([CreatorSignatureComponent]).execute_entities():
+        signature = entity.get_component(CreatorSignatureComponent)
+        if signature.source_event_id == source_event_id:
+            return entity
+    return None
 
 
 def record_world_history(
@@ -228,6 +265,48 @@ def record_physical_mark(
     return mark
 
 
+def record_creator_signature(
+    world: World,
+    *,
+    artifact_id: str,
+    creator_id: str,
+    source_event_id: str,
+    created_at_epoch: int,
+    circumstance: str = "",
+) -> bool:
+    """Attach creator metadata to a crafted or authored artifact."""
+
+    parsed_artifact = parse_entity_id(artifact_id)
+    if parsed_artifact is None or not world.has_entity(parsed_artifact) or not source_event_id:
+        return False
+    artifact = world.get_entity(parsed_artifact)
+    current = (
+        artifact.get_component(CreatorSignatureComponent)
+        if artifact.has_component(CreatorSignatureComponent)
+        else None
+    )
+    if current is not None and current.source_event_id == source_event_id:
+        return False
+    signature = CreatorSignatureComponent(
+        creator_id=creator_id,
+        source_event_id=source_event_id,
+        created_at_epoch=created_at_epoch,
+        circumstance=_clean(circumstance),
+    )
+    replace_component(artifact, signature)
+    parsed_creator = parse_entity_id(creator_id)
+    if parsed_creator is not None and world.has_entity(parsed_creator):
+        artifact.add_relationship(
+            CreatedBy(
+                source_event_id=source_event_id,
+                created_at_epoch=created_at_epoch,
+                circumstance=signature.circumstance,
+            ),
+            parsed_creator,
+        )
+    return True
+
+
 def history_fragments(world: World, character: Entity) -> list[str]:
     """Prompt lines for relevant world history near a character."""
 
@@ -242,6 +321,31 @@ def history_fragments(world: World, character: Entity) -> list[str]:
             f"[history:{record_entity.id} source:{record.source_event_id}]"
         )
         if len(fragments) >= _HISTORY_PROMPT_LIMIT:
+            break
+    return fragments
+
+
+def creator_fragments(world: World, character: Entity) -> list[str]:
+    """Prompt lines for visible creator signatures."""
+
+    fragments: list[str] = []
+    for artifact_id in sorted(reachable_ids(world, character), key=str):
+        if not world.has_entity(artifact_id):
+            continue
+        artifact = world.get_entity(artifact_id)
+        if not artifact.has_component(CreatorSignatureComponent):
+            continue
+        signature = artifact.get_component(CreatorSignatureComponent)
+        creator = _name(world, signature.creator_id) if signature.creator_id else "someone"
+        artifact_name = entity_name(artifact)
+        circumstance = (
+            f" while {signature.circumstance}" if signature.circumstance else ""
+        )
+        fragments.append(
+            f"{artifact_name} was made by {creator}{circumstance}. "
+            f"[signature:{artifact.id} source:{signature.source_event_id}]"
+        )
+        if len(fragments) >= _CREATOR_PROMPT_LIMIT:
             break
     return fragments
 
@@ -276,7 +380,7 @@ class WorldHistoryReactor:
 
     def _on_event(self, event: DomainEvent) -> None:
         if isinstance(event, PhysicalWriteEvent):
-            record_physical_mark(
+            mark = record_physical_mark(
                 self.world,
                 target_id=event.item_id,
                 text=event.text,
@@ -284,6 +388,25 @@ class WorldHistoryReactor:
                 created_at_epoch=event.world_epoch,
                 author_id=event.actor_id or "",
             )
+            if mark is not None:
+                record_creator_signature(
+                    self.world,
+                    artifact_id=str(mark.id),
+                    creator_id=event.actor_id or "",
+                    source_event_id=event.event_id,
+                    created_at_epoch=event.world_epoch,
+                    circumstance=f"writing on {_name(self.world, event.item_id)}",
+                )
+        elif isinstance(event, ItemCraftedEvent):
+            for output_id in event.output_ids:
+                record_creator_signature(
+                    self.world,
+                    artifact_id=output_id,
+                    creator_id=event.actor_id or "",
+                    source_event_id=event.event_id,
+                    created_at_epoch=event.world_epoch,
+                    circumstance=f"crafting recipe {event.recipe_id}",
+                )
         payload = _history_payload(self.world, event)
         if payload is None:
             return
@@ -395,18 +518,23 @@ def _truncate(text: str, limit: int) -> str:
 
 
 __all__ = [
+    "CreatedBy",
+    "CreatorSignatureComponent",
     "HistoryActor",
     "HistoryTarget",
     "MarkOn",
     "PhysicalMarkComponent",
     "WorldHistoryReactor",
     "WorldHistoryRecordComponent",
+    "creator_fragments",
+    "creator_signature_for_event",
     "history_fragments",
     "history_record_for_event",
     "install_history",
     "mark_fragments",
     "marks_on",
     "physical_mark_for_event",
+    "record_creator_signature",
     "record_physical_mark",
     "record_world_history",
     "world_history_records",

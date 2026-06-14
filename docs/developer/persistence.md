@@ -74,8 +74,9 @@ reload with the same `--plugin`/`--module` flags you generated with.
 
 World history is normal ECS state (`WorldHistoryRecordComponent`, `HistoryActor`, and
 `HistoryTarget`). Durable marks are normal ECS state too (`PhysicalMarkComponent` and
-`MarkOn`). They are created from notable domain events such as writing, crafting, and
-death; prompts read those records as presentation state rather than inventing history.
+`MarkOn`). Creator signatures are stored with `CreatorSignatureComponent` and `CreatedBy`.
+They are created from notable domain events such as writing, crafting, and death; prompts
+read those records as presentation state rather than inventing history.
 
 ## From Python
 

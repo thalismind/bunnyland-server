@@ -84,6 +84,9 @@ Craft from a known recipe:
 !craft recipe_id=club
 ```
 
+Crafted outputs carry creator signatures when world history is enabled. Later prompt
+context can cite who made a visible artifact and the recipe circumstance that produced it.
+
 Crafting consumes the required resource stacks and creates the recipe output in your
 inventory. Some recipes require a workstation in the room, such as a workbench.
 

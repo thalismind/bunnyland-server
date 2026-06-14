@@ -76,8 +76,9 @@ Write on reachable writable objects:
 ```
 
 Writing changes the physical object, unlike private notes. Significant writing also
-creates a physical mark and shared world history, so later prompts can cite who marked an
-object after a save and reload. Inspecting the object still shows the readable text.
+creates a physical mark, creator signature, and shared world history, so later prompts can
+cite who marked an object after a save and reload. Inspecting the object still shows the
+readable text.
 
 ## Rest, wait, and talk
 

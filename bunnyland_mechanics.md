@@ -498,6 +498,7 @@ MemoryProfileComponent
 RoomSummaryComponent
 WorldHistoryRecordComponent
 PhysicalMarkComponent
+CreatorSignatureComponent
 ```
 
 ### Services and projections
@@ -513,6 +514,7 @@ AffectPromptPart
 MemoryPromptPart
 WorldHistoryPromptPart
 PhysicalMarkPromptPart
+CreatorSignaturePromptPart
 ActionPromptPart
 PolicyPromptPart
 ```
@@ -590,9 +592,11 @@ WorldHistoryReactor
 ```python
 WorldHistoryRecordComponent
 PhysicalMarkComponent
+CreatorSignatureComponent
 HistoryActor
 HistoryTarget
 MarkOn
+CreatedBy
 ```
 
 World history records store a concise summary, source event id, event type, epoch,
@@ -600,7 +604,9 @@ location id, tags, and salience. Actor and target links are ECS edges so later m
 can inspect who did what and which artifacts or characters were involved. Current
 recorded sources include physical writing, crafting, and death. Physical marks are
 separate mark entities linked with `MarkOn`, so one object can accumulate several visible
-marks without duplicate components.
+marks without duplicate components. Crafted outputs and authored mark entities carry
+`CreatorSignatureComponent` and `CreatedBy` links so visible artifacts can expose maker
+and circumstance.
 
 ---
 

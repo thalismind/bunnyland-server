@@ -319,7 +319,7 @@ deterministic harnesses.
     reload.
   - **Verification:** persistence tests and player-command tests.
 
-- [ ] **Creator signatures**
+- [x] **Creator signatures**
   - **Goal:** crafted or authored objects remember who made them and under what notable
     circumstances.
   - **Depends on:** crafting/authorship mechanics and world history projection.
