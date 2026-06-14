@@ -79,7 +79,7 @@ deterministic harnesses.
     scene input rather than repeated stat lines.
   - **Verification:** deterministic event sequence tests.
 
-- [ ] **Dramatic salience scoring**
+- [x] **Dramatic salience scoring**
   - **Goal:** prioritize events that matter emotionally or mechanically.
   - **Depends on:** typed events, affect/relationship deltas where available, incident
     state where available.

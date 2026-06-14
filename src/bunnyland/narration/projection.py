@@ -31,6 +31,8 @@ from ..core.events import (
 from ..core.world_actor import WorldActor
 from ..projections import RoomSummaryProjection, perceive
 
+LOW_SALIENCE_CUTOFF = 30
+
 
 @dataclass(frozen=True)
 class SceneEvent:
@@ -80,6 +82,8 @@ class SceneInput:
     events: tuple[SceneEvent, ...] = ()
     clusters: tuple[SceneCluster, ...] = ()
     omitted_event_ids: tuple[str, ...] = ()
+    compressed_event_ids: tuple[str, ...] = ()
+    compression_notes: tuple[str, ...] = ()
     invisible_names: tuple[str, ...] = ()
     facts: tuple[SceneFact, ...] = ()
 
@@ -298,6 +302,7 @@ def _scene_facts(
     visible_objects: tuple[tuple[str, str], ...],
     exits: tuple[str, ...],
     events: tuple[SceneEvent, ...],
+    compression_notes: tuple[str, ...],
 ) -> tuple[SceneFact, ...]:
     facts: list[SceneFact] = [
         SceneFact(
@@ -340,7 +345,35 @@ def _scene_facts(
                 event_id=event.event_id,
             )
         )
+    for note in compression_notes:
+        facts.append(SceneFact(category="compression", text=note))
     return tuple(facts)
+
+
+def _compress_visible_events(
+    events: tuple[SceneEvent, ...], *, max_events: int
+) -> tuple[tuple[SceneEvent, ...], tuple[str, ...], tuple[str, ...]]:
+    if max_events <= 0 or len(events) <= max_events:
+        return events, (), ()
+
+    high_salience = tuple(event for event in events if event.salience > LOW_SALIENCE_CUTOFF)
+    routine = tuple(event for event in events if event.salience <= LOW_SALIENCE_CUTOFF)
+    routine_budget = max(0, max_events - len(high_salience))
+    kept_routine = routine[:routine_budget]
+    compressed = routine[routine_budget:]
+    if not compressed:
+        return events, (), ()
+
+    kept = tuple(
+        sorted(
+            (*high_salience, *kept_routine),
+            key=lambda event: (-event.salience, event.event_id),
+        )
+    )
+    compressed_ids = tuple(event.event_id for event in compressed)
+    count = len(compressed_ids)
+    noun = "event" if count == 1 else "events"
+    return kept, compressed_ids, (f"{count} routine {noun} compressed.",)
 
 
 def _scene_clusters(events: tuple[SceneEvent, ...]) -> tuple[SceneCluster, ...]:
@@ -372,6 +405,7 @@ class NarrationProjection:
     world: World
     room_summary: RoomSummaryProjection | None = None
     capacity: int = 20
+    max_scene_events: int = 8
     renderer: Callable[[SceneInput], str] = render_scene
     _pending: list[DomainEvent] = field(default_factory=list, init=False)
     _transcript: dict[str, deque[SceneNarration]] = field(
@@ -444,7 +478,11 @@ class NarrationProjection:
                 )
             )
         visible_events.sort(key=lambda event: (-event.salience, event.event_id))
-        clusters = _scene_clusters(tuple(visible_events))
+        visible_event_tuple, compressed_event_ids, compression_notes = _compress_visible_events(
+            tuple(visible_events),
+            max_events=self.max_scene_events,
+        )
+        clusters = _scene_clusters(visible_event_tuple)
         return SceneInput(
             viewer_id=str(viewer.id),
             room_id=str(room_id) if room_id is not None else None,
@@ -453,9 +491,11 @@ class NarrationProjection:
             visible_characters=visible_characters,
             visible_objects=visible_objects,
             exits=exits,
-            events=tuple(visible_events),
+            events=visible_event_tuple,
             clusters=clusters,
             omitted_event_ids=tuple(omitted),
+            compressed_event_ids=compressed_event_ids,
+            compression_notes=compression_notes,
             invisible_names=self._invisible_names(viewer),
             facts=_scene_facts(
                 room_id=str(room_id) if room_id is not None else None,
@@ -464,7 +504,8 @@ class NarrationProjection:
                 visible_characters=visible_character_facts,
                 visible_objects=visible_object_facts,
                 exits=exits,
-                events=tuple(visible_events),
+                events=visible_event_tuple,
+                compression_notes=compression_notes,
             ),
         )
 

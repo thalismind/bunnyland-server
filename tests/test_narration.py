@@ -387,6 +387,46 @@ def test_narration_clusters_visible_events_and_omits_command_lifecycle(scenario)
     )
 
 
+def test_narration_salience_retains_important_events_and_compresses_routine_noise(
+    scenario,
+):
+    world = scenario.actor.world
+    routine_events = tuple(
+        RoomLookedEvent(
+            **event_base(
+                4,
+                visibility=EventVisibility.PRIVATE,
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+                target_ids=(str(scenario.room_a),),
+                room_title="Mosslit Burrow",
+                summary=f"look {index}",
+            )
+        )
+        for index in range(4)
+    )
+    important = SpeechSaidEvent(
+        **event_base(
+            4,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            text="The bridge is falling.",
+        )
+    )
+    projection = NarrationProjection(world, max_scene_events=2)
+
+    scene = projection.assemble(world.get_entity(scenario.character), (*routine_events, important))
+    retained_ids = {event.event_id for event in scene.events}
+
+    assert important.event_id in retained_ids
+    assert len(scene.events) == 2
+    assert len(scene.compressed_event_ids) == 3
+    assert set(scene.compressed_event_ids).isdisjoint(retained_ids)
+    assert scene.compression_notes == ("3 routine events compressed.",)
+    assert any(fact.category == "compression" for fact in scene.facts)
+
+
 def test_narration_handles_no_pending_events_and_orphan_viewer(scenario):
     world = scenario.actor.world
     projection = NarrationProjection(world)

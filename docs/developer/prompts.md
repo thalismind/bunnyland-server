@@ -10,7 +10,9 @@ message for each viewer. It does not write ECS state. `SceneInput.facts` is the
 visibility-filtered fact set a prose renderer consumes; source event ids and entity ids
 make the presentation auditable without asking the model to decide what exists.
 `SceneInput.clusters` groups visible event summaries by actor and room so lifecycle noise
-does not become repeated prose beats.
+does not become repeated prose beats. Deterministic salience weights keep important events
+ahead of routine events; when a scene batch is noisy, low-salience event ids move to
+`compressed_event_ids` with a compression fact instead of filling the prompt.
 
 ## Context Shape
 
