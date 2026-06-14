@@ -1,6 +1,6 @@
 Below is the first-pass **master mechanics catalogue** for bunnyland. This is intentionally broad. It is not the MVP list. It is the long-term backlog of systems, components, actions, events, services, projections, and plugin classes we may eventually want.
 
-## Current v1 peaceful-pack status
+## Current v1 implemented-pack status
 
 The peaceful starter pack now has playable v1 coverage for the core catalogue loops:
 
@@ -25,8 +25,9 @@ The peaceful starter pack now has playable v1 coverage for the core catalogue lo
   festivals, bundles, shipping, collections, museum donation, rewards, and daily farm
   reset.
 
-The remaining catalogue text is still broader than v1 outside these implemented peaceful
-starter-pack surfaces. Treat unimplemented headings below as backlog unless a component,
+The outer-ring parity pass has also implemented the package status lines marked below,
+including `neon-sim`. The remaining catalogue text is still broader than v1 outside these
+implemented surfaces. Treat unimplemented headings below as backlog unless a component,
 handler, consequence/system, event, prompt fragment, and test exists in
 `src/bunnyland/mechanics/` and `tests/`.
 
@@ -48,7 +49,7 @@ The inspirations break down cleanly:
 | Jurassic Park / ARK / Dino Crisis / Pacific Rim | `dino-sim` | fossil and species identification, cloning, egg handling, reptile procreation, hatching, and kaiju storyteller incidents |
 | Dwarf Fortress | `fortress-sim`    | deep settlement simulation, materials, history, disasters, artifacts, absurd detail |
 
-For source grounding: The Sims uses traits, emotions, whims, aspirations, skills, careers, crafting hobbies, and life-state systems; RimWorld centers on colonist moods, needs, wounds, illnesses, addictions, social bonds, storyteller incidents, work priorities, and mental breaks; Conan Exiles emphasizes survival, building, thralls, weather, temperature, hunger/thirst, PvP/siege, mounts, pets, purges, and world bosses; Stardew Valley revolves around seasonal crops, fertilizer, skills, villagers, gifts, friendship, farming, fishing, mining, and festivals; Skyrim’s replay loop is open-world exploration, factions, skills, combat, magic, stealth, followers, crafting, dragons, and shouts; Daggerfall contributes procedural scale, guilds, banks, services, law, travel, generated quests, and generated dungeons; FTL contributes crewed-ship pressure, subsystem damage, sector travel, distress signals, resource scarcity, and cascading emergencies; Dwarf Fortress goes deeper than all of these with generated worlds, histories, fortress management, geology, migrants, nobles, justice, strange moods, artifacts, tantrum spirals, and many more systems; Deus Ex, Watch Dogs, and Cyberpunk 2077 contribute cyberpunk infiltration, hacking, surveillance, corporate power, street economies, cybernetics, and reputation pressure; Jurassic Park, ARK, and Dino Crisis contribute dangerous animals, eggs, taming, escapes, containment failure, and monster-scale emergency response. ([Electronic Arts Inc.][1])
+For source grounding: The Sims uses traits, emotions, whims, aspirations, skills, careers, crafting hobbies, and life-state systems; RimWorld centers on colonist moods, needs, wounds, illnesses, addictions, social bonds, storyteller incidents, work priorities, and mental breaks; Conan Exiles emphasizes survival, building, thralls, weather, temperature, hunger/thirst, PvP/siege, mounts, pets, purges, and world bosses; Stardew Valley revolves around seasonal crops, fertilizer, skills, villagers, gifts, friendship, farming, fishing, mining, and festivals; Skyrim’s replay loop is open-world exploration, factions, skills, combat, magic, stealth, followers, crafting, dragons, and shouts; Daggerfall contributes procedural scale, guilds, banks, services, law, travel, generated quests, and generated dungeons; FTL contributes crewed-ship pressure, subsystem damage, sector travel, distress signals, resource scarcity, and cascading emergencies; Dwarf Fortress goes deeper than all of these with generated worlds, histories, fortress management, geology, migrants, nobles, justice, strange moods, artifacts, tantrum spirals, and many more systems; Deus Ex, Watch Dogs, Cyberpunk 2077, Blade Runner, and Shadows of Doubt contribute cyberpunk infiltration, hacking, surveillance, corporate power, street economies, cybernetics, investigation, noir atmosphere, and reputation pressure; Jurassic Park, ARK, and Dino Crisis contribute dangerous animals, eggs, taming, escapes, containment failure, and monster-scale emergency response. ([Electronic Arts Inc.][1])
 
 ---
 
@@ -7844,17 +7845,18 @@ old-world tech leads/beacons/trader routes/raider pressure/terminal boot
 
 ## Phase 10 — neon sim
 
-Status: planned and out of scope for the current parity pass.
+Status: implemented for the current parity pass.
 
 ```text
-districts/security zones
-devices/networks/surveillance
-hacking actions/credentials
-fixer missions/corp intrigue
-street economy
-reputation/heat/wanted levels
-cybernetics/implant tradeoffs
-city expansion worldgen
+districts/security zones/public and restricted access
+credentials/access levels/checkpoints/safehouses
+devices/networks/surveillance/cameras/evidence
+hacking actions/traces/data extraction/backdoors
+black markets/data brokers/contraband/informants
+heat/wanted levels/bounties
+cybernetics/implant slots/clinics/maintenance
+fixers/handlers/runner contracts/blackmail/extractions
+city expansion worldgen/demo world
 ```
 
 ## Phase 11 — dino sim
