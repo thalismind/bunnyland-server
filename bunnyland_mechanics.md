@@ -987,6 +987,7 @@ rivalry status
 
 ```python
 SocialBond
+GossipClaimComponent
 RelationshipStatusComponent
 ConversationComponent
 ConversationParticipant
@@ -994,6 +995,7 @@ RomanceStatusComponent
 FamilyRelationshipComponent
 JealousyComponent
 SocialMemoryComponent
+KnowsGossip
 ```
 
 ### Systems

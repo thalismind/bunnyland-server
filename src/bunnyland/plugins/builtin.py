@@ -1281,7 +1281,14 @@ from ..mechanics.policy import (
     boundary_fragments,
     install_policy,
 )
-from ..mechanics.social import SocialBond, install_social, relationship_fragments
+from ..mechanics.social import (
+    GossipClaimComponent,
+    KnowsGossip,
+    SocialBond,
+    gossip_fragments,
+    install_social,
+    relationship_fragments,
+)
 from ..mechanics.storyteller import (
     IncidentBudgetComponent,
     IncidentComponent,
@@ -1846,9 +1853,14 @@ def social_plugin() -> Plugin:
         id=SOCIAL,
         name="Social Bonds",
         dependencies=DependencyContribution(requires=(CORE_VERBS,)),
-        ecs=EcsContribution(edges=(SocialBond,)),
+        ecs=EcsContribution(
+            components=(GossipClaimComponent,),
+            edges=(SocialBond, KnowsGossip),
+        ),
         runtime=RuntimeContribution(service_factories=(_social_factory,)),
-        content=ContentContribution(persona_fragments=(relationship_fragments,)),
+        content=ContentContribution(
+            persona_fragments=(relationship_fragments, gossip_fragments)
+        ),
     )
 
 

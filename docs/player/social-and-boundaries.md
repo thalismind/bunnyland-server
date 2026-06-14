@@ -39,6 +39,11 @@ When memory is enabled, conversation lines are also stored as private memories f
 profiled participants. Later `remember` searches and prompt recall can surface who spoke,
 who heard it, and how the line landed.
 
+Conversation lines also create structured gossip claims for the people present. If a
+character later uses speech with `intent=gossip`, listeners can learn attributed,
+lower-confidence versions of claims they did not personally hear. This spreads social
+knowledge without treating hearsay as authoritative world state.
+
 ## Use explicit relationship commands in life-sim
 
 Some durable relationship state is command-driven:
@@ -46,6 +51,7 @@ Some durable relationship state is command-driven:
 ```text
 !set-relationship-status target_id=Hazel status=friend
 !start-partnership target_id=Hazel
+!spread-gossip target_id=Hazel text="kept watch all night" reputation_delta=1
 ```
 
 Family commands are also explicit:

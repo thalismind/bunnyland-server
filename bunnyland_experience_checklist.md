@@ -276,7 +276,7 @@ deterministic harnesses.
     memories, and narration inputs.
   - **Verification:** E2E or direct conversation loop tests.
 
-- [ ] **Gossip propagation**
+- [x] **Gossip propagation**
   - **Goal:** overheard or relayed information can spread through the social graph.
   - **Depends on:** conversation memory, relationships, reputation hooks.
   - **Implementation notes:** propagate structured claims with source/confidence, not

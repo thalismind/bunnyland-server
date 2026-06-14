@@ -15,11 +15,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from pydantic.dataclasses import dataclass
-from relics import Edge, Entity, EntityId, World
+from relics import Component, Edge, Entity, EntityId, World
 
 from ..core.components import AffectComponent, IdentityComponent
-from ..core.ecs import parse_entity_id
-from ..core.events import SpeechSaidEvent, SpeechToldEvent
+from ..core.ecs import entity_name, parse_entity_id, spawn_entity
+from ..core.events import ConversationLineEvent, SpeechSaidEvent, SpeechToldEvent
 from ..prompts import ComponentPromptContext
 from .needs import SocialNeedComponent, recover_daily_need
 
@@ -55,6 +55,27 @@ class SocialBond(Edge):
 
 
 @dataclass(frozen=True)
+class GossipClaimComponent(Component):
+    """A structured claim that can be remembered, attributed, and relayed."""
+
+    text: str
+    subject_id: str = ""
+    source_character_id: str = ""
+    source_event_id: str = ""
+    created_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class KnowsGossip(Edge):
+    """character -> GossipClaim knowledge, with provenance and confidence."""
+
+    confidence: float = 1.0
+    learned_from_id: str = ""
+    learned_at_epoch: int = 0
+    hops: int = 0
+
+
+@dataclass(frozen=True)
 class SpeechInterpretation:
     """How one listener receives a speech act after mood and relationship bias."""
 
@@ -69,6 +90,9 @@ _FAMILIARITY_PER_SAY = 0.03
 _FAMILIARITY_PER_TELL = 0.06
 _SOCIAL_RECOVERY_PER_SAY = 8.0
 _SOCIAL_RECOVERY_PER_TELL = 12.0
+_GOSSIP_RELAY_FLOOR = 0.05
+_GOSSIP_RELAY_CEILING = 0.9
+_GOSSIP_PROMPT_LIMIT = 5
 
 # How the speaker's bond toward a listener shifts, by speech intent (spec 14.2).
 _SPEAKER_DELTAS: dict[str, dict[str, float]] = {
@@ -137,6 +161,96 @@ def adjust_bond(
     return updated
 
 
+def known_gossip(world: World, character_id: EntityId) -> list[tuple[Entity, KnowsGossip]]:
+    """Return structured claims known by a character, newest and strongest first."""
+    if not world.has_entity(character_id):
+        return []
+    known: list[tuple[Entity, KnowsGossip]] = []
+    for edge, claim_id in world.get_entity(character_id).get_relationships(KnowsGossip):
+        if not world.has_entity(claim_id):
+            continue
+        claim = world.get_entity(claim_id)
+        if claim.has_component(GossipClaimComponent):
+            known.append((claim, edge))
+    return sorted(
+        known,
+        key=lambda item: (
+            item[1].learned_at_epoch,
+            item[1].confidence,
+            item[0].get_component(GossipClaimComponent).text,
+        ),
+        reverse=True,
+    )
+
+
+def _knows_claim(world: World, character_id: EntityId, claim_id: EntityId) -> bool:
+    if not world.has_entity(character_id):
+        return False
+    return any(
+        target == claim_id
+        for _edge, target in world.get_entity(character_id).get_relationships(KnowsGossip)
+    )
+
+
+def create_gossip_claim(
+    world: World,
+    *,
+    text: str,
+    subject_id: str = "",
+    source_character_id: str = "",
+    source_event_id: str = "",
+    created_at_epoch: int = 0,
+) -> Entity:
+    """Spawn a claim entity so knowledge can be attributed without mutating prose."""
+    return spawn_entity(
+        world,
+        [
+            GossipClaimComponent(
+                text=text.strip(),
+                subject_id=subject_id,
+                source_character_id=source_character_id,
+                source_event_id=source_event_id,
+                created_at_epoch=created_at_epoch,
+            )
+        ],
+    )
+
+
+def learn_gossip(
+    world: World,
+    learner_id: EntityId,
+    claim_id: EntityId,
+    *,
+    learned_from_id: str = "",
+    confidence: float = 1.0,
+    hops: int = 0,
+    learned_at_epoch: int = 0,
+) -> bool:
+    """Attach a structured claim to a learner, preserving the strongest known version."""
+    if not world.has_entity(learner_id) or not world.has_entity(claim_id):
+        return False
+    claim = world.get_entity(claim_id)
+    if not claim.has_component(GossipClaimComponent):
+        return False
+    learner = world.get_entity(learner_id)
+    current = next(
+        (edge for edge, target in learner.get_relationships(KnowsGossip) if target == claim_id),
+        None,
+    )
+    if current is not None and current.confidence >= confidence and current.hops <= hops:
+        return False
+    learner.add_relationship(
+        KnowsGossip(
+            confidence=_clamp_confidence(confidence),
+            learned_from_id=learned_from_id,
+            learned_at_epoch=learned_at_epoch,
+            hops=max(0, hops),
+        ),
+        claim_id,
+    )
+    return True
+
+
 def interpret_speech_for_listener(
     world: World,
     speaker_id: EntityId,
@@ -181,6 +295,79 @@ def interpret_speech_for_listener(
         relationship_tags=tuple(relationship_tags),
         mood_tags=tuple(mood_tags),
     )
+
+
+class GossipReactor:
+    """Creates and propagates structured gossip claims from conversation and speech."""
+
+    def __init__(self, world: World) -> None:
+        self.world = world
+
+    def subscribe(self, bus) -> None:
+        bus.subscribe(ConversationLineEvent, self._on_conversation_line)
+        bus.subscribe(SpeechToldEvent, self._on_speech)
+        bus.subscribe(SpeechSaidEvent, self._on_speech)
+
+    def _on_conversation_line(self, event: ConversationLineEvent) -> None:
+        speaker_id = parse_entity_id(event.speaker_id)
+        if speaker_id is None or not self.world.has_entity(speaker_id):
+            return
+        speaker = self.world.get_entity(speaker_id)
+        speaker_name = entity_name(speaker, "someone")
+        claim = create_gossip_claim(
+            self.world,
+            text=f'{speaker_name} said in conversation {event.conversation_id}: "{event.text}"',
+            subject_id=str(speaker_id),
+            source_character_id=str(speaker_id),
+            source_event_id=event.event_id,
+            created_at_epoch=event.world_epoch,
+        )
+        learn_gossip(
+            self.world,
+            speaker_id,
+            claim.id,
+            confidence=1.0,
+            learned_at_epoch=event.world_epoch,
+        )
+        for raw_target in event.target_ids:
+            target_id = parse_entity_id(raw_target)
+            if target_id is None or target_id == speaker_id or not self.world.has_entity(target_id):
+                continue
+            learn_gossip(
+                self.world,
+                target_id,
+                claim.id,
+                learned_from_id=str(speaker_id),
+                confidence=1.0,
+                learned_at_epoch=event.world_epoch,
+            )
+
+    def _on_speech(self, event: SpeechSaidEvent | SpeechToldEvent) -> None:
+        if event.final_interpretation != "gossip":
+            return
+        speaker_id = parse_entity_id(event.actor_id) if event.actor_id else None
+        if speaker_id is None or not self.world.has_entity(speaker_id):
+            return
+        claims = known_gossip(self.world, speaker_id)
+        if not claims:
+            return
+        for raw_target in event.target_ids:
+            target_id = parse_entity_id(raw_target)
+            if target_id is None or target_id == speaker_id or not self.world.has_entity(target_id):
+                continue
+            for claim, edge in claims:
+                if _knows_claim(self.world, target_id, claim.id):
+                    continue
+                confidence = edge.confidence * _relay_factor(self.world, speaker_id, target_id)
+                learn_gossip(
+                    self.world,
+                    target_id,
+                    claim.id,
+                    learned_from_id=str(speaker_id),
+                    confidence=confidence,
+                    hops=edge.hops + 1,
+                    learned_at_epoch=event.world_epoch,
+                )
 
 
 class RelationshipReactor:
@@ -274,18 +461,64 @@ def relationship_fragments(world: World, character: Entity) -> list[str]:
     return sorted(lines)
 
 
+def gossip_fragments(world: World, character: Entity) -> list[str]:
+    """Foundation-prompt lines for structured hearsay known by a character."""
+    lines: list[str] = []
+    for claim, edge in known_gossip(world, character.id)[:_GOSSIP_PROMPT_LIMIT]:
+        component = claim.get_component(GossipClaimComponent)
+        if edge.learned_from_id:
+            source_id = parse_entity_id(edge.learned_from_id)
+            source = (
+                entity_name(world.get_entity(source_id), "someone")
+                if source_id is not None and world.has_entity(source_id)
+                else "someone"
+            )
+            lines.append(
+                f"You heard from {source}: {component.text} "
+                f"(confidence {edge.confidence:.2f})."
+            )
+        else:
+            lines.append(f"You know: {component.text} (confidence {edge.confidence:.2f}).")
+    return sorted(lines)
+
+
+def _clamp_confidence(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _relay_factor(world: World, speaker_id: EntityId, listener_id: EntityId) -> float:
+    bond = bond_between(world, listener_id, speaker_id) or SocialBond()
+    factor = (
+        0.45
+        + 0.25 * bond.trust
+        + 0.15 * bond.familiarity
+        + 0.10 * bond.affinity
+        - 0.20 * bond.fear
+        - 0.20 * bond.resentment
+    )
+    return max(_GOSSIP_RELAY_FLOOR, min(_GOSSIP_RELAY_CEILING, factor))
+
+
 def install_social(actor: WorldActor) -> None:
     """Wire the relationship reactor onto an actor's event bus."""
     RelationshipReactor(actor.world).subscribe(actor.bus)
+    GossipReactor(actor.world).subscribe(actor.bus)
 
 
 __all__ = [
+    "GossipClaimComponent",
+    "GossipReactor",
+    "KnowsGossip",
     "RelationshipReactor",
     "SocialBond",
     "SpeechInterpretation",
     "adjust_bond",
     "bond_between",
+    "create_gossip_claim",
+    "gossip_fragments",
     "install_social",
     "interpret_speech_for_listener",
+    "known_gossip",
+    "learn_gossip",
     "relationship_fragments",
 ]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -18,16 +20,23 @@ from bunnyland.core import (
     parse_entity_id,
     spawn_entity,
 )
-from bunnyland.core.events import EventVisibility, SpeechToldEvent
+from bunnyland.core.events import ConversationLineEvent, EventVisibility, SpeechToldEvent
 from bunnyland.mechanics.meter import Meter
 from bunnyland.mechanics.needs import SocialNeedComponent
 from bunnyland.mechanics.social import (
+    GossipClaimComponent,
+    GossipReactor,
+    KnowsGossip,
     RelationshipReactor,
     SocialBond,
     adjust_bond,
     bond_between,
+    create_gossip_claim,
+    gossip_fragments,
     install_social,
     interpret_speech_for_listener,
+    known_gossip,
+    learn_gossip,
     relationship_fragments,
 )
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
@@ -337,3 +346,172 @@ def test_no_fragment_for_a_faint_bond():
 def test_social_bond_defaults_are_neutral():
     assert SocialBond().affinity == 0.0
     assert SocialBond().familiarity == 0.0
+
+
+def test_conversation_line_creates_structured_gossip_claim_for_participants():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    reactor = GossipReactor(world)
+
+    reactor._on_conversation_line(
+        ConversationLineEvent(
+            event_id="line-1",
+            world_epoch=10,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            target_ids=(str(hazel),),
+            conversation_id="conversation_1",
+            speaker_id=str(scenario.character),
+            text="The east gate is unlatched.",
+            turn_index=0,
+            final_interpretation="inform",
+        )
+    )
+
+    hazel_claims = known_gossip(world, hazel)
+    juniper_claims = known_gossip(world, scenario.character)
+
+    assert len(hazel_claims) == 1
+    assert juniper_claims[0][0].id == hazel_claims[0][0].id
+    claim, edge = hazel_claims[0]
+    component = claim.get_component(GossipClaimComponent)
+    assert component.subject_id == str(scenario.character)
+    assert component.source_event_id == "line-1"
+    assert "Juniper said in conversation conversation_1" in component.text
+    assert "east gate is unlatched" in component.text
+    assert edge == KnowsGossip(
+        confidence=1.0,
+        learned_from_id=str(scenario.character),
+        learned_at_epoch=10,
+    )
+    juniper_fragments = gossip_fragments(world, world.get_entity(scenario.character))
+    assert any("You know:" in line for line in juniper_fragments)
+
+
+def test_gossip_relay_teaches_absent_character_attributed_degraded_claim():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    clover = spawn_entity(
+        world,
+        [IdentityComponent(name="Clover", kind="character"), CharacterComponent()],
+    )
+    reactor = GossipReactor(world)
+
+    reactor._on_conversation_line(
+        ConversationLineEvent(
+            event_id="line-2",
+            world_epoch=20,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            target_ids=(str(hazel),),
+            conversation_id="conversation_2",
+            speaker_id=str(scenario.character),
+            text="The baker hid the ledger under the millstone.",
+            turn_index=0,
+            final_interpretation="inform",
+        )
+    )
+    assert known_gossip(world, clover.id) == []
+
+    adjust_bond(world, clover.id, hazel, {"trust": 0.4, "familiarity": 0.4})
+    reactor._on_speech(
+        SpeechToldEvent(
+            event_id="gossip-1",
+            world_epoch=25,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(hazel),
+            room_id=str(scenario.room_a),
+            target_ids=(str(clover.id),),
+            text="You should know what Juniper said.",
+            final_interpretation="gossip",
+        )
+    )
+
+    learned = known_gossip(world, clover.id)
+    assert len(learned) == 1
+    claim, edge = learned[0]
+    assert "baker hid the ledger" in claim.get_component(GossipClaimComponent).text
+    assert edge.learned_from_id == str(hazel)
+    assert edge.hops == 1
+    assert 0.0 < edge.confidence < 1.0
+    fragments = gossip_fragments(world, world.get_entity(clover.id))
+    assert any("You heard from Hazel:" in fragment for fragment in fragments)
+    assert any("confidence 0." in fragment for fragment in fragments)
+
+
+def test_gossip_helpers_ignore_invalid_and_weaker_claims():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    claim = create_gossip_claim(world, text="Hazel found a brass key.")
+    not_claim = spawn_entity(world, [IdentityComponent(name="rumor shell", kind="note")])
+    dangling = spawn_entity(world, [IdentityComponent(name="old rumor", kind="note")])
+    world.get_entity(hazel).add_relationship(KnowsGossip(confidence=0.4), not_claim.id)
+    world.get_entity(hazel).add_relationship(KnowsGossip(confidence=0.3), dangling.id)
+    world.remove(dangling.id)
+
+    assert known_gossip(world, parse_entity_id("entity_999")) == []
+    assert known_gossip(world, hazel) == []
+    assert not learn_gossip(world, parse_entity_id("entity_999"), claim.id)
+    assert not learn_gossip(world, hazel, parse_entity_id("entity_999"))
+    assert not learn_gossip(world, hazel, not_claim.id)
+    assert learn_gossip(world, hazel, claim.id, confidence=0.8, hops=1)
+    assert not learn_gossip(world, hazel, claim.id, confidence=0.7, hops=2)
+    assert learn_gossip(world, hazel, claim.id, confidence=0.9, hops=1)
+    assert known_gossip(world, hazel)[0][1].confidence == 0.9
+
+
+def test_gossip_reactor_ignores_invalid_sources_targets_and_known_claims():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    reactor = GossipReactor(world)
+
+    reactor._on_conversation_line(
+        ConversationLineEvent(
+            event_id="bad-line",
+            world_epoch=30,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            actor_id="entity_999",
+            target_ids=(str(hazel),),
+            conversation_id="conversation_3",
+            speaker_id="entity_999",
+            text="Nobody hears this.",
+            turn_index=0,
+        )
+    )
+    assert known_gossip(world, hazel) == []
+
+    claim = create_gossip_claim(world, text="Juniper saw the lantern go out.")
+    assert learn_gossip(world, scenario.character, claim.id, confidence=1.0)
+    assert learn_gossip(world, hazel, claim.id, confidence=0.6)
+    reactor._on_speech(
+        SpeechToldEvent(
+            event_id="no-claims",
+            world_epoch=31,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(hazel),
+            target_ids=("not-an-id", str(scenario.character), str(hazel)),
+            text="Rumor has it.",
+            final_interpretation="gossip",
+        )
+    )
+    reactor._on_speech(
+        SpeechToldEvent(
+            event_id="missing-speaker",
+            world_epoch=32,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.PRIVATE,
+            actor_id="entity_999",
+            target_ids=(str(hazel),),
+            text="Rumor has it.",
+            final_interpretation="gossip",
+        )
+    )
+
+    assert len(known_gossip(world, hazel)) == 1
