@@ -15,8 +15,9 @@ from relics import World
 
 from ..core.commands import CommandCost, Lane, SubmittedCommand, build_submitted_command
 from ..core.components import CharacterComponent, MemoryProfileComponent
-from ..core.ecs import parse_entity_id, replace_component
+from ..core.ecs import entity_name, parse_entity_id, replace_component
 from ..core.events import (
+    ConversationLineEvent,
     DomainEvent,
     NoteForgottenEvent,
     NotesSearchedEvent,
@@ -293,6 +294,68 @@ class ReflectionLoopConsequence:
         return events
 
 
+class ConversationMemoryReactor:
+    """Store structured conversation lines in each participant's private memory."""
+
+    def __init__(self, world: World, store: MemoryStore) -> None:
+        self.world = world
+        self.store = store
+
+    def subscribe(self, bus) -> None:
+        bus.subscribe(ConversationLineEvent, self._on_conversation_line)
+
+    def _on_conversation_line(self, event: ConversationLineEvent) -> None:
+        speaker_id = parse_entity_id(event.speaker_id)
+        if speaker_id is None or not self.world.has_entity(speaker_id):
+            return
+        participants = tuple(
+            participant_id
+            for participant_id in (
+                speaker_id,
+                *(parse_entity_id(raw) for raw in event.target_ids),
+            )
+            if participant_id is not None and self.world.has_entity(participant_id)
+        )
+        if not participants:
+            return
+        speaker = self.world.get_entity(speaker_id)
+        speaker_name = entity_name(speaker)
+        listener_names = tuple(
+            entity_name(self.world.get_entity(participant_id))
+            for participant_id in participants
+            if participant_id != speaker_id
+        )
+        heard_by = ", ".join(listener_names) if listener_names else "no one else"
+        interpretation = event.final_interpretation or event.inferred_intent or "neutral"
+        approach = f"; approach {event.approach}" if event.approach else ""
+        text = (
+            f"Conversation {event.conversation_id}: {speaker_name} said to {heard_by}: "
+            f'"{event.text}" (landed as {interpretation}{approach}).'
+        )
+        tags = tuple(
+            tag
+            for tag in (
+                "conversation",
+                event.conversation_id,
+                f"speaker:{speaker_name.lower()}",
+                f"intent:{interpretation}",
+            )
+            if tag
+        )
+        for participant_id in dict.fromkeys(participants):
+            participant = self.world.get_entity(participant_id)
+            if not participant.has_component(MemoryProfileComponent):
+                continue
+            profile = participant.get_component(MemoryProfileComponent)
+            self.store.add(
+                profile.vector_collection,
+                text=text,
+                tags=tags,
+                created_at_epoch=event.world_epoch,
+                source="conversation",
+            )
+
+
 def _optional_int(value: object) -> int | None:
     if value is None or value == "":
         return None
@@ -323,6 +386,7 @@ def _reflection_source_entries(
 
 
 __all__ = [
+    "ConversationMemoryReactor",
     "ForgetHandler",
     "ReflectHandler",
     "ReflectionLoopConsequence",

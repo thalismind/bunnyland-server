@@ -35,6 +35,10 @@ conversation entity with participants, timeout, and whose turn it is; each
 !end-conversation conversation_id=entity_12 reason=resolved
 ```
 
+When memory is enabled, conversation lines are also stored as private memories for
+profiled participants. Later `remember` searches and prompt recall can surface who spoke,
+who heard it, and how the line landed.
+
 ## Use explicit relationship commands in life-sim
 
 Some durable relationship state is command-driven:

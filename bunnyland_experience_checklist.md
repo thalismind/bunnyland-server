@@ -259,7 +259,7 @@ deterministic harnesses.
     different relationship/mood state.
   - **Verification:** social/affect tests.
 
-- [ ] **Conversation memory**
+- [x] **Conversation memory**
   - **Goal:** conversations leave durable, retrievable traces.
   - **Depends on:** true recall gate, speech interpretation, memory store.
   - **Implementation notes:** record who said what, who heard it, and how it landed using

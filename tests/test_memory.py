@@ -6,16 +6,22 @@ from conftest import build_scenario
 
 from bunnyland.core import (
     ActionPointsComponent,
+    CharacterComponent,
     CommandCost,
+    ContainmentMode,
+    Contains,
     FocusPointsComponent,
+    IdentityComponent,
     Lane,
     MemoryProfileComponent,
     OnInsufficientPoints,
     build_submitted_command,
     replace_component,
+    spawn_entity,
 )
 from bunnyland.core.events import (
     CommandRejectedEvent,
+    ConversationLineEvent,
     NoteForgottenEvent,
     NotesSearchedEvent,
     NoteTakenEvent,
@@ -25,12 +31,14 @@ from bunnyland.core.handlers.base import HandlerContext
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.memory.chroma import ChromaMemoryStore
 from bunnyland.memory.handlers import (
+    ConversationMemoryReactor,
     ForgetHandler,
     ReflectHandler,
     ReflectionLoopConsequence,
     RememberHandler,
     TakeNoteHandler,
 )
+from bunnyland.prompts.builder import PromptBuilder, render_prompt
 
 HOUR = 3600.0
 
@@ -193,6 +201,91 @@ async def test_remember_keyword_filters_results():
     results = searched[-1].results
     assert any("basin" in r for r in results)
     assert all("tunnel" not in r for r in results)
+
+
+async def test_conversation_lines_become_retrievable_participant_memories():
+    scenario, store = memory_scenario()
+    hazel = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            MemoryProfileComponent(vector_collection="hazel"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+
+    await scenario.actor.bus.publish(
+        ConversationLineEvent(
+            event_id="conversation-line",
+            world_epoch=12,
+            created_at="2026-01-01T00:00:00Z",
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            target_ids=(str(hazel.id),),
+            conversation_id="conversation_1",
+            speaker_id=str(scenario.character),
+            text="Please watch the east tunnel.",
+            turn_index=0,
+            next_participant_id=str(hazel.id),
+            author_intent="request",
+            inferred_intent="request",
+            final_interpretation="request",
+            approach="urgent",
+        )
+    )
+
+    juniper_results = store.search("juniper", query="east tunnel", mode="keyword")
+    hazel_results = store.search("hazel", query="Juniper east tunnel", mode="keyword")
+    assert juniper_results[0].source == "conversation"
+    assert "Juniper said to Hazel" in juniper_results[0].text
+    assert "landed as request; approach urgent" in hazel_results[0].text
+    assert "conversation" in hazel_results[0].tags
+
+    prompt = render_prompt(
+        PromptBuilder(scenario.actor.world, memory_store=store).build(hazel.id)
+    )
+    assert "Please watch the east tunnel" in prompt
+    assert "source:conversation" in prompt
+
+
+def test_conversation_memory_reactor_ignores_invalid_or_unprofiled_participants():
+    scenario, store = memory_scenario()
+    reactor = ConversationMemoryReactor(scenario.actor.world, store)
+
+    reactor._on_conversation_line(
+        ConversationLineEvent(
+            event_id="bad-speaker",
+            world_epoch=1,
+            created_at="2026-01-01T00:00:00Z",
+            conversation_id="conversation_1",
+            speaker_id="not-an-id",
+            text="hello",
+            turn_index=0,
+        )
+    )
+    listener = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="NoProfile", kind="character"), CharacterComponent()],
+    )
+    reactor._on_conversation_line(
+        ConversationLineEvent(
+            event_id="no-profile",
+            world_epoch=2,
+            created_at="2026-01-01T00:00:00Z",
+            actor_id=str(scenario.character),
+            target_ids=(str(listener.id),),
+            conversation_id="conversation_2",
+            speaker_id=str(scenario.character),
+            text="Only Juniper records this.",
+            turn_index=0,
+        )
+    )
+
+    assert store.search("juniper", query="Only Juniper", mode="keyword")
+    assert store.search("NoProfile", mode="recent") == []
 
 
 async def test_forget_removes_note_by_id():
