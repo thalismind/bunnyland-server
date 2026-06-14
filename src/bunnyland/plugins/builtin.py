@@ -1304,9 +1304,15 @@ from ..mechanics.policy import (
 from ..mechanics.social import (
     GossipClaimComponent,
     KnowsGossip,
+    ObligationComponent,
+    ObligationCreditor,
+    ObligationDebtor,
+    ObligationResolvedEvent,
+    ResolveObligationHandler,
     SocialBond,
     gossip_fragments,
     install_social,
+    obligation_fragments,
     relationship_fragments,
 )
 from ..mechanics.storyteller import (
@@ -1909,12 +1915,16 @@ def social_plugin() -> Plugin:
         name="Social Bonds",
         dependencies=DependencyContribution(requires=(CORE_VERBS,)),
         ecs=EcsContribution(
-            components=(GossipClaimComponent,),
-            edges=(SocialBond, KnowsGossip),
+            components=(GossipClaimComponent, ObligationComponent),
+            edges=(SocialBond, KnowsGossip, ObligationDebtor, ObligationCreditor),
+        ),
+        commands=CommandContribution(
+            action_handlers=(ResolveObligationHandler,),
+            typed_events=(ObligationResolvedEvent,),
         ),
         runtime=RuntimeContribution(service_factories=(_social_factory,)),
         content=ContentContribution(
-            persona_fragments=(relationship_fragments, gossip_fragments)
+            persona_fragments=(relationship_fragments, gossip_fragments, obligation_fragments)
         ),
     )
 

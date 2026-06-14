@@ -17,9 +17,17 @@ from typing import TYPE_CHECKING
 from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
+from ..core.commands import SubmittedCommand
 from ..core.components import AffectComponent, IdentityComponent
-from ..core.ecs import entity_name, parse_entity_id, spawn_entity
-from ..core.events import ConversationLineEvent, SpeechSaidEvent, SpeechToldEvent
+from ..core.ecs import entity_name, parse_entity_id, replace_component, spawn_entity
+from ..core.events import (
+    ConversationLineEvent,
+    DomainEvent,
+    EventVisibility,
+    SpeechSaidEvent,
+    SpeechToldEvent,
+)
+from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from ..prompts import ComponentPromptContext
 from .needs import SocialNeedComponent, recover_daily_need
 
@@ -76,6 +84,30 @@ class KnowsGossip(Edge):
 
 
 @dataclass(frozen=True)
+class ObligationComponent(Component):
+    """A promise, request, offer, threat, debt, or agreement tracked as state."""
+
+    kind: str
+    text: str
+    status: str = "open"
+    source_event_id: str = ""
+    created_at_epoch: int = 0
+    due_epoch: int = 0
+    resolved_at_epoch: int = 0
+    resolution_note: str = ""
+
+
+@dataclass(frozen=True)
+class ObligationDebtor(Edge):
+    role: str = "debtor"
+
+
+@dataclass(frozen=True)
+class ObligationCreditor(Edge):
+    role: str = "creditor"
+
+
+@dataclass(frozen=True)
 class SpeechInterpretation:
     """How one listener receives a speech act after mood and relationship bias."""
 
@@ -93,6 +125,9 @@ _SOCIAL_RECOVERY_PER_TELL = 12.0
 _GOSSIP_RELAY_FLOOR = 0.05
 _GOSSIP_RELAY_CEILING = 0.9
 _GOSSIP_PROMPT_LIMIT = 5
+_OBLIGATION_PROMPT_LIMIT = 5
+_OBLIGATION_INTENTS = frozenset({"offer", "promise", "request", "threat"})
+_OBLIGATION_RESOLUTIONS = frozenset({"fulfilled", "failed", "canceled"})
 
 # How the speaker's bond toward a listener shifts, by speech intent (spec 14.2).
 _SPEAKER_DELTAS: dict[str, dict[str, float]] = {
@@ -249,6 +284,89 @@ def learn_gossip(
         claim_id,
     )
     return True
+
+
+def obligation_for_source(
+    world: World, source_event_id: str, debtor_id: EntityId, creditor_id: EntityId
+) -> Entity | None:
+    for entity in world.query().with_all([ObligationComponent]).execute_entities():
+        component = entity.get_component(ObligationComponent)
+        if component.source_event_id != source_event_id:
+            continue
+        if not entity.has_relationship(ObligationDebtor, debtor_id):
+            continue
+        if entity.has_relationship(ObligationCreditor, creditor_id):
+            return entity
+    return None
+
+
+def create_obligation(
+    world: World,
+    *,
+    kind: str,
+    text: str,
+    debtor_id: EntityId,
+    creditor_id: EntityId,
+    source_event_id: str = "",
+    created_at_epoch: int = 0,
+    due_epoch: int = 0,
+) -> Entity | None:
+    """Create one explicit obligation between two existing entities."""
+
+    clean_text = " ".join(text.split())
+    if (
+        kind not in _OBLIGATION_INTENTS
+        or not clean_text
+        or not world.has_entity(debtor_id)
+        or not world.has_entity(creditor_id)
+    ):
+        return None
+    if source_event_id and obligation_for_source(world, source_event_id, debtor_id, creditor_id):
+        return None
+    debtor_name = entity_name(world.get_entity(debtor_id), "someone")
+    creditor_name = entity_name(world.get_entity(creditor_id), "someone")
+    obligation = spawn_entity(
+        world,
+        [
+            IdentityComponent(
+                name=f"{kind.title()} from {debtor_name} to {creditor_name}",
+                kind="obligation",
+            ),
+            ObligationComponent(
+                kind=kind,
+                text=clean_text,
+                source_event_id=source_event_id,
+                created_at_epoch=created_at_epoch,
+                due_epoch=due_epoch,
+            ),
+        ],
+    )
+    obligation.add_relationship(ObligationDebtor(), debtor_id)
+    obligation.add_relationship(ObligationCreditor(), creditor_id)
+    return obligation
+
+
+def obligations_for(
+    world: World, character_id: EntityId, *, include_resolved: bool = False
+) -> list[tuple[Entity, ObligationComponent]]:
+    """Return obligations involving ``character_id``, newest first."""
+
+    if not world.has_entity(character_id):
+        return []
+    obligations = []
+    for entity in world.query().with_all([ObligationComponent]).execute_entities():
+        component = entity.get_component(ObligationComponent)
+        if not include_resolved and component.status != "open":
+            continue
+        if entity.has_relationship(ObligationDebtor, character_id) or entity.has_relationship(
+            ObligationCreditor, character_id
+        ):
+            obligations.append((entity, component))
+    return sorted(
+        obligations,
+        key=lambda item: (item[1].created_at_epoch, item[0].id),
+        reverse=True,
+    )
 
 
 def interpret_speech_for_listener(
@@ -432,6 +550,101 @@ class RelationshipReactor:
             )
 
 
+class ObligationReactor:
+    """Projects promise/request/offer/threat speech into explicit obligation state."""
+
+    def __init__(self, world: World) -> None:
+        self.world = world
+
+    def subscribe(self, bus) -> None:
+        bus.subscribe(SpeechSaidEvent, self._on_speech)
+        bus.subscribe(SpeechToldEvent, self._on_speech)
+
+    def _on_speech(self, event: SpeechSaidEvent | SpeechToldEvent) -> None:
+        intent = event.final_interpretation or "neutral"
+        if intent not in _OBLIGATION_INTENTS:
+            return
+        speaker_id = parse_entity_id(event.actor_id) if event.actor_id else None
+        if speaker_id is None or not self.world.has_entity(speaker_id):
+            return
+        for raw_target_id in event.target_ids:
+            target_id = parse_entity_id(raw_target_id)
+            if target_id is None or target_id == speaker_id or not self.world.has_entity(target_id):
+                continue
+            if intent == "request":
+                debtor_id, creditor_id = target_id, speaker_id
+            else:
+                debtor_id, creditor_id = speaker_id, target_id
+            create_obligation(
+                self.world,
+                kind=intent,
+                text=event.text,
+                debtor_id=debtor_id,
+                creditor_id=creditor_id,
+                source_event_id=event.event_id,
+                created_at_epoch=event.world_epoch,
+            )
+
+
+class ObligationResolvedEvent(DomainEvent):
+    obligation_id: str
+    status: str
+    debtor_id: str
+    creditor_id: str
+    note: str = ""
+
+
+class ResolveObligationHandler:
+    command_type = "resolve-obligation"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        actor_id = parse_entity_id(command.character_id)
+        obligation_id = parse_entity_id(command.payload.get("obligation_id"))
+        if actor_id is None or obligation_id is None:
+            return rejected("invalid character or obligation id")
+        if not ctx.world.has_entity(obligation_id):
+            return rejected("obligation does not exist")
+        obligation_entity = ctx.entity(obligation_id)
+        if not obligation_entity.has_component(ObligationComponent):
+            return rejected("target is not an obligation")
+        debtor_id, creditor_id = _obligation_parties(obligation_entity)
+        if actor_id not in {debtor_id, creditor_id}:
+            return rejected("character is not party to obligation")
+        status = str(command.payload.get("status", "")).strip().lower()
+        if status not in _OBLIGATION_RESOLUTIONS:
+            return rejected("invalid obligation status")
+        obligation = obligation_entity.get_component(ObligationComponent)
+        if obligation.status != "open":
+            return rejected("obligation is already resolved")
+        note = str(command.payload.get("note", "")).strip()
+        updated = ObligationComponent(
+            kind=obligation.kind,
+            text=obligation.text,
+            status=status,
+            source_event_id=obligation.source_event_id,
+            created_at_epoch=obligation.created_at_epoch,
+            due_epoch=obligation.due_epoch,
+            resolved_at_epoch=ctx.epoch,
+            resolution_note=note,
+        )
+        replace_component(obligation_entity, updated)
+        _apply_obligation_resolution(ctx.world, debtor_id, creditor_id, status)
+        return ok(
+            ObligationResolvedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.DIRECTED,
+                    actor_id=str(actor_id),
+                    target_ids=(str(obligation_id), str(debtor_id), str(creditor_id)),
+                    obligation_id=str(obligation_id),
+                    status=status,
+                    debtor_id=str(debtor_id),
+                    creditor_id=str(creditor_id),
+                    note=note,
+                )
+            )
+        )
+
+
 def _describe_bond(bond: SocialBond, perspective: str = "second-person") -> str | None:
     first_person = perspective == "first-person"
     if bond.fear >= 0.3:
@@ -482,6 +695,44 @@ def gossip_fragments(world: World, character: Entity) -> list[str]:
     return sorted(lines)
 
 
+def obligation_fragments(world: World, character: Entity) -> list[str]:
+    """Prompt lines for open obligations involving a character."""
+
+    lines = []
+    for entity, component in obligations_for(world, character.id)[:_OBLIGATION_PROMPT_LIMIT]:
+        debtor_id, creditor_id = _obligation_parties(entity)
+        if character.id == debtor_id:
+            other = entity_name(world.get_entity(creditor_id), "someone")
+            lines.append(
+                f"You owe {other}: {component.text} "
+                f"[obligation:{entity.id} kind:{component.kind}]"
+            )
+        elif character.id == creditor_id:
+            other = entity_name(world.get_entity(debtor_id), "someone")
+            lines.append(
+                f"{other} owes you: {component.text} "
+                f"[obligation:{entity.id} kind:{component.kind}]"
+            )
+    return sorted(lines)
+
+
+def _obligation_parties(entity: Entity) -> tuple[EntityId, EntityId]:
+    debtor = entity.get_relationships(ObligationDebtor)[0][1]
+    creditor = entity.get_relationships(ObligationCreditor)[0][1]
+    return debtor, creditor
+
+
+def _apply_obligation_resolution(
+    world: World, debtor_id: EntityId, creditor_id: EntityId, status: str
+) -> None:
+    if not world.has_entity(debtor_id) or not world.has_entity(creditor_id):
+        return
+    if status == "fulfilled":
+        adjust_bond(world, creditor_id, debtor_id, {"trust": 0.1, "affinity": 0.05})
+    elif status == "failed":
+        adjust_bond(world, creditor_id, debtor_id, {"trust": -0.15, "resentment": 0.08})
+
+
 def _clamp_confidence(value: float) -> float:
     return max(0.0, min(1.0, value))
 
@@ -503,22 +754,33 @@ def install_social(actor: WorldActor) -> None:
     """Wire the relationship reactor onto an actor's event bus."""
     RelationshipReactor(actor.world).subscribe(actor.bus)
     GossipReactor(actor.world).subscribe(actor.bus)
+    ObligationReactor(actor.world).subscribe(actor.bus)
 
 
 __all__ = [
     "GossipClaimComponent",
     "GossipReactor",
     "KnowsGossip",
+    "ObligationComponent",
+    "ObligationCreditor",
+    "ObligationDebtor",
+    "ObligationReactor",
+    "ObligationResolvedEvent",
     "RelationshipReactor",
+    "ResolveObligationHandler",
     "SocialBond",
     "SpeechInterpretation",
     "adjust_bond",
     "bond_between",
     "create_gossip_claim",
+    "create_obligation",
     "gossip_fragments",
     "install_social",
     "interpret_speech_for_listener",
     "known_gossip",
     "learn_gossip",
+    "obligation_for_source",
+    "obligation_fragments",
+    "obligations_for",
     "relationship_fragments",
 ]

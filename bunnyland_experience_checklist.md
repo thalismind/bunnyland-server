@@ -356,7 +356,7 @@ deterministic harnesses.
     surviving characters can reference them.
   - **Verification:** lifesim/persistence tests.
 
-- [ ] **Tracked obligations and branching consequences**
+- [x] **Tracked obligations and branching consequences**
   - **Goal:** promises, threats, agreements, failures, and debts become state that later
     systems can inspect.
   - **Depends on:** speech intent, conversation memory, reputation.

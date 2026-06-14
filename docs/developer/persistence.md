@@ -84,6 +84,11 @@ Life-sim inheritance is also normal ECS state. A death can transfer existing own
 links and balances to an heir, then store `InheritanceRecordComponent` plus an
 `InheritedFrom` edge so the lineage/audit trail survives save and reload.
 
+Social obligations are persisted ECS state as well. Speech can create
+`ObligationComponent` entities linked with `ObligationDebtor` and `ObligationCreditor`;
+resolution updates the component status and relationship state instead of relying on
+remembered prose alone.
+
 ## From Python
 
 The same operations are available programmatically:

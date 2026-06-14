@@ -187,6 +187,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "mission_id",
         "mortgage_id",
         "node_id",
+        "obligation_id",
         "objective_id",
         "object_id",
         "offer_id",
@@ -998,6 +999,17 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     _definition(
         "spread-gossip", ("target_id", "text", "reputation_delta"), tool_name="spread_gossip"
+    ),
+    _definition(
+        "resolve-obligation",
+        ("obligation_id", "status", "note"),
+        tool_name="resolve_obligation",
+        patterns=(
+            "fulfill {obligation_id}",
+            "fail {obligation_id}",
+            "cancel {obligation_id}",
+            "resolve {obligation_id}",
+        ),
     ),
     _definition(
         "witness-romance", ("partner_id", "rival_id", "intensity"), tool_name="witness_romance"

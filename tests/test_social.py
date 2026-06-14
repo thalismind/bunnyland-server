@@ -21,24 +21,36 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import ConversationLineEvent, EventVisibility, SpeechToldEvent
+from bunnyland.core.handlers import HandlerContext
 from bunnyland.mechanics.meter import Meter
 from bunnyland.mechanics.needs import SocialNeedComponent
 from bunnyland.mechanics.social import (
     GossipClaimComponent,
     GossipReactor,
     KnowsGossip,
+    ObligationComponent,
+    ObligationCreditor,
+    ObligationDebtor,
+    ObligationReactor,
+    ObligationResolvedEvent,
     RelationshipReactor,
+    ResolveObligationHandler,
     SocialBond,
     adjust_bond,
     bond_between,
     create_gossip_claim,
+    create_obligation,
     gossip_fragments,
     install_social,
     interpret_speech_for_listener,
     known_gossip,
     learn_gossip,
+    obligation_for_source,
+    obligation_fragments,
+    obligations_for,
     relationship_fragments,
 )
+from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
@@ -334,6 +346,246 @@ def test_relationship_reactor_handles_tell_events_and_ignores_invalid_targets():
     assert speaker.get_component(SocialNeedComponent).meter.value < 40.0
     assert listener.get_component(SocialNeedComponent).meter.value < 40.0
     assert bond_between(world, scenario.character, hazel).familiarity > 0
+
+
+async def test_promise_speech_creates_persisted_obligation_prompt(tmp_path):
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+
+    await scenario.actor.submit(_say(scenario, "I promise I will repair the latch.", "promise"))
+    await scenario.actor.tick(HOUR)
+
+    obligations = obligations_for(world, scenario.character)
+    assert len(obligations) == 1
+    obligation_entity, obligation = obligations[0]
+    assert obligation.kind == "promise"
+    assert obligation.text == "I promise I will repair the latch."
+    assert obligation.status == "open"
+    assert obligation_entity.get_relationships(ObligationDebtor)[0][1] == scenario.character
+    assert obligation_entity.get_relationships(ObligationCreditor)[0][1] == hazel
+    assert obligation_for_source(
+        world, obligation.source_event_id, scenario.character, hazel
+    ) == obligation_entity
+    assert any(
+        "You owe Hazel" in line
+        for line in obligation_fragments(world, world.get_entity(scenario.character))
+    )
+    assert any(
+        "Juniper owes you" in line
+        for line in obligation_fragments(world, world.get_entity(hazel))
+    )
+
+    path = tmp_path / "world.json"
+    save_world(scenario.actor, path, meta=WorldMeta(seed="obligation"))
+    loaded, _meta = load_world(path)
+    loaded_obligations = obligations_for(loaded.world, scenario.character)
+    assert len(loaded_obligations) == 1
+    assert loaded_obligations[0][1].text == "I promise I will repair the latch."
+
+
+def test_obligation_creation_handles_request_dedupe_and_invalid_inputs():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    request = create_obligation(
+        world,
+        kind="request",
+        text="  bring water   ",
+        debtor_id=hazel,
+        creditor_id=scenario.character,
+        source_event_id="request-1",
+        created_at_epoch=10,
+    )
+    duplicate = create_obligation(
+        world,
+        kind="request",
+        text="bring water again",
+        debtor_id=hazel,
+        creditor_id=scenario.character,
+        source_event_id="request-1",
+        created_at_epoch=11,
+    )
+
+    assert request is not None
+    assert duplicate is None
+    assert request.get_component(ObligationComponent).text == "bring water"
+    assert obligations_for(world, hazel)[0][0] == request
+    assert obligations_for(world, parse_entity_id("entity_999")) == []
+    assert (
+        create_obligation(
+            world,
+            kind="neutral",
+            text="nothing",
+            debtor_id=hazel,
+            creditor_id=scenario.character,
+        )
+        is None
+    )
+    assert (
+        create_obligation(
+            world,
+            kind="promise",
+            text=" ",
+            debtor_id=hazel,
+            creditor_id=scenario.character,
+        )
+        is None
+    )
+    missing_id = parse_entity_id("entity_999")
+    assert missing_id is not None
+    assert (
+        create_obligation(
+            world,
+            kind="promise",
+            text="missing debtor",
+            debtor_id=missing_id,
+            creditor_id=scenario.character,
+        )
+        is None
+    )
+    assert obligation_for_source(world, "different-source", hazel, scenario.character) is None
+    assert obligation_for_source(world, "request-1", scenario.character, hazel) is None
+
+
+def test_obligation_reactor_handles_request_and_ignores_invalid_speech():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    obligation_reactor = ObligationReactor(world)
+    obligation_reactor._on_speech(
+        SpeechToldEvent(
+            event_id="neutral",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(scenario.character),
+            target_ids=(str(hazel),),
+            text="hello",
+            final_interpretation="neutral",
+        )
+    )
+    obligation_reactor._on_speech(
+        SpeechToldEvent(
+            event_id="missing-speaker",
+            world_epoch=2,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.PRIVATE,
+            actor_id="entity_999",
+            target_ids=(str(hazel),),
+            text="please bring water",
+            final_interpretation="request",
+        )
+    )
+    obligation_reactor._on_speech(
+        SpeechToldEvent(
+            event_id="request",
+            world_epoch=3,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(scenario.character),
+            target_ids=("not-an-id", str(scenario.character), "entity_999", str(hazel)),
+            text="please bring water",
+            final_interpretation="request",
+        )
+    )
+
+    obligations = obligations_for(world, hazel)
+
+    assert len(obligations) == 1
+    obligation_entity, obligation = obligations[0]
+    assert obligation.kind == "request"
+    assert obligation_entity.get_relationships(ObligationDebtor)[0][1] == hazel
+    assert obligation_entity.get_relationships(ObligationCreditor)[0][1] == scenario.character
+
+
+def test_resolve_obligation_updates_status_and_social_consequence():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    obligation = create_obligation(
+        world,
+        kind="promise",
+        text="repair the latch",
+        debtor_id=scenario.character,
+        creditor_id=hazel,
+        source_event_id="promise-1",
+        created_at_epoch=1,
+    )
+    assert obligation is not None
+    ctx = HandlerContext(world, HOUR)
+    command = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="resolve-obligation",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={
+            "obligation_id": str(obligation.id),
+            "status": "fulfilled",
+            "note": "fixed before dusk",
+        },
+    )
+
+    result = ResolveObligationHandler().execute(ctx, command)
+
+    assert result.ok is True
+    event = result.events[0]
+    assert isinstance(event, ObligationResolvedEvent)
+    assert event.status == "fulfilled"
+    component = obligation.get_component(ObligationComponent)
+    assert component.status == "fulfilled"
+    assert component.resolution_note == "fixed before dusk"
+    assert obligations_for(world, scenario.character) == []
+    assert obligations_for(world, scenario.character, include_resolved=True)[0][0] == obligation
+    assert bond_between(world, hazel, scenario.character).trust > 0
+
+
+def test_resolve_obligation_rejections_and_failed_consequence():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    outsider = spawn_entity(
+        world, [IdentityComponent(name="Outsider", kind="character"), CharacterComponent()]
+    )
+    wrong_kind = spawn_entity(world, [IdentityComponent(name="token", kind="item")])
+    obligation = create_obligation(
+        world,
+        kind="promise",
+        text="repair the latch",
+        debtor_id=scenario.character,
+        creditor_id=hazel,
+        source_event_id="promise-2",
+        created_at_epoch=1,
+    )
+    assert obligation is not None
+    ctx = HandlerContext(world, HOUR)
+
+    def command(character_id, obligation_id, status="failed"):
+        return build_submitted_command(
+            character_id=str(character_id),
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="resolve-obligation",
+            cost=CommandCost(action=1),
+            lane=Lane.WORLD,
+            payload={"obligation_id": str(obligation_id), "status": status},
+        )
+
+    cases = [
+        (command("not-an-id", obligation.id), "invalid character or obligation id"),
+        (command(scenario.character, "entity_999"), "obligation does not exist"),
+        (command(scenario.character, wrong_kind.id), "target is not an obligation"),
+        (command(outsider.id, obligation.id), "character is not party to obligation"),
+        (command(scenario.character, obligation.id, "unknown"), "invalid obligation status"),
+    ]
+    for submitted, reason in cases:
+        result = ResolveObligationHandler().execute(ctx, submitted)
+        assert result.ok is False
+        assert result.reason == reason
+
+    failed = ResolveObligationHandler().execute(ctx, command(scenario.character, obligation.id))
+    assert failed.ok is True
+    assert bond_between(world, hazel, scenario.character).resentment > 0
+    second = ResolveObligationHandler().execute(ctx, command(scenario.character, obligation.id))
+    assert second.ok is False
+    assert second.reason == "obligation is already resolved"
 
 
 def test_no_fragment_for_a_faint_bond():

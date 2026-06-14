@@ -1027,6 +1027,7 @@ rivalry status
 ```python
 SocialBond
 GossipClaimComponent
+ObligationComponent
 RelationshipStatusComponent
 ConversationComponent
 ConversationParticipant
@@ -1035,7 +1036,16 @@ FamilyRelationshipComponent
 JealousyComponent
 SocialMemoryComponent
 KnowsGossip
+ObligationDebtor
+ObligationCreditor
 ```
+
+Speech with `promise`, `offer`, `request`, or `threat` intent creates explicit obligation
+state. Promises, offers, and threats make the speaker the debtor; requests make the
+listener the debtor. `resolve-obligation` marks an obligation fulfilled, failed, or
+canceled. Fulfillment raises trust/affinity toward the debtor; failure lowers trust and
+adds resentment. Open obligations are prompt-visible ECS state, not inferred from memory
+text.
 
 ### Systems
 
