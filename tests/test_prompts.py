@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from conftest import build_scenario
 
 from bunnyland.core import (
     AffectComponent,
     AffectVector,
+    CharacterComponent,
     ContainmentMode,
     Contains,
     DeadComponent,
@@ -18,6 +21,7 @@ from bunnyland.core import (
     SuspendedComponent,
     spawn_entity,
 )
+from bunnyland.core.events import ActorMovedEvent, EventVisibility, SpeechSaidEvent
 from bunnyland.mechanics.dinosim import (
     ApexPredatorComponent,
     ArmyResponseComponent,
@@ -199,6 +203,97 @@ def test_build_context_includes_needs_feelings_and_notes():
     assert all("dry" not in n for n in ctx.conditions)  # thirst calm
     assert "tense" in ctx.feelings
     assert "The basin water is unsafe." in ctx.notes
+
+
+async def test_build_context_surfaces_structured_social_cues_from_recent_events():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    recent = RecentContextProjection(world)
+    recent.subscribe(scenario.actor.bus)
+    created_at = datetime.now(UTC)
+
+    await scenario.actor.bus.publish(
+        ActorMovedEvent(
+            event_id="arrival",
+            world_epoch=1,
+            created_at=created_at,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(hazel.id),
+            room_id=str(scenario.room_a),
+            from_room_id=str(scenario.room_b),
+            to_room_id=str(scenario.room_a),
+        )
+    )
+    builder = PromptBuilder(world, recent_context=recent)
+    arrived = builder.build(scenario.character)
+
+    assert "Hazel just arrived." in arrived.social_cues
+    assert "Hazel is quiet." in arrived.social_cues
+
+    await scenario.actor.bus.publish(
+        SpeechSaidEvent(
+            event_id="hazel-speaks",
+            world_epoch=2,
+            created_at=created_at,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(hazel.id),
+            room_id=str(scenario.room_a),
+            target_ids=(str(scenario.character),),
+            text="The bridge is out.",
+            final_interpretation="inform",
+        )
+    )
+    spoke = builder.build(scenario.character)
+
+    assert "Hazel just spoke." in spoke.social_cues
+    assert "Hazel is quiet." not in spoke.social_cues
+
+    await scenario.actor.bus.publish(
+        SpeechSaidEvent(
+            event_id="juniper-speaks",
+            world_epoch=3,
+            created_at=created_at,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            target_ids=(str(hazel.id),),
+            text="Can you hear me?",
+            final_interpretation="question",
+        )
+    )
+    ignored = builder.build(scenario.character)
+
+    assert "Hazel has not answered you." in ignored.social_cues
+
+
+def test_build_context_surfaces_visible_social_distress():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            AffectComponent(labels=("afraid", "curious")),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    builder = PromptBuilder(world)
+
+    ctx = builder.build(scenario.character)
+    prompt = render_prompt(ctx)
+
+    assert "Hazel seems afraid." in ctx.social_cues
+    assert "Social cues:" in prompt
 
 
 def test_build_context_surfaces_relevant_memory_with_audit_metadata():

@@ -189,7 +189,7 @@ deterministic harnesses.
   - **Acceptance check:** non-LLM background characters perform coherent low-cost actions.
   - **Verification:** controller dispatch tests.
 
-- [ ] **Social-cue perception**
+- [x] **Social-cue perception**
   - **Goal:** characters notice nearby social facts: arrivals, silence, distress,
     ignored speech, and relationship-relevant changes.
   - **Depends on:** event clustering, prompt fragments, social/affect mechanics.

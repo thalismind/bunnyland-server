@@ -8,6 +8,10 @@ programmatic name, kind, and status facts, then appends plugin-provided persona 
 for profile, relationships, and boundaries. Generic `prompt_fragments` remain in
 `PromptContext.conditions` for changing mechanic state such as needs, weather, and local
 services.
+`PromptContext.social_cues` is a separate structured perception surface for nearby social
+facts before prose narration: visible distress, recent arrivals/departures, nearby speech,
+quiet characters, and unanswered player speech. These cues are derived from visible
+characters plus recent room context; they are prompt facts, not world-state edits.
 `ControllerDispatch` runs a deterministic persona contradiction guard over each tool call's
 string arguments. It records name, relationship, and impossible self-claim issues on the
 observable `Decision.persona_issues` while still submitting valid commands through the

@@ -101,6 +101,10 @@ Each mechanic surfaces itself to characters where it can. Stable identity state,
 profile, social bonds, and boundaries appear in the agent prompt's "Persona" block. Needs,
 weather/time, and other changing mechanic state appear in "Currently", while room changes
 (light, door state, ...) flow into the room summary an agent perceives.
+Nearby social facts appear in the prompt's `Social cues` section: recent arrivals,
+departures, room speech, visible distress, quiet nearby characters, and unanswered speech.
+This is a structured prompt surface for controller attention; narration may describe the
+same facts, but narration remains presentation rather than truth.
 Agent decisions also carry advisory `persona_issues` when a tool call contradicts stable
 persona facts, such as claiming another character's name, denying a known bond, or claiming
 an impossible status. These issues are logged for review; valid commands still enter the

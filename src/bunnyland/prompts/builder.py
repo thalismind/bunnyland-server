@@ -24,7 +24,7 @@ from ..core.components import (
     SleepingComponent,
     SuspendedComponent,
 )
-from ..core.ecs import container_of
+from ..core.ecs import container_of, parse_entity_id
 from ..core.edges import Contains, ControlledBy, Holding, Wearing
 from ..projections import RecentContextProjection, RoomSummaryProjection, perceive
 from ..projections.room_summary import RoomExit
@@ -51,6 +51,7 @@ class PromptContext:
     persona: tuple[str, ...] = ()
     conditions: tuple[str, ...] = ()  # domain fragments: needs, weather, relationships, ...
     feelings: tuple[str, ...] = ()
+    social_cues: tuple[str, ...] = ()
     recent: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
     recall: tuple[str, ...] = ()
@@ -143,6 +144,11 @@ class PromptBuilder:
         recent = ()
         if self.recent_context is not None and room_id is not None:
             recent = self.recent_context.recent(room_id)
+        social_cues = self._social_cues(
+            character,
+            perception.entities,
+            recent=tuple(recent),
+        )
 
         notes = self._notes(character)
         recall = self._recall(
@@ -176,6 +182,7 @@ class PromptBuilder:
             persona=tuple(dict.fromkeys(persona)),
             conditions=tuple(conditions),
             feelings=feelings,
+            social_cues=social_cues,
             recent=tuple(recent),
             notes=notes,
             recall=recall,
@@ -252,6 +259,47 @@ class PromptBuilder:
         collection = character.get_component(MemoryProfileComponent).vector_collection
         entries = self.memory_store.search(collection, mode="recent", limit=3)
         return tuple(entry.text for entry in entries)
+
+    def _social_cues(
+        self,
+        character: Entity,
+        visible_entities,
+        *,
+        recent: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        self_name = _name(character)
+        recent_lower = tuple(line.lower() for line in recent)
+        last_speech = next((line for line in reversed(recent) if " said:" in line), "")
+        cues: list[str] = []
+        for perceived in visible_entities:
+            if not perceived.is_character:
+                continue
+            name = perceived.name
+            name_key = name.lower()
+            if any(line.startswith(f"{name_key} arrived.") for line in recent_lower):
+                cues.append(f"{name} just arrived.")
+            if any(line.startswith(f"{name_key} left.") for line in recent_lower):
+                cues.append(f"{name} just left.")
+            if any(line.startswith(f"{name_key} said:") for line in recent_lower):
+                cues.append(f"{name} just spoke.")
+            entity_id = parse_entity_id(perceived.id)
+            if entity_id is not None and self.world.has_entity(entity_id):
+                entity = self.world.get_entity(entity_id)
+                if entity.has_component(AffectComponent):
+                    distress = tuple(
+                        label
+                        for label in sorted(entity.get_component(AffectComponent).labels)
+                        if label in {"afraid", "angry", "sad", "tense", "unhappy"}
+                    )
+                    if distress:
+                        cues.append(f"{name} seems {', '.join(distress)}.")
+            if last_speech.lower().startswith(f"{self_name.lower()} said:"):
+                cues.append(f"{name} has not answered you.")
+            elif recent and not any(
+                line.startswith(f"{name_key} said:") for line in recent_lower
+            ):
+                cues.append(f"{name} is quiet.")
+        return tuple(dict.fromkeys(cues))
 
     def _recall(
         self,
@@ -351,6 +399,7 @@ def render_prompt(context: PromptContext) -> str:
     section("Persona", context.persona)
     section("You feel", context.feelings)
     section("Currently", context.conditions)
+    section("Social cues", context.social_cues)
     section("Recent context", context.recent)
     section("Notes", context.notes)
     section("Recall", context.recall)
