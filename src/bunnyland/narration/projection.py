@@ -40,6 +40,19 @@ class SceneEvent:
     event_type: str
     summary: str
     salience: int
+    actor_id: str | None = None
+    room_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SceneCluster:
+    """A coherent group of visible events for one viewer."""
+
+    cluster_id: str
+    event_ids: tuple[str, ...]
+    summaries: tuple[str, ...]
+    salience: int
+    actor_id: str | None = None
     room_ids: tuple[str, ...] = ()
 
 
@@ -65,6 +78,7 @@ class SceneInput:
     visible_objects: tuple[str, ...] = ()
     exits: tuple[str, ...] = ()
     events: tuple[SceneEvent, ...] = ()
+    clusters: tuple[SceneCluster, ...] = ()
     omitted_event_ids: tuple[str, ...] = ()
     invisible_names: tuple[str, ...] = ()
     facts: tuple[SceneFact, ...] = ()
@@ -237,7 +251,12 @@ def render_scene(scene: SceneInput) -> str:
 
     lines: list[str] = []
     title = scene.location_title or "Somewhere"
-    if scene.events:
+    if scene.clusters:
+        cluster_text = " ".join(
+            " ".join(cluster.summaries) for cluster in scene.clusters
+        )
+        lines.append(f"{title}: {cluster_text}")
+    elif scene.events:
         lines.append(f"{title}: " + " ".join(event.summary for event in scene.events))
     else:
         lines.append(f"{title}: {scene.room_summary or 'Nothing notable changes.'}")
@@ -324,6 +343,28 @@ def _scene_facts(
     return tuple(facts)
 
 
+def _scene_clusters(events: tuple[SceneEvent, ...]) -> tuple[SceneCluster, ...]:
+    grouped: dict[tuple[str | None, tuple[str, ...]], list[SceneEvent]] = {}
+    for event in events:
+        key = (event.actor_id, event.room_ids)
+        grouped.setdefault(key, []).append(event)
+
+    clusters: list[SceneCluster] = []
+    for (actor_id, room_ids), grouped_events in grouped.items():
+        event_ids = tuple(event.event_id for event in grouped_events)
+        clusters.append(
+            SceneCluster(
+                cluster_id=f"cluster-{event_ids[0]}",
+                event_ids=event_ids,
+                summaries=tuple(event.summary for event in grouped_events),
+                salience=max(event.salience for event in grouped_events),
+                actor_id=actor_id,
+                room_ids=room_ids,
+            )
+        )
+    return tuple(sorted(clusters, key=lambda cluster: (-cluster.salience, cluster.cluster_id)))
+
+
 @dataclass
 class NarrationProjection:
     """Collects tick events and emits per-viewer presentation messages."""
@@ -398,10 +439,12 @@ class NarrationProjection:
                     event_type=event.__class__.__name__,
                     summary=summary,
                     salience=_event_salience(event),
+                    actor_id=event.actor_id,
                     room_ids=_event_rooms(self.world, event),
                 )
             )
         visible_events.sort(key=lambda event: (-event.salience, event.event_id))
+        clusters = _scene_clusters(tuple(visible_events))
         return SceneInput(
             viewer_id=str(viewer.id),
             room_id=str(room_id) if room_id is not None else None,
@@ -411,6 +454,7 @@ class NarrationProjection:
             visible_objects=visible_objects,
             exits=exits,
             events=tuple(visible_events),
+            clusters=clusters,
             omitted_event_ids=tuple(omitted),
             invisible_names=self._invisible_names(viewer),
             facts=_scene_facts(
@@ -468,6 +512,7 @@ class NarrationProjection:
 __all__ = [
     "NarrationIssue",
     "NarrationProjection",
+    "SceneCluster",
     "SceneEvent",
     "SceneFact",
     "SceneInput",

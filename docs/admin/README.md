@@ -184,5 +184,5 @@ decisions and rejections at INFO.
 `NarrationProjection` can also subscribe to the same bus and keep a volatile read-side
 presentation transcript keyed by viewer id. It assembles scene facts from current ECS
 projections and visible domain events. Each transcript entry keeps the structured
-`SceneInput.facts` plus source event ids for audit, and a renderer failure is recorded on
-the projection without mutating the world.
+`SceneInput.facts`, event clusters, and source event ids for audit, and a renderer failure
+is recorded on the projection without mutating the world.

@@ -70,7 +70,7 @@ deterministic harnesses.
   - **Verification:** prompt-fragment and narration input tests that assert hidden state
     does not leak.
 
-- [ ] **Event-to-scene clustering**
+- [x] **Event-to-scene clustering**
   - **Goal:** convert raw tick events into coherent per-room/per-viewer scene inputs.
   - **Depends on:** event visibility levels, room containment, recent context.
   - **Implementation notes:** group events by room, actor, viewer, and salience; keep raw

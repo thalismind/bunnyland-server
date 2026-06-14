@@ -15,8 +15,11 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import (
+    ActorMovedEvent,
     CharacterDiedEvent,
     CharacterDownedEvent,
+    CommandExecutedEvent,
+    CommandQueuedEvent,
     CommandSubmittedEvent,
     EntityInspectedEvent,
     EventVisibility,
@@ -297,6 +300,91 @@ def test_narration_programmatic_facts_are_viewer_scoped_for_same_tick(scenario):
     assert not any("moss lantern" in fact for fact in hazel_facts)
     assert not any("buried clue" in fact for fact in juniper_facts | hazel_facts)
     assert juniper_facts != hazel_facts
+
+
+def test_narration_clusters_visible_events_and_omits_command_lifecycle(scenario):
+    world = scenario.actor.world
+    pebble = spawn_entity(world, [IdentityComponent(name="smooth pebble", kind="item")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), pebble.id
+    )
+    lifecycle_events = (
+        CommandSubmittedEvent(
+            **event_base(
+                3,
+                actor_id=str(scenario.character),
+                command_id="cmd-move",
+                command_type="move",
+            )
+        ),
+        CommandQueuedEvent(
+            **event_base(
+                3,
+                actor_id=str(scenario.character),
+                command_id="cmd-move",
+                command_type="move",
+                lane="world",
+            )
+        ),
+        CommandExecutedEvent(
+            **event_base(
+                3,
+                actor_id=str(scenario.character),
+                command_id="cmd-move",
+                command_type="move",
+            )
+        ),
+    )
+    visible_events = (
+        SpeechSaidEvent(
+            **event_base(
+                3,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+                text="I found a pebble.",
+            )
+        ),
+        ItemTakenEvent(
+            **event_base(
+                3,
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+                target_ids=(str(pebble.id),),
+                item_id=str(pebble.id),
+                from_container_id=str(scenario.room_a),
+            )
+        ),
+    )
+    move_event = ActorMovedEvent(
+        **event_base(
+            3,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_b),
+            from_room_id=str(scenario.room_a),
+            to_room_id=str(scenario.room_b),
+            direction="north",
+        )
+    )
+    projection = NarrationProjection(world)
+
+    scene = projection.assemble(
+        world.get_entity(scenario.character),
+        (*lifecycle_events, *visible_events, move_event),
+    )
+
+    assert set(scene.omitted_event_ids) >= {event.event_id for event in lifecycle_events}
+    assert {event.event_id for event in scene.events} == {
+        event.event_id for event in (*visible_events, move_event)
+    }
+    same_room_cluster = next(
+        cluster for cluster in scene.clusters if visible_events[0].event_id in cluster.event_ids
+    )
+    assert same_room_cluster.event_ids == tuple(event.event_id for event in visible_events)
+    assert same_room_cluster.summaries == (
+        'You said, "I found a pebble."',
+        "You picked up smooth pebble.",
+    )
 
 
 def test_narration_handles_no_pending_events_and_orphan_viewer(scenario):

@@ -3,6 +3,7 @@
 from .projection import (
     NarrationIssue,
     NarrationProjection,
+    SceneCluster,
     SceneEvent,
     SceneFact,
     SceneInput,
@@ -14,6 +15,7 @@ from .projection import (
 __all__ = [
     "NarrationIssue",
     "NarrationProjection",
+    "SceneCluster",
     "SceneEvent",
     "SceneFact",
     "SceneInput",
