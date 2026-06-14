@@ -138,7 +138,7 @@ deterministic harnesses.
     sessions and model swaps.
   - **Verification:** prompt-builder tests.
 
-- [ ] **Persona contradiction guard**
+- [x] **Persona contradiction guard**
   - **Goal:** detect when controller output contradicts stable identity facts.
   - **Depends on:** decision logging and persona prompt surface.
   - **Implementation notes:** start with deterministic checks for names, known

@@ -8,6 +8,10 @@ programmatic name, kind, and status facts, then appends plugin-provided persona 
 for profile, relationships, and boundaries. Generic `prompt_fragments` remain in
 `PromptContext.conditions` for changing mechanic state such as needs, weather, and local
 services.
+`ControllerDispatch` runs a deterministic persona contradiction guard over each tool call's
+string arguments. It records name, relationship, and impossible self-claim issues on the
+observable `Decision.persona_issues` while still submitting valid commands through the
+normal command pipeline.
 
 Narration follows the same boundary. `NarrationProjection` reads typed domain events,
 `RoomSummaryProjection`, and per-character perception, then stores a volatile presentation

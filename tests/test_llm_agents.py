@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import types
+from dataclasses import replace
 
 import pytest
 from conftest import build_scenario
@@ -12,6 +13,7 @@ from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
     ActionPattern,
+    CharacterComponent,
     CommandCost,
     ContainerComponent,
     ContainmentMode,
@@ -33,6 +35,7 @@ from bunnyland.llm_agents import (
     did_you_mean,
     name_candidates,
     parse_natural_command,
+    persona_contradictions,
     resolve_reference,
     resolve_reference_args,
     suggest_names,
@@ -47,6 +50,8 @@ from bunnyland.llm_agents.agent import (
     _openrouter_arguments,
     normalize_model,
 )
+from bunnyland.mechanics.social import SocialBond
+from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
 from bunnyland.prompts.builder import PromptBuilder
 
 
@@ -872,6 +877,95 @@ async def test_dispatch_uses_controller_provider_for_character_decision():
     await dispatch.run_once()
 
     assert agent.providers == ["openrouter"]
+
+
+def test_persona_contradiction_guard_flags_name_relationship_and_status_claims():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    character.add_relationship(SocialBond(affinity=0.5, familiarity=0.5), hazel.id)
+    builder = PromptBuilder(
+        world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+    context = builder.build(scenario.character)
+
+    issues = persona_contradictions(
+        context,
+        ToolCall(
+            "say",
+            {
+                "text": "My name is Hazel. I am not fond of Hazel. I am dead.",
+            },
+        ),
+    )
+
+    assert "name contradiction: claimed to be Hazel" in issues
+    assert "relationship contradiction: denied bond with Hazel" in issues
+    assert "impossible self-claim: claimed dead" in issues
+
+
+def test_persona_contradiction_guard_covers_relationship_line_shapes():
+    scenario = build_scenario()
+    context = PromptBuilder(scenario.actor.world).build(scenario.character)
+    context = replace(
+        context,
+        persona=(
+            *context.persona,
+            "Hazel is your friend.",
+            "You are partners with Hazel.",
+            "You know Hazel.",
+        ),
+    )
+
+    issues = persona_contradictions(
+        context,
+        ToolCall(
+            "say",
+            {
+                "text": (
+                    "Hazel is not my friend. "
+                    "I am not partners with Hazel. "
+                    "I don't know Hazel."
+                )
+            },
+        ),
+    )
+
+    assert "relationship contradiction: denied Hazel's friend status" in issues
+    assert "relationship contradiction: denied partnership with Hazel" in issues
+    assert "relationship contradiction: denied bond with Hazel" in issues
+    assert persona_contradictions(context, ToolCall("wait", {})) == ()
+
+
+async def test_dispatch_flags_persona_contradiction_without_blocking_valid_action():
+    scenario = build_scenario()
+    hazel = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    builder = PromptBuilder(
+        scenario.actor.world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+    agent = ScriptedAgent([ToolCall("say", {"text": "I am Hazel."})])
+    dispatch = ControllerDispatch(scenario.actor, builder, agent)
+
+    decisions = await dispatch.run_once()
+
+    assert decisions[0].tool == "say"
+    assert decisions[0].persona_issues == ("name contradiction: claimed to be Hazel",)
+    assert not scenario.actor._inbox.empty()
 
 
 async def test_provider_router_uses_selected_agent():

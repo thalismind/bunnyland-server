@@ -12,6 +12,7 @@ from __future__ import annotations
 import difflib
 import inspect
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
@@ -167,6 +168,90 @@ class Decision:
     character_id: str
     tool: str | None
     summary: str
+    persona_issues: tuple[str, ...] = ()
+
+
+def _tool_text(call: ToolCall) -> str:
+    return " ".join(
+        value.strip() for value in call.arguments.values() if isinstance(value, str)
+    )
+
+
+def persona_contradictions(context, call: ToolCall) -> tuple[str, ...]:
+    """Detect deterministic contradictions against stable prompt persona facts."""
+
+    text = _tool_text(call)
+    if not text:
+        return ()
+    lowered = text.lower()
+    issues: list[str] = []
+    visible_names = {name.lower(): name for name in context.visible_characters}
+    for pattern in (
+        r"\bmy name is\s+([A-Za-z][A-Za-z0-9 _'-]{1,40})",
+        r"\bcall me\s+([A-Za-z][A-Za-z0-9 _'-]{1,40})",
+        r"\bi am\s+([A-Za-z][A-Za-z0-9 _'-]{1,40})",
+        r"\bi'm\s+([A-Za-z][A-Za-z0-9 _'-]{1,40})",
+    ):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match is None:
+            continue
+        claimed = match.group(1).strip(" .,!?:;\"'")
+        claimed_key = claimed.lower()
+        if claimed_key != context.name.lower() and claimed_key in visible_names:
+            issues.append(
+                f"name contradiction: claimed to be {visible_names[claimed_key]}"
+            )
+            break
+
+    status = context.status.split(",", 1)[0].strip().lower()
+    impossible_statuses = {
+        "dead": ("i am dead", "i'm dead"),
+        "asleep": ("i am asleep", "i'm asleep"),
+        "downed": ("i am downed", "i'm downed"),
+    }
+    for claimed_status, phrases in impossible_statuses.items():
+        if status != claimed_status and any(phrase in lowered for phrase in phrases):
+            issues.append(f"impossible self-claim: claimed {claimed_status}")
+
+    for line in context.persona:
+        relationship = re.fullmatch(r"(.+) is your ([A-Za-z0-9 _'-]+)\.", line)
+        if relationship is not None:
+            name, relation = relationship.groups()
+            name_key = name.lower()
+            relation_key = relation.lower()
+            if (
+                f"{name_key} is not my {relation_key}" in lowered
+                or f"{name_key} is not your {relation_key}" in lowered
+            ):
+                issues.append(
+                    f"relationship contradiction: denied {name}'s {relation} status"
+                )
+        partner = re.fullmatch(r"You are partners with (.+)\.", line)
+        if partner is not None:
+            name = partner.group(1)
+            name_key = name.lower()
+            if f"not partners with {name_key}" in lowered:
+                issues.append(f"relationship contradiction: denied partnership with {name}")
+        bond = re.fullmatch(r"You (are fond of|know|fear|resent|dislike) (.+)\.", line)
+        if bond is not None:
+            descriptor, name = bond.groups()
+            name_key = name.lower()
+            descriptor_key = descriptor.lower()
+            if descriptor_key == "are fond of":
+                denials = (
+                    f"i am not fond of {name_key}",
+                    f"i'm not fond of {name_key}",
+                )
+            else:
+                denials = (
+                    f"i do not {descriptor_key} {name_key}",
+                    f"i don't {descriptor_key} {name_key}",
+                )
+            if any(denial in lowered for denial in denials):
+                issues.append(
+                    f"relationship contradiction: denied bond with {name}"
+                )
+    return tuple(dict.fromkeys(issues))
 
 
 class ControllerDispatch:
@@ -255,6 +340,13 @@ class ControllerDispatch:
         if call is None:
             logger.info("character %s decided to wait", character_id)
             return Decision(cid, None, "wait")
+        persona_issues = persona_contradictions(context, call)
+        if persona_issues:
+            logger.info(
+                "character %s persona contradiction(s): %s",
+                character_id,
+                "; ".join(persona_issues),
+            )
 
         # Resolve names exactly as the Discord bot does. If a reference can't be resolved,
         # don't submit a doomed command — feed the agent the same "did you mean..." hint
@@ -270,7 +362,7 @@ class ControllerDispatch:
             message = did_you_mean(call.arguments, unresolved)
             self._feedback[cid] = message
             logger.info("character %s named something unreachable: %s", character_id, message)
-            return Decision(cid, call.name, f"unresolved: {message}")
+            return Decision(cid, call.name, f"unresolved: {message}", persona_issues)
 
         try:
             command = command_from_tool_call(
@@ -285,11 +377,11 @@ class ControllerDispatch:
             message = str(exc)
             self._feedback[cid] = f"{message}. Choose one of the available tools exactly as named."
             logger.info("character %s chose an unavailable tool: %s", character_id, message)
-            return Decision(cid, call.name, message)
+            return Decision(cid, call.name, message, persona_issues)
         await self.actor.submit(command)
         summary = f"{call.name} {resolved}".strip()
         logger.info("character %s chose %s", character_id, summary)
-        return Decision(cid, call.name, summary)
+        return Decision(cid, call.name, summary, persona_issues)
 
 
 __all__ = [
@@ -297,6 +389,7 @@ __all__ = [
     "Decision",
     "did_you_mean",
     "name_candidates",
+    "persona_contradictions",
     "resolve_reference",
     "resolve_reference_args",
     "suggest_names",
