@@ -316,7 +316,7 @@ class LoreBookComponent(Component):
 
 
 @dataclass(frozen=True)
-class MagickaComponent(Component):
+class MagicComponent(Component):
     current: int = 10
     maximum: int = 10
     regen_per_hour: int = 2
@@ -325,7 +325,7 @@ class MagickaComponent(Component):
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if not ctx.is_first_person:
             return ()
-        return (f"Magicka: {self.current}/{self.maximum}.",)
+        return (f"Magic: {self.current}/{self.maximum}.",)
 
 
 @dataclass(frozen=True)
@@ -366,7 +366,7 @@ class SurrenderComponent(Component):
 class SpellComponent(Component):
     name: str
     school: str = "alteration"
-    magicka_cost: int = 1
+    magic_cost: int = 1
     skill_name: str = "magic"
     min_skill_level: int = 0
     effect: str = ""
@@ -604,7 +604,7 @@ class DragonSpellCastEvent(DomainEvent):
     spell_id: str
     spell_name: str
     school: str
-    magicka_spent: int
+    magic_spent: int
 
 
 class PotionBrewedEvent(DomainEvent):
@@ -624,7 +624,7 @@ class ArtifactIdentifiedEvent(DomainEvent):
     artifact_name: str
 
 
-class MagickaRecoveredEvent(DomainEvent):
+class MagicRecoveredEvent(DomainEvent):
     character_id: str
     current: int
     maximum: int
@@ -1928,15 +1928,15 @@ class CastDragonSpellHandler:
             cooldown = spell_entity.get_component(SpellCooldownComponent)
             if cooldown.ready_at_epoch > ctx.epoch:
                 return rejected("spell is on cooldown")
-        magicka = (
-            character.get_component(MagickaComponent)
-            if character.has_component(MagickaComponent)
-            else MagickaComponent()
+        magic = (
+            character.get_component(MagicComponent)
+            if character.has_component(MagicComponent)
+            else MagicComponent()
         )
-        if magicka.current < spell.magicka_cost:
-            return rejected("not enough magicka")
+        if magic.current < spell.magic_cost:
+            return rejected("not enough magic")
 
-        replace_component(character, replace(magicka, current=magicka.current - spell.magicka_cost))
+        replace_component(character, replace(magic, current=magic.current - spell.magic_cost))
         if spell_entity.has_component(SpellCooldownComponent):
             cooldown = spell_entity.get_component(SpellCooldownComponent)
             replace_component(
@@ -1953,7 +1953,7 @@ class CastDragonSpellHandler:
                     spell_id=str(spell_id),
                     spell_name=spell.name,
                     school=spell.school,
-                    magicka_spent=spell.magicka_cost,
+                    magic_spent=spell.magic_cost,
                 )
             )
         ]
@@ -1963,7 +1963,7 @@ class CastDragonSpellHandler:
                     ctx,
                     character,
                     skill=spell.skill_name,
-                    amount=max(1.0, float(spell.magicka_cost)),
+                    amount=max(1.0, float(spell.magic_cost)),
                     actor_id=str(character_id),
                     target_ids=(str(spell_id),),
                 )
@@ -2079,30 +2079,30 @@ class UseArtifactHandler:
         )
 
 
-class RecoverMagickaHandler:
-    command_type = "recover-magicka"
+class RecoverMagicHandler:
+    command_type = "recover-magic"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         character = ctx.entity(character_id)
-        magicka = (
-            character.get_component(MagickaComponent)
-            if character.has_component(MagickaComponent)
-            else MagickaComponent()
+        magic = (
+            character.get_component(MagicComponent)
+            if character.has_component(MagicComponent)
+            else MagicComponent()
         )
-        amount = int(command.payload.get("amount", magicka.regen_per_hour))
+        amount = int(command.payload.get("amount", magic.regen_per_hour))
         if amount <= 0:
             return rejected("recovery amount must be positive")
         updated = replace(
-            magicka,
-            current=min(magicka.maximum, magicka.current + amount),
+            magic,
+            current=min(magic.maximum, magic.current + amount),
             last_updated_epoch=ctx.epoch,
         )
         replace_component(character, updated)
         return ok(
-            MagickaRecoveredEvent(
+            MagicRecoveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
@@ -2362,8 +2362,8 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
                 world, spell, perspective=ctx.perspective, target=character
             )
             lines.extend(spell.get_component(SpellComponent).prompt_fragments(spell_ctx))
-    if character.has_component(MagickaComponent):
-        lines.extend(character.get_component(MagickaComponent).prompt_fragments(ctx))
+    if character.has_component(MagicComponent):
+        lines.extend(character.get_component(MagicComponent).prompt_fragments(ctx))
     if character.has_component(SurrenderComponent):
         lines.extend(character.get_component(SurrenderComponent).prompt_fragments(ctx))
     if character.has_component(JailComponent):
@@ -2457,8 +2457,8 @@ __all__ = [
     "LockPickedEvent",
     "LoreBookComponent",
     "LoreBookReadEvent",
-    "MagickaComponent",
-    "MagickaRecoveredEvent",
+    "MagicComponent",
+    "MagicRecoveredEvent",
     "LocationDiscoveredEvent",
     "MapMarkerAddedEvent",
     "MapMarkerComponent",
@@ -2486,7 +2486,7 @@ __all__ = [
     "QuestStageComponent",
     "QuestTrackedEvent",
     "ReadLoreBookHandler",
-    "RecoverMagickaHandler",
+    "RecoverMagicHandler",
     "ReportCrimeHandler",
     "SneakHandler",
     "SpellCooldownComponent",

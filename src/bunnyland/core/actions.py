@@ -1181,7 +1181,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("criminal_id", "faction_id", "bounty"),
         tool_name="report_crime",
     ),
-    _definition("recover-magicka", ("amount",), tool_name="recover_magicka"),
+    _definition("recover-magic", ("amount",), tool_name="recover_magic"),
     _definition("identify-artifact", ("artifact_id",), tool_name="identify_artifact"),
     _definition(
         "appease-ancient-beast",

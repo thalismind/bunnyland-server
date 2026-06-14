@@ -177,7 +177,7 @@ from ..mechanics.dragonsim import (
     JailComponent,
     LockDifficultyComponent,
     LoreBookComponent,
-    MagickaComponent,
+    MagicComponent,
     MapMarkerComponent,
     PerkComponent,
     PersuasionComponent,
@@ -1151,8 +1151,8 @@ class DragonWorldgenHook:
                 entity,
                 WantedComponent(amounts={_generated_id(event, "faction"): 10}),
             )
-        if _wants(event, "magicka"):
-            replace_component(entity, MagickaComponent(last_updated_epoch=event.world_epoch))
+        if _wants(event, "magic"):
+            replace_component(entity, MagicComponent(last_updated_epoch=event.world_epoch))
         if _wants(event, "spell-cooldown"):
             replace_component(entity, SpellCooldownComponent(ready_at_epoch=event.world_epoch))
         if _wants(event, "persuasion"):

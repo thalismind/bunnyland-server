@@ -54,7 +54,7 @@ from bunnyland.mechanics.dragonsim import (
     KnowsSpell,
     LockDifficultyComponent,
     LoreBookComponent,
-    MagickaComponent,
+    MagicComponent,
     MapMarkerComponent,
     MemberOf,
     PointOfInterestComponent,
@@ -324,7 +324,7 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert LoreBookComponent(title="Herbs", skill_name="alchemy").prompt_fragments(
         self_ctx
     ) == ("Unread skill book nearby: Herbs (alchemy).",)
-    assert MagickaComponent().prompt_fragments(other_ctx) == ()
+    assert MagicComponent().prompt_fragments(other_ctx) == ()
     assert SpellCooldownComponent().prompt_fragments(self_ctx) == ()
     assert SpellCooldownComponent(ready_at_epoch=7).prompt_fragments(self_ctx) == (
         "Spell cooldown nearby: ready at epoch 7.",

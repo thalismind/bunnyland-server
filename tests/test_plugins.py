@@ -709,7 +709,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "CarvableComponent",
         "LoreBookComponent",
         "LockDifficultyComponent",
-        "MagickaComponent",
+        "MagicComponent",
         "SpellComponent",
         "PotionRecipeComponent",
         "ArtifactComponent",
@@ -742,7 +742,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "persuade",
         "surrender",
         "report-crime",
-        "recover-magicka",
+        "recover-magic",
         "identify-artifact",
         "appease-ancient-beast",
     } <= {handler.command_type for handler in dragon.commands.action_handlers}

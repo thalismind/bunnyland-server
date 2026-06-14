@@ -71,8 +71,8 @@ from bunnyland.mechanics.dragonsim import (
     LockPickedEvent,
     LoreBookComponent,
     LoreBookReadEvent,
-    MagickaComponent,
-    MagickaRecoveredEvent,
+    MagicComponent,
+    MagicRecoveredEvent,
     MapMarkerAddedEvent,
     MapMarkerComponent,
     MarkMapHandler,
@@ -99,7 +99,7 @@ from bunnyland.mechanics.dragonsim import (
     QuestStageComponent,
     QuestTrackedEvent,
     ReadLoreBookHandler,
-    RecoverMagickaHandler,
+    RecoverMagicHandler,
     ReportCrimeHandler,
     ServeJailTimeHandler,
     SneakHandler,
@@ -216,7 +216,7 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(MagickaComponent(current=1, maximum=10, regen_per_hour=3))
+    character.add_component(MagicComponent(current=1, maximum=10, regen_per_hour=3))
 
     accepted_quest = _dragon_room_entity(
         scenario,
@@ -309,10 +309,10 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
             CrimeReportedEvent,
         ),
         (
-            RecoverMagickaHandler(),
-            "recover-magicka",
+            RecoverMagicHandler(),
+            "recover-magic",
             {"amount": 3},
-            MagickaRecoveredEvent,
+            MagicRecoveredEvent,
         ),
         (
             IdentifyArtifactHandler(),
@@ -341,12 +341,12 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
     assert target.get_component(PersuasionComponent).disposition == 2
     assert character.get_component(SurrenderComponent).reason == "fine"
     assert criminal.get_component(WantedComponent).amounts[str(faction.id)] == 7
-    assert character.get_component(MagickaComponent).current == 4
+    assert character.get_component(MagicComponent).current == 4
     assert str(scenario.character) in artifact.get_component(ArtifactComponent).identified_by
     fragments = dragonsim_fragments(scenario.actor.world, character)
     assert "Declined quest: Wolf Road Trouble." in fragments
     assert "Tracked quest stage 0 for lost-ring, branch return." in fragments
-    assert "Magicka: 4/10." in fragments
+    assert "Magic: 4/10." in fragments
     assert f"Surrendered to {target.id}." in fragments
     assert "Artifact nearby: star mirror (1 charges, identified)." in fragments
     assert "Moss Guard disposition: 2." in fragments
@@ -427,9 +427,9 @@ def test_dragonsim_parity_handlers_reject_invalid_targets_directly():
         assert missing_target.ok is False
         assert missing_target.reason == missing_reason
 
-    result = RecoverMagickaHandler().execute(
+    result = RecoverMagicHandler().execute(
         ctx,
-        _handler_cmd(scenario, "recover-magicka", character_id="not-an-id"),
+        _handler_cmd(scenario, "recover-magic", character_id="not-an-id"),
     )
     assert result.ok is False
     assert result.reason == "invalid character id"
@@ -487,7 +487,7 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
         world,
         [
             IdentityComponent(name="Slow Spark", kind="spell"),
-            SpellComponent(name="Slow Spark", magicka_cost=1),
+            SpellComponent(name="Slow Spark", magic_cost=1),
             SpellCooldownComponent(cooldown_seconds=10, ready_at_epoch=ctx.epoch + 10),
         ],
     )
@@ -497,12 +497,12 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
         world,
         [
             IdentityComponent(name="Meteor", kind="spell"),
-            SpellComponent(name="Meteor", magicka_cost=5, skill_name=""),
+            SpellComponent(name="Meteor", magic_cost=5, skill_name=""),
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), expensive_spell.id)
     character.add_relationship(KnowsSpell(learned_at_epoch=0), expensive_spell.id)
-    character.add_component(MagickaComponent(current=0, maximum=5))
+    character.add_component(MagicComponent(current=0, maximum=5))
 
     locked_chest = spawn_entity(
         world,
@@ -666,7 +666,7 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
         (
             CastDragonSpellHandler(),
             _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(expensive_spell.id)),
-            "not enough magicka",
+            "not enough magic",
         ),
         (
             BrewPotionHandler(),
@@ -694,8 +694,8 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
             "artifact has no charges",
         ),
         (
-            RecoverMagickaHandler(),
-            _handler_cmd(scenario, "recover-magicka", amount=0),
+            RecoverMagicHandler(),
+            _handler_cmd(scenario, "recover-magic", amount=0),
             "recovery amount must be positive",
         ),
         (
@@ -2042,7 +2042,7 @@ async def test_learn_cast_brew_and_use_fixed_adventure_magic():
     scenario = build_scenario()
     _install(scenario.actor)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(MagickaComponent(current=5, maximum=5))
+    character.add_component(MagicComponent(current=5, maximum=5))
     _set_skill_level(scenario, "destruction", 1)
     _set_skill_level(scenario, "alchemy", 1)
     spell = spawn_entity(
@@ -2052,7 +2052,7 @@ async def test_learn_cast_brew_and_use_fixed_adventure_magic():
             SpellComponent(
                 name="Spark",
                 school="destruction",
-                magicka_cost=3,
+                magic_cost=3,
                 skill_name="destruction",
                 min_skill_level=1,
             ),
@@ -2104,7 +2104,7 @@ async def test_learn_cast_brew_and_use_fixed_adventure_magic():
 
     await scenario.actor.submit(_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id)))
     await scenario.actor.tick(HOUR)
-    assert character.get_component(MagickaComponent).current == 2
+    assert character.get_component(MagicComponent).current == 2
     assert cast[0].school == "destruction"
     assert character.get_component(SkillSetComponent).xp["destruction"] == 3.0
 

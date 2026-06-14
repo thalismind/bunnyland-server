@@ -176,19 +176,19 @@ Pick a reachable lock when your lockpicking skill is high enough:
 ```
 
 Dragon-sim fixed magic is separate from dagger-sim's custom spellmaker. Learn a prepared
-spell, cast it from your magicka pool, brew a prepared potion recipe, or trigger a charged
+spell, cast it from your magic pool, brew a prepared potion recipe, or trigger a charged
 artifact:
 
 ```text
 !learn-spell spell_id=Spark
 !cast-dragon-spell spell_id=Spark
-!recover-magicka amount=5
+!recover-magic amount=5
 !brew-potion recipe_id="blue tonic recipe"
 !identify-artifact artifact_id="star mirror"
 !use-artifact artifact_id="star mirror"
 ```
 
-Spells can have cooldowns, and magicka recovery respects the character's magicka state.
+Spells can have cooldowns, and magic recovery respects the character's magic state.
 
 ## Quest branches, persuasion, and surrender
 
@@ -235,5 +235,5 @@ A simple adventure loop:
 !steal ruby ring from Mara
 !pay-bounty faction_id="Moss Wardens"
 !pick-lock lock_id="old chest"
-!recover-magicka amount=5
+!recover-magic amount=5
 ```

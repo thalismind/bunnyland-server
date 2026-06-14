@@ -3440,7 +3440,7 @@ TrespassDetectedEvent
 
 ```text
 spells
-mana/magicka
+mana/magic
 spell schools
 enchanting
 soul gems, adapted as spirit vessels
@@ -3455,7 +3455,7 @@ blessings
 ### Components
 
 ```python
-MagickaComponent
+MagicComponent
 SpellComponent
 SpellSchoolComponent
 EnchantmentComponent
@@ -3469,7 +3469,7 @@ SoulVesselComponent
 ### Systems
 
 ```text
-MagickaRegenSystem
+MagicRegenSystem
 SpellCastSystem
 SpellEffectSystem
 EnchantmentSystem
@@ -7775,7 +7775,7 @@ factions
 skills-by-use
 perks
 persuasion/surrender/report-crime
-magicka regen/cooldowns
+magic regen/cooldowns
 fixed magic
 dungeons
 dragons/ancient beasts encounter options
