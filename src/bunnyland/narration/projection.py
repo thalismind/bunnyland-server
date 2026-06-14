@@ -35,6 +35,43 @@ LOW_SALIENCE_CUTOFF = 30
 
 
 @dataclass(frozen=True)
+class NarrationVoice:
+    """Scenario narration style metadata kept separate from scene facts."""
+
+    name: str
+    style_tags: tuple[str, ...] = ()
+    lead_in: str = ""
+
+
+DEFAULT_VOICE = NarrationVoice(name="plain")
+DEFAULT_VOICES = (
+    DEFAULT_VOICE,
+    NarrationVoice(name="cozy", style_tags=("warm", "gentle"), lead_in="Gently,"),
+    NarrationVoice(name="noir", style_tags=("terse", "shadowed"), lead_in="In clipped shadows,"),
+)
+
+
+class NarrationVoiceRegistry:
+    """Resolve scenario voice names or tags to deterministic narration style metadata."""
+
+    def __init__(self, voices: tuple[NarrationVoice, ...] = DEFAULT_VOICES) -> None:
+        self._voices = {voice.name: voice for voice in voices}
+
+    def get(self, name: str) -> NarrationVoice:
+        return self._voices.get(name, DEFAULT_VOICE)
+
+    def for_tags(self, tags: tuple[str, ...]) -> NarrationVoice:
+        wanted = set(tags)
+        for voice in self._voices.values():
+            if wanted.intersection(voice.style_tags):
+                return voice
+        return DEFAULT_VOICE
+
+
+DEFAULT_VOICE_REGISTRY = NarrationVoiceRegistry()
+
+
+@dataclass(frozen=True)
 class SceneEvent:
     """One visible event phrase retained for audit and rendering."""
 
@@ -76,6 +113,7 @@ class SceneInput:
     room_id: str | None
     location_title: str
     room_summary: str
+    voice: NarrationVoice = DEFAULT_VOICE
     visible_characters: tuple[str, ...] = ()
     visible_objects: tuple[str, ...] = ()
     exits: tuple[str, ...] = ()
@@ -255,15 +293,16 @@ def render_scene(scene: SceneInput) -> str:
 
     lines: list[str] = []
     title = scene.location_title or "Somewhere"
+    lead_in = f"{scene.voice.lead_in} " if scene.voice.lead_in else ""
     if scene.clusters:
         cluster_text = " ".join(
             " ".join(cluster.summaries) for cluster in scene.clusters
         )
-        lines.append(f"{title}: {cluster_text}")
+        lines.append(f"{title}: {lead_in}{cluster_text}")
     elif scene.events:
-        lines.append(f"{title}: " + " ".join(event.summary for event in scene.events))
+        lines.append(f"{title}: {lead_in}" + " ".join(event.summary for event in scene.events))
     else:
-        lines.append(f"{title}: {scene.room_summary or 'Nothing notable changes.'}")
+        lines.append(f"{title}: {lead_in}{scene.room_summary or 'Nothing notable changes.'}")
     visible = scene.visible_characters + scene.visible_objects
     if visible:
         lines.append("Visible now: " + ", ".join(visible) + ".")
@@ -406,6 +445,7 @@ class NarrationProjection:
     room_summary: RoomSummaryProjection | None = None
     capacity: int = 20
     max_scene_events: int = 8
+    voice: NarrationVoice = DEFAULT_VOICE
     renderer: Callable[[SceneInput], str] = render_scene
     _pending: list[DomainEvent] = field(default_factory=list, init=False)
     _transcript: dict[str, deque[SceneNarration]] = field(
@@ -488,6 +528,7 @@ class NarrationProjection:
             room_id=str(room_id) if room_id is not None else None,
             location_title=location_title,
             room_summary=room_summary,
+            voice=self.voice,
             visible_characters=visible_characters,
             visible_objects=visible_objects,
             exits=exits,
@@ -551,6 +592,10 @@ class NarrationProjection:
 
 
 __all__ = [
+    "DEFAULT_VOICE",
+    "DEFAULT_VOICE_REGISTRY",
+    "NarrationVoice",
+    "NarrationVoiceRegistry",
     "NarrationIssue",
     "NarrationProjection",
     "SceneCluster",

@@ -89,7 +89,7 @@ deterministic harnesses.
     are compressed in the narration input.
   - **Verification:** table-driven salience tests.
 
-- [ ] **Scenario register and voice controls**
+- [x] **Scenario register and voice controls**
   - **Goal:** let narration style reflect scenario tone without changing facts.
   - **Depends on:** scenario/world metadata or tags.
   - **Implementation notes:** keep style tags separate from factual context; style can

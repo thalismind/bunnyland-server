@@ -12,7 +12,9 @@ make the presentation auditable without asking the model to decide what exists.
 `SceneInput.clusters` groups visible event summaries by actor and room so lifecycle noise
 does not become repeated prose beats. Deterministic salience weights keep important events
 ahead of routine events; when a scene batch is noisy, low-salience event ids move to
-`compressed_event_ids` with a compression fact instead of filling the prompt.
+`compressed_event_ids` with a compression fact instead of filling the prompt. Scenario
+voice controls are stored as `NarrationVoice` metadata on the scene input. Voice changes
+can alter renderer diction, but the structured facts and event ids are unchanged.
 
 ## Context Shape
 

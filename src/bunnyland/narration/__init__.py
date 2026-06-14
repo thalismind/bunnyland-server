@@ -1,8 +1,12 @@
 """Read-side narration assembled from visible ECS state and domain events."""
 
 from .projection import (
+    DEFAULT_VOICE,
+    DEFAULT_VOICE_REGISTRY,
     NarrationIssue,
     NarrationProjection,
+    NarrationVoice,
+    NarrationVoiceRegistry,
     SceneCluster,
     SceneEvent,
     SceneFact,
@@ -13,8 +17,12 @@ from .projection import (
 )
 
 __all__ = [
+    "DEFAULT_VOICE",
+    "DEFAULT_VOICE_REGISTRY",
     "NarrationIssue",
     "NarrationProjection",
+    "NarrationVoice",
+    "NarrationVoiceRegistry",
     "SceneCluster",
     "SceneEvent",
     "SceneFact",

@@ -31,7 +31,13 @@ from bunnyland.core.events import (
     SpeechToldEvent,
     event_base,
 )
-from bunnyland.narration import NarrationProjection, SceneInput, check_grounding, render_scene
+from bunnyland.narration import (
+    NarrationProjection,
+    NarrationVoiceRegistry,
+    SceneInput,
+    check_grounding,
+    render_scene,
+)
 
 
 def _command(scenario, command_type: str, payload=None):
@@ -425,6 +431,39 @@ def test_narration_salience_retains_important_events_and_compresses_routine_nois
     assert set(scene.compressed_event_ids).isdisjoint(retained_ids)
     assert scene.compression_notes == ("3 routine events compressed.",)
     assert any(fact.category == "compression" for fact in scene.facts)
+
+
+def test_narration_voice_controls_style_without_changing_facts(scenario):
+    world = scenario.actor.world
+    event = SpeechSaidEvent(
+        **event_base(
+            5,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            text="The kettle is singing.",
+        )
+    )
+    registry = NarrationVoiceRegistry()
+    plain = NarrationProjection(world, voice=registry.get("plain"))
+    cozy = NarrationProjection(world, voice=registry.for_tags(("warm",)))
+
+    plain_scene = plain.assemble(world.get_entity(scenario.character), (event,))
+    cozy_scene = cozy.assemble(world.get_entity(scenario.character), (event,))
+    plain_facts = tuple(
+        (fact.category, fact.text, fact.entity_id, fact.event_id)
+        for fact in plain_scene.facts
+    )
+    cozy_facts = tuple(
+        (fact.category, fact.text, fact.entity_id, fact.event_id)
+        for fact in cozy_scene.facts
+    )
+
+    assert plain_facts == cozy_facts
+    assert plain_scene.voice.name == "plain"
+    assert cozy_scene.voice.name == "cozy"
+    assert render_scene(plain_scene) != render_scene(cozy_scene)
+    assert 'You said, "The kettle is singing."' in render_scene(cozy_scene)
 
 
 def test_narration_handles_no_pending_events_and_orphan_viewer(scenario):

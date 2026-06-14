@@ -187,3 +187,5 @@ projections and visible domain events. Each transcript entry keeps the structure
 `SceneInput.facts`, event clusters, and source event ids for audit, and a renderer failure
 is recorded on the projection without mutating the world. Noisy scene batches retain
 high-salience events and record compressed low-salience event ids on the scene input.
+Scenario voice controls change renderer diction only; audit facts and event ids stay the
+same across voices.
