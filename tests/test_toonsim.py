@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from conftest import build_scenario
 
 from bunnyland.core import (
     ActionPointsComponent,
+    CharacterComponent,
     CommandCost,
     ContainerComponent,
     ContainmentMode,
@@ -19,6 +22,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.handlers import HandlerContext
+from bunnyland.mechanics import toonsim
 from bunnyland.mechanics.toonsim import (
     LAYER_BACKGROUND,
     LAYER_CHARACTER,
@@ -154,6 +158,39 @@ def test_backfill_preserves_existing_sprite_parts_when_adding_layer():
     assert item.get_component(SpriteScale).scale == 2.5
 
 
+def test_backfill_preserves_existing_bounds_when_adding_layer():
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="a crate", kind="container"),
+            ContainerComponent(),
+            SpriteBounds(width=33.0, height=11.0, solid=True),
+        ],
+    )
+
+    _backfill(world)
+
+    assert item.get_component(SpriteLayer).layer == LAYER_FURNITURE
+    assert item.get_component(SpriteBounds).width == 33.0
+
+
+def test_default_bounds_cover_renderable_categories_and_unnamed_kind():
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    door = spawn_entity(world, [DoorComponent()])
+    loose = spawn_entity(world, [PortableComponent()])
+    unnamed = spawn_entity(world, [])
+
+    assert toonsim._kind(unnamed) == ""
+    assert toonsim.default_bounds_for(door).width == 10.0
+    assert toonsim.default_bounds_for(loose).width == 4.0
+    assert toonsim.default_bounds_for(unnamed) is None
+
+
 def test_backfill_is_idempotent():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -215,6 +252,162 @@ async def test_worldgen_hook_places_items_on_table_without_changing_containment(
     apple_pos = apple.get_component(SpritePosition)
     assert abs(apple_pos.x - table_pos.x) <= table_bounds.width / 2.0
     assert abs(apple_pos.y - table_pos.y) <= table_bounds.height / 2.0
+
+
+def test_generated_positions_cover_directions_and_floor_fallback():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = spawn_entity(
+        world,
+        [
+            CharacterComponent(species="hare"),
+            SpriteBounds(width=5.0, height=8.0, solid=True),
+        ],
+    )
+    floor_item = spawn_entity(world, [PortableComponent(), SpriteBounds()])
+    north = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="north hatch", kind="door"),
+            DoorComponent(),
+            SpriteBounds(width=10.0, height=8.0),
+        ],
+    )
+    south = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="south hatch", kind="door"),
+            DoorComponent(),
+            SpriteBounds(width=10.0, height=8.0),
+        ],
+    )
+    east = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="east hatch", kind="door"),
+            DoorComponent(),
+            SpriteBounds(width=10.0, height=8.0),
+        ],
+    )
+    west = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="west hatch", kind="door"),
+            DoorComponent(),
+            SpriteBounds(width=10.0, height=8.0),
+        ],
+    )
+    unnamed_door = spawn_entity(world, [DoorComponent(), SpriteBounds(width=10.0, height=8.0)])
+
+    assert 30.0 <= toonsim._generated_position(world, character, room, "c").x <= 70.0
+    assert toonsim._generated_position(world, north, room, "n").y == 4.0
+    assert toonsim._generated_position(world, south, room, "s").y == 96.0
+    assert toonsim._generated_position(world, east, room, "e").x == 95.0
+    assert toonsim._generated_position(world, west, room, "w").x == 5.0
+    assert 5.0 <= toonsim._generated_position(world, unnamed_door, room, "u").x <= 95.0
+
+    pos = toonsim._generated_position(world, floor_item, room, "floor")
+    assert 2.0 <= pos.x <= 98.0
+    assert 2.0 <= pos.y <= 98.0
+
+
+def test_generated_surface_position_preserves_existing_placed_on_edge():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    surface = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="desk", kind="desk"),
+            SpritePosition(x=45.0, y=45.0),
+            SpriteBounds(width=20.0, height=10.0, solid=True),
+        ],
+    )
+    item = spawn_entity(world, [PortableComponent(), SpriteBounds()])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), surface.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), item.id)
+    item.add_relationship(PlacedOn(surface="top"), surface.id)
+
+    pos = toonsim._generated_position(world, item, room, "item")
+
+    assert item.has_relationship(PlacedOn, surface.id)
+    assert abs(pos.x - 45.0) <= 10.0
+    assert abs(pos.y - 45.0) <= 5.0
+
+
+def test_worldgen_hook_ignores_invalid_or_non_room_events():
+    scenario = build_scenario()
+    hook = toonsim.ToonWorldgenHook()
+    hook.actor = scenario.actor
+    room = scenario.actor.world.get_entity(scenario.room_a)
+
+    hook._on_room(SimpleNamespace(entity_id="bad-id"))
+    hook._on_object(SimpleNamespace(entity_id="bad-id", room_id=None, container_id=None))
+    hook._on_object(
+        SimpleNamespace(
+            entity_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            container_id=str(scenario.character),
+            object_key="nested",
+        )
+    )
+    hook._on_object(
+        SimpleNamespace(
+            entity_id=str(scenario.character),
+            room_id="entity_999",
+            container_id="entity_999",
+            object_key="missing",
+        )
+    )
+    hook._on_character(SimpleNamespace(entity_id="entity_999", room_id=str(scenario.room_a)))
+
+    assert not room.has_component(ToonRoomComponent)
+
+
+def test_worldgen_hook_preserves_explicit_renderable_parts():
+    scenario = build_scenario()
+    actor = scenario.actor
+    hook = toonsim.ToonWorldgenHook()
+    hook.actor = actor
+    room = actor.world.get_entity(scenario.room_a)
+    room.add_component(ToonRoomComponent(default_start=True))
+    room.add_component(SpritePosition(x=12.0, y=34.0))
+    entity = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="apple", kind="food"),
+            PortableComponent(),
+            SpriteImage(url="https://cdn/apple.png"),
+            SpriteScale(scale=2.0),
+            SpriteBounds(width=9.0, height=9.0),
+            SpritePosition(x=22.0, y=33.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    hook._on_room(SimpleNamespace(entity_id=str(room.id)))
+    hook._on_object(
+        SimpleNamespace(
+            entity_id=str(entity.id),
+            room_id=str(room.id),
+            container_id=str(room.id),
+            object_key="apple",
+        )
+    )
+    hook._on_character(
+        SimpleNamespace(
+            entity_id=str(scenario.character),
+            room_id=str(room.id),
+            character_key="juniper",
+        )
+    )
+
+    assert room.get_component(ToonRoomComponent).default_start is True
+    assert room.get_component(SpritePosition).x == 12.0
+    assert entity.get_component(SpriteImage).url == "https://cdn/apple.png"
+    assert entity.get_component(SpriteScale).scale == 2.0
+    assert entity.get_component(SpritePosition).x == 22.0
 
 
 def _move_sprite(scenario, **payload):
@@ -279,6 +472,80 @@ def test_move_sprite_rejects_solid_collision():
     character = world.get_entity(scenario.character)
     assert result.reason == "position is blocked"
     assert not character.has_component(SpritePosition)
+
+
+def test_move_sprite_allows_nearby_non_overlapping_solid_member():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    blocker = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="oak table", kind="table"),
+            SpritePosition(x=70.0, y=70.0),
+            SpriteBounds(width=12.0, height=12.0, solid=True),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), blocker.id
+    )
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+
+    assert result.ok is True
+    assert world.get_entity(scenario.character).get_component(SpritePosition).x == 40.0
+
+
+def test_move_sprite_ignores_non_solid_and_unpositioned_members():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    non_solid = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="apple", kind="food"),
+            SpritePosition(x=40.0, y=40.0),
+            SpriteBounds(width=20.0, height=20.0, solid=False),
+        ],
+    )
+    unpositioned_solid = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="table", kind="table"),
+            SpriteBounds(width=20.0, height=20.0, solid=True),
+        ],
+    )
+    room = world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), non_solid.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unpositioned_solid.id)
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+
+    assert result.ok is True
+    assert world.get_entity(scenario.character).get_component(SpritePosition).x == 40.0
+
+
+def test_move_sprite_rejects_character_without_room():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+
+    assert result.reason == "character is not in a room"
+
+
+def test_move_sprite_rejects_entity_without_sprite_bounds():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.remove_component(CharacterComponent)
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+
+    assert result.reason == "character has no sprite bounds"
 
 
 async def test_move_sprite_rejects_bad_payload():
