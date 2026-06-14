@@ -8,6 +8,7 @@ from bunnyland.core import (
     ActionPointsComponent,
     CommandCost,
     ContainerComponent,
+    ContainmentMode,
     Contains,
     DoorComponent,
     IdentityComponent,
@@ -234,16 +235,50 @@ async def test_move_sprite_repositions_for_free():
     moved: list[SpriteMovedEvent] = []
     scenario.actor.bus.subscribe(SpriteMovedEvent, moved.append)
 
-    await scenario.actor.submit(_move_sprite(scenario, x=4.0, y=-1.5))
+    await scenario.actor.submit(_move_sprite(scenario, x=20.0, y=20.0))
     await scenario.actor.tick(0.0)
 
     character = scenario.actor.world.get_entity(scenario.character)
     pos = character.get_component(SpritePosition)
-    assert (pos.x, pos.y) == (4.0, -1.5)
+    assert (pos.x, pos.y) == (20.0, 20.0)
     # No action points were spent on the free in-room move.
     assert character.get_component(ActionPointsComponent).current == 5.0
-    assert moved and (moved[-1].x, moved[-1].y) == (4.0, -1.5)
+    assert moved and (moved[-1].x, moved[-1].y) == (20.0, 20.0)
     assert moved[-1].room_id == str(scenario.room_a)
+
+
+def test_move_sprite_rejects_out_of_room_bounds():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=1.0, y=1.0))
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert result.reason == "position is outside room bounds"
+    assert not character.has_component(SpritePosition)
+
+
+def test_move_sprite_rejects_solid_collision():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    blocker = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="oak table", kind="table"),
+            SpritePosition(x=40.0, y=40.0),
+            SpriteBounds(width=12.0, height=12.0, solid=True),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), blocker.id
+    )
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+
+    character = world.get_entity(scenario.character)
+    assert result.reason == "position is blocked"
+    assert not character.has_component(SpritePosition)
 
 
 async def test_move_sprite_rejects_bad_payload():

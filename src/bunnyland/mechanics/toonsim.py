@@ -259,6 +259,59 @@ def _position_on_surface(entity: Entity, surface: Entity) -> SpritePosition:
     return _clamp_position(x, y, entity_bounds)
 
 
+def _aabb(position: SpritePosition, bounds: SpriteBounds) -> tuple[float, float, float, float]:
+    half_w = bounds.width / 2.0
+    half_h = bounds.height / 2.0
+    return (
+        position.x - half_w,
+        position.y - half_h,
+        position.x + half_w,
+        position.y + half_h,
+    )
+
+
+def _aabb_overlaps(
+    left: tuple[float, float, float, float], right: tuple[float, float, float, float]
+) -> bool:
+    return left[0] < right[2] and left[2] > right[0] and left[1] < right[3] and left[3] > right[1]
+
+
+def _inside_room(position: SpritePosition, bounds: SpriteBounds, room_bounds: SpriteBounds) -> bool:
+    left, top, right, bottom = _aabb(position, bounds)
+    return (
+        left >= 0.0
+        and top >= 0.0
+        and right <= room_bounds.width
+        and bottom <= room_bounds.height
+    )
+
+
+def _solid_collision(
+    world: World,
+    character: Entity,
+    room: Entity,
+    position: SpritePosition,
+    bounds: SpriteBounds,
+) -> bool:
+    moving = _aabb(position, bounds)
+    for _edge, child_id in room.get_relationships(Contains):
+        if child_id == character.id or not world.has_entity(child_id):
+            continue
+        child = world.get_entity(child_id)
+        if not child.has_component(SpritePosition):
+            continue
+        child_bounds = (
+            child.get_component(SpriteBounds)
+            if child.has_component(SpriteBounds)
+            else default_bounds_for(child)
+        )
+        if child_bounds is None or not child_bounds.solid:
+            continue
+        if _aabb_overlaps(moving, _aabb(child.get_component(SpritePosition), child_bounds)):
+            return True
+    return False
+
+
 def _generated_position(
     world: World, entity: Entity, room: Entity, event_key: str
 ) -> SpritePosition:
@@ -410,8 +463,30 @@ class MoveSpriteHandler:
             return rejected("invalid x/y position")
 
         character = ctx.entity(character_id)
-        replace_component(character, SpritePosition(x=x, y=y))
         room_id = container_of(character)
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("character is not in a room")
+        room = ctx.entity(room_id)
+        bounds = (
+            character.get_component(SpriteBounds)
+            if character.has_component(SpriteBounds)
+            else default_bounds_for(character)
+        )
+        if bounds is None:
+            return rejected("character has no sprite bounds")
+        if not character.has_component(SpriteBounds):
+            replace_component(character, bounds)
+        position = SpritePosition(x=x, y=y)
+        room_bounds = (
+            room.get_component(SpriteBounds)
+            if room.has_component(SpriteBounds)
+            else SpriteBounds(width=ROOM_WIDTH, height=ROOM_HEIGHT)
+        )
+        if not _inside_room(position, bounds, room_bounds):
+            return rejected("position is outside room bounds")
+        if _solid_collision(ctx.world, character, room, position, bounds):
+            return rejected("position is blocked")
+        replace_component(character, position)
         return ok(
             SpriteMovedEvent(
                 **ctx.event_base(
