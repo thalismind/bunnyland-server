@@ -450,6 +450,32 @@ class SpeechToldEvent(DomainEvent):
     overhearer_ids: tuple[str, ...] = ()
 
 
+class ConversationStartedEvent(DomainEvent):
+    conversation_id: str
+    participant_ids: tuple[str, ...] = ()
+    topic: str = ""
+    active_participant_id: str | None = None
+    expires_at_epoch: int = 0
+
+
+class ConversationLineEvent(DomainEvent):
+    conversation_id: str
+    speaker_id: str
+    text: str
+    turn_index: int
+    next_participant_id: str | None = None
+    author_intent: str | None = None
+    inferred_intent: str | None = None
+    final_interpretation: str | None = None
+    approach: str | None = None
+
+
+class ConversationEndedEvent(DomainEvent):
+    conversation_id: str
+    participant_ids: tuple[str, ...] = ()
+    reason: str = "ended"
+
+
 # --------------------------------------------------------------------------------------
 # Private notes / memory events (spec 15, 18.4). Always private to the character.
 # --------------------------------------------------------------------------------------

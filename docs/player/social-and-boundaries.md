@@ -21,6 +21,16 @@ Speech records text, inferred intent, and the final interpretation. Praise, apol
 requests, promises, insults, and threats can shift social bonds when the social mechanic is
 enabled.
 
+For immediate turn-taking, use a conversation thread. The first command creates a
+conversation entity with participants, timeout, and whose turn it is; each
+`conversation-line` advances the turn and also emits ordinary speech for social systems:
+
+```text
+!start-conversation target_ids=Hazel topic=watch rotation
+!conversation-line conversation_id=entity_12 text="Please check the east tunnel."
+!end-conversation conversation_id=entity_12 reason=resolved
+```
+
 ## Use explicit relationship commands in life-sim
 
 Some durable relationship state is command-driven:

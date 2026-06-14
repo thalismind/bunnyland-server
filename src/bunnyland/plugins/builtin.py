@@ -8,11 +8,20 @@ surface and mechanics so disabling one removes its components/systems/verbs.
 
 from __future__ import annotations
 
-from ..core.components import AdminComponent, HoldableComponent, WearableComponent
+from ..core.components import (
+    AdminComponent,
+    ConversationComponent,
+    HoldableComponent,
+    WearableComponent,
+)
 from ..core.controllers import MCPControllerComponent
+from ..core.edges import ConversationParticipant
 from ..core.events import (
     ContainerClosedEvent,
     ContainerOpenedEvent,
+    ConversationEndedEvent,
+    ConversationLineEvent,
+    ConversationStartedEvent,
     DoorClosedEvent,
     DoorOpenedEvent,
     EntityInspectedEvent,
@@ -26,7 +35,9 @@ from ..core.events import (
 )
 from ..core.handlers import (
     CloseHandler,
+    ConversationLineHandler,
     DropHandler,
+    EndConversationHandler,
     HoldHandler,
     InspectHandler,
     LockHandler,
@@ -37,6 +48,7 @@ from ..core.handlers import (
     RemoveHandler,
     SayHandler,
     SleepHandler,
+    StartConversationHandler,
     TakeHandler,
     TellHandler,
     UnholdHandler,
@@ -1547,7 +1559,15 @@ def core_verbs_plugin() -> Plugin:
     return Plugin(
         id=CORE_VERBS,
         name="Core Verbs",
-        ecs=EcsContribution(components=(AdminComponent, HoldableComponent, WearableComponent)),
+        ecs=EcsContribution(
+            components=(
+                AdminComponent,
+                ConversationComponent,
+                HoldableComponent,
+                WearableComponent,
+            ),
+            edges=(ConversationParticipant,),
+        ),
         commands=CommandContribution(
             action_handlers=(
                 LookHandler,
@@ -1571,8 +1591,14 @@ def core_verbs_plugin() -> Plugin:
                 WaitHandler,
                 SayHandler,
                 TellHandler,
+                StartConversationHandler,
+                ConversationLineHandler,
+                EndConversationHandler,
             ),
             typed_events=(
+                ConversationStartedEvent,
+                ConversationLineEvent,
+                ConversationEndedEvent,
                 RoomLookedEvent,
                 EntityInspectedEvent,
                 ContainerOpenedEvent,

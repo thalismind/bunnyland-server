@@ -309,6 +309,7 @@ move: Action 1
 take: Action 1
 eat/drink: Action 1
 say/tell: Action 1 + Focus 1
+start/end conversation and conversation line: Focus 1
 take note: Focus 1
 remember/search notes: Focus 1
 write on physical object: Action 1 + Focus 1
@@ -350,6 +351,9 @@ CommandDispatcher
 
 ```text
 Focus lane:
+  start conversation
+  conversation line
+  end conversation
   take note
   remember/search
   private reflection tools
@@ -985,6 +989,7 @@ rivalry status
 SocialBond
 RelationshipStatusComponent
 ConversationComponent
+ConversationParticipant
 RomanceStatusComponent
 FamilyRelationshipComponent
 JealousyComponent
@@ -1011,6 +1016,9 @@ Dialogue covers most social behavior:
 ```text
 say
 tell
+start-conversation
+conversation-line
+end-conversation
 ```
 
 Speech intent can be:
@@ -1038,6 +1046,9 @@ gossip
 ```text
 SpeechSaidEvent
 SpeechToldEvent
+ConversationStartedEvent
+ConversationLineEvent
+ConversationEndedEvent
 DialogueActInterpretedEvent
 RelationshipChangedEvent
 FriendshipFormedEvent
@@ -7696,6 +7707,7 @@ room graph
 prompt builder
 notes/remember
 say/tell with intent
+threaded conversation micro-loop
 hunger/thirst
 sleep/suspended
 basic LLM/Discord handoff

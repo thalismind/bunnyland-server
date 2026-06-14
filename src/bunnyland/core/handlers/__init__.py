@@ -31,12 +31,21 @@ from .inventory import (
 )
 from .lifecycle import SleepHandler, WaitHandler, WakeHandler
 from .movement import MoveHandler
-from .speech import SayHandler, TellHandler, infer_intent
+from .speech import (
+    ConversationLineHandler,
+    EndConversationHandler,
+    SayHandler,
+    StartConversationHandler,
+    TellHandler,
+    infer_intent,
+)
 
 __all__ = [
     "CommandHandler",
+    "ConversationLineHandler",
     "CloseHandler",
     "DropHandler",
+    "EndConversationHandler",
     "HandlerContext",
     "HandlerResult",
     "HoldHandler",
@@ -49,6 +58,7 @@ __all__ = [
     "RemoveHandler",
     "SayHandler",
     "SleepHandler",
+    "StartConversationHandler",
     "TakeHandler",
     "TellHandler",
     "UnholdHandler",

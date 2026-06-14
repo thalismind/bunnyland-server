@@ -91,6 +91,18 @@ class AdminComponent(Component):
     label: str = ""
 
 
+@dataclass(frozen=True)
+class ConversationComponent(Component):
+    """Structured state for a bounded, turn-taking conversation micro-loop."""
+
+    topic: str = ""
+    active_turn: int = 0
+    started_at_epoch: int = 0
+    expires_at_epoch: int = 0
+    ended: bool = False
+    ended_reason: str = ""
+
+
 # --------------------------------------------------------------------------------------
 # Affect, thoughts (spec 11.12). Mood is multidimensional, not a single scalar.
 # --------------------------------------------------------------------------------------
@@ -497,6 +509,7 @@ __all__ = [
     "ButtonComponent",
     "CharacterComponent",
     "ContainerComponent",
+    "ConversationComponent",
     "DeadComponent",
     "DescriptionComponent",
     "DoorComponent",

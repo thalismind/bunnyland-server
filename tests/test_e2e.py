@@ -48,6 +48,9 @@ from bunnyland.core.events import (
     CommandExecutedEvent,
     CommandRejectedEvent,
     ControllerChangedEvent,
+    ConversationEndedEvent,
+    ConversationLineEvent,
+    ConversationStartedEvent,
     ItemTakenEvent,
     NotesSearchedEvent,
     SpeechSaidEvent,
@@ -317,6 +320,100 @@ async def test_agent_prompt_reflects_the_generated_world():
 
 
 # -- playing the world processes actions ------------------------------------------------
+
+
+async def test_threaded_conversation_micro_loop_e2e():
+    actor, _proposal, result = await _new_world()
+    hazel = result.characters["hazel"]
+    room = actor.world.get_entity(container_of(actor.world.get_entity(hazel)))
+    clover = spawn_entity(
+        actor.world,
+        [
+            ActionPointsComponent(current=3.0, maximum=3.0),
+            FocusPointsComponent(current=3.0, maximum=3.0),
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), clover.id)
+    clover_controller = spawn_entity(actor.world)
+    clover_generation = actor.assign_controller(clover.id, clover_controller.id)
+    started: list[ConversationStartedEvent] = []
+    lines: list[ConversationLineEvent] = []
+    ended: list[ConversationEndedEvent] = []
+    rejected: list[CommandRejectedEvent] = []
+    actor.bus.subscribe(ConversationStartedEvent, started.append)
+    actor.bus.subscribe(ConversationLineEvent, lines.append)
+    actor.bus.subscribe(ConversationEndedEvent, ended.append)
+    actor.bus.subscribe(CommandRejectedEvent, rejected.append)
+
+    hazel_controller, hazel_generation = _controller_generation(actor.world.get_entity(hazel))
+    await actor.submit(
+        build_submitted_command(
+            character_id=str(hazel),
+            controller_id=str(hazel_controller),
+            controller_generation=hazel_generation,
+            command_type="start-conversation",
+            cost=CommandCost(focus=1),
+            lane=Lane.FOCUS,
+            payload={"target_ids": (str(clover.id),), "topic": "watch rotation"},
+        )
+    )
+    await actor.tick(1.0)
+    assert rejected == []
+    assert started
+    conversation_id = started[0].conversation_id
+
+    await actor.submit(
+        build_submitted_command(
+            character_id=str(hazel),
+            controller_id=str(hazel_controller),
+            controller_generation=hazel_generation,
+            command_type="conversation-line",
+            cost=CommandCost(focus=1),
+            lane=Lane.FOCUS,
+            payload={
+                "conversation_id": conversation_id,
+                "text": "Please watch the east tunnel.",
+                "intent": "request",
+            },
+        )
+    )
+    await actor.tick(1.0)
+    await actor.submit(
+        build_submitted_command(
+            character_id=str(clover.id),
+            controller_id=str(clover_controller.id),
+            controller_generation=clover_generation,
+            command_type="conversation-line",
+            cost=CommandCost(focus=1),
+            lane=Lane.FOCUS,
+            payload={
+                "conversation_id": conversation_id,
+                "text": "I will keep watch.",
+                "intent": "promise",
+            },
+        )
+    )
+    await actor.tick(1.0)
+    await actor.submit(
+        build_submitted_command(
+            character_id=str(hazel),
+            controller_id=str(hazel_controller),
+            controller_generation=hazel_generation,
+            command_type="end-conversation",
+            cost=CommandCost(focus=1),
+            lane=Lane.FOCUS,
+            payload={"conversation_id": conversation_id, "reason": "agreed"},
+        )
+    )
+    await actor.tick(1.0)
+
+    assert rejected == []
+    assert len(lines) == 2
+    assert lines[0].next_participant_id == str(clover.id)
+    assert lines[1].next_participant_id == str(hazel)
+    assert ended[0].reason == "agreed"
 
 
 async def test_scripted_playthrough_processes_actions_each_round():

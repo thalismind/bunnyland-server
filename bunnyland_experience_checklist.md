@@ -231,7 +231,7 @@ deterministic harnesses.
 
 ## Stage 3 - Conversation and Social Interpretation
 
-- [ ] **Threaded conversation micro-loop**
+- [x] **Threaded conversation micro-loop**
   - **Goal:** support immediate back-and-forth conversation without consuming a full world
     tick per line.
   - **Depends on:** command lanes, speech handlers, controller dispatch.

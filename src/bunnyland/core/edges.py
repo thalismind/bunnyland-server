@@ -63,6 +63,13 @@ class ControlledBy(Edge):
 
 
 @dataclass(frozen=True)
+class ConversationParticipant(Edge):
+    """conversation -> character participant with stable turn order."""
+
+    order: int = 0
+
+
+@dataclass(frozen=True)
 class HasThought(Edge):
     """character -> thought entity (spec 12)."""
 
@@ -76,6 +83,7 @@ __all__ = [
     "ContainmentMode",
     "Contains",
     "ControlledBy",
+    "ConversationParticipant",
     "ExitTo",
     "HasInjury",
     "HasThought",

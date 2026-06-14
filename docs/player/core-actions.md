@@ -101,3 +101,15 @@ Talk to the room or a present character:
 
 Speech is world state. Relationship and mood systems can react to what was said and how it
 was interpreted.
+
+For quick back-and-forth scenes, start a focused conversation with one or more present
+characters, add lines in turn, then end it:
+
+```text
+!start-conversation target_ids=Hazel topic=watch rotation
+!conversation-line conversation_id=entity_12 text="Please watch the east tunnel."
+!end-conversation conversation_id=entity_12 reason=agreed
+```
+
+Conversation lines are structured speech events with explicit participants, turn order,
+intent, approach, and timeout state.
