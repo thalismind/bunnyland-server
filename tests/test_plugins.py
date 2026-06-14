@@ -393,6 +393,25 @@ def test_builtin_handler_command_types_are_in_the_shared_action_catalog():
     assert handler_types - catalog == set()
 
 
+def test_speech_action_metadata_exposes_intent_and_approach_arguments():
+    definitions = {
+        definition.command_type: definition for definition in DEFAULT_ACTION_DEFINITIONS
+    }
+
+    assert definitions["say"].arg_keys == ("text", "intent", "approach")
+    assert definitions["tell"].arg_keys == (
+        "target_id",
+        "text",
+        "intent",
+        "approach",
+        "audible",
+    )
+    assert definitions["say"].arguments["intent"].kind == "string"
+    assert definitions["say"].arguments["approach"].kind == "string"
+    assert definitions["tell"].arguments["intent"].kind == "string"
+    assert definitions["tell"].arguments["approach"].kind == "string"
+
+
 def test_imported_plugin_ids_are_namespaced_and_selectable_by_short_id(monkeypatch):
     install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
 

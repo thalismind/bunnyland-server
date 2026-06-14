@@ -241,7 +241,7 @@ deterministic harnesses.
     normal world ticks cleanly.
   - **Verification:** direct handler tests and E2E conversation test.
 
-- [ ] **Speech intent and approach metadata**
+- [x] **Speech intent and approach metadata**
   - **Goal:** speech carries intent and social approach, not just text.
   - **Depends on:** existing speech command surface and action definitions.
   - **Implementation notes:** allow explicit intent when provided and deterministic
