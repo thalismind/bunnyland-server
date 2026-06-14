@@ -2399,6 +2399,98 @@ async def stuck_subway_example(actor, seed: str, options: GenOptions) -> Instant
     return world
 
 
+async def midnight_laundromat_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """A 24-hour laundromat in the small hours: strangers, a broken dryer, a lost-and-found."""
+
+    del options
+    from ..core.components import (
+        IdentityComponent,
+        PortableComponent,
+        ReadableComponent,
+        WorldClockComponent,
+    )
+    from ..mechanics.dragonsim import DiscoveryComponent, PointOfInterestComponent
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+    from ..mechanics.lifesim import WhimComponent
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="sidewalk", title="Buzzing Sidewalk", biome="city-street",
+                     light=0.1, celsius=13.0),
+            RoomSpec(key="floor", title="All-Night Laundromat", biome="laundromat",
+                     indoor=True, light=0.6, celsius=26.0),
+            RoomSpec(key="back", title="Back Folding Room", biome="laundromat",
+                     indoor=True, light=0.4, celsius=24.0),
+        ],
+        exits=[
+            ExitSpec(from_key="sidewalk", direction="in", to_key="floor"),
+            ExitSpec(from_key="floor", direction="out", to_key="sidewalk"),
+            ExitSpec(from_key="floor", direction="back", to_key="back"),
+            ExitSpec(from_key="back", direction="front", to_key="floor"),
+        ],
+        objects=[
+            ObjectSpec(key="coffee", room_key="floor", name="a paper cup of machine coffee",
+                       kind="water", hydration=10.0, portable=True),
+            ObjectSpec(key="crackers", room_key="floor", name="a sleeve of vending crackers",
+                       kind="food", nutrition=3.0, satiety=9.0, portable=True),
+            ObjectSpec(key="dryer", room_key="floor", name="an out-of-order dryer",
+                       kind="item", portable=False),
+            ObjectSpec(key="lostbin", room_key="back", name="the lost-and-found bin",
+                       kind="container", portable=False, open=False),
+            ObjectSpec(key="mitten", room_key="back", name="a child's red mitten, unclaimed",
+                       kind="item", portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="patron", name="Marisol Vega", room_key="floor",
+                          controller="suspended", traits=("sleepless", "friendly", "curious"),
+                          goals=("finish the wash in peace", "figure out the back room")),
+            CharacterSpec(key="attendant", name="Sam Okafor", room_key="back",
+                          controller="llm", llm_profile="night-attendant",
+                          traits=("quiet", "watchful", "kind"),
+                          goals=("keep the machines running", "mind the lost-and-found")),
+            CharacterSpec(key="regular", name="Dot Pell", room_key="floor",
+                          controller="llm", llm_profile="lonely-regular",
+                          traits=("chatty", "lonely"),
+                          goals=("talk to someone", "put off going home")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        # It is already the small hours; the cycle carries the scene on toward dawn.
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=1 * 3600))
+            clock[0].add_component(TimeOfDayComponent(phase="night"))
+            clock[0].add_component(CalendarComponent(day=1, season="autumn", hour=1))
+
+        back = world.rooms["back"]
+        # The night's small wants are what give the liminal hour its pull.
+        _augment(actor, world.characters["patron"],
+                 WhimComponent(want="get one full load done before dawn"))
+        _augment(actor, world.characters["regular"],
+                 WhimComponent(want="not be alone at two in the morning"))
+        # The lost-and-found is the quiet mystery: things no one remembers leaving.
+        _augment(actor, back,
+                 PointOfInterestComponent(location_type="lost and found", region="Eighth Street"),
+                 DiscoveryComponent())
+        _add(actor, back, [
+            IdentityComponent(name="a lost-and-found ledger", kind="paper"),
+            PortableComponent(can_pick_up=True),
+            ReadableComponent(title="Lost and Found Ledger",
+                              text="Half the entries are in the attendant's hand, half in none "
+                                   "he recognizes, logging coats and keys nobody came back for."),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["dryer"]),
+            ReadableComponent(title="Taped-On Sign",
+                              text="OUT OF ORDER. It still rumbles and turns some nights. Do not "
+                                   "use it; do not open it while it does."),
+        )
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -2499,6 +2591,11 @@ STUCK_SUBWAY_DEMO = WorldGenerator(
     description="A subway car stalled between stations with dim power, dead ventilation, a "
                 "dead traction motor, and strangers waiting out the hold in the dark.",
     uses_seed=False)
+MIDNIGHT_LAUNDROMAT_DEMO = WorldGenerator(
+    name="midnight-laundromat-demo", generate=midnight_laundromat_example,
+    description="A 24-hour laundromat in the small hours rolling toward dawn, with late-night "
+                "strangers, a broken dryer, and a lost-and-found nobody remembers filling.",
+    uses_seed=False)
 
 POP_CULTURE_DEMOS = (
     CLUE_SNACK_DEMO,
@@ -2519,6 +2616,7 @@ SCENE_DEMOS = (
     VACANCY_MOTEL_DEMO,
     FROZEN_GREENHOUSE_DEMO,
     STUCK_SUBWAY_DEMO,
+    MIDNIGHT_LAUNDROMAT_DEMO,
 )
 
 
@@ -2540,6 +2638,7 @@ __all__ = [
     "LIFESIM_DEMO",
     "MAPLE_FARM_DEMO",
     "MIDNIGHT_BURGER_DEMO",
+    "MIDNIGHT_LAUNDROMAT_DEMO",
     "NEONSIM_DEMO",
     "NUKESIM_DEMO",
     "POP_CULTURE_DEMOS",
@@ -2565,6 +2664,7 @@ __all__ = [
     "lifesim_example",
     "maple_farm_example",
     "midnight_burger_example",
+    "midnight_laundromat_example",
     "neonsim_example",
     "nukesim_example",
     "star_opera_example",

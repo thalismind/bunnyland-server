@@ -107,6 +107,7 @@ from bunnyland.worldgen.examples import (
     LIFESIM_DEMO,
     MAPLE_FARM_DEMO,
     MIDNIGHT_BURGER_DEMO,
+    MIDNIGHT_LAUNDROMAT_DEMO,
     NEONSIM_DEMO,
     NUKESIM_DEMO,
     POP_CULTURE_DEMOS,
@@ -400,6 +401,27 @@ async def test_stuck_subway_demo_is_a_failing_car_full_of_strangers():
 
     # The clamped social want that makes the wait bite.
     assert _has(actor, WhimComponent)
+
+
+async def test_midnight_laundromat_demo_drifts_from_night_toward_dawn():
+    actor = WorldActor()
+
+    world = await MIDNIGHT_LAUNDROMAT_DEMO.generate(
+        actor, "midnight-laundromat-demo", GenOptions())
+
+    # It is already the small hours, and late-night wants give the scene its pull.
+    clock = list(actor.world.query().with_all([TimeOfDayComponent]).execute_entities())[0]
+    assert clock.get_component(TimeOfDayComponent).phase == "night"
+    whims = list(actor.world.query().with_all([WhimComponent]).execute_entities())
+    assert len(whims) >= 2
+
+    # The quiet mystery: a lost-and-found nobody remembers filling.
+    assert actor.world.get_entity(world.rooms["back"]).has_component(PointOfInterestComponent)
+
+    # The cycle carries the small hours on toward morning.
+    install_environment(actor)
+    await actor.tick(4 * 3600)  # 01:00 -> 05:00
+    assert clock.get_component(TimeOfDayComponent).phase == "dawn"
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)
