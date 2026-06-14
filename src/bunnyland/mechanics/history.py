@@ -29,6 +29,7 @@ from ..core.events import (
 _HISTORY_PROMPT_LIMIT = 5
 _MARK_PROMPT_LIMIT = 5
 _CREATOR_PROMPT_LIMIT = 5
+_DEATH_CONSEQUENCE_PROMPT_LIMIT = 5
 _SUMMARY_LIMIT = 180
 _QUOTE_LIMIT = 90
 
@@ -77,6 +78,18 @@ class DeedReputationComponent(Component):
 
 
 @dataclass(frozen=True)
+class DeathConsequenceComponent(Component):
+    """Durable presentation/query state for a character death."""
+
+    character_id: str
+    cause: str
+    source_event_id: str
+    created_at_epoch: int
+    location_id: str = ""
+    summary: str = ""
+
+
+@dataclass(frozen=True)
 class HistoryActor(Edge):
     """history record -> actor involved in the deed."""
 
@@ -104,6 +117,13 @@ class CreatedBy(Edge):
     source_event_id: str = ""
     created_at_epoch: int = 0
     circumstance: str = ""
+
+
+@dataclass(frozen=True)
+class DeathOf(Edge):
+    """death consequence -> dead character."""
+
+    cause: str = ""
 
 
 def install_history(actor) -> None:
@@ -174,6 +194,16 @@ def creator_signature_for_event(world: World, source_event_id: str) -> Entity | 
     for entity in world.query().with_all([CreatorSignatureComponent]).execute_entities():
         signature = entity.get_component(CreatorSignatureComponent)
         if signature.source_event_id == source_event_id:
+            return entity
+    return None
+
+
+def death_consequence_for_event(world: World, source_event_id: str) -> Entity | None:
+    """Return the death consequence created from ``source_event_id``, if any."""
+
+    for entity in world.query().with_all([DeathConsequenceComponent]).execute_entities():
+        consequence = entity.get_component(DeathConsequenceComponent)
+        if consequence.source_event_id == source_event_id:
             return entity
     return None
 
@@ -354,6 +384,48 @@ def apply_deed_reputation(
     return True
 
 
+def record_death_consequence(
+    world: World,
+    *,
+    character_id: str,
+    cause: str,
+    source_event_id: str,
+    created_at_epoch: int,
+    location_id: str = "",
+) -> Entity | None:
+    """Create one visible consequence entity for a character death."""
+
+    parsed_character = parse_entity_id(character_id)
+    clean_cause = _clean(cause) or "unknown causes"
+    if (
+        parsed_character is None
+        or not world.has_entity(parsed_character)
+        or not source_event_id
+    ):
+        return None
+    if death_consequence_for_event(world, source_event_id) is not None:
+        return None
+
+    character_name = _name(world, character_id)
+    summary = f"{character_name} died from {clean_cause}."
+    consequence = spawn_entity(
+        world,
+        [
+            IdentityComponent(name=f"Death of {character_name}", kind="death-consequence"),
+            DeathConsequenceComponent(
+                character_id=character_id,
+                cause=_truncate(clean_cause, _SUMMARY_LIMIT),
+                source_event_id=source_event_id,
+                created_at_epoch=created_at_epoch,
+                location_id=location_id,
+                summary=_truncate(summary, _SUMMARY_LIMIT),
+            ),
+        ],
+    )
+    consequence.add_relationship(DeathOf(cause=clean_cause), parsed_character)
+    return consequence
+
+
 def history_fragments(world: World, character: Entity) -> list[str]:
     """Prompt lines for relevant world history near a character."""
 
@@ -386,6 +458,24 @@ def deed_reputation_fragments(world: World, character: Entity) -> list[str]:
     ]
     lines.extend(f"Known deed: {summary}." for summary in reputation.known_for[-3:])
     return lines
+
+
+def death_consequence_fragments(world: World, character: Entity) -> list[str]:
+    """Prompt lines for relevant death consequences."""
+
+    room_id = container_of(character)
+    visible = reachable_ids(world, character)
+    fragments: list[str] = []
+    for entity, consequence in _death_consequences(world):
+        if not _death_consequence_relevant(consequence, character.id, room_id, visible):
+            continue
+        fragments.append(
+            f"Death consequence: {consequence.summary} "
+            f"[death:{entity.id} source:{consequence.source_event_id}]"
+        )
+        if len(fragments) >= _DEATH_CONSEQUENCE_PROMPT_LIMIT:
+            break
+    return fragments
 
 
 def creator_fragments(world: World, character: Entity) -> list[str]:
@@ -470,6 +560,15 @@ class WorldHistoryReactor:
                     created_at_epoch=event.world_epoch,
                     circumstance=f"crafting recipe {event.recipe_id}",
                 )
+        elif isinstance(event, CharacterDiedEvent) and event.actor_id:
+            record_death_consequence(
+                self.world,
+                character_id=event.actor_id,
+                cause=event.cause,
+                source_event_id=event.event_id,
+                created_at_epoch=event.world_epoch,
+                location_id=event.room_id or _location_for_event_actor(self.world, event),
+            )
         payload = _history_payload(self.world, event)
         if payload is None:
             return
@@ -559,6 +658,34 @@ def _record_relevant(
     return False
 
 
+def _death_consequences(
+    world: World,
+) -> list[tuple[Entity, DeathConsequenceComponent]]:
+    consequences: list[tuple[Entity, DeathConsequenceComponent]] = []
+    for entity in world.query().with_all([DeathConsequenceComponent]).execute_entities():
+        consequences.append((entity, entity.get_component(DeathConsequenceComponent)))
+    return sorted(
+        consequences,
+        key=lambda item: (
+            item[1].created_at_epoch,
+            item[1].source_event_id,
+        ),
+        reverse=True,
+    )
+
+
+def _death_consequence_relevant(
+    consequence: DeathConsequenceComponent,
+    character_id: EntityId,
+    room_id: EntityId | None,
+    visible: set[EntityId],
+) -> bool:
+    if room_id is not None and consequence.location_id == str(room_id):
+        return True
+    parsed_character = parse_entity_id(consequence.character_id)
+    return parsed_character == character_id or parsed_character in visible
+
+
 def _location_for_event_actor(world: World, event: DomainEvent) -> str:
     actor_id = parse_entity_id(event.actor_id) if event.actor_id else None
     if actor_id is not None and world.has_entity(actor_id):
@@ -594,6 +721,8 @@ def _truncate(text: str, limit: int) -> str:
 __all__ = [
     "CreatedBy",
     "CreatorSignatureComponent",
+    "DeathConsequenceComponent",
+    "DeathOf",
     "DeedReputationComponent",
     "HistoryActor",
     "HistoryTarget",
@@ -604,6 +733,8 @@ __all__ = [
     "apply_deed_reputation",
     "creator_fragments",
     "creator_signature_for_event",
+    "death_consequence_for_event",
+    "death_consequence_fragments",
     "deed_reputation_fragments",
     "history_fragments",
     "history_record_for_event",
@@ -612,6 +743,7 @@ __all__ = [
     "marks_on",
     "physical_mark_for_event",
     "record_creator_signature",
+    "record_death_consequence",
     "record_physical_mark",
     "record_world_history",
     "world_history_records",

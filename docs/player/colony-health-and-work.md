@@ -76,6 +76,13 @@ moves the patient to the bed's room, starts bed rest, and leaves them asleep. Be
 recovers health over time based on bed quality. Infection immunity improves faster while
 the patient is resting.
 
+## Death consequences
+
+If a downed character fails recovery and dies, the death becomes shared world state when
+world history is enabled. Later prompts can present the visible consequence in the room
+and cite the persisted death record after a save and reload. Suspended characters are
+kept out of the downed/death lifecycle.
+
 ## Mental states
 
 Colony-sim can set visible mental states:

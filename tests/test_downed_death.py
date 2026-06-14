@@ -19,6 +19,11 @@ from bunnyland.core.events import (
     CharacterDownedEvent,
     CharacterRevivedEvent,
 )
+from bunnyland.mechanics.history import (
+    death_consequence_for_event,
+    install_history,
+    world_history_records,
+)
 
 HOUR = 3600.0
 
@@ -49,6 +54,7 @@ async def test_zero_health_downs_active_character():
 
 async def test_downed_then_dies_after_failed_recovery_checks():
     scenario = build_scenario()
+    install_history(scenario.actor)
     char = with_health(scenario, 0.0)
     died = collect(scenario.actor, CharacterDiedEvent)
 
@@ -59,6 +65,12 @@ async def test_downed_then_dies_after_failed_recovery_checks():
     assert char.has_component(DeadComponent)
     assert not char.has_component(DownedComponent)
     assert len(died) == 1
+    assert death_consequence_for_event(scenario.actor.world, died[0].event_id) is not None
+    assert world_history_records(scenario.actor.world)[0][1].tags == (
+        "death",
+        "loss",
+        "consequence",
+    )
 
 
 async def test_healing_revives_a_downed_character():
@@ -80,6 +92,7 @@ async def test_healing_revives_a_downed_character():
 
 async def test_suspended_character_cannot_be_downed_or_die():
     scenario = build_scenario()
+    install_history(scenario.actor)
     char = with_health(scenario, 0.0)
     no_op = spawn_entity(scenario.actor.world)
     scenario.actor.suspend(scenario.character, no_op.id)
@@ -90,6 +103,7 @@ async def test_suspended_character_cannot_be_downed_or_die():
     assert char.has_component(SuspendedComponent)
     assert not char.has_component(DownedComponent)
     assert not char.has_component(DeadComponent)
+    assert world_history_records(scenario.actor.world) == []
 
 
 async def test_stable_downed_character_does_not_die():

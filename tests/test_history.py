@@ -27,6 +27,8 @@ from bunnyland.core.events import (
 from bunnyland.mechanics.history import (
     CreatedBy,
     CreatorSignatureComponent,
+    DeathConsequenceComponent,
+    DeathOf,
     DeedReputationComponent,
     HistoryActor,
     HistoryTarget,
@@ -36,12 +38,15 @@ from bunnyland.mechanics.history import (
     apply_deed_reputation,
     creator_fragments,
     creator_signature_for_event,
+    death_consequence_for_event,
+    death_consequence_fragments,
     deed_reputation_fragments,
     history_fragments,
     mark_fragments,
     marks_on,
     physical_mark_for_event,
     record_creator_signature,
+    record_death_consequence,
     record_physical_mark,
     record_world_history,
     world_history_records,
@@ -163,9 +168,10 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
     assert inspected[0].text == "Juniper kept watch through the storm."
 
 
-async def test_character_death_event_becomes_history_with_actor_and_target_edges():
+async def test_character_death_event_becomes_history_and_visible_consequence(tmp_path):
     scenario = build_scenario()
-    apply_plugins(_plugins(), scenario.actor)
+    plugins = _plugins()
+    apply_plugins(plugins, scenario.actor)
     event = CharacterDiedEvent(
         **event_base(
             42,
@@ -177,12 +183,42 @@ async def test_character_death_event_becomes_history_with_actor_and_target_edges
 
     await scenario.actor.bus.publish(event)
 
+    consequence_entity = death_consequence_for_event(scenario.actor.world, event.event_id)
+    assert consequence_entity is not None
+    consequence = consequence_entity.get_component(DeathConsequenceComponent)
+    assert consequence.summary == "Juniper died from a cave-in."
+    assert consequence.location_id == str(scenario.room_a)
+    assert consequence_entity.get_relationships(DeathOf)[0][1] == scenario.character
+
     record_entity, record = world_history_records(scenario.actor.world)[0]
     assert record.summary == "Juniper died from a cave-in."
     assert record.tags == ("death", "loss", "consequence")
     assert record.source_event_id == event.event_id
     assert record_entity.get_relationships(HistoryActor)[0][1] == scenario.character
     assert record_entity.get_relationships(HistoryTarget)[0][1] == scenario.character
+    ctx = PromptBuilder(
+        scenario.actor.world, fragment_providers=collect_prompt_fragments(plugins)
+    ).build(scenario.character)
+    assert any(
+        "Death consequence: Juniper died from a cave-in." in line
+        for line in ctx.conditions
+    )
+
+    path = tmp_path / "world.json"
+    save_world(scenario.actor, path, meta=WorldMeta(seed="death-consequence"))
+    loaded, _meta = load_world(path, plugins=plugins)
+    loaded_consequence = death_consequence_for_event(loaded.world, event.event_id)
+    assert loaded_consequence is not None
+    assert loaded_consequence.get_component(DeathConsequenceComponent).summary == (
+        "Juniper died from a cave-in."
+    )
+    loaded_ctx = PromptBuilder(
+        loaded.world, fragment_providers=collect_prompt_fragments(plugins)
+    ).build(scenario.character)
+    assert any(
+        "Death consequence: Juniper died from a cave-in." in line
+        for line in loaded_ctx.conditions
+    )
 
 
 async def test_history_reactor_handles_craft_fallback_and_non_notable_events():
@@ -442,6 +478,55 @@ def test_record_creator_signature_skips_invalid_and_duplicate_sources():
     assert artifact.get_component(CreatorSignatureComponent).source_event_id == "sig-b"
 
 
+def test_record_death_consequence_skips_invalid_empty_and_duplicate_sources():
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    assert (
+        record_death_consequence(
+            world,
+            character_id="not-an-id",
+            cause="a cave-in",
+            source_event_id="death-a",
+            created_at_epoch=1,
+        )
+        is None
+    )
+    assert (
+        record_death_consequence(
+            world,
+            character_id=str(scenario.character),
+            cause="a cave-in",
+            source_event_id="",
+            created_at_epoch=1,
+        )
+        is None
+    )
+    created = record_death_consequence(
+        world,
+        character_id=str(scenario.character),
+        cause="  a cave-in  ",
+        source_event_id="death-a",
+        created_at_epoch=1,
+        location_id=str(scenario.room_a),
+    )
+    duplicate = record_death_consequence(
+        world,
+        character_id=str(scenario.character),
+        cause="different",
+        source_event_id="death-a",
+        created_at_epoch=2,
+    )
+
+    assert created is not None
+    assert duplicate is None
+    consequence = created.get_component(DeathConsequenceComponent)
+    assert consequence.cause == "a cave-in"
+    assert consequence.summary == "Juniper died from a cave-in."
+    assert created.get_relationships(DeathOf)[0][1] == scenario.character
+    assert death_consequence_for_event(world, "missing") is None
+
+
 def test_apply_deed_reputation_accumulates_tags_and_skips_duplicates():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -696,6 +781,40 @@ def test_creator_fragments_use_anonymous_creator_without_circumstance():
     assert creator_fragments(world, world.get_entity(scenario.character)) == [
         f"plain hook was made by someone. [signature:{artifact.id} source:anon-sig]"
     ]
+
+
+def test_death_consequence_fragments_show_relevant_deaths_with_limit():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    for index in range(6):
+        record_death_consequence(
+            world,
+            character_id=str(scenario.character),
+            cause=f"cause {index}",
+            source_event_id=f"death-{index}",
+            created_at_epoch=index,
+            location_id=str(scenario.room_a),
+        )
+    far_character = spawn_entity(
+        world, [IdentityComponent(name="Farley", kind="character")]
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), far_character.id
+    )
+    record_death_consequence(
+        world,
+        character_id=str(far_character.id),
+        cause="far trouble",
+        source_event_id="far-death",
+        created_at_epoch=20,
+        location_id=str(scenario.room_b),
+    )
+
+    fragments = death_consequence_fragments(world, world.get_entity(scenario.character))
+
+    assert len(fragments) == 5
+    assert fragments[0].startswith("Death consequence: Juniper died from cause 5.")
+    assert not any("Farley" in fragment for fragment in fragments)
 
 
 async def test_write_event_with_missing_target_records_history_without_mark():

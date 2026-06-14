@@ -1,9 +1,10 @@
 # World history
 
 World history is durable ECS state for notable shared events. Physical marks, creator
-signatures, and deed reputation are durable ECS state for authored changes, made objects,
-and later reactions to known deeds. None of these are private memory or narration.
-Narration and prompts may present these records, but the source of truth is ECS state.
+signatures, deed reputation, and death consequences are durable ECS state for authored
+changes, made objects, later reactions to known deeds, and visible loss. None of these
+are private memory or narration. Narration and prompts may present these records, but
+the source of truth is ECS state.
 
 Use world history when an event should remain discoverable by characters or mechanics
 after the original actor leaves, forgets, or the world is saved and reloaded.
@@ -53,15 +54,28 @@ Scores are keyed by history tags, such as `crafted`, `writing`, or `death`. Mech
 gate services or behavior on those explicit scores rather than inferring reputation from
 prompt text.
 
+Deaths create visible consequence state:
+
+```text
+DeathConsequenceComponent(character_id, cause, source_event_id, created_at_epoch,
+                          location_id, summary)
+DeathOf -> dead character
+```
+
+`DeadComponent` remains lifecycle truth. Death consequences are query/presentation state
+derived from `CharacterDiedEvent`, so suspended-character safety and death validation stay
+in the lifecycle systems.
+
 ## Prompt use
 
 `history_fragments(world, character)` returns concise, deterministic prompt lines for
 records relevant to the character's current room, visible targets, or the character
 themselves. `mark_fragments(world, character)` returns visible marks on reachable
 entities. `creator_fragments(world, character)` returns visible artifact makers and
-circumstances. `deed_reputation_fragments(world, character)` returns the character's
-explicit deed scores and recent known deeds. All include ids or source event data for
-audit where relevant.
+circumstances. `death_consequence_fragments(world, character)` returns relevant visible
+death consequences. `deed_reputation_fragments(world, character)` returns the
+character's explicit deed scores and recent known deeds. All include ids or source event
+data for audit where relevant.
 
 ## Current sources
 
@@ -72,8 +86,9 @@ The built-in `bunnyland.history` plugin records:
 - character deaths
 
 Physical writing creates a mark entity and signs that mark. Crafting signs each crafted
-output. History records project deed reputation onto their actors; dagger-sim institution
-services can optionally require a deed tag and score.
+output. Death creates a death consequence entity linked to the dead character. History
+records project deed reputation onto their actors; dagger-sim institution services can
+optionally require a deed tag and score.
 
 Add new sources by extending the history reactor from typed domain events. Do not create
 records from generated prose unless that prose has already been validated into world state.

@@ -337,9 +337,9 @@ deterministic harnesses.
   - **Acceptance check:** a deed changes service/guard/dialogue behavior in a later scene.
   - **Verification:** mechanic tests and deterministic scenario test.
 
-- [ ] **Death and consequence presentation**
-  - **Goal:** death and major loss are narrated, remembered, and mechanically
-    consequential.
+- [x] **Death and consequence presentation**
+  - **Goal:** death and major loss are presented from durable state, remembered, and
+    mechanically consequential.
   - **Depends on:** lifecycle/death mechanics, narrator, history, memory.
   - **Implementation notes:** respect suspended-character safety; separate event
     correctness from prose presentation.

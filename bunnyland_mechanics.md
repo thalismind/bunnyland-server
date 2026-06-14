@@ -596,10 +596,12 @@ WorldHistoryRecordComponent
 PhysicalMarkComponent
 CreatorSignatureComponent
 DeedReputationComponent
+DeathConsequenceComponent
 HistoryActor
 HistoryTarget
 MarkOn
 CreatedBy
+DeathOf
 ```
 
 World history records store a concise summary, source event id, event type, epoch,
@@ -610,7 +612,10 @@ separate mark entities linked with `MarkOn`, so one object can accumulate severa
 marks without duplicate components. Crafted outputs and authored mark entities carry
 `CreatorSignatureComponent` and `CreatedBy` links so visible artifacts can expose maker
 and circumstance. History records also project `DeedReputationComponent` onto actors, so
-later services, guards, and dialogue can react to explicit deed tags and scores.
+later services, guards, and dialogue can react to explicit deed tags and scores. Death
+events also create `DeathConsequenceComponent` entities linked with `DeathOf`; prompt
+rendering presents those entities as visible consequences while lifecycle systems remain
+responsible for deciding whether a character actually died.
 
 ---
 
