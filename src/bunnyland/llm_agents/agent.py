@@ -240,6 +240,9 @@ class BehaviorProfileAgent:
 
         if self.profile == "idle":
             return None
+        relationship_decision = self._relationship(context)
+        if relationship_decision is not None:
+            return relationship_decision
         if self.profile == "social":
             return self._social(context)
         if self.profile == "timid":
@@ -251,6 +254,51 @@ class BehaviorProfileAgent:
     @staticmethod
     def _target(context: PromptContext) -> str | None:
         return context.visible_characters[0] if context.visible_characters else None
+
+    def _relationship(self, context: PromptContext) -> ToolCall | None:
+        for target in context.visible_characters:
+            target_key = target.lower()
+            for line in context.persona:
+                line_key = line.lower()
+                if target_key not in line_key:
+                    continue
+                if line_key == f"you fear {target_key}.":
+                    direction = _first_unlocked_exit(context)
+                    if direction is not None and _command_available(context, f"move {direction}"):
+                        return ToolCall("move", {"direction": direction})
+                    if _command_available(context, "say something to the room"):
+                        return ToolCall(
+                            "say",
+                            {
+                                "text": f"{target}, I need space.",
+                                "intent": "request",
+                                "approach": "cautious",
+                            },
+                        )
+                if line_key == f"you are fond of {target_key}.":
+                    if _command_available(context, "say something to the room"):
+                        return ToolCall(
+                            "say",
+                            {
+                                "text": f"{target}, I am glad you are here.",
+                                "intent": "praise",
+                                "approach": "warm",
+                            },
+                        )
+                if line_key in {
+                    f"you resent {target_key}.",
+                    f"you dislike {target_key}.",
+                }:
+                    if _command_available(context, "say something to the room"):
+                        return ToolCall(
+                            "say",
+                            {
+                                "text": f"{target}, keep your distance.",
+                                "intent": "threat",
+                                "approach": "cold",
+                            },
+                        )
+        return None
 
     def _social(self, context: PromptContext) -> ToolCall | None:
         target = self._target(context)

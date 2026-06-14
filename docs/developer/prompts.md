@@ -33,6 +33,9 @@ waits, `social` opens friendly room speech, `timid` leaves when someone is nearb
 `aggressive` warns nearby characters, and `worker` picks up visible work items or moves to
 the next available room. These profiles are deterministic controller policies, not new
 verbs or hidden state mutation paths.
+Relationship prompt facts feed the same cheap behavior layer. A visible character the
+controller fears can trigger avoidance, fondness can trigger warm speech, and resentment or
+dislike can trigger guarded speech before the generic profile fallback runs.
 
 Narration follows the same boundary. `NarrationProjection` reads typed domain events,
 `RoomSummaryProjection`, and per-character perception, then stores a volatile presentation

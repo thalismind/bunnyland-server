@@ -621,6 +621,59 @@ def test_behavior_profile_agent_social_waits_without_visible_character():
     )
 
 
+def test_behavior_profile_agent_relationship_fear_prefers_avoidance():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=("Hazel",),
+        persona=("You fear Hazel.",),
+        exits=("north",),
+        commands=("move north", "say something to the room"),
+    )
+
+    assert BehaviorProfileAgent("social").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall("move", {"direction": "north"})
+
+
+def test_behavior_profile_agent_relationship_fondness_prefers_warm_speech():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=("Hazel",),
+        persona=("You are fond of Hazel.",),
+        commands=("say something to the room",),
+    )
+
+    assert BehaviorProfileAgent("social").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall(
+        "say",
+        {
+            "text": "Hazel, I am glad you are here.",
+            "intent": "praise",
+            "approach": "warm",
+        },
+    )
+
+
+def test_behavior_profile_agent_relationship_resentment_prefers_cold_warning():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=("Hazel",),
+        persona=("You resent Hazel.",),
+        commands=("say something to the room",),
+    )
+
+    assert BehaviorProfileAgent("social").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall(
+        "say",
+        {"text": "Hazel, keep your distance.", "intent": "threat", "approach": "cold"},
+    )
+
+
 def test_behavior_profile_agent_timid_leaves_when_someone_is_nearby():
     scenario = build_scenario()
     world = scenario.actor.world

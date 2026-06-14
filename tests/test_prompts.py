@@ -161,6 +161,31 @@ def test_build_context_has_stable_persona_surface_from_plugins():
     assert "- Your voice: warm and direct." in prompt
 
 
+def test_build_context_relationship_prompts_differ_by_viewer_bond():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    juniper = world.get_entity(scenario.character)
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    juniper.add_relationship(SocialBond(fear=0.5, familiarity=0.5), hazel.id)
+    hazel.add_relationship(SocialBond(affinity=0.5, familiarity=0.5), juniper.id)
+    builder = PromptBuilder(
+        world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+
+    juniper_context = builder.build(juniper.id)
+    hazel_context = builder.build(hazel.id)
+
+    assert "You fear Hazel." in juniper_context.persona
+    assert "You are fond of Juniper." in hazel_context.persona
+
+
 def test_status_helper_uses_condition_precedence(scenario):
     character = scenario.actor.world.get_entity(scenario.character)
 

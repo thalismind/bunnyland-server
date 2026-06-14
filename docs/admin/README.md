@@ -125,6 +125,10 @@ contain a clear goal or recall signal, the character waits instead of moving ran
 `idle`, `social`, `timid`, `aggressive`, and `worker`. Goal-directed actions still run
 first; the profile only supplies a cheap default when the prompt has no stronger goal or
 recall-driven action.
+Relationship facts also influence those cheap profiles: fear tends toward avoidance,
+fondness tends toward warm speech, and resentment or dislike tends toward guarded speech.
+The controller still submits ordinary tool calls; the relationship state is prompt input,
+not a bypass around command validation.
 
 ### Enabling a subset
 

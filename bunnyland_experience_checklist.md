@@ -198,7 +198,7 @@ deterministic harnesses.
     leaves, speaks, or is visibly upset.
   - **Verification:** prompt-fragment tests.
 
-- [ ] **Relationship-driven behavior**
+- [x] **Relationship-driven behavior**
   - **Goal:** relationships and sentiment influence dialogue, cooperation, avoidance, and
     memory salience.
   - **Depends on:** social bonds, affect, true recall gate.
