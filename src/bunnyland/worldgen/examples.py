@@ -2491,6 +2491,110 @@ async def midnight_laundromat_example(actor, seed: str, options: GenOptions) -> 
     return world
 
 
+async def county_fair_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    """Closing night of a county fair: a pie contest, a prize pumpkin, and a blue ribbon."""
+
+    del options
+    from ..core.components import IdentityComponent, ReadableComponent, WorldClockComponent
+    from ..mechanics.dragonsim import (
+        QuestComponent,
+        QuestObjectiveComponent,
+        QuestRewardComponent,
+    )
+    from ..mechanics.environment import CalendarComponent, TimeOfDayComponent
+    from ..mechanics.gardensim import (
+        CropComponent,
+        CropGrowthComponent,
+        CropQualityComponent,
+        HarvestableComponent,
+        ShippingBinComponent,
+    )
+
+    # Day 57 at 19:00 is a clear autumn dusk, so the harvest-season closing night holds.
+    fair_dusk_seconds = 56 * 24 * 3600 + 19 * 3600
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(key="midway", title="Fairground Midway", biome="fairground",
+                     light=0.4, celsius=16.0),
+            RoomSpec(key="hall", title="Exhibition Hall", biome="fairground",
+                     indoor=True, light=0.7, celsius=20.0),
+            RoomSpec(key="barn", title="Livestock Barn", biome="fairground",
+                     indoor=True, light=0.5, celsius=18.0),
+        ],
+        exits=[
+            ExitSpec(from_key="midway", direction="in", to_key="hall"),
+            ExitSpec(from_key="hall", direction="out", to_key="midway"),
+            ExitSpec(from_key="hall", direction="barn", to_key="barn"),
+            ExitSpec(from_key="barn", direction="hall", to_key="hall"),
+        ],
+        objects=[
+            ObjectSpec(key="pie", room_key="hall", name="a blue-ribbon contender pie",
+                       kind="food", nutrition=5.0, satiety=16.0, portable=True),
+            ObjectSpec(key="lemonade", room_key="midway", name="a cup of fresh lemonade",
+                       kind="water", hydration=13.0, portable=True),
+            ObjectSpec(key="ferris", room_key="midway", name="the lit Ferris wheel",
+                       kind="item", portable=False),
+            ObjectSpec(key="ribbon", room_key="hall", name="an unawarded blue ribbon",
+                       kind="item", portable=True),
+        ],
+        characters=[
+            CharacterSpec(key="grower", name="Hattie Boone", room_key="hall",
+                          controller="suspended", traits=("proud", "nervous", "green-thumbed"),
+                          goals=("win the blue ribbon", "outgrow her rival's entry")),
+            CharacterSpec(key="judge", name="Inez Coulter", room_key="hall",
+                          controller="llm", llm_profile="fair-judge",
+                          traits=("fair", "theatrical"),
+                          goals=("crown a winner before the lights go out",)),
+            CharacterSpec(key="rival", name="Cyrus Webb", room_key="barn",
+                          controller="llm", llm_profile="fair-rival",
+                          traits=("smug", "competitive"),
+                          goals=("take the ribbon from Hattie", "show off his prize hog")),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        clock = list(actor.world.query().with_all([WorldClockComponent]).execute_entities())
+        if clock:
+            replace_component(clock[0], WorldClockComponent(game_time_seconds=fair_dusk_seconds))
+            clock[0].add_component(TimeOfDayComponent(phase="dusk"))
+            clock[0].add_component(CalendarComponent(day=57, season="autumn", hour=19))
+
+        hall = world.rooms["hall"]
+        # The star entry: a prize pumpkin grown to championship quality.
+        _add(actor, hall, [
+            IdentityComponent(name="a championship prize pumpkin", kind="crop"),
+            CropComponent(crop_type="pumpkin", planted_at_epoch=0, stage=3),
+            CropGrowthComponent(progress_days=120.0, required_days=120.0, last_updated_epoch=0),
+            HarvestableComponent(yield_item="pumpkin", quantity=1),
+            CropQualityComponent(quality=2.0),
+        ])
+        # The judging table where entries are weighed and scored.
+        _add(actor, hall, [
+            IdentityComponent(name="the judging entry table", kind="shipping-bin"),
+            ShippingBinComponent(),
+        ])
+        # The blue-ribbon quest, still up for grabs on closing night.
+        _add(actor, hall, [
+            IdentityComponent(name="Win the Blue Ribbon", kind="quest"),
+            QuestComponent(quest_id="blue-ribbon", title="Win the Blue Ribbon",
+                           status="offered"),
+            QuestObjectiveComponent(quest_id="blue-ribbon",
+                                    description="Enter the best produce before judging closes"),
+            QuestRewardComponent(quest_id="blue-ribbon",
+                                 description="the county fair blue ribbon and bragging rights"),
+        ])
+        replace_component(
+            actor.world.get_entity(world.objects["ribbon"]),
+            ReadableComponent(title="Blue Ribbon",
+                              text="FIRST PLACE — to be pinned to the winning entry at the close "
+                                   "of judging. The card beneath it is still blank."),
+        )
+    return world
+
+
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
@@ -2596,6 +2700,11 @@ MIDNIGHT_LAUNDROMAT_DEMO = WorldGenerator(
     description="A 24-hour laundromat in the small hours rolling toward dawn, with late-night "
                 "strangers, a broken dryer, and a lost-and-found nobody remembers filling.",
     uses_seed=False)
+COUNTY_FAIR_DEMO = WorldGenerator(
+    name="county-fair-demo", generate=county_fair_example,
+    description="Closing night of an autumn county fair, with a pie contest, a championship "
+                "prize pumpkin, a smug rival, and a blue ribbon still up for grabs.",
+    uses_seed=False)
 
 POP_CULTURE_DEMOS = (
     CLUE_SNACK_DEMO,
@@ -2617,6 +2726,7 @@ SCENE_DEMOS = (
     FROZEN_GREENHOUSE_DEMO,
     STUCK_SUBWAY_DEMO,
     MIDNIGHT_LAUNDROMAT_DEMO,
+    COUNTY_FAIR_DEMO,
 )
 
 
@@ -2624,6 +2734,7 @@ __all__ = [
     "BARBARIANSIM_DEMO",
     "CLUE_SNACK_DEMO",
     "COLONYSIM_DEMO",
+    "COUNTY_FAIR_DEMO",
     "DAGGERSIM_DEMO",
     "DINOSIM_DEMO",
     "DRAGONSIM_DEMO",
@@ -2651,6 +2762,7 @@ __all__ = [
     "barbariansim_example",
     "clue_snack_example",
     "colonysim_example",
+    "county_fair_example",
     "daggersim_example",
     "dinosim_example",
     "dragonsim_example",

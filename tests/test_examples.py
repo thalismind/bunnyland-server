@@ -98,6 +98,7 @@ from bunnyland.plugins.builtin import bunnyland_plugins
 from bunnyland.worldgen.examples import (
     BARBARIANSIM_DEMO,
     COLONYSIM_DEMO,
+    COUNTY_FAIR_DEMO,
     DAGGERSIM_DEMO,
     DINOSIM_DEMO,
     DRAGONSIM_DEMO,
@@ -422,6 +423,27 @@ async def test_midnight_laundromat_demo_drifts_from_night_toward_dawn():
     install_environment(actor)
     await actor.tick(4 * 3600)  # 01:00 -> 05:00
     assert clock.get_component(TimeOfDayComponent).phase == "dawn"
+
+
+async def test_county_fair_demo_has_a_blue_ribbon_contest_and_a_prize_entry():
+    actor = WorldActor()
+
+    world = await COUNTY_FAIR_DEMO.generate(actor, "county-fair-demo", GenOptions())
+
+    # The blue-ribbon quest is still up for grabs on closing night.
+    quest = list(actor.world.query().with_all([QuestComponent]).execute_entities())[0]
+    assert quest.get_component(QuestComponent).quest_id == "blue-ribbon"
+    assert quest.get_component(QuestComponent).status == "offered"
+
+    # A championship-quality produce entry to win it with.
+    qualities = [
+        entity.get_component(CropQualityComponent).quality
+        for entity in actor.world.query().with_all([CropQualityComponent]).execute_entities()
+    ]
+    assert any(quality >= 1.5 for quality in qualities)
+
+    # A rival to beat: the fair is a social contest, not a solo scene.
+    assert len(world.characters) >= 3
 
 
 @pytest.mark.parametrize("demo", DUNGEON_DEMOS, ids=lambda d: d.name)
