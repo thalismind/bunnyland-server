@@ -181,7 +181,7 @@ deterministic harnesses.
     tied to current goals and recalled context.
   - **Verification:** deterministic controller tests and scenario harness checks.
 
-- [ ] **Cheap background controllers**
+- [x] **Cheap background controllers**
   - **Goal:** populate worlds without full LLM cost for every character.
   - **Depends on:** controller model, action definitions, persona/goals.
   - **Implementation notes:** provide behavior/script controller profiles for timid,

@@ -26,6 +26,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.llm_agents import (
+    BehaviorProfileAgent,
     ControllerDispatch,
     GoalDirectedAgent,
     OpenRouterAgent,
@@ -570,6 +571,207 @@ def test_goal_directed_agent_waits_without_goal_or_recall_signal():
     context = PromptBuilder(scenario.actor.world).build(scenario.character)
 
     assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) is None
+
+
+def test_behavior_profile_agent_rejects_unknown_profile():
+    with pytest.raises(ValueError, match="unknown background profile"):
+        BehaviorProfileAgent("wanderer")
+
+
+def test_behavior_profile_agent_idle_waits_without_goal_signal():
+    scenario = build_scenario()
+    context = PromptBuilder(scenario.actor.world).build(scenario.character)
+
+    assert (
+        BehaviorProfileAgent("idle").decide("", context, character_id=str(scenario.character))
+        is None
+    )
+
+
+def test_behavior_profile_agent_social_speaks_to_visible_character():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    context = PromptBuilder(world).build(scenario.character)
+
+    assert BehaviorProfileAgent("social").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall(
+        "say",
+        {"text": "Hazel, good to see you.", "intent": "praise", "approach": "friendly"},
+    )
+
+
+def test_behavior_profile_agent_social_waits_without_visible_character():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=(),
+    )
+
+    assert (
+        BehaviorProfileAgent("social").decide("", context, character_id=str(scenario.character))
+        is None
+    )
+
+
+def test_behavior_profile_agent_timid_leaves_when_someone_is_nearby():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    context = PromptBuilder(world).build(scenario.character)
+
+    assert BehaviorProfileAgent("timid").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall("move", {"direction": "north"})
+
+
+def test_behavior_profile_agent_timid_waits_without_visible_character():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=(),
+    )
+
+    assert (
+        BehaviorProfileAgent("timid").decide("", context, character_id=str(scenario.character))
+        is None
+    )
+
+
+def test_behavior_profile_agent_timid_waits_without_unlocked_exit():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=("Hazel",),
+        exits=("north (locked)",),
+        commands=("say something to the room",),
+    )
+
+    assert (
+        BehaviorProfileAgent("timid").decide("", context, character_id=str(scenario.character))
+        is None
+    )
+
+
+def test_behavior_profile_agent_aggressive_warns_visible_character():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    context = PromptBuilder(world).build(scenario.character)
+
+    assert BehaviorProfileAgent("aggressive").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall(
+        "say",
+        {"text": "Hazel, back away.", "intent": "threat", "approach": "confrontational"},
+    )
+
+
+def test_behavior_profile_agent_aggressive_waits_without_speech_command():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=("Hazel",),
+        commands=(),
+    )
+
+    assert (
+        BehaviorProfileAgent("aggressive").decide(
+            "", context, character_id=str(scenario.character)
+        )
+        is None
+    )
+
+
+def test_behavior_profile_agent_worker_takes_available_object():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_objects=("work crate",),
+        commands=("take work crate",),
+    )
+
+    assert BehaviorProfileAgent("worker").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall("take", {"item_id": "work crate"})
+
+
+def test_behavior_profile_agent_worker_moves_when_no_object_is_available():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_objects=("fixed anvil",),
+        exits=("north",),
+        commands=("move north",),
+    )
+
+    assert BehaviorProfileAgent("worker").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall("move", {"direction": "north"})
+
+
+def test_behavior_profile_agent_worker_waits_without_work_or_exit():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_objects=("fixed anvil",),
+        exits=("north (locked)",),
+        commands=(),
+    )
+
+    assert (
+        BehaviorProfileAgent("worker").decide("", context, character_id=str(scenario.character))
+        is None
+    )
+
+
+def test_behavior_profile_agent_prefers_goal_over_profile_fallback():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(GoalComponent(active_goals=("find the silver key",)))
+    _add_item(scenario, "work crate")
+    _add_item(scenario, "silver key")
+    context = PromptBuilder(
+        world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    ).build(scenario.character)
+
+    assert BehaviorProfileAgent("worker").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall("take", {"item_id": "silver key"})
+
+
+async def test_dispatch_submits_behavior_profile_agent_command():
+    scenario = build_scenario()
+    _add_item(scenario, "work crate")
+    builder = PromptBuilder(scenario.actor.world)
+    dispatch = ControllerDispatch(scenario.actor, builder, BehaviorProfileAgent("worker"))
+
+    decisions = await dispatch.run_once()
+
+    assert len(decisions) == 1
+    assert decisions[0].tool == "take"
+    assert not scenario.actor._inbox.empty()
 
 
 async def test_dispatch_submits_goal_directed_agent_command():

@@ -16,7 +16,7 @@ import logging
 import re
 from collections.abc import Awaitable, Iterable
 from collections.abc import Mapping as MappingABC
-from typing import Protocol
+from typing import Literal, Protocol
 
 from ..prompts.builder import PromptContext
 from .tools import ToolCall, tool_schemas
@@ -131,6 +131,11 @@ _DIRECTION_WORDS = (
     "out",
 )
 
+BackgroundProfile = Literal["idle", "social", "timid", "aggressive", "worker"]
+BACKGROUND_PROFILES: frozenset[str] = frozenset(
+    {"idle", "social", "timid", "aggressive", "worker"}
+)
+
 
 def _tokens(text: str) -> frozenset[str]:
     return frozenset(
@@ -189,6 +194,105 @@ class GoalDirectedAgent:
 
         if signals.should_record and _command_available(context, "take note"):
             return ToolCall("take_note", {"text": signals.note_text()})
+        return None
+
+
+class BehaviorProfileAgent:
+    """Cheap deterministic controller profiles for background characters.
+
+    Goal-directed choices run first. When goals and recall do not point to a clear action,
+    the selected profile provides a small model-free fallback so background characters can
+    feel occupied without requiring a live LLM call every tick.
+    """
+
+    def __init__(
+        self,
+        profile: BackgroundProfile = "idle",
+        *,
+        goal_agent: CharacterAgent | None = None,
+    ) -> None:
+        if profile not in BACKGROUND_PROFILES:
+            available = ", ".join(sorted(BACKGROUND_PROFILES))
+            raise ValueError(f"unknown background profile {profile!r}; choose one of {available}")
+        self.profile = profile
+        self._goal_agent = goal_agent or GoalDirectedAgent()
+
+    def decide(
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> ToolCall | None | Awaitable[ToolCall | None]:
+        goal_decision = self._goal_agent.decide(
+            prompt,
+            context,
+            character_id=character_id,
+            model=model,
+            provider=provider,
+            tools=tools,
+        )
+        if goal_decision is not None:
+            return goal_decision
+
+        if self.profile == "idle":
+            return None
+        if self.profile == "social":
+            return self._social(context)
+        if self.profile == "timid":
+            return self._timid(context)
+        if self.profile == "aggressive":
+            return self._aggressive(context)
+        return self._worker(context)
+
+    @staticmethod
+    def _target(context: PromptContext) -> str | None:
+        return context.visible_characters[0] if context.visible_characters else None
+
+    def _social(self, context: PromptContext) -> ToolCall | None:
+        target = self._target(context)
+        if target is None or not _command_available(context, "say something to the room"):
+            return None
+        return ToolCall(
+            "say",
+            {
+                "text": f"{target}, good to see you.",
+                "intent": "praise",
+                "approach": "friendly",
+            },
+        )
+
+    def _timid(self, context: PromptContext) -> ToolCall | None:
+        if not context.visible_characters:
+            return None
+        direction = _first_unlocked_exit(context)
+        if direction is not None and _command_available(context, f"move {direction}"):
+            return ToolCall("move", {"direction": direction})
+        return None
+
+    def _aggressive(self, context: PromptContext) -> ToolCall | None:
+        target = self._target(context)
+        if target is None or not _command_available(context, "say something to the room"):
+            return None
+        return ToolCall(
+            "say",
+            {
+                "text": f"{target}, back away.",
+                "intent": "threat",
+                "approach": "confrontational",
+            },
+        )
+
+    def _worker(self, context: PromptContext) -> ToolCall | None:
+        for item in context.visible_objects:
+            if _command_available(context, f"take {item}"):
+                return ToolCall("take", {"item_id": item})
+        direction = _first_unlocked_exit(context)
+        if direction is not None and _command_available(context, f"move {direction}"):
+            return ToolCall("move", {"direction": direction})
         return None
 
 
@@ -612,6 +716,9 @@ __all__ = [
     "DEFAULT_MODEL",
     "LEGACY_DEFAULT_MODEL",
     "Agent",
+    "BACKGROUND_PROFILES",
+    "BackgroundProfile",
+    "BehaviorProfileAgent",
     "CharacterAgent",
     "GoalDirectedAgent",
     "OpenRouterAgent",

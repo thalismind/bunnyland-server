@@ -1,8 +1,11 @@
 """LLM agents: the tool surface, agents that decide actions, and the dispatch loop."""
 
 from .agent import (
+    BACKGROUND_PROFILES,
     DEFAULT_MODEL,
     Agent,
+    BackgroundProfile,
+    BehaviorProfileAgent,
     CharacterAgent,
     GoalDirectedAgent,
     OllamaAgent,
@@ -27,6 +30,9 @@ __all__ = [
     "DEFAULT_MODEL",
     "REFERENCE_ARG_KEYS",
     "Agent",
+    "BACKGROUND_PROFILES",
+    "BackgroundProfile",
+    "BehaviorProfileAgent",
     "CharacterAgent",
     "ControllerDispatch",
     "Decision",

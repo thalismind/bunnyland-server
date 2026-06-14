@@ -117,6 +117,10 @@ model call. It reads the same prompt facts an LLM would see, prefers actions tie
 goals, recalled memories, needs, visible people, visible objects, and available exits, and
 then submits a normal tool call through controller dispatch. If the prompt does not
 contain a clear goal or recall signal, the character waits instead of moving randomly.
+`BehaviorProfileAgent` adds model-free fallback profiles for background population:
+`idle`, `social`, `timid`, `aggressive`, and `worker`. Goal-directed actions still run
+first; the profile only supplies a cheap default when the prompt has no stronger goal or
+recall-driven action.
 
 ### Enabling a subset
 

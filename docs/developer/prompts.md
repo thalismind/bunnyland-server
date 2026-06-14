@@ -24,6 +24,11 @@ controller. It scores visible objects, visible characters, exits, and note-takin
 persona goals, contextual recall, current conditions, recent context, and notes. It emits
 ordinary tool calls only when those scores line up with available prompt commands; dispatch
 still resolves references, charges points, and lets handlers validate state changes.
+`BehaviorProfileAgent` composes that goal policy with cheap fallback profiles: `idle`
+waits, `social` opens friendly room speech, `timid` leaves when someone is nearby,
+`aggressive` warns nearby characters, and `worker` picks up visible work items or moves to
+the next available room. These profiles are deterministic controller policies, not new
+verbs or hidden state mutation paths.
 
 Narration follows the same boundary. `NarrationProjection` reads typed domain events,
 `RoomSummaryProjection`, and per-character perception, then stores a volatile presentation
