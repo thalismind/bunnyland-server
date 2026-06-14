@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from pydantic.dataclasses import dataclass
 from relics import Edge, Entity, EntityId, World
 
-from ..core.components import IdentityComponent
+from ..core.components import AffectComponent, IdentityComponent
 from ..core.ecs import parse_entity_id
 from ..core.events import SpeechSaidEvent, SpeechToldEvent
 from ..prompts import ComponentPromptContext
@@ -54,6 +54,16 @@ class SocialBond(Edge):
         return (f"{subject} {descriptor} {name}.",)
 
 
+@dataclass(frozen=True)
+class SpeechInterpretation:
+    """How one listener receives a speech act after mood and relationship bias."""
+
+    base_interpretation: str
+    final_interpretation: str
+    relationship_tags: tuple[str, ...] = ()
+    mood_tags: tuple[str, ...] = ()
+
+
 _FIELDS = ("affinity", "trust", "fear", "resentment", "familiarity")
 _FAMILIARITY_PER_SAY = 0.03
 _FAMILIARITY_PER_TELL = 0.06
@@ -85,6 +95,22 @@ _LISTENER_DELTAS: dict[str, dict[str, float]] = {
     "threat": {"fear": 0.15, "resentment": 0.10, "affinity": -0.08},
 }
 
+_WARM_INTENTS = frozenset({"praise", "comfort", "flirt", "apology", "offer", "promise", "joke"})
+
+
+def _affect_labels(entity: Entity) -> set[str]:
+    if not entity.has_component(AffectComponent):
+        return set()
+    affect = entity.get_component(AffectComponent)
+    labels = set(affect.labels)
+    if affect.current.anger >= 8:
+        labels.add("angry")
+    if affect.current.fear >= 10:
+        labels.add("afraid")
+    if affect.current.stress >= 10:
+        labels.add("tense")
+    return labels
+
 
 def _clamp(value: float) -> float:
     return max(-1.0, min(1.0, value))
@@ -111,6 +137,52 @@ def adjust_bond(
     return updated
 
 
+def interpret_speech_for_listener(
+    world: World,
+    speaker_id: EntityId,
+    listener_id: EntityId,
+    base_interpretation: str | None,
+) -> SpeechInterpretation:
+    """Contextualize a speech act for one listener.
+
+    This is intentionally deterministic: the same authored sentence can land warmly with a
+    trusting listener and badly with an angry, resentful listener, without letting raw text
+    alone decide the result.
+    """
+
+    base = base_interpretation or "neutral"
+    if not world.has_entity(listener_id):
+        return SpeechInterpretation(base_interpretation=base, final_interpretation=base)
+    listener = world.get_entity(listener_id)
+    bond = bond_between(world, listener_id, speaker_id) or SocialBond()
+    mood = _affect_labels(listener)
+    relationship_tags: list[str] = []
+    mood_tags: list[str] = sorted(mood)
+    final = base
+
+    hostile_bond = bond.resentment >= 0.5 or bond.fear >= 0.5 or bond.affinity <= -0.5
+    trusting_bond = bond.trust >= 0.4 or bond.affinity >= 0.4
+    agitated = bool(mood.intersection({"angry", "afraid", "tense"}))
+    if hostile_bond:
+        relationship_tags.append("hostile")
+    if trusting_bond:
+        relationship_tags.append("trusting")
+
+    if base == "apology" and bond.resentment >= 0.5 and not trusting_bond:
+        final = "neutral"
+    elif base in _WARM_INTENTS and hostile_bond and agitated:
+        final = "insult"
+    elif base == "threat" and trusting_bond and not agitated:
+        final = "joke"
+
+    return SpeechInterpretation(
+        base_interpretation=base,
+        final_interpretation=final,
+        relationship_tags=tuple(relationship_tags),
+        mood_tags=tuple(mood_tags),
+    )
+
+
 class RelationshipReactor:
     """Grows social bonds from speech events (subscribed to the event bus)."""
 
@@ -135,7 +207,6 @@ class RelationshipReactor:
         )
         intent = event.final_interpretation or "neutral"
         speaker_extra = _SPEAKER_DELTAS.get(intent, {})
-        listener_extra = _LISTENER_DELTAS.get(intent, {})
         speaker_entity = self.world.get_entity(speaker)
         if event.target_ids and speaker_entity.has_component(SocialNeedComponent):
             recover_daily_need(
@@ -159,6 +230,13 @@ class RelationshipReactor:
                     event.world_epoch,
                     timestamp_field="last_social_epoch",
                 )
+            interpretation = interpret_speech_for_listener(
+                self.world,
+                speaker,
+                listener,
+                intent,
+            )
+            listener_extra = _LISTENER_DELTAS.get(interpretation.final_interpretation, {})
             adjust_bond(
                 self.world, speaker, listener, {**speaker_extra, "familiarity": familiarity}
             )
@@ -204,8 +282,10 @@ def install_social(actor: WorldActor) -> None:
 __all__ = [
     "RelationshipReactor",
     "SocialBond",
+    "SpeechInterpretation",
     "adjust_bond",
     "bond_between",
     "install_social",
+    "interpret_speech_for_listener",
     "relationship_fragments",
 ]

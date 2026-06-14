@@ -5,6 +5,8 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    AffectComponent,
+    AffectVector,
     CharacterComponent,
     CommandCost,
     ContainmentMode,
@@ -13,6 +15,7 @@ from bunnyland.core import (
     Lane,
     SayHandler,
     build_submitted_command,
+    parse_entity_id,
     spawn_entity,
 )
 from bunnyland.core.events import EventVisibility, SpeechToldEvent
@@ -24,6 +27,7 @@ from bunnyland.mechanics.social import (
     adjust_bond,
     bond_between,
     install_social,
+    interpret_speech_for_listener,
     relationship_fragments,
 )
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
@@ -98,6 +102,79 @@ async def test_praise_warms_the_bond_and_threat_frightens_the_listener():
     await scenario.actor.tick(HOUR)
     # The listener now fears the speaker.
     assert bond_between(world, hazel, juniper).fear > 0
+
+
+async def test_speech_interpretation_depends_on_listener_mood_and_relationship():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    juniper = scenario.character
+    clover = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(),
+            AffectComponent(current=AffectVector(anger=10.0), labels=("angry",)),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), clover.id
+    )
+    adjust_bond(world, clover.id, juniper, {"resentment": 0.6})
+
+    await scenario.actor.submit(_say(scenario, "That was excellent work.", "praise"))
+    await scenario.actor.tick(HOUR)
+
+    warm = bond_between(world, hazel, juniper)
+    hostile = bond_between(world, clover.id, juniper)
+    assert warm.affinity > 0
+    assert hostile.resentment > 0.6
+    assert hostile.affinity < 0
+
+
+def test_interpret_speech_can_soften_a_trusted_threat():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    adjust_bond(world, hazel, scenario.character, {"trust": 0.6})
+
+    interpretation = interpret_speech_for_listener(
+        world,
+        scenario.character,
+        hazel,
+        "threat",
+    )
+
+    assert interpretation.base_interpretation == "threat"
+    assert interpretation.final_interpretation == "joke"
+    assert interpretation.relationship_tags == ("trusting",)
+
+
+def test_interpret_speech_handles_missing_listener_and_suspicious_apology():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    wary = world.get_entity(hazel)
+    wary.add_component(
+        AffectComponent(current=AffectVector(fear=10.0, stress=10.0), labels=())
+    )
+    adjust_bond(world, hazel, scenario.character, {"resentment": 0.6})
+
+    missing_interpretation = interpret_speech_for_listener(
+        world,
+        scenario.character,
+        parse_entity_id("entity_999"),
+        "praise",
+    )
+    apology = interpret_speech_for_listener(
+        world,
+        scenario.character,
+        hazel,
+        "apology",
+    )
+
+    assert missing_interpretation.final_interpretation == "praise"
+    assert apology.final_interpretation == "neutral"
+    assert apology.relationship_tags == ("hostile",)
+    assert "afraid" in apology.mood_tags
+    assert "tense" in apology.mood_tags
 
 
 async def test_repeated_speech_accumulates_familiarity():
@@ -199,6 +276,17 @@ def test_relationship_fragments_cover_negative_and_familiar_bonds():
     assert any("resent Rival" in line for line in fragments)
     assert any("know Acquaintance" in line for line in fragments)
     assert any("dislike someone" in line for line in fragments)
+
+
+def test_relationship_fragments_skip_dangling_targets():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    target = spawn_entity(world, [CharacterComponent()])
+    character.add_relationship(SocialBond(familiarity=0.5), target.id)
+    world.remove(target.id)
+
+    assert relationship_fragments(world, character) == []
 
 
 def test_relationship_reactor_handles_tell_events_and_ignores_invalid_targets():

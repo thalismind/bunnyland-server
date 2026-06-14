@@ -21,6 +21,10 @@ Speech records text, inferred intent, and the final interpretation. Praise, apol
 requests, promises, insults, and threats can shift social bonds when the social mechanic is
 enabled.
 
+Listeners do not interpret speech from text alone. Their current mood and relationship to
+the speaker can change how a line lands: a warm comment may reassure a trusted friend but
+sound insulting to someone who is already angry and resentful.
+
 For immediate turn-taking, use a conversation thread. The first command creates a
 conversation entity with participants, timeout, and whose turn it is; each
 `conversation-line` advances the turn and also emits ordinary speech for social systems:

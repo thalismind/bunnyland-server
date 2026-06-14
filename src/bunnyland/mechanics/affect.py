@@ -125,11 +125,26 @@ class AffectReactor:
         )
 
     def _on_speech(self, event: SpeechSaidEvent) -> None:
-        reaction = _SPEECH_REACTIONS.get(event.final_interpretation or "")
-        if reaction is None:
-            return
-        label, text, delta = reaction
+        from ..core.ecs import parse_entity_id
+        from .social import interpret_speech_for_listener
+
+        speaker = parse_entity_id(event.actor_id) if event.actor_id else None
         for hearer in event.target_ids:
+            listener = parse_entity_id(hearer)
+            if speaker is not None and listener is not None:
+                interpretation = interpret_speech_for_listener(
+                    self.world,
+                    speaker,
+                    listener,
+                    event.final_interpretation,
+                )
+                final_interpretation = interpretation.final_interpretation
+            else:
+                final_interpretation = event.final_interpretation or ""
+            reaction = _SPEECH_REACTIONS.get(final_interpretation)
+            if reaction is None:
+                continue
+            label, text, delta = reaction
             self._add_thought(hearer, label, text, delta, event.world_epoch, event.event_id)
 
     def _on_downed(self, event: CharacterDownedEvent) -> None:

@@ -250,7 +250,7 @@ deterministic harnesses.
     systems.
   - **Verification:** speech handler and action metadata tests.
 
-- [ ] **Social interpretation system**
+- [x] **Social interpretation system**
   - **Goal:** listeners interpret speech through mood, traits, relationship, and context.
   - **Depends on:** speech intent, affect, relationships, true recall gate.
   - **Implementation notes:** interpretation drives affect/relationship deltas; raw text

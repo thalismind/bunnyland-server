@@ -21,7 +21,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.components import AffectDelta
-from bunnyland.core.events import CharacterDownedEvent
+from bunnyland.core.events import CharacterDownedEvent, SpeechSaidEvent
 from bunnyland.mechanics import install_affect, install_needs
 from bunnyland.mechanics.affect import (
     THOUGHT_TTL_SECONDS,
@@ -30,6 +30,7 @@ from bunnyland.mechanics.affect import (
     labels_for,
 )
 from bunnyland.mechanics.consumables import ConsumableComponent, FoodComponent
+from bunnyland.mechanics.social import SocialBond
 
 HOUR = 3600.0
 
@@ -126,6 +127,40 @@ async def test_overheard_insult_makes_listener_angry():
     assert "unhappy" in listener.get_component(AffectComponent).labels
 
 
+async def test_listener_context_can_turn_praise_into_an_insult_thought():
+    scenario = affect_scenario()
+    scenario.actor.register_handler(SayHandler())
+    listener = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            AffectComponent(current=AffectVector(anger=10.0), labels=("angry",)),
+        ],
+    )
+    listener.add_relationship(SocialBond(resentment=0.7), scenario.character)
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), listener.id
+    )
+
+    say = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="say",
+        cost=CommandCost(action=1, focus=1),
+        lane=Lane.WORLD,
+        payload={"text": "That was excellent work.", "intent": SpeechIntent.PRAISE.value},
+    )
+    await scenario.actor.submit(say)
+    await scenario.actor.tick(HOUR)
+
+    _edge, thought_id = listener.get_relationships(HasThought)[0]
+    thought = scenario.actor.world.get_entity(thought_id).get_component(ThoughtComponent)
+    assert thought.label == "insulted"
+    assert "angry" in listener.get_component(AffectComponent).labels
+
+
 async def test_thoughts_decay_and_mood_returns_to_baseline():
     scenario = affect_scenario()
     char = scenario.actor.world.get_entity(scenario.character)
@@ -170,6 +205,25 @@ def test_downed_event_creates_pain_thought():
     thought = scenario.actor.world.get_entity(thought_id).get_component(ThoughtComponent)
     assert thought.label == "in pain"
     assert thought.affect_delta.stress == 12
+
+
+def test_speech_affect_ignores_invalid_hearer_with_fallback_interpretation():
+    scenario = affect_scenario()
+
+    AffectReactor(scenario.actor.world)._on_speech(
+        SpeechSaidEvent(
+            event_id="speech",
+            world_epoch=12,
+            created_at="2026-01-01T00:00:00Z",
+            actor_id=None,
+            target_ids=("not-an-id",),
+            text="good job",
+            final_interpretation="praise",
+        )
+    )
+
+    char = scenario.actor.world.get_entity(scenario.character)
+    assert char.get_relationships(HasThought) == []
 
 
 def test_thought_ttl_is_positive():
