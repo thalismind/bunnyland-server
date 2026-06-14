@@ -86,6 +86,9 @@ class PromptBuilder:
         memory_store=None,
         fragment_providers: Sequence[FragmentProvider] = (),
         persona_providers: Sequence[FragmentProvider] = (),
+        recall_limit: int = 3,
+        recall_budget_chars: int = 900,
+        recall_line_chars: int = 240,
     ) -> None:
         self.world = world
         # Attach the projection's ECS observers so its cache invalidates as the room
@@ -95,6 +98,9 @@ class PromptBuilder:
         self.memory_store = memory_store
         self.fragment_providers = tuple(fragment_providers)
         self.persona_providers = tuple(persona_providers)
+        self.recall_limit = max(0, recall_limit)
+        self.recall_budget_chars = max(0, recall_budget_chars)
+        self.recall_line_chars = max(40, recall_line_chars)
 
     def build(self, character_id: EntityId, *, epoch: int = 0) -> PromptContext:
         character = self.world.get_entity(character_id)
@@ -271,11 +277,35 @@ class PromptBuilder:
         if not query.strip():
             return ()
         collection = character.get_component(MemoryProfileComponent).vector_collection
-        entries = self.memory_store.search(collection, query=query, mode="keyword", limit=3)
-        return tuple(
-            f"{entry.text} [memory:{entry.id} source:{entry.source} score:{entry.score or 0.0:.1f}]"
+        entries = self.memory_store.search(
+            collection, query=query, mode="keyword", limit=self.recall_limit
+        )
+        lines = (
+            f"{self._truncate_memory(entry.text)} "
+            f"[memory:{entry.id} source:{entry.source} score:{entry.score or 0.0:.1f}]"
             for entry in entries
         )
+        return self._fit_memory_budget(lines)
+
+    def _truncate_memory(self, text: str) -> str:
+        if len(text) <= self.recall_line_chars:
+            return text
+        return text[: self.recall_line_chars - 3].rstrip() + "..."
+
+    def _fit_memory_budget(self, lines) -> tuple[str, ...]:
+        if self.recall_budget_chars <= 0:
+            return ()
+        kept: list[str] = []
+        used = 0
+        for line in lines:
+            next_used = used + len(line)
+            if kept:
+                next_used += 1
+            if next_used > self.recall_budget_chars:
+                continue
+            kept.append(line)
+            used = next_used
+        return tuple(kept)
 
     @staticmethod
     def _available_commands(

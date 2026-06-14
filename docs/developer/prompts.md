@@ -16,6 +16,9 @@ Memory-backed prompts keep recent notes and relevant recall separate. `PromptCon
 shows the latest private notes, while `PromptContext.recall` keyword-searches the
 character's memory collection using current location, visible entities, and recent room
 context. Rendered recall lines include memory id, source, and score metadata for audit.
+`PromptBuilder` bounds recall with `recall_limit`, `recall_budget_chars`, and
+`recall_line_chars`; scored memories are considered in relevance order, low-priority noise
+falls out first, and retained lines stay within the configured character budget.
 
 Narration follows the same boundary. `NarrationProjection` reads typed domain events,
 `RoomSummaryProjection`, and per-character perception, then stores a volatile presentation

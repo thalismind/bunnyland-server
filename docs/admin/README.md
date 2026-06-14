@@ -109,6 +109,9 @@ When a memory store is attached, prompts also include contextual `Recall` lines 
 from the character's private memory collection by matching current location, visible
 entities, and recent room context. Recall entries include memory id, source, and score
 metadata so operators can audit why a past note surfaced.
+Recall is bounded by prompt-builder limits for entry count, total recall characters, and
+per-memory line length. Higher-scored memories are considered first, so low-relevance noise
+falls out before durable relevant entries.
 
 ### Enabling a subset
 

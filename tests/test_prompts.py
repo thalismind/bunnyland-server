@@ -234,6 +234,43 @@ def test_build_context_surfaces_relevant_memory_with_audit_metadata():
     assert "Recall:" in prompt
 
 
+def test_build_context_bounds_recall_while_preserving_relevant_memory():
+    scenario = build_scenario()
+    add_item(scenario, scenario.room_a, "stone basin")
+    char = scenario.actor.world.get_entity(scenario.character)
+    char.add_component(MemoryProfileComponent(vector_collection="juniper"))
+    store = InMemoryStore()
+    for index in range(8):
+        store.add(
+            "juniper",
+            text=f"Basin noise {index} " + ("filler " * 40),
+            tags=("basin",),
+            created_at_epoch=index,
+        )
+    important = store.add(
+        "juniper",
+        text="Basin water stone warning: the clear pool is poison.",
+        tags=("basin", "water", "stone"),
+        created_at_epoch=99,
+        source="reflection",
+    )
+    builder = PromptBuilder(
+        scenario.actor.world,
+        memory_store=store,
+        recall_limit=9,
+        recall_budget_chars=180,
+        recall_line_chars=80,
+    )
+
+    ctx = builder.build(scenario.character)
+    joined = "\n".join(ctx.recall)
+
+    assert f"memory:{important.id}" in joined
+    assert "source:reflection" in joined
+    assert sum(len(line) for line in ctx.recall) + max(0, len(ctx.recall) - 1) <= 180
+    assert len(ctx.recall) < 9
+
+
 def test_component_prompt_context_lazy_room_siblings_and_inventory_helpers():
     scenario = build_scenario()
     world = scenario.actor.world

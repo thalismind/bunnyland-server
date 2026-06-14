@@ -162,7 +162,7 @@ deterministic harnesses.
     callbacks, reputation references, legacy beats, or "they remembered" behavior can be
     marked complete.
 
-- [ ] **Memory hygiene and bounded context**
+- [x] **Memory hygiene and bounded context**
   - **Goal:** keep recall useful as worlds accumulate notes and events.
   - **Depends on:** true recall gate, memory store, note/forget or pruning flow.
   - **Implementation notes:** summarize or prune low-value memory noise; preserve durable
