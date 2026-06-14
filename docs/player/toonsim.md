@@ -30,6 +30,16 @@ The left panel is the room. From back to front you see:
 - **items and doors** you can interact with,
 - **characters**, including you, drawn on top.
 
+Items can also carry a toon-only `PlacedOn` relationship to furniture such as tables,
+desks, shelves, and counters. The room still contains both the furniture and the item;
+`PlacedOn` only tells Bunnyland Toon to draw the item resting on that surface instead of
+as a loose floor object.
+
+Transparent containers use the normal container data already present in the world
+snapshot. When a container has `ContainerComponent.transparent = true`, Bunnyland Toon
+can query or read that container's `Contains` relationships and draw those contents as
+visible through the container without changing core reachability or inventory rules.
+
 **Doors** are pinned to the edge of the room that matches their direction - a north exit
 sits at the top, an east exit on the right. Clicking a door moves the view into that room
 so you can look around. While you are looking at a room your character is not in, the title
