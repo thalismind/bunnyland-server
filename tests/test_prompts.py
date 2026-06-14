@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from conftest import build_scenario
 
@@ -319,6 +320,139 @@ def test_build_context_surfaces_visible_social_distress():
 
     assert "Hazel seems afraid." in ctx.social_cues
     assert "Social cues:" in prompt
+
+
+async def test_build_context_surfaces_pointed_silence_from_hostility():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    hazel.add_relationship(SocialBond(resentment=0.5), scenario.character)
+    recent = RecentContextProjection(world)
+    recent.subscribe(scenario.actor.bus)
+
+    await scenario.actor.bus.publish(
+        SpeechSaidEvent(
+            event_id="juniper-asks",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            target_ids=(str(hazel.id),),
+            text="Will you answer me?",
+            final_interpretation="question",
+        )
+    )
+
+    ctx = PromptBuilder(world, recent_context=recent).build(scenario.character)
+
+    assert "Hazel is pointedly silent after what you said." in ctx.social_cues
+    assert "Hazel has not answered you." not in ctx.social_cues
+
+
+def test_build_context_surfaces_brooding_presence_without_recent_speech():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            AffectComponent(labels=("angry",)),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+
+    ctx = PromptBuilder(world).build(scenario.character)
+
+    assert "Hazel seems angry." in ctx.social_cues
+    assert "Hazel is brooding silently." in ctx.social_cues
+
+
+def test_build_context_surfaces_familiar_quiet_watching():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    hazel.add_relationship(SocialBond(familiarity=0.5), scenario.character)
+
+    ctx = PromptBuilder(world).build(scenario.character)
+
+    assert "Hazel is watching you quietly." in ctx.social_cues
+
+
+async def test_build_context_surfaces_recent_brooding_and_watching_presence():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            AffectComponent(labels=("tense",)),
+        ],
+    )
+    clover = spawn_entity(
+        world,
+        [IdentityComponent(name="Clover", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), clover.id
+    )
+    clover.add_relationship(SocialBond(trust=0.4), scenario.character)
+    recent = RecentContextProjection(world)
+    recent.subscribe(scenario.actor.bus)
+
+    for actor_id in (hazel.id, clover.id):
+        await scenario.actor.bus.publish(
+            ActorMovedEvent(
+                event_id=f"arrival-{actor_id}",
+                world_epoch=1,
+                created_at=datetime.now(UTC),
+                visibility=EventVisibility.ROOM,
+                actor_id=str(actor_id),
+                room_id=str(scenario.room_a),
+                from_room_id=str(scenario.room_b),
+                to_room_id=str(scenario.room_a),
+            )
+        )
+
+    ctx = PromptBuilder(world, recent_context=recent).build(scenario.character)
+
+    assert "Hazel is quiet." in ctx.social_cues
+    assert "Hazel is brooding silently." in ctx.social_cues
+    assert "Clover is quiet." in ctx.social_cues
+    assert "Clover is watching you quietly." in ctx.social_cues
+
+
+def test_social_cues_handle_unresolved_visible_character_ids():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    builder = PromptBuilder(world)
+
+    cues = builder._social_cues(
+        world.get_entity(scenario.character),
+        (SimpleNamespace(is_character=True, id="not-an-id", name="Stranger"),),
+        recent=('Juniper said: "Are you there?"',),
+    )
+
+    assert cues == ("Stranger has not answered you.",)
 
 
 def test_build_context_surfaces_relevant_memory_with_audit_metadata():

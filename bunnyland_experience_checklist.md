@@ -285,7 +285,7 @@ deterministic harnesses.
     attributed version of a conversation.
   - **Verification:** social memory tests.
 
-- [ ] **Silence and presence as social acts**
+- [x] **Silence and presence as social acts**
   - **Goal:** watching, brooding, ignoring, or pointed silence is legible to nearby
     characters and narration.
   - **Depends on:** social-cue perception, conversation loop.

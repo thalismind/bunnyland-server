@@ -25,6 +25,11 @@ Listeners do not interpret speech from text alone. Their current mood and relati
 the speaker can change how a line lands: a warm comment may reassure a trusted friend but
 sound insulting to someone who is already angry and resentful.
 
+Social prompts also surface meaningful nonverbal state. A familiar character may be
+watching quietly, an angry or tense character may be brooding silently, and a hostile
+listener may be pointedly silent after your last remark. These cues are projections of
+world state and recent events, not new state invented by narration.
+
 For immediate turn-taking, use a conversation thread. The first command creates a
 conversation entity with participants, timeout, and whose turn it is; each
 `conversation-line` advances the turn and also emits ordinary speech for social systems:

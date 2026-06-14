@@ -285,21 +285,64 @@ class PromptBuilder:
             entity_id = parse_entity_id(perceived.id)
             if entity_id is not None and self.world.has_entity(entity_id):
                 entity = self.world.get_entity(entity_id)
+                distress = self._distress_labels(entity)
                 if entity.has_component(AffectComponent):
-                    distress = tuple(
-                        label
-                        for label in sorted(entity.get_component(AffectComponent).labels)
-                        if label in {"afraid", "angry", "sad", "tense", "unhappy"}
-                    )
                     if distress:
                         cues.append(f"{name} seems {', '.join(distress)}.")
+                bond = self._visible_bond(entity, character.id)
+            else:
+                distress = ()
+                bond = None
             if last_speech.lower().startswith(f"{self_name.lower()} said:"):
-                cues.append(f"{name} has not answered you.")
+                if self._is_pointed_silence(distress, bond):
+                    cues.append(f"{name} is pointedly silent after what you said.")
+                else:
+                    cues.append(f"{name} has not answered you.")
             elif recent and not any(
                 line.startswith(f"{name_key} said:") for line in recent_lower
             ):
                 cues.append(f"{name} is quiet.")
+                if self._is_brooding(distress):
+                    cues.append(f"{name} is brooding silently.")
+                elif self._is_watching(bond):
+                    cues.append(f"{name} is watching you quietly.")
+            elif not recent:
+                if self._is_brooding(distress):
+                    cues.append(f"{name} is brooding silently.")
+                elif self._is_watching(bond):
+                    cues.append(f"{name} is watching you quietly.")
         return tuple(dict.fromkeys(cues))
+
+    @staticmethod
+    def _distress_labels(entity: Entity) -> tuple[str, ...]:
+        if not entity.has_component(AffectComponent):
+            return ()
+        return tuple(
+            label
+            for label in sorted(entity.get_component(AffectComponent).labels)
+            if label in {"afraid", "angry", "sad", "tense", "unhappy"}
+        )
+
+    def _visible_bond(self, entity: Entity, viewer_id: EntityId):
+        from ..mechanics.social import bond_between
+
+        return bond_between(self.world, entity.id, viewer_id)
+
+    @staticmethod
+    def _is_pointed_silence(distress: tuple[str, ...], bond) -> bool:
+        if bond is not None and (bond.resentment >= 0.3 or bond.fear >= 0.3):
+            return True
+        return any(label in {"angry", "tense", "unhappy"} for label in distress)
+
+    @staticmethod
+    def _is_brooding(distress: tuple[str, ...]) -> bool:
+        return any(label in {"angry", "sad", "tense", "unhappy"} for label in distress)
+
+    @staticmethod
+    def _is_watching(bond) -> bool:
+        if bond is None:
+            return False
+        return bond.familiarity >= 0.4 or bond.trust >= 0.3 or bond.affinity >= 0.4
 
     def _recall(
         self,
