@@ -335,6 +335,7 @@ class ActorMovedEvent(DomainEvent):
     from_room_id: str
     to_room_id: str
     direction: str | None = None
+    arrival_summary: str = ""
 
 
 class RoomLookedEvent(DomainEvent):

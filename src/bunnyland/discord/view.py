@@ -253,7 +253,7 @@ def render_move_result(
 
     if isinstance(event, CommandRejectedEvent):
         return f"Move failed: {explain_rejection(event.reason)}."
-    return "You are now in " + render_look(actor, discord_user_id)
+    return _render_success(actor, event)
 
 
 def _entity_name(actor: WorldActor, raw_id: object) -> str | None:
@@ -322,6 +322,7 @@ def _humanize_event_type(event_type: str) -> str:
 _DOMAIN_EVENT_SKIP_KEYS = frozenset(
     {
         "actor_id",
+        "arrival_summary",
         "causation_id",
         "correlation_id",
         "created_at",
@@ -336,6 +337,8 @@ _DOMAIN_EVENT_SKIP_KEYS = frozenset(
 
 
 def _render_domain_event(actor: WorldActor, event: dict[str, Any]) -> str:
+    if event.get("event_type") == "ActorMovedEvent" and event.get("arrival_summary"):
+        return "You are now in " + str(event["arrival_summary"])
     if event.get("event_type") == "ShipSystemInspectedEvent":
         system = _entity_name(actor, event.get("system_id")) or str(event.get("system_id"))
         details = _payload_summary(

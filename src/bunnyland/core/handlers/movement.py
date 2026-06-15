@@ -7,6 +7,7 @@ from typing import Any
 
 from relics import EntityId
 
+from ...projections.room_summary import build_room_facts, render_summary
 from ..commands import SubmittedCommand
 from ..components import NoiseComponent
 from ..ecs import container_of, parse_entity_id, spawn_entity
@@ -80,6 +81,7 @@ class MoveHandler:
                     from_room_id=str(current_room_id),
                     to_room_id=str(destination_id),
                     direction=chosen_direction,
+                    arrival_summary=render_summary(build_room_facts(ctx.world, destination_id)),
                 )
             )
         )

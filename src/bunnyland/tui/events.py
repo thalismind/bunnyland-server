@@ -20,7 +20,7 @@ _UNNARRATED_EVENT_TYPES = frozenset({
 # Fields on every ``DomainEvent``; the rest of a serialized event is its specific payload.
 _EVENT_BASE_KEYS = frozenset({
     "event_id", "world_epoch", "created_at", "visibility", "actor_id", "room_id",
-    "target_ids", "causation_id", "correlation_id",
+    "target_ids", "causation_id", "correlation_id", "arrival_summary",
 })
 
 
@@ -70,7 +70,9 @@ class EventNarrator:
                 continue
             own = bool(player_id) and event.get("actor_id") == player_id
             if own or self._perceives(event, player_id=player_id, room_of=room_of):
-                rendered.append(self._render_event(data, name_for=name_for))
+                rendered.append(
+                    self._render_event(data, player_id=player_id, name_for=name_for)
+                )
         self._seen_event_ids = current
         return rendered
 
@@ -95,9 +97,22 @@ class EventNarrator:
             return bool(player_id) and player_id == event.get("actor_id")
         return False
 
-    def _render_event(self, data: dict, *, name_for: Callable[[str], str | None]) -> Text:
+    def _render_event(
+        self,
+        data: dict,
+        *,
+        player_id: str,
+        name_for: Callable[[str], str | None],
+    ) -> Text:
         event = data.get("event", {})
         event_type = str(data.get("event_type", "Event"))
+        if (
+            event_type == "ActorMovedEvent"
+            and bool(player_id)
+            and event.get("actor_id") == player_id
+            and event.get("arrival_summary")
+        ):
+            return Text(str(event["arrival_summary"]))
         label = _humanize_event_type(event_type)
         actor = name_for(event.get("actor_id") or "") if event.get("actor_id") else None
         details: list[str] = []

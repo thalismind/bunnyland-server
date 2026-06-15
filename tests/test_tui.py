@@ -26,6 +26,7 @@ from bunnyland.persistence import type_registries
 from bunnyland.tui import app as tui_app
 from bunnyland.tui.app import BunnylandTUI, TargetPicker, TextPrompt
 from bunnyland.tui.backend import Backend, LocalBackend, RemoteBackend, persistent_client_id
+from bunnyland.tui.events import EventNarrator
 from bunnyland.tui.model import World, entity_icon, entity_name, entity_type
 from bunnyland.tui.verbs import ACTION_VERBS
 
@@ -211,6 +212,38 @@ def _event(event_id: str | None, event_type="CustomEvent", **fields) -> dict:
             },
         },
     }
+
+
+def test_event_narrator_renders_arrival_room_for_own_move():
+    world = World.parse(_snapshot())
+    narrator = EventNarrator()
+    shown = narrator.drain_events(
+        [
+            _event(
+                "m1",
+                event_type="ActorMovedEvent",
+                visibility="system",
+                actor_id=PLAYER,
+                from_room_id=PARLOR,
+                to_room_id=HALL,
+                arrival_summary="Hallway\nHere: Pib.\nExits: south.",
+            ),
+            _event(
+                "m2",
+                event_type="ActorMovedEvent",
+                visibility="system",
+                actor_id=MARLOW,
+                from_room_id=PARLOR,
+                to_room_id=HALL,
+                arrival_summary="Hallway\nHere: Marlow.\nExits: south.",
+            ),
+        ],
+        player_id=PLAYER,
+        room_of=world.room_of,
+        name_for=lambda entity_id: entity_name(world.get(entity_id)),
+    )
+
+    assert [item.plain for item in shown] == ["Hallway\nHere: Pib.\nExits: south."]
 
 
 # ── lazy package exports ──────────────────────────────────────────────────────

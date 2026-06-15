@@ -400,7 +400,8 @@ def test_drain_events_narrates_own_system_actions_uniformly():
     repl = _repl()  # player is in the Parlor
     messages = [
         _event("m1", event_type="ActorMovedEvent", visibility="system", actor_id=PLAYER,
-               from_room_id=PARLOR, to_room_id=HALL),
+               from_room_id=PARLOR, to_room_id=HALL,
+               arrival_summary="Hallway\nHere: Pib.\nExits: south."),
         _event("t1", event_type="ItemTakenEvent", visibility="system", actor_id=PLAYER,
                item_id=APPLE),
         _event("x1", event_type="CommandExecutedEvent", visibility="system", actor_id=PLAYER),
@@ -408,7 +409,8 @@ def test_drain_events_narrates_own_system_actions_uniformly():
                from_room_id=PARLOR, to_room_id=HALL),
     ]
     shown = " | ".join(text.plain for text in repl.drain_events(messages))
-    assert "Pib: Actor moved" in shown  # your own move (system) is surfaced
+    assert "Hallway\nHere: Pib.\nExits: south." in shown  # your own move shows arrival room
+    assert "Pib: Actor moved" not in shown
     assert "Pib: Item taken" in shown and "an apple" in shown  # ...and so is your own take
     assert "Command executed" not in shown  # command lifecycle stays suppressed
     assert "Marlow" not in shown  # someone else's system-only action is not perceived

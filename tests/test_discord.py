@@ -1100,12 +1100,38 @@ def test_render_move_result_shows_room_after_successful_move(scenario):
         actor_id=str(scenario.character),
         command_id="cmd-1",
         command_type="move",
+        result_events=(
+            {
+                "event_type": "ActorMovedEvent",
+                "actor_id": str(scenario.character),
+                "from_room_id": str(scenario.room_a),
+                "to_room_id": str(scenario.room_b),
+                "direction": "north",
+                "arrival_summary": "North Tunnel\nHere: Juniper.\nExits: south.",
+            },
+        ),
     )
 
     text = render_move_result(scenario.actor, 123, event)
 
     assert text.startswith("You are now in North Tunnel")
     assert "Exits: south." in text
+
+
+def test_render_move_result_without_server_arrival_summary_uses_generic_success(scenario):
+    event = CommandExecutedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-1",
+        command_type="move",
+    )
+
+    text = render_move_result(scenario.actor, 123, event)
+
+    assert text == "Move complete for Juniper in Mosslit Burrow."
 
 
 def test_render_action_result_confirms_non_move_success(scenario):
@@ -1138,6 +1164,15 @@ def test_render_action_result_routes_move_results(scenario):
         actor_id=str(scenario.character),
         command_id="cmd-1",
         command_type="move",
+        result_events=(
+            {
+                "event_type": "ActorMovedEvent",
+                "actor_id": str(scenario.character),
+                "from_room_id": str(scenario.room_b),
+                "to_room_id": str(scenario.room_a),
+                "arrival_summary": "Mosslit Burrow\nHere: Juniper.\nExits: north.",
+            },
+        ),
     )
 
     text = render_action_result(scenario.actor, 123, "move", event)
