@@ -24,7 +24,7 @@ from ..core.edges import ControlledBy, Holding, Wearing
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
-from ..projections import PerceivedEntity, perceive
+from ..projections import PerceivedEntity, build_room_facts, perceive
 from .models import (
     CharacterProjectionResponse,
     ClientActionArgumentView,
@@ -36,6 +36,8 @@ from .models import (
     ClientRoomView,
     ClientTargetView,
     CommandCostRequest,
+    DmProjectionResponse,
+    DmRoomProjectionView,
 )
 
 
@@ -371,6 +373,60 @@ def serialize_character_projection(
     )
 
 
+def _dm_room_projection(actor: WorldActor, room) -> DmRoomProjectionView:
+    facts = build_room_facts(actor.world, room.id)
+    return DmRoomProjectionView(
+        id=facts.room_id,
+        title=facts.title,
+        biome=facts.biome,
+        occupants=[
+            ClientTargetView(id=entity_id, label=name, kind="character")
+            for entity_id, name in facts.occupants
+        ],
+        objects=[
+            ClientEntityView(
+                id=obj.id,
+                name=obj.name,
+                kind="object",
+                is_character=False,
+            )
+            for obj in facts.objects
+        ],
+        exits=[
+            ClientExitView(
+                id=exit.to_room_id,
+                direction=exit.direction,
+                label=f"{exit.direction}: {exit.to_room_id}" if exit.direction else exit.to_room_id,
+                locked=exit.locked,
+            )
+            for exit in facts.exits
+        ],
+    )
+
+
+def serialize_dm_projection(actor: WorldActor, dm_id: str) -> DmProjectionResponse:
+    """Return a permission-gated, structured moderator projection."""
+
+    dm_id = dm_id.strip()
+    if not dm_id:
+        raise ValueError("dm id must not be blank")
+
+    rooms = sorted(
+        actor.world.query().with_all([RoomComponent]).execute_entities(),
+        key=lambda room: entity_name(room).lower(),
+    )
+    characters = sorted(
+        actor.world.query().with_all([CharacterComponent]).execute_entities(),
+        key=lambda character: entity_name(character).lower(),
+    )
+    return DmProjectionResponse(
+        world_epoch=actor.epoch,
+        dm_id=dm_id,
+        rooms=[_dm_room_projection(actor, room) for room in rooms],
+        characters=[_target_for_entity(character) for character in characters],
+    )
+
+
 def serialize_event(event: DomainEvent) -> dict[str, Any]:
     """Return a typed event payload with class name and JSON-safe fields."""
 
@@ -390,6 +446,7 @@ __all__ = [
     "event_message",
     "jsonable",
     "serialize_character_projection",
+    "serialize_dm_projection",
     "serialize_entity",
     "serialize_event",
     "serialize_queued_command",

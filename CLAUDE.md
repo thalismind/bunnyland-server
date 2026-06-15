@@ -131,6 +131,9 @@ Client/server API contracts should be explicit and shared:
   `test:server-integration`, not inside the default server gate.
 - Keep the default server gate focused on authoritative behavior, projection filtering,
   schema stability, and backward-compatible response shapes.
+- Use named typed request and response models for API contracts. Avoid returning or
+  accepting ad hoc dicts for client-facing endpoints once a surface is part of the
+  contract; stable model names make OpenAPI/schema checks and client validation reliable.
 - Prefer projection routes shaped as `/world/{projection}/{id}`. The client is implied;
   the projection type scopes how to interpret `id`. Examples: `/world/character/123`
   for a character-scoped play view, `/world/room/123` for a room-scoped view, and

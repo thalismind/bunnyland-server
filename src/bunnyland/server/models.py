@@ -122,6 +122,24 @@ class CharacterProjectionResponse(BaseModel):
     actions: list[ClientActionView] = Field(default_factory=list)
 
 
+class DmRoomProjectionView(BaseModel):
+    id: str
+    title: str
+    biome: str = "unknown"
+    occupants: list[ClientTargetView] = Field(default_factory=list)
+    objects: list[ClientEntityView] = Field(default_factory=list)
+    exits: list[ClientExitView] = Field(default_factory=list)
+
+
+class DmProjectionResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    dm_id: str
+    rooms: list[DmRoomProjectionView] = Field(default_factory=list)
+    characters: list[ClientTargetView] = Field(default_factory=list)
+
+
 ClaimFallbackController = Literal["suspend", "llm"]
 
 
@@ -370,6 +388,8 @@ __all__ = [
     "ClientPointsView",
     "ClientRoomView",
     "ClientTargetView",
+    "DmProjectionResponse",
+    "DmRoomProjectionView",
     "ComponentPatchSpec",
     "EcsTypeSchema",
     "EdgePatchSpec",

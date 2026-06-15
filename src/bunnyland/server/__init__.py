@@ -8,6 +8,8 @@ from .models import (
     CharacterProjectionResponse,
     CommandRequest,
     CommandResponse,
+    DmProjectionResponse,
+    DmRoomProjectionView,
     WebControllerClaimRequest,
     WebControllerClaimResponse,
     WebControllerFallbackRequest,
@@ -32,6 +34,7 @@ from .models import (
 from .serialization import (
     event_message,
     serialize_character_projection,
+    serialize_dm_projection,
     serialize_event,
     serialize_world,
 )
@@ -40,6 +43,8 @@ from .subscriptions import EventStream, EventSubscription
 __all__ = [
     "CommandRequest",
     "CommandResponse",
+    "DmProjectionResponse",
+    "DmRoomProjectionView",
     "CharacterProjectionResponse",
     "EventStream",
     "EventSubscription",
@@ -65,6 +70,7 @@ __all__ = [
     "WorldSchemaResponse",
     "event_message",
     "serialize_character_projection",
+    "serialize_dm_projection",
     "serialize_event",
     "serialize_world",
 ]

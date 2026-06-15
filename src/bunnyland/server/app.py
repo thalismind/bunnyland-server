@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -31,6 +32,7 @@ from .models import (
     CharacterProjectionResponse,
     CommandRequest,
     CommandResponse,
+    DmProjectionResponse,
     WebControllerClaimRequest,
     WebControllerClaimResponse,
     WebControllerFallbackRequest,
@@ -56,7 +58,11 @@ from .models import (
 )
 from .patches import WorldPatchError, apply_world_patch
 from .schema import world_schema
-from .serialization import serialize_character_projection, serialize_world
+from .serialization import (
+    serialize_character_projection,
+    serialize_dm_projection,
+    serialize_world,
+)
 from .subscriptions import EventStream
 from .worldgen import (
     generate_character_patch,
@@ -79,10 +85,13 @@ if TYPE_CHECKING:
 # parameter as a query field, closing every connection with a 403. Optional dependency, so
 # fall back to ``None`` and raise a friendly error from ``create_app`` if it is missing.
 try:
-    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
 except ImportError:  # pragma: no cover - exercised only without optional deps
-    FastAPI = HTTPException = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
+    FastAPI = Header = HTTPException = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
+
+
+ADMIN_TOKEN_ENV = "BUNNYLAND_MCP_ADMIN_TOKEN"
 
 
 async def next_websocket_update(actor: WorldActor, subscription: EventSubscription) -> dict:
@@ -158,6 +167,27 @@ def create_app(
             detail = str(exc)
             status = 400 if detail == "entity is not a character" else 404
             raise HTTPException(status_code=status, detail=detail) from exc
+
+    def _require_projection_admin(supplied: str | None) -> None:
+        expected = (mcp_admin_token or os.environ.get(ADMIN_TOKEN_ENV) or "").strip()
+        if not expected:
+            raise HTTPException(status_code=403, detail=f"{ADMIN_TOKEN_ENV} is not configured")
+        if supplied != expected:
+            raise HTTPException(status_code=403, detail="invalid admin token")
+
+    @app.get("/world/dm/{id}", response_model=DmProjectionResponse)
+    async def world_dm_projection(
+        id: str,
+        admin_token: str | None = Header(
+            default=None,
+            alias="X-Bunnyland-Admin-Token",
+        ),
+    ) -> DmProjectionResponse:
+        _require_projection_admin(admin_token)
+        try:
+            return serialize_dm_projection(actor, id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/world/schema", response_model=WorldSchemaResponse)
     async def get_world_schema() -> WorldSchemaResponse:

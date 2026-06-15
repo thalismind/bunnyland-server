@@ -58,6 +58,7 @@ from bunnyland.server import (
     CommandRequest,
     EventStream,
     serialize_character_projection,
+    serialize_dm_projection,
     serialize_event,
     serialize_world,
 )
@@ -393,6 +394,11 @@ def test_client_view_handles_unperceiving_character_and_errors():
         serialize_character_projection(actor, str(room.id))
 
 
+def test_dm_projection_rejects_blank_id(scenario):
+    with pytest.raises(ValueError, match="dm id must not be blank"):
+        serialize_dm_projection(scenario.actor, " ")
+
+
 def test_jsonable_serializes_client_view_models():
     assert jsonable(ClientTargetView(id="item_1", label="lamp", kind="item")) == {
         "id": "item_1",
@@ -540,6 +546,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/health" in paths
     assert "/world/snapshot" in paths
     assert "/world/character/{id}" in paths
+    assert "/world/dm/{id}" in paths
     assert "/world/client-view/{character_id}" not in paths
     assert "/world/schema" in paths
     assert "/world/library" in paths
@@ -589,16 +596,99 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
     assert "entities" not in character_view.json()
 
 
+def test_fastapi_character_projection_maps_invalid_ids_to_http_errors(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    invalid = client.get("/world/character/not-an-id")
+    wrong_kind = client.get(f"/world/character/{scenario.room_a}")
+
+    assert invalid.status_code == 404
+    assert invalid.json()["detail"] == "character does not exist"
+    assert wrong_kind.status_code == 400
+    assert wrong_kind.json()["detail"] == "entity is not a character"
+
+
 def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     pytest.importorskip("fastapi")
-    app = create_app(scenario.actor)
+    app = create_app(scenario.actor, mcp_admin_token="secret")
 
-    operation = app.openapi()["paths"]["/world/character/{id}"]["get"]
+    schema = app.openapi()
+    operation = schema["paths"]["/world/character/{id}"]["get"]
 
     assert operation["parameters"][0]["name"] == "id"
     assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CharacterProjectionResponse"
     }
+    dm_operation = schema["paths"]["/world/dm/{id}"]["get"]
+    assert {parameter["name"] for parameter in dm_operation["parameters"]} == {
+        "id",
+        "X-Bunnyland-Admin-Token",
+    }
+    assert dm_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/DmProjectionResponse"
+    }
+
+
+def test_fastapi_dm_projection_requires_permission_and_returns_typed_view(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    world = scenario.actor.world
+    hidden_item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="hidden ledger", kind="item"),
+            PortableComponent(),
+            StealthComponent(hiding=True, visibility_level=0.0),
+        ],
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hidden_item.id
+    )
+    app = create_app(scenario.actor, mcp_admin_token="secret")
+    client = testclient.TestClient(app)
+
+    missing = client.get("/world/dm/dm-1")
+    wrong = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "wrong"})
+    allowed = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "secret"})
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
+    assert allowed.status_code == 200
+    view = allowed.json()
+    assert view["dm_id"] == "dm-1"
+    assert {room["title"] for room in view["rooms"]} == {"Mosslit Burrow", "North Tunnel"}
+    assert any(character["label"] == "Juniper" for character in view["characters"])
+    rendered = json.dumps(view)
+    assert "hidden ledger" in rendered
+    assert "components" not in rendered
+    assert "relationships" not in rendered
+
+
+def test_fastapi_dm_projection_uses_configured_admin_token_env(monkeypatch, scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    monkeypatch.setenv("BUNNYLAND_MCP_ADMIN_TOKEN", "env-secret")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    blocked = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "secret"})
+    allowed = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "env-secret"})
+
+    assert blocked.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["dm_id"] == "dm-1"
+
+
+def test_fastapi_dm_projection_rejects_when_admin_token_unconfigured(monkeypatch, scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    monkeypatch.delenv("BUNNYLAND_MCP_ADMIN_TOKEN", raising=False)
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    response = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "secret"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "BUNNYLAND_MCP_ADMIN_TOKEN is not configured"
 
 
 def test_room_description_prefers_long_then_short_description(scenario):
