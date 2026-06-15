@@ -5,6 +5,7 @@ FastAPI app factory is imported lazily by callers that install web-server depend
 """
 
 from .models import (
+    CharacterProjectionResponse,
     CommandRequest,
     CommandResponse,
     WebControllerClaimRequest,
@@ -28,12 +29,18 @@ from .models import (
     WorldSaveResponse,
     WorldSchemaResponse,
 )
-from .serialization import event_message, serialize_event, serialize_world
+from .serialization import (
+    event_message,
+    serialize_character_projection,
+    serialize_event,
+    serialize_world,
+)
 from .subscriptions import EventStream, EventSubscription
 
 __all__ = [
     "CommandRequest",
     "CommandResponse",
+    "CharacterProjectionResponse",
     "EventStream",
     "EventSubscription",
     "WebControllerFallbackRequest",
@@ -57,6 +64,7 @@ __all__ = [
     "WorldSaveResponse",
     "WorldSchemaResponse",
     "event_message",
+    "serialize_character_projection",
     "serialize_event",
     "serialize_world",
 ]

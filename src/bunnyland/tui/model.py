@@ -47,9 +47,12 @@ class World:
 
     entities: dict[str, dict] = field(default_factory=dict)
     epoch: int = 0
+    target_groups: dict[str, list[Target]] = field(default_factory=dict)
 
     @classmethod
     def parse(cls, data: dict | None) -> World:
+        if data and "room" in data and "character_id" in data:
+            return cls._parse_client_view(data)
         entities: dict[str, dict] = {}
         for entity in (data or {}).get("entities", []):
             rels: dict[str, list[dict]] = {}
@@ -64,6 +67,105 @@ class World:
                 "relationships": rels,
             }
         return cls(entities=entities, epoch=(data or {}).get("world_epoch", 0))
+
+    @classmethod
+    def _parse_client_view(cls, data: dict) -> World:
+        entities: dict[str, dict] = {}
+        character_id = data["character_id"]
+        room = data.get("room") or {}
+        room_id = room.get("id")
+        contains: list[dict] = []
+        if room_id:
+            contains.append({"target": character_id, "edge": {}})
+            for entity in room.get("entities") or []:
+                contains.append({"target": entity["id"], "edge": {}})
+                entities[entity["id"]] = _entity_from_view(entity)
+            entities[room_id] = {
+                "id": room_id,
+                "components": {
+                    "RoomComponent": {"title": room.get("title") or room_id},
+                },
+                "relationships": {
+                    "Contains": contains,
+                    "ExitTo": [
+                        {
+                            "target": exit["id"],
+                            "edge": {
+                                "direction": exit.get("direction") or "",
+                                "locked": exit.get("locked", False),
+                            },
+                        }
+                        for exit in room.get("exits") or []
+                    ],
+                },
+            }
+
+        points = data.get("points") or {}
+        controller = data.get("controller")
+        entities[character_id] = {
+            "id": character_id,
+            "components": {
+                "CharacterComponent": {},
+                "IdentityComponent": {
+                    "name": data.get("character_name") or character_id,
+                    "kind": "character",
+                },
+                "ActionPointsComponent": {
+                    "current": points.get("action", 0),
+                    "maximum": points.get("action_max", 0),
+                },
+                "FocusPointsComponent": {
+                    "current": points.get("focus", 0),
+                    "maximum": points.get("focus_max", 0),
+                },
+            },
+            "relationships": {
+                "Contains": [
+                    {"target": item["id"], "edge": {}}
+                    for item in data.get("inventory") or []
+                ],
+                "ControlledBy": [
+                    {
+                        "target": controller["controller_id"],
+                        "edge": {"generation": controller.get("generation", 0)},
+                    }
+                ]
+                if controller
+                else [],
+            },
+        }
+        for item in data.get("inventory") or []:
+            entities.setdefault(
+                item["id"],
+                {
+                    "id": item["id"],
+                    "components": {
+                        "PortableComponent": {},
+                        "IdentityComponent": {
+                            "name": item.get("label") or item["id"],
+                            "kind": item.get("kind") or "item",
+                        },
+                    },
+                    "relationships": {},
+                },
+            )
+
+        target_groups = {
+            key: [
+                Target(
+                    value=target["id"],
+                    label=target.get("label") or target["id"],
+                    icon=KIND_ICON.get(target.get("kind")) or KIND_ICON["other"],
+                )
+                for target in targets
+            ]
+            for key, targets in (data.get("target_groups") or {}).items()
+        }
+        return cls(
+            entities=entities,
+            epoch=data.get("world_epoch", 0),
+            target_groups=target_groups,
+        )
 
     # ── lookups ──────────────────────────────────────────────────────────────
     def get(self, entity_id: str | None) -> dict | None:
@@ -140,6 +242,8 @@ class World:
 
     def target_candidates(self, player_id: str, kind: str) -> list[Target]:
         """Reachable targets for a verb. Permissive — the server still validates."""
+        if kind in self.target_groups:
+            return self.target_groups[kind]
         room_id = self.room_of(player_id)
         members = [
             m for m in self.room_members(room_id)
@@ -197,6 +301,29 @@ def entity_name(entity: dict | None) -> str:
     if has(entity, "RoomComponent"):
         return c["RoomComponent"].get("title") or entity["id"]
     return c.get("IdentityComponent", {}).get("name") or entity["id"][:16]
+
+
+def _entity_from_view(entity: dict) -> dict:
+    components = {
+        "IdentityComponent": {
+            "name": entity.get("name") or entity["id"],
+            "kind": entity.get("kind") or "other",
+        }
+    }
+    if entity.get("is_character"):
+        components["CharacterComponent"] = {}
+    else:
+        components["PortableComponent"] = {}
+    return {
+        "id": entity["id"],
+        "components": components,
+        "relationships": {
+            "Contains": [
+                {"target": child["id"], "edge": {}}
+                for child in entity.get("contents") or []
+            ]
+        },
+    }
 
 
 def fmt_points(value: float) -> str:

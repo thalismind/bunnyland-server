@@ -122,6 +122,27 @@ then add broader tests only when the behavior is actually cross-system.
 - **Live LLM tests**: marked `live_llm`; they are optional and skipped unless explicitly
   enabled with credentials.
 
+Client/server API contracts should be explicit and shared:
+- The server owns authoritative DTOs, OpenAPI/JSON Schema, and server-side contract
+  tests that prove responses validate against the exported contract.
+- Clients own validation of their server interaction layer. Two-part integration tests
+  that start or target a real server and exercise a client adapter should normally live
+  in the client repo, in their own run such as `test:contract` or
+  `test:server-integration`, not inside the default server gate.
+- Keep the default server gate focused on authoritative behavior, projection filtering,
+  schema stability, and backward-compatible response shapes.
+- Prefer projection routes shaped as `/world/{projection}/{id}`. The client is implied;
+  the projection type scopes how to interpret `id`. Examples: `/world/character/123`
+  for a character-scoped play view, `/world/room/123` for a room-scoped view, and
+  `/world/dm/123` for a DM/moderator-scoped projection.
+- Enforce privileged projections such as DM/moderator views with explicit server-side
+  permission checks. Do not make a projection admin-only by moving it under an
+  `/admin/...` path; keep the projection route stable and guard access before producing
+  the DTO.
+- Projection DTOs are client-facing contracts. Do not expose raw ECS entities, component
+  maps, relationship maps, private memory, hidden state, raw controller context, or
+  implementation-only metadata through them.
+
 For rejection coverage, follow earlier module patterns:
 - Prefer table-driven direct handler tests.
 - Cover invalid ids, missing entities, unreachable targets, wrong-kind targets, and

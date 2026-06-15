@@ -96,6 +96,58 @@ def _snapshot() -> dict:
     }
 
 
+def _client_view() -> dict:
+    return {
+        "schema_version": 1,
+        "world_epoch": 43,
+        "character_id": PLAYER,
+        "character_name": "Pib",
+        "can_perceive": True,
+        "room": {
+            "id": PARLOR,
+            "title": "Parlor",
+            "entities": [
+                {
+                    "id": MARLOW,
+                    "name": "Marlow",
+                    "kind": "character",
+                    "is_character": True,
+                    "contents": [],
+                },
+                {
+                    "id": APPLE,
+                    "name": "an apple",
+                    "kind": "item",
+                    "is_character": False,
+                    "contents": [],
+                },
+            ],
+            "exits": [
+                {
+                    "id": HALL,
+                    "direction": "north",
+                    "label": "north: Hallway",
+                    "locked": False,
+                }
+            ],
+        },
+        "inventory": [{"id": KEY, "label": "a brass key", "kind": "item"}],
+        "points": {"action": 4, "action_max": 5, "focus": 2, "focus_max": 3},
+        "controller": {"controller_id": "controller:1", "generation": 3},
+        "target_groups": {
+            "exits": [{"id": HALL, "label": "north: Hallway", "kind": "exit"}],
+            "roomItems": [{"id": APPLE, "label": "an apple", "kind": "item"}],
+            "inventory": [{"id": KEY, "label": "a brass key", "kind": "item"}],
+            "characters": [{"id": MARLOW, "label": "Marlow", "kind": "character"}],
+            "reachableItems": [
+                {"id": APPLE, "label": "an apple", "kind": "item"},
+                {"id": KEY, "label": "a brass key", "kind": "item"},
+            ],
+        },
+        "actions": [],
+    }
+
+
 # ── world model ───────────────────────────────────────────────────────────────
 def test_parse_normalizes_relationships_and_epoch():
     world = World.parse(_snapshot())
@@ -126,6 +178,25 @@ def test_control_and_points():
     pts = world.points(PLAYER)
     assert (pts["ap"], pts["ap_max"], pts["fp"], pts["fp_max"]) == (5, 5, 3, 3)
     assert world.control(MARLOW) is None  # no ControlledBy edge
+
+
+def test_parse_client_view_supports_filtered_structured_surface():
+    world = World.parse(_client_view())
+
+    assert world.epoch == 43
+    assert world.room_of(PLAYER) == PARLOR
+    assert entity_name(world.get(PARLOR)) == "Parlor"
+    assert world.control(PLAYER) == ("controller:1", 3)
+    assert world.points(PLAYER) == {
+        "has": True,
+        "ap": 4,
+        "ap_max": 5,
+        "fp": 2,
+        "fp_max": 3,
+    }
+    assert {target.value for target in world.target_candidates(PLAYER, "exits")} == {HALL}
+    assert {target.value for target in world.target_candidates(PLAYER, "roomItems")} == {APPLE}
+    assert {target.value for target in world.target_candidates(PLAYER, "inventory")} == {KEY}
 
 
 @pytest.mark.parametrize(

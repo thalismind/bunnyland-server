@@ -14,11 +14,13 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DoorComponent,
+    ExitTo,
     IdentityComponent,
     Lane,
     LightComponent,
     LockableComponent,
     PerceptionComponent,
+    RoomComponent,
     RoomSummaryComponent,
     SayHandler,
     SleepingComponent,
@@ -277,6 +279,19 @@ def test_perceive_lists_room_entities_and_exits_excluding_self():
     names = {e.name for e in perception.entities}
     assert "a pebble" in names
     assert "Juniper" not in names  # self excluded
+    assert [e.direction for e in perception.exits] == ["north"]
+
+
+def test_perceive_hides_hidden_exits():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    secret_room = spawn_entity(world, [RoomComponent(title="Hidden Annex")])
+    world.get_entity(scenario.room_a).add_relationship(
+        ExitTo(direction="secret", hidden=True), secret_room.id
+    )
+
+    perception = perceive(world, world.get_entity(scenario.character))
+
     assert [e.direction for e in perception.exits] == ["north"]
 
 

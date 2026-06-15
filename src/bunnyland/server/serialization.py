@@ -9,11 +9,34 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ..core.actions import ActionDefinition, action_definitions
 from ..core.commands import Lane, SubmittedCommand
-from ..core.components import IdentityComponent
+from ..core.components import (
+    ActionPointsComponent,
+    CharacterComponent,
+    FocusPointsComponent,
+    IdentityComponent,
+    PortableComponent,
+    RoomComponent,
+)
+from ..core.ecs import contents, entity_name, parse_entity_id
+from ..core.edges import ControlledBy, Holding, Wearing
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta
+from ..projections import PerceivedEntity, perceive
+from .models import (
+    CharacterProjectionResponse,
+    ClientActionArgumentView,
+    ClientActionView,
+    ClientControllerView,
+    ClientEntityView,
+    ClientExitView,
+    ClientPointsView,
+    ClientRoomView,
+    ClientTargetView,
+    CommandCostRequest,
+)
 
 
 def jsonable(value: Any) -> Any:
@@ -114,6 +137,240 @@ def serialize_world(actor: WorldActor, meta: WorldMeta | None = None) -> dict[st
     }
 
 
+def _entity_kind(entity) -> str:
+    if entity.has_component(IdentityComponent):
+        return entity.get_component(IdentityComponent).kind or "other"
+    if entity.has_component(RoomComponent):
+        return "room"
+    if entity.has_component(CharacterComponent):
+        return "character"
+    if entity.has_component(PortableComponent):
+        return "item"
+    return "other"
+
+
+def _perceived_entity_view(entity: PerceivedEntity) -> ClientEntityView:
+    return ClientEntityView(
+        id=entity.id,
+        name=entity.name,
+        kind="character" if entity.is_character else "object",
+        is_character=entity.is_character,
+        contents=[_perceived_entity_view(child) for child in entity.contents],
+    )
+
+
+def _target_for_entity(entity) -> ClientTargetView:
+    return ClientTargetView(
+        id=str(entity.id),
+        label=entity_name(entity),
+        kind=_entity_kind(entity),
+    )
+
+
+def _target_for_perceived(entity: PerceivedEntity) -> ClientTargetView:
+    return ClientTargetView(
+        id=entity.id,
+        label=entity.name,
+        kind="character" if entity.is_character else "object",
+    )
+
+
+def _inventory_targets(actor: WorldActor, character) -> list[ClientTargetView]:
+    seen: set[str] = set()
+    targets: list[ClientTargetView] = []
+    for item_id in contents(character):
+        if not actor.world.has_entity(item_id):
+            continue
+        item_key = str(item_id)
+        if item_key in seen:
+            continue
+        seen.add(item_key)
+        targets.append(_target_for_entity(actor.world.get_entity(item_id)))
+    for edge_type in (Holding, Wearing):
+        for _edge, item_id in character.get_relationships(edge_type):
+            if not actor.world.has_entity(item_id):
+                continue
+            item_key = str(item_id)
+            if item_key in seen:
+                continue
+            seen.add(item_key)
+            targets.append(_target_for_entity(actor.world.get_entity(item_id)))
+    return sorted(targets, key=lambda target: target.label.lower())
+
+
+def _controller_view(character) -> ClientControllerView | None:
+    for edge, controller_id in character.get_relationships(ControlledBy):
+        return ClientControllerView(controller_id=str(controller_id), generation=edge.generation)
+    return None
+
+
+def _points_view(character) -> ClientPointsView:
+    action = (
+        character.get_component(ActionPointsComponent)
+        if character.has_component(ActionPointsComponent)
+        else None
+    )
+    focus = (
+        character.get_component(FocusPointsComponent)
+        if character.has_component(FocusPointsComponent)
+        else None
+    )
+    return ClientPointsView(
+        action=action.current if action is not None else 0.0,
+        action_max=action.maximum if action is not None else 0.0,
+        focus=focus.current if focus is not None else 0.0,
+        focus_max=focus.maximum if focus is not None else 0.0,
+    )
+
+
+def _flatten_perceived(entities: Iterable[PerceivedEntity]) -> list[PerceivedEntity]:
+    flattened: list[PerceivedEntity] = []
+    for entity in entities:
+        flattened.append(entity)
+        flattened.extend(_flatten_perceived(entity.contents))
+    return flattened
+
+
+def _target_groups(
+    actor: WorldActor,
+    character,
+    entities: tuple[PerceivedEntity, ...],
+    exits: list[ClientExitView],
+) -> dict[str, list[ClientTargetView]]:
+    inventory = _inventory_targets(actor, character)
+    visible = [_target_for_perceived(entity) for entity in _flatten_perceived(entities)]
+    visible_by_id = {target.id: target for target in visible}
+    carried_by_id = {target.id: target for target in inventory}
+    room_items: list[ClientTargetView] = []
+    for target in visible:
+        parsed = parse_entity_id(target.id)
+        if parsed is None or not actor.world.has_entity(parsed):
+            continue
+        entity = actor.world.get_entity(parsed)
+        if target.kind != "character" and entity.has_component(PortableComponent):
+            room_items.append(target)
+    characters = [target for target in visible if target.kind == "character"]
+    reachable = list({**visible_by_id, **carried_by_id}.values())
+    return {
+        "exits": [
+            ClientTargetView(id=exit.id, label=exit.label, kind="exit")
+            for exit in exits
+        ],
+        "roomItems": sorted(room_items, key=lambda target: target.label.lower()),
+        "inventory": inventory,
+        "characters": sorted(characters, key=lambda target: target.label.lower()),
+        "reachable": sorted(reachable, key=lambda target: target.label.lower()),
+        "reachableItems": sorted(
+            [target for target in reachable if target.kind != "character"],
+            key=lambda target: target.label.lower(),
+        ),
+    }
+
+
+def _target_group_for_argument(definition: ActionDefinition, key: str) -> str | None:
+    if key == "exit_id":
+        return "exits"
+    if key == "target_id" and definition.command_type == "tell":
+        return "characters"
+    if key == "item_id":
+        return "inventory" if definition.command_type in {"drop", "put"} else "reachableItems"
+    if key == "source_id":
+        return "reachableItems"
+    if key == "target_container_id":
+        return "reachableItems"
+    argument = (definition.arguments or {}).get(key)
+    if argument is not None and argument.kind == "entity":
+        return "reachable"
+    return None
+
+
+def _action_view(definition: ActionDefinition) -> ClientActionView:
+    arguments = [
+        ClientActionArgumentView(
+            key=key,
+            title=argument.title,
+            kind=argument.kind,
+            required=argument.required,
+            target_group=_target_group_for_argument(definition, key),
+        )
+        for key, argument in (definition.arguments or {}).items()
+    ]
+    return ClientActionView(
+        command_type=definition.command_type,
+        tool_name=definition.name,
+        title=definition.title or definition.command_type.replace("-", " ").title(),
+        description=definition.description,
+        lane=definition.lane,
+        cost=CommandCostRequest(
+            action=definition.cost.action,
+            focus=definition.cost.focus,
+        ),
+        arguments=arguments,
+    )
+
+
+def serialize_character_projection(
+    actor: WorldActor, character_id: str
+) -> CharacterProjectionResponse:
+    """Return a viewer-scoped, player-facing view for structured clients.
+
+    This intentionally differs from ``serialize_world``: it exposes only facts the
+    character can use for normal play instead of raw ECS components and relationships.
+    """
+
+    parsed = parse_entity_id(character_id)
+    if parsed is None or not actor.world.has_entity(parsed):
+        raise ValueError("character does not exist")
+    character = actor.world.get_entity(parsed)
+    if not character.has_component(CharacterComponent):
+        raise ValueError("entity is not a character")
+
+    perception = perceive(actor.world, character)
+    room = ClientRoomView()
+    exits: list[ClientExitView] = []
+    room_id = parse_entity_id(perception.room_id)
+    if room_id is not None and actor.world.has_entity(room_id):
+        room_entity = actor.world.get_entity(room_id)
+        room_title = (
+            room_entity.get_component(RoomComponent).title
+            if room_entity.has_component(RoomComponent)
+            else perception.room_id
+        )
+        exits = [
+            ClientExitView(
+                id=exit.to_room_id,
+                direction=exit.direction,
+                label=f"{exit.direction}: {exit.to_room_id}" if exit.direction else exit.to_room_id,
+                locked=exit.locked,
+            )
+            for exit in perception.exits
+        ]
+        room = ClientRoomView(
+            id=perception.room_id,
+            title=room_title,
+            entities=[_perceived_entity_view(entity) for entity in perception.entities],
+            exits=exits,
+        )
+
+    groups = _target_groups(actor, character, perception.entities, exits)
+    return CharacterProjectionResponse(
+        world_epoch=actor.epoch,
+        character_id=str(character.id),
+        character_name=entity_name(character),
+        can_perceive=perception.can_perceive,
+        room=room,
+        inventory=groups["inventory"],
+        points=_points_view(character),
+        controller=_controller_view(character),
+        target_groups=groups,
+        actions=[
+            _action_view(definition)
+            for definition in action_definitions(actor.action_definitions())
+            if definition.command_type in actor.available_command_types()
+        ],
+    )
+
+
 def serialize_event(event: DomainEvent) -> dict[str, Any]:
     """Return a typed event payload with class name and JSON-safe fields."""
 
@@ -132,6 +389,7 @@ def event_message(event: DomainEvent) -> dict[str, Any]:
 __all__ = [
     "event_message",
     "jsonable",
+    "serialize_character_projection",
     "serialize_entity",
     "serialize_event",
     "serialize_queued_command",

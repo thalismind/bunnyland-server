@@ -49,6 +49,79 @@ class CommandResponse(BaseModel):
     command_id: str
 
 
+class ClientEntityView(BaseModel):
+    id: str
+    name: str
+    kind: str = "other"
+    is_character: bool = False
+    contents: list[ClientEntityView] = Field(default_factory=list)
+
+
+class ClientExitView(BaseModel):
+    id: str
+    direction: str
+    label: str
+    locked: bool = False
+
+
+class ClientPointsView(BaseModel):
+    action: float = 0.0
+    action_max: float = 0.0
+    focus: float = 0.0
+    focus_max: float = 0.0
+
+
+class ClientControllerView(BaseModel):
+    controller_id: str
+    generation: int
+
+
+class ClientTargetView(BaseModel):
+    id: str
+    label: str
+    kind: str = "other"
+
+
+class ClientActionArgumentView(BaseModel):
+    key: str
+    title: str = ""
+    kind: str = "string"
+    required: bool = False
+    target_group: str | None = None
+
+
+class ClientActionView(BaseModel):
+    command_type: str
+    tool_name: str
+    title: str
+    description: str = ""
+    lane: Lane = Lane.WORLD
+    cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
+    arguments: list[ClientActionArgumentView] = Field(default_factory=list)
+
+
+class ClientRoomView(BaseModel):
+    id: str | None = None
+    title: str = ""
+    entities: list[ClientEntityView] = Field(default_factory=list)
+    exits: list[ClientExitView] = Field(default_factory=list)
+
+
+class CharacterProjectionResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    character_id: str
+    character_name: str
+    can_perceive: bool
+    room: ClientRoomView = Field(default_factory=ClientRoomView)
+    inventory: list[ClientTargetView] = Field(default_factory=list)
+    points: ClientPointsView = Field(default_factory=ClientPointsView)
+    controller: ClientControllerView | None = None
+    target_groups: dict[str, list[ClientTargetView]] = Field(default_factory=dict)
+    actions: list[ClientActionView] = Field(default_factory=list)
+
+
 ClaimFallbackController = Literal["suspend", "llm"]
 
 
@@ -288,6 +361,15 @@ __all__ = [
     "CommandCostRequest",
     "CommandRequest",
     "CommandResponse",
+    "ClientActionArgumentView",
+    "ClientActionView",
+    "CharacterProjectionResponse",
+    "ClientControllerView",
+    "ClientEntityView",
+    "ClientExitView",
+    "ClientPointsView",
+    "ClientRoomView",
+    "ClientTargetView",
     "ComponentPatchSpec",
     "EcsTypeSchema",
     "EdgePatchSpec",

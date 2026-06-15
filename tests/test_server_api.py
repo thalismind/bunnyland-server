@@ -11,6 +11,8 @@ import pytest
 import bunnyland.server.worldgen as server_worldgen
 from bunnyland.content import load_content_library
 from bunnyland.core import (
+    ActionArgument,
+    ActionDefinition,
     CharacterComponent,
     ContainerComponent,
     ContainmentMode,
@@ -18,12 +20,22 @@ from bunnyland.core import (
     ControlledBy,
     DescriptionComponent,
     DoorComponent,
+    DropHandler,
     ExitTo,
+    Holding,
     IdentityComponent,
     LockableComponent,
+    PerceptionComponent,
+    PortableComponent,
+    PutHandler,
     RoomComponent,
+    StealthComponent,
     SuspendedComponent,
+    TakeHandler,
+    TellHandler,
+    Wearing,
     WebControllerComponent,
+    WorldActor,
     WorldPauseStatusChangedEvent,
     parse_entity_id,
     spawn_entity,
@@ -42,7 +54,13 @@ from bunnyland.mechanics.storyteller import IncidentComponent
 from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.prompts.builder import PromptBuilder
-from bunnyland.server import CommandRequest, EventStream, serialize_event, serialize_world
+from bunnyland.server import (
+    CommandRequest,
+    EventStream,
+    serialize_character_projection,
+    serialize_event,
+    serialize_world,
+)
 from bunnyland.server import admin as server_admin
 from bunnyland.server import app as server_app
 from bunnyland.server.admin import (
@@ -52,6 +70,7 @@ from bunnyland.server.admin import (
 )
 from bunnyland.server.app import create_app, next_websocket_update
 from bunnyland.server.models import (
+    ClientTargetView,
     WebControllerClaimRequest,
     WebControllerFallbackRequest,
     WorldCharacterGenerationRequest,
@@ -64,6 +83,7 @@ from bunnyland.server.models import (
 from bunnyland.server.patches import WorldPatchError, apply_world_patch
 from bunnyland.server.runtime import run_loop_with_api
 from bunnyland.server.schema import _type_schema, world_schema
+from bunnyland.server.serialization import jsonable
 from bunnyland.server.worldgen import (
     _room_description,
     build_character_generation_response,
@@ -177,6 +197,208 @@ def test_world_snapshot_serializes_pending_submitted_commands_before_tick(scenar
             "expires_at_epoch": None,
         }
     ]
+
+
+def test_client_view_scopes_visible_state_points_controller_and_actions(scenario):
+    world = scenario.actor.world
+    visible_item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="a loose pebble", kind="item"),
+            PortableComponent(),
+        ],
+    )
+    hidden_item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="hidden ledger", kind="item"),
+            PortableComponent(),
+            StealthComponent(hiding=True, visibility_level=0.0),
+        ],
+    )
+    remote_item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="remote candle", kind="item"),
+            PortableComponent(),
+        ],
+    )
+    carried_item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="brass key", kind="item"),
+            PortableComponent(),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), visible_item.id
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hidden_item.id
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), remote_item.id
+    )
+    world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), carried_item.id
+    )
+
+    view = serialize_character_projection(scenario.actor, str(scenario.character)).model_dump(
+        mode="json"
+    )
+
+    assert view["character_id"] == str(scenario.character)
+    assert view["character_name"] == "Juniper"
+    assert view["room"]["id"] == str(scenario.room_a)
+    assert view["points"] == {
+        "action": 5.0,
+        "action_max": 5.0,
+        "focus": 3.0,
+        "focus_max": 3.0,
+    }
+    assert view["controller"] == {
+        "controller_id": str(scenario.controller),
+        "generation": scenario.generation,
+    }
+    rendered = json.dumps(view)
+    assert "a loose pebble" in rendered
+    assert "brass key" in rendered
+    assert "hidden ledger" not in rendered
+    assert "remote candle" not in rendered
+    assert "components" not in rendered
+    assert "relationships" not in rendered
+    assert {target["id"] for target in view["target_groups"]["roomItems"]} == {
+        str(visible_item.id)
+    }
+    assert {target["id"] for target in view["target_groups"]["inventory"]} == {
+        str(carried_item.id)
+    }
+    move = next(action for action in view["actions"] if action["command_type"] == "move")
+    assert move["cost"] == {"action": 1, "focus": 0}
+    assert any(
+        argument["key"] == "exit_id" and argument["target_group"] == "exits"
+        for argument in move["arguments"]
+    )
+
+
+def test_client_view_action_menu_uses_advisory_target_groups(scenario):
+    scenario.actor.register_handler(TakeHandler())
+    scenario.actor.register_handler(DropHandler())
+    scenario.actor.register_handler(PutHandler())
+    scenario.actor.register_handler(TellHandler())
+
+    class _SipHandler:
+        command_type = "sip"
+
+    class _MarkHandler:
+        command_type = "mark"
+
+    scenario.actor.register_handler(_SipHandler())
+    scenario.actor.register_action_definition(
+        ActionDefinition(
+            command_type="sip",
+            arguments={"source_id": ActionArgument(kind="entity")},
+        )
+    )
+    scenario.actor.register_handler(_MarkHandler())
+    scenario.actor.register_action_definition(
+        ActionDefinition(
+            command_type="mark",
+            arguments={"artifact_id": ActionArgument(kind="entity")},
+        )
+    )
+
+    view = serialize_character_projection(scenario.actor, str(scenario.character)).model_dump(
+        mode="json"
+    )
+    actions = {action["command_type"]: action for action in view["actions"]}
+
+    take_args = {
+        argument["key"]: argument["target_group"]
+        for argument in actions["take"]["arguments"]
+    }
+    drop_args = {
+        argument["key"]: argument["target_group"]
+        for argument in actions["drop"]["arguments"]
+    }
+    put_args = {
+        argument["key"]: argument["target_group"]
+        for argument in actions["put"]["arguments"]
+    }
+    tell_args = {
+        argument["key"]: argument["target_group"]
+        for argument in actions["tell"]["arguments"]
+    }
+    sip_args = {
+        argument["key"]: argument["target_group"]
+        for argument in actions["sip"]["arguments"]
+    }
+    mark_args = {
+        argument["key"]: argument["target_group"]
+        for argument in actions["mark"]["arguments"]
+    }
+    assert take_args["item_id"] == "reachableItems"
+    assert drop_args["item_id"] == "inventory"
+    assert put_args["item_id"] == "inventory"
+    assert put_args["target_container_id"] == "reachableItems"
+    assert tell_args["target_id"] == "characters"
+    assert tell_args["text"] is None
+    assert sip_args["source_id"] == "reachableItems"
+    assert mark_args["artifact_id"] == "reachable"
+
+
+def test_client_view_handles_unperceiving_character_and_errors():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Quiet", kind="character"),
+            CharacterComponent(),
+            PerceptionComponent(active=False),
+        ],
+    )
+    room = spawn_entity(actor.world, [RoomComponent(title="Bare Room")])
+    actor.world.get_entity(room.id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
+    )
+    carried_room = spawn_entity(actor.world, [RoomComponent(title="Pocket Room")])
+    carried_character = spawn_entity(actor.world, [CharacterComponent()])
+    carried_item = spawn_entity(actor.world, [PortableComponent()])
+    worn_item = spawn_entity(actor.world, [IdentityComponent(name="cloak", kind="item")])
+    carried_other = spawn_entity(actor.world)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried_room.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried_character.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried_item.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried_other.id)
+    character.add_relationship(Holding(), carried_item.id)
+    character.add_relationship(Wearing(), worn_item.id)
+
+    view = serialize_character_projection(actor, str(character.id)).model_dump(mode="json")
+
+    assert view["can_perceive"] is False
+    assert view["room"] == {"id": None, "title": "", "entities": [], "exits": []}
+    assert view["points"] == {"action": 0.0, "action_max": 0.0, "focus": 0.0, "focus_max": 0.0}
+    assert view["controller"] is None
+    assert {target["kind"] for target in view["inventory"]} == {
+        "item",
+        "character",
+        "room",
+        "other",
+    }
+    assert sum(1 for target in view["inventory"] if target["id"] == str(carried_item.id)) == 1
+    assert any(target["id"] == str(worn_item.id) for target in view["inventory"])
+    with pytest.raises(ValueError, match="character does not exist"):
+        serialize_character_projection(actor, "not-an-id")
+    with pytest.raises(ValueError, match="entity is not a character"):
+        serialize_character_projection(actor, str(room.id))
+
+
+def test_jsonable_serializes_client_view_models():
+    assert jsonable(ClientTargetView(id="item_1", label="lamp", kind="item")) == {
+        "id": "item_1",
+        "label": "lamp",
+        "kind": "item",
+    }
 
 
 def test_command_request_builds_submitted_command():
@@ -317,6 +539,8 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     paths = {route.path for route in app.routes}
     assert "/health" in paths
     assert "/world/snapshot" in paths
+    assert "/world/character/{id}" in paths
+    assert "/world/client-view/{character_id}" not in paths
     assert "/world/schema" in paths
     assert "/world/library" in paths
     assert "/world/events/recent" in paths
@@ -348,6 +572,7 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
     schema = client.get("/world/schema")
     library = client.get("/world/library")
     recent = client.get("/world/events/recent")
+    character_view = client.get(f"/world/character/{scenario.character}")
 
     assert health.status_code == 200
     assert health.json() == {"ok": True, "world_epoch": scenario.actor.epoch}
@@ -359,6 +584,21 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
     assert library.json() == load_content_library().model_dump(mode="json")
     assert recent.status_code == 200
     assert recent.json() == {"events": []}
+    assert character_view.status_code == 200
+    assert character_view.json()["character_id"] == str(scenario.character)
+    assert "entities" not in character_view.json()
+
+
+def test_fastapi_openapi_exposes_projection_contract_route(scenario):
+    pytest.importorskip("fastapi")
+    app = create_app(scenario.actor)
+
+    operation = app.openapi()["paths"]["/world/character/{id}"]["get"]
+
+    assert operation["parameters"][0]["name"] == "id"
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CharacterProjectionResponse"
+    }
 
 
 def test_room_description_prefers_long_then_short_description(scenario):

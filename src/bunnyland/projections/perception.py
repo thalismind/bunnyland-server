@@ -113,6 +113,7 @@ def perceive(world: World, character: Entity) -> Perception:
             (
                 RoomExit(direction=edge.direction, to_room_id=str(target), locked=edge.locked)
                 for edge, target in room.get_relationships(ExitTo)
+                if not edge.hidden
             ),
             key=lambda e: e.direction,
         )

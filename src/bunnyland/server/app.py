@@ -28,6 +28,7 @@ from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .models import (
+    CharacterProjectionResponse,
     CommandRequest,
     CommandResponse,
     WebControllerClaimRequest,
@@ -55,7 +56,7 @@ from .models import (
 )
 from .patches import WorldPatchError, apply_world_patch
 from .schema import world_schema
-from .serialization import serialize_world
+from .serialization import serialize_character_projection, serialize_world
 from .subscriptions import EventStream
 from .worldgen import (
     generate_character_patch,
@@ -148,6 +149,15 @@ def create_app(
     @app.get("/world/snapshot")
     async def world_snapshot() -> dict:
         return serialize_world(actor, meta)
+
+    @app.get("/world/character/{id}", response_model=CharacterProjectionResponse)
+    async def world_character_projection(id: str) -> CharacterProjectionResponse:
+        try:
+            return serialize_character_projection(actor, id)
+        except ValueError as exc:
+            detail = str(exc)
+            status = 400 if detail == "entity is not a character" else 404
+            raise HTTPException(status_code=status, detail=detail) from exc
 
     @app.get("/world/schema", response_model=WorldSchemaResponse)
     async def get_world_schema() -> WorldSchemaResponse:
