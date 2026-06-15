@@ -10,9 +10,13 @@ import pytest
 
 from bunnyland.core import (
     CharacterComponent,
+    CommandCost,
     IdentityComponent,
+    Lane,
+    OnInsufficientPoints,
     SuspendedComponent,
     WebControllerComponent,
+    build_submitted_command,
     parse_entity_id,
     spawn_entity,
 )
@@ -148,13 +152,45 @@ def _client_view() -> dict:
     }
 
 
+def _queued_response(*commands: dict) -> dict:
+    return {
+        "ok": True,
+        "schema_version": 1,
+        "world_epoch": 42,
+        "character_id": PLAYER,
+        "commands": list(commands),
+    }
+
+
+def _queued_command(**overrides) -> dict:
+    command = {
+        "command_id": "cmd-1",
+        "character_id": PLAYER,
+        "command_type": "say",
+        "payload": {"text": "next"},
+        "cost": {"action": 1, "focus": 1},
+        "lane": "focus",
+        "submitted_at_epoch": 41,
+        "expires_at_epoch": None,
+    }
+    command.update(overrides)
+    return command
+
+
 # ── world model ───────────────────────────────────────────────────────────────
 def test_parse_normalizes_relationships_and_epoch():
-    world = World.parse(_snapshot())
+    snapshot = _snapshot()
+    snapshot["queued_commands"] = [
+        _queued_command(),
+        _queued_command(command_id="cmd-2", character_id=MARLOW),
+    ]
+    world = World.parse(snapshot)
     assert world.epoch == 42
     assert set(world.entities) == {PARLOR, HALL, PLAYER, MARLOW, APPLE, KEY}
     # target_id is normalized to target on every edge.
     assert world.get(PARLOR)["relationships"]["Contains"][0]["target"] == PLAYER
+    assert [command["command_id"] for command in world.queued_for(PLAYER)] == ["cmd-1"]
+    assert world.queued_for("") == []
 
 
 def test_rooms_characters_and_containment():
@@ -274,6 +310,18 @@ def test_verb_catalogue_costs():
         assert bool(verb.target_kind) == bool(verb.target_key)
 
 
+def test_queued_command_label_formats_unknown_free_command():
+    label = tui_app._queued_command_label(
+        {
+            "command_type": "custom-command",
+            "payload": {"empty": "", "target_id": APPLE},
+            "cost": {},
+        }
+    )
+
+    assert label == "custom command — free · target_id: item:1"
+
+
 # ── web controller ────────────────────────────────────────────────────────────
 def test_web_controller_registered_for_persistence():
     components, _edges = type_registries()
@@ -336,6 +384,23 @@ async def test_local_backend_hosts_claims_and_submits():
         # The claimed controller is what the fresh snapshot reports.
         refreshed = World.parse(await backend.fetch_snapshot())
         assert refreshed.control(player) == (controller_id, control[1])
+
+        await backend.actor.submit(
+            build_submitted_command(
+                character_id=player,
+                controller_id=controller_id,
+                controller_generation=control[1],
+                command_type="say",
+                payload={"text": "later"},
+                cost=CommandCost(action=1, focus=1),
+                lane=Lane.FOCUS,
+                on_insufficient_points=OnInsufficientPoints.QUEUE,
+                submitted_at_epoch=backend.actor.epoch,
+            )
+        )
+        queued = await backend.fetch_queued_commands(player)
+        assert queued["character_id"] == player
+        assert queued["commands"][-1]["command_type"] == "say"
     finally:
         await backend.close()
 
@@ -508,14 +573,17 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
 
     await backend.start()
     snapshot = await backend.fetch_snapshot()
+    queued = await backend.fetch_queued_commands(PLAYER)
     submitted = await backend.submit({"command_type": "wait"})
     await backend.close()
 
     assert snapshot == {"world_epoch": 7}
+    assert queued == {"world_epoch": 7}
     assert submitted is False
     assert clients[0].closed is True
     assert clients[0].requests == [
         ("GET", "http://server.example/world/snapshot", None),
+        ("GET", f"http://server.example/world/character/{PLAYER}/commands", None),
         ("POST", "http://server.example/world/commands", {"command_type": "wait"}),
     ]
 
@@ -528,12 +596,38 @@ async def test_remote_backend_close_without_client_is_noop():
     assert backend._client is None
 
 
+async def test_backend_default_queued_commands_response():
+    class MinimalBackend(Backend):
+        label = "minimal"
+
+        async def start(self) -> None: ...
+        async def close(self) -> None: ...
+        async def fetch_snapshot(self) -> dict:
+            return {}
+
+        async def submit(self, command: dict) -> bool:
+            return True
+
+        async def claim(self, player_id: str, world: World):
+            return None
+
+    assert await MinimalBackend().fetch_queued_commands(PLAYER) == {
+        "ok": True,
+        "schema_version": 1,
+        "world_epoch": 0,
+        "character_id": PLAYER,
+        "commands": [],
+    }
+
+
 # ── the app (Textual pilot) ───────────────────────────────────────────────────
 class RecordingBackend(Backend):
     """A static-snapshot backend that records submitted commands, for app tests."""
 
-    def __init__(self, snapshot: dict) -> None:
+    def __init__(self, snapshot: dict, queued_response: dict | None = None) -> None:
         self.snapshot = snapshot
+        self.queued_response = queued_response or _queued_response()
+        self.queued_requests: list[str] = []
         self.commands: list[dict] = []
         self.label = "test"
 
@@ -541,6 +635,10 @@ class RecordingBackend(Backend):
     async def close(self) -> None: ...
     async def fetch_snapshot(self) -> dict:
         return copy.deepcopy(self.snapshot)
+
+    async def fetch_queued_commands(self, character_id: str) -> dict:
+        self.queued_requests.append(character_id)
+        return copy.deepcopy(self.queued_response)
 
     async def submit(self, command: dict) -> bool:
         self.commands.append(command)
@@ -553,6 +651,12 @@ class RecordingBackend(Backend):
 class FailingBackend(RecordingBackend):
     async def fetch_snapshot(self) -> dict:
         raise RuntimeError("snapshot failed")
+
+
+class FailingQueueBackend(RecordingBackend):
+    async def fetch_queued_commands(self, character_id: str) -> dict:
+        self.queued_requests.append(character_id)
+        raise RuntimeError("queue failed")
 
 
 async def _select_player(app, pilot):
@@ -629,7 +733,8 @@ async def test_app_renders_room_and_actions():
     from textual.widgets import OptionList, Static
 
     text = lambda wid: str(app.query_one(wid, Static).render())  # noqa: E731
-    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    backend = RecordingBackend(_snapshot(), _queued_response(_queued_command()))
+    app = BunnylandTUI(backend)
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
         assert "Parlor" in text("#room-title")
@@ -639,6 +744,47 @@ async def test_app_renders_room_and_actions():
         doors = app.query_one("#doors", OptionList)
         assert [o.id for o in doors.options] == [f"door:{HALL}"]
         assert "5/5 AP" in text("#points")
+        queued = app.query_one("#queued", OptionList)
+        assert backend.queued_requests[-1] == PLAYER
+        assert queued.option_count == 1
+        assert "Say [focus]" in str(queued.get_option_at_index(0).prompt)
+        assert "1 AP + 1 FP" in str(queued.get_option_at_index(0).prompt)
+        assert "text: next" in str(queued.get_option_at_index(0).prompt)
+
+
+async def test_app_renders_empty_and_snapshot_fallback_queued_actions():
+    from textual.widgets import OptionList
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        queued = app.query_one("#queued", OptionList)
+        assert queued.option_count == 1
+        assert "No queued actions." in str(queued.get_option_at_index(0).prompt)
+
+    snapshot = _snapshot()
+    snapshot["queued_commands"] = [_queued_command(command_id="cmd-fallback")]
+    fallback_app = BunnylandTUI(FailingQueueBackend(snapshot))
+    async with fallback_app.run_test() as pilot:
+        await _select_player(fallback_app, pilot)
+        queued = fallback_app.query_one("#queued", OptionList)
+        assert queued.option_count == 1
+        assert "text: next" in str(queued.get_option_at_index(0).prompt)
+
+
+async def test_app_discards_mismatched_queued_command_response():
+    app = BunnylandTUI(
+        RecordingBackend(
+            _snapshot(),
+            {
+                **_queued_response(_queued_command()),
+                "character_id": MARLOW,
+            },
+        )
+    )
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        assert app.queued_commands == []
 
 
 async def test_app_rendering_restores_highlight_and_handles_missing_room():

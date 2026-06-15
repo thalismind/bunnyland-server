@@ -25,7 +25,7 @@ from ..core import (
 )
 from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.ecs import parse_entity_id
-from ..server.serialization import serialize_world
+from ..server.serialization import serialize_character_queued_commands, serialize_world
 from .model import World
 
 logger = logging.getLogger("bunnyland.tui")
@@ -66,6 +66,15 @@ class Backend(ABC):
 
     @abstractmethod
     async def fetch_snapshot(self) -> dict: ...
+
+    async def fetch_queued_commands(self, character_id: str) -> dict:
+        return {
+            "ok": True,
+            "schema_version": 1,
+            "world_epoch": 0,
+            "character_id": character_id,
+            "commands": [],
+        }
 
     @abstractmethod
     async def submit(self, command: dict) -> bool: ...
@@ -154,6 +163,9 @@ class LocalBackend(Backend):
     async def fetch_snapshot(self) -> dict:
         return serialize_world(self.actor, self.meta)
 
+    async def fetch_queued_commands(self, character_id: str) -> dict:
+        return serialize_character_queued_commands(self.actor, character_id).model_dump(mode="json")
+
     async def submit(self, command: dict) -> bool:
         cost = command.get("cost") or {}
         await self.actor.submit(
@@ -227,6 +239,13 @@ class RemoteBackend(Backend):
 
     async def fetch_snapshot(self) -> dict:
         res = await self._client.get(f"{self.base}/world/snapshot")
+        res.raise_for_status()
+        return res.json()
+
+    async def fetch_queued_commands(self, character_id: str) -> dict:
+        res = await self._client.get(
+            f"{self.base}/world/character/{character_id}/commands"
+        )
         res.raise_for_status()
         return res.json()
 

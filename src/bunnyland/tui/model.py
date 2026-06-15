@@ -48,6 +48,7 @@ class World:
     entities: dict[str, dict] = field(default_factory=dict)
     epoch: int = 0
     target_groups: dict[str, list[Target]] = field(default_factory=dict)
+    queued_commands: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def parse(cls, data: dict | None) -> World:
@@ -66,7 +67,11 @@ class World:
                 "components": entity.get("components") or {},
                 "relationships": rels,
             }
-        return cls(entities=entities, epoch=(data or {}).get("world_epoch", 0))
+        return cls(
+            entities=entities,
+            epoch=(data or {}).get("world_epoch", 0),
+            queued_commands=list((data or {}).get("queued_commands") or []),
+        )
 
     @classmethod
     def _parse_client_view(cls, data: dict) -> World:
@@ -165,6 +170,7 @@ class World:
             entities=entities,
             epoch=data.get("world_epoch", 0),
             target_groups=target_groups,
+            queued_commands=list(data.get("queued_commands") or []),
         )
 
     # ── lookups ──────────────────────────────────────────────────────────────
@@ -269,6 +275,14 @@ class World:
         if kind == "reachableItems":
             return [as_target(e) for e in (*room_items, *carried)]
         return []
+
+    def queued_for(self, player_id: str | None) -> list[dict[str, Any]]:
+        if not player_id:
+            return []
+        return [
+            command for command in self.queued_commands
+            if command.get("character_id") == player_id
+        ]
 
 
 # ── entity presentation (mirrors the toon client) ─────────────────────────────

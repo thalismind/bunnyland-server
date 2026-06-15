@@ -21,6 +21,46 @@ from .verbs import ACTION_VERBS, Verb
 REFRESH_SECONDS = 1.0
 
 
+def _queued_command_label(command: dict) -> str:
+    name = _queued_command_name(command)
+    lane = command.get("lane") or ""
+    cost = _queued_command_cost(command)
+    detail = _queued_command_detail(command)
+    parts = [part for part in (cost, detail) if part]
+    suffix = f" — {' · '.join(parts)}" if parts else ""
+    lane_suffix = f" [{lane}]" if lane else ""
+    return f"{name}{lane_suffix}{suffix}"
+
+
+def _queued_command_name(command: dict) -> str:
+    verb = next(
+        (verb for verb in ACTION_VERBS if verb.cmd == command.get("command_type")),
+        None,
+    )
+    if verb:
+        return verb.label
+    return str(command.get("command_type") or "command").replace("-", " ")
+
+
+def _queued_command_cost(command: dict) -> str:
+    cost = command.get("cost") or {}
+    parts = []
+    if cost.get("action"):
+        parts.append(f"{cost['action']} AP")
+    if cost.get("focus"):
+        parts.append(f"{cost['focus']} FP")
+    return " + ".join(parts) if parts else "free"
+
+
+def _queued_command_detail(command: dict) -> str:
+    payload = command.get("payload") or {}
+    return ", ".join(
+        f"{key}: {value}"
+        for key, value in payload.items()
+        if value is not None and value != ""
+    )
+
+
 class TargetPicker(ModalScreen[str]):
     """Modal list of candidate targets for a verb; dismisses with the chosen id or None."""
 
@@ -90,6 +130,7 @@ class BunnylandTUI(App[None]):
     .col-title { padding: 0 1; color: $accent; text-style: bold; }
     #members, #doors, #verbs { height: auto; max-height: 1fr; }
     #doors { border-top: solid $panel; }
+    #queued { height: auto; max-height: 1fr; border-top: solid $panel; }
     #points { padding: 0 1; height: 1; }
     #picker, #prompt {
         width: 60; height: auto; max-height: 80%;
@@ -116,6 +157,7 @@ class BunnylandTUI(App[None]):
         self.follow = True
         self.selected_id: str | None = None
         self._player_choice_ids: list[str] = []
+        self.queued_commands: list[dict] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -130,6 +172,8 @@ class BunnylandTUI(App[None]):
                 yield Select([], prompt="— pick a player —", allow_blank=True, id="player")
                 yield Static("", id="points")
                 yield OptionList(id="verbs")
+                yield Static("Queued actions", classes="col-title")
+                yield OptionList(id="queued")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -153,6 +197,7 @@ class BunnylandTUI(App[None]):
         if self.player_id and self.player_id not in self.world.entities:
             self.player_id = ""
             self.control = None
+        self.queued_commands = await self._fetch_queued_commands()
         if self.follow or not self.world.get(self.view_room_id):
             self.view_room_id = self.world.room_of(self.player_id) or self.world.first_room_id()
 
@@ -161,6 +206,17 @@ class BunnylandTUI(App[None]):
         self.query_one("#status", Static).update(f"{status} · epoch {epoch}s · {who}")
         self._render_room()
         self._render_actions()
+
+    async def _fetch_queued_commands(self) -> list[dict]:
+        if not self.player_id:
+            return []
+        try:
+            data = await self.backend.fetch_queued_commands(self.player_id)
+        except Exception:
+            return self.world.queued_for(self.player_id)
+        if data.get("character_id") != self.player_id:
+            return []
+        return list(data.get("commands") or [])
 
     def _sync_players(self) -> None:
         ids = [c["id"] for c in self.world.characters()]
@@ -231,6 +287,16 @@ class BunnylandTUI(App[None]):
             tgt = " ⌖" if verb.target_kind else ""
             verbs.add_option(
                 Option(f"{verb.label}{tgt}  ({cost})", id=verb.tool, disabled=not affordable)
+            )
+
+        queued = self.query_one("#queued", OptionList)
+        queued.clear_options()
+        if not self.queued_commands:
+            queued.add_option(Option("No queued actions.", id="queued-empty", disabled=True))
+            return
+        for index, command in enumerate(self.queued_commands):
+            queued.add_option(
+                Option(_queued_command_label(command), id=f"queued:{index}", disabled=True)
             )
 
     # ── events ──────────────────────────────────────────────────────────────────
