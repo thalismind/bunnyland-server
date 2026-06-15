@@ -263,6 +263,7 @@ def test_action_list_height_leaves_queue_visible():
     assert "#members, #doors, #activity {" in BunnylandTUI.CSS
     assert "#verbs { height: auto; max-height: 12; }" in BunnylandTUI.CSS
     assert "#queued { height: 1fr; min-height: 4;" in BunnylandTUI.CSS
+    assert "#action-filter-row { height: 3; }" in BunnylandTUI.CSS
     assert "#doors-title, #activity-title, #queued-title { border-top:" in BunnylandTUI.CSS
     assert "#doors { border-top:" not in BunnylandTUI.CSS
 
@@ -987,6 +988,59 @@ async def test_app_refresh_preserves_stable_action_list_position():
         assert verbs.option_count == 18
         assert verbs.highlighted == 17
         assert "Custom 17" in str(verbs.get_option_at_index(17).prompt)
+
+
+async def test_app_filters_and_clears_action_list():
+    from textual.widgets import Button, Input, OptionList
+
+    projection = _client_view()
+    projection["actions"] = [
+        _projected_action(
+            command_type="inspect",
+            tool_name="inspect",
+            title="Inspect",
+        ),
+        _projected_action(
+            command_type="negotiate",
+            tool_name="negotiate",
+            title="Negotiate",
+        ),
+        _projected_action(
+            command_type="bribe",
+            tool_name="bribe",
+            title="Bribe",
+        ),
+    ]
+    app = BunnylandTUI(
+        RecordingBackend(
+            _snapshot(),
+            _queued_response(_queued_command(command_type="say")),
+            character_projection=projection,
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        verbs = app.query_one("#verbs", OptionList)
+        queued = app.query_one("#queued", OptionList)
+        assert verbs.option_count == 3
+        assert queued.option_count == 1
+
+        filter_input = app.query_one("#action-filter", Input)
+        filter_input.value = "neg"
+        await pilot.pause()
+
+        assert verbs.option_count == 1
+        assert "Negotiate" in str(verbs.get_option_at_index(0).prompt)
+        assert queued.option_count == 1
+
+        app._action_filter_clear_pressed(
+            SimpleNamespace(button=app.query_one("#action-filter-clear", Button))
+        )
+        await pilot.pause()
+
+        assert filter_input.value == ""
+        assert verbs.option_count == 3
 
 
 async def test_app_renders_perceived_activity_after_initial_prime():

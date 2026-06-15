@@ -12,7 +12,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, OptionList, Select, Static
+from textual.widgets import Button, Footer, Header, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from ..core.claim_timeout import normalize_claim_timeout
@@ -203,6 +203,9 @@ class BunnylandTUI(App[None]):
     #verbs { height: auto; max-height: 12; }
     #queued { height: 1fr; min-height: 4; }
     #points { padding: 0 1; height: 1; }
+    #action-filter-row { height: 3; }
+    #action-filter { width: 1fr; }
+    #action-filter-clear { width: 5; min-width: 5; }
     #picker, #prompt {
         width: 60; height: auto; max-height: 80%;
         border: thick $accent; background: $surface; padding: 1 2;
@@ -234,6 +237,7 @@ class BunnylandTUI(App[None]):
         self._verbs_signature: tuple[tuple[str, str, bool], ...] = ()
         self._queued_signature: tuple[tuple[str, str], ...] = ()
         self._points_line = ""
+        self.action_filter = ""
         self.activity_lines: list[Text] = []
         self._events = EventNarrator()
         self._events_primed = False
@@ -253,6 +257,9 @@ class BunnylandTUI(App[None]):
             with Vertical(id="actions"):
                 yield Select([], prompt="— pick a player —", allow_blank=True, id="player")
                 yield Static("", id="points")
+                with Horizontal(id="action-filter-row"):
+                    yield Input(placeholder="Search actions", id="action-filter")
+                    yield Button("Clear", id="action-filter-clear")
                 yield OptionList(id="verbs")
                 yield Static("Queued actions", id="queued-title", classes="col-title")
                 yield OptionList(id="queued")
@@ -398,7 +405,7 @@ class BunnylandTUI(App[None]):
             self.query_one("#points", Static).update(line)
             self._points_line = line
 
-        actions = self._available_actions()
+        actions = self._filtered_actions()
         action_options: dict[str, dict] = {}
         verb_entries: list[tuple[str, str, bool]] = []
         for index, action in enumerate(actions):
@@ -461,6 +468,18 @@ class BunnylandTUI(App[None]):
 
     def _available_actions(self) -> list[dict]:
         return self.action_views or [_legacy_action_view(verb) for verb in ACTION_VERBS]
+
+    def _filtered_actions(self) -> list[dict]:
+        actions = self._available_actions()
+        query = self.action_filter.strip().lower()
+        if not query:
+            return actions
+        return [
+            action for action in actions
+            if query in _action_title(action).lower()
+            or query in _action_tool(action).lower()
+            or query in str(action.get("command_type", "")).lower()
+        ]
 
     def _drain_activity(self, events: list[dict], *, prime: bool = False) -> None:
         lines = self._events.drain_events(
@@ -526,6 +545,21 @@ class BunnylandTUI(App[None]):
             action = _legacy_action_view(legacy) if legacy else None
         if action:
             self.run_worker(self._do_action(action), exclusive=True)
+
+    @on(Input.Changed, "#action-filter")
+    def _action_filter_changed(self, event: Input.Changed) -> None:
+        value = event.value.strip()
+        if value == self.action_filter:
+            return
+        self.action_filter = value
+        self._render_actions()
+
+    @on(Button.Pressed, "#action-filter-clear")
+    def _action_filter_clear_pressed(self, _event: Button.Pressed) -> None:
+        self.query_one("#action-filter", Input).value = ""
+        if self.action_filter:
+            self.action_filter = ""
+            self._render_actions()
 
     # ── actions ─────────────────────────────────────────────────────────────────
     async def _do_verb(self, verb: Verb) -> None:
