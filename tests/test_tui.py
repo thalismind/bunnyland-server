@@ -697,6 +697,27 @@ async def test_app_member_and_verb_selection_handlers():
         assert app.backend.commands[-1]["command_type"] == "wait"
 
 
+async def test_app_target_picker_action_selection_runs_in_worker(monkeypatch):
+    from textual.worker import get_current_worker
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+
+        async def fake_pick(screen):
+            assert isinstance(screen, TargetPicker)
+            get_current_worker()
+            return HALL
+
+        monkeypatch.setattr(app, "push_screen_wait", fake_pick)
+
+        app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="move")))
+        await pilot.pause()
+
+        assert app.backend.commands[-1]["command_type"] == "move"
+        assert app.backend.commands[-1]["payload"] == {"exit_id": HALL}
+
+
 async def test_app_wait_submits_a_command():
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test() as pilot:

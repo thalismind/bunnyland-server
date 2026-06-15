@@ -185,8 +185,8 @@ branch tags and `latest` for the default branch. The web repo publishes
   characters; enabling/disabling plugins.
 - **[Saving & reloading](docs/developer/persistence.md)** — save/autosave/reload a world, and what
   is (and isn't) persisted.
-- **[Scripting](docs/developer/scripting.md)** — external JSON scripts for deterministic tests,
-  plugin scenarios, and scripted events.
+- **[Scripting catalogue](bunnyland_scripting.md)** — external JSON scripts for deterministic
+  tests, plugin scenarios, and scripted events.
 
 The full design is in [`bunnyland_specification.md`](bunnyland_specification.md); the build
 plan is in [`PLAN.md`](PLAN.md).
