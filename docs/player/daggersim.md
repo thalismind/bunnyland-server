@@ -1,4 +1,4 @@
-# Dagger-sim frontier play
+# Dagger-sim adventuring and institutions
 
 Dagger-sim adds a broad frontier-adventure loop: rumors, procedural site expansion,
 travel, institutions, generated work, banking, law, custom classes, spells, pacification,

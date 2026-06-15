@@ -135,7 +135,7 @@ branch tags and `latest` for the default branch. The web repo publishes
   factions.
 - **[Life-sim homes, work, and family](docs/player/lifesim.md)** — aspirations, skills,
   jobs, businesses, households, homes, room claims, rent, and family.
-- **[Dagger-sim frontier play](docs/player/daggersim.md)** — rumors, travel, institutions,
+- **[Dagger-sim adventuring and institutions](docs/player/daggersim.md)** — rumors, travel, institutions,
   banking, law, property, magic, afflictions, and dungeons.
 - **[Dagger civic life and property](docs/player/dagger-civic-property.md)** —
   institution reputation, service access, generated work, legal reputation, banking, and
