@@ -1280,3 +1280,37 @@ def test_main_runs_local_backend(monkeypatch):
     assert backends[0].generator == "empty"
     assert backends[0].fallback_controller == "suspend"
     assert backends[0].timeout_seconds is None
+
+
+def test_main_lists_generators_and_exits(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    launched: list[bool] = []
+    monkeypatch.setattr(
+        tui_app,
+        "available_generators",
+        lambda: [
+            SimpleNamespace(
+                name="apartment-demo",
+                uses_seed=False,
+                description="a demo",
+                group="pop culture",
+            ),
+            SimpleNamespace(
+                name="recursive",
+                uses_seed=True,
+                description="",
+                group="algorithmic",
+            ),
+        ],
+    )
+    monkeypatch.setattr(tui_app, "BunnylandTUI", lambda backend: launched.append(True))
+
+    assert tui_app.main(["--list-generators"]) == 0
+    assert launched == []
+    output = capsys.readouterr().out
+    assert "Algorithmic:" in output
+    assert "  recursive" in output
+    assert "Pop Culture:" in output
+    assert "  apartment-demo *" in output
+    assert "* ignores --seed" in output

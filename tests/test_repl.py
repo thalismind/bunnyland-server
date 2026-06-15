@@ -842,13 +842,26 @@ def test_format_generator_lines_flags_seed_and_description():
     from types import SimpleNamespace
 
     generators = [
-        SimpleNamespace(name="apartment-demo", uses_seed=False, description="a demo"),
-        SimpleNamespace(name="recursive", uses_seed=True, description=""),
+        SimpleNamespace(
+            name="apartment-demo",
+            uses_seed=False,
+            description="a demo",
+            group="pop culture",
+        ),
+        SimpleNamespace(
+            name="recursive",
+            uses_seed=True,
+            description="",
+            group="algorithmic",
+        ),
     ]
     assert format_generator_lines(generators) == [
-        "apartment-demo *",
-        "    a demo",
-        "recursive",
+        "Algorithmic:",
+        "  recursive",
+        "",
+        "Pop Culture:",
+        "  apartment-demo *",
+        "      a demo",
         "",
         "* ignores --seed",
     ]
@@ -869,7 +882,9 @@ def test_main_lists_generators_and_exits(monkeypatch, capsys):
 
     assert repl_app.main(["--list-generators"]) == 0
     assert launched == []
-    assert "apartment-demo" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Custom:" in output
+    assert "apartment-demo *" in output
 
 
 def test_main_runs_remote_backend(monkeypatch):

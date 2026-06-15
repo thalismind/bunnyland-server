@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from rich.style import Style
 from rich.text import Text
@@ -28,13 +28,12 @@ from rich.text import Text
 from ..core.actions import ActionDefinition, definitions_by_tool_name
 from ..llm_agents.dispatch import suggest_names
 from ..llm_agents.natural_language import NaturalCommandParser
+from ..terminal_generators import available_generators as available_generators
+from ..terminal_generators import format_generator_lines as format_generator_lines
 from ..tui import events as tui_events
 from ..tui.backend import Backend
 from ..tui.model import World, entity_icon, entity_name, fmt_points, has
 from .completion import complete_line, reference_candidates
-
-if TYPE_CHECKING:
-    from ..worldgen import WorldGenerator
 
 META_COMMANDS = (
     "help", "who", "look", "inventory", "points", "play", "refresh", "quit", "exit"
@@ -49,36 +48,6 @@ def history_path() -> Path:
     """The REPL history file, beside the TUI's persistent client id."""
     base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "bunnyland" / "repl-history"
-
-
-def available_generators() -> list[WorldGenerator]:
-    """The world generators (demo worlds) a local game can use, from the enabled plugins —
-    the same registry ``LocalBackend`` resolves ``--generator`` against, sorted by name."""
-    from ..plugins import bunnyland_plugins, select
-    from ..worldgen import collect_generators
-
-    plugins = select(list(bunnyland_plugins()), None)
-    return sorted(collect_generators(plugins).values(), key=lambda generator: generator.name)
-
-
-def format_generator_lines(generators: list[WorldGenerator]) -> list[str]:
-    """Human-readable lines for ``--list-generators``: name, optional seed marker, and
-    an indented description where one is set."""
-    lines: list[str] = []
-    seedless = False
-    for generator in generators:
-        marker = ""
-        if not generator.uses_seed:
-            marker = " *"
-            seedless = True
-        lines.append(f"{generator.name}{marker}")
-        if generator.description:
-            lines.append(f"    {generator.description}")
-    if seedless:
-        if lines:
-            lines.append("")
-        lines.append("* ignores --seed")
-    return lines
 
 
 def link(label: str, entity_id: str) -> Text:

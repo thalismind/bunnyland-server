@@ -16,6 +16,7 @@ from textual.widgets import Footer, Header, Input, Label, OptionList, Select, St
 from textual.widgets.option_list import Option
 
 from ..core.claim_timeout import normalize_claim_timeout
+from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, LocalBackend, RemoteBackend
 from .events import EventNarrator
 from .model import World, entity_icon, entity_name, fmt_points, has
@@ -561,6 +562,11 @@ def main(argv: list[str] | None = None) -> int:
         "--generator", default="apartment-demo", help="generator for a locally hosted world"
     )
     parser.add_argument(
+        "--list-generators",
+        action="store_true",
+        help="list the available world generators (demo worlds) for local play and exit",
+    )
+    parser.add_argument(
         "--claim-fallback",
         choices=("suspend", "llm"),
         default=None,
@@ -573,6 +579,11 @@ def main(argv: list[str] | None = None) -> int:
         help="claim timeout override in minutes, between 5 and 60",
     )
     args = parser.parse_args(argv)
+    if args.list_generators:
+        for line in format_generator_lines(available_generators()):
+            print(line)
+        return 0
+
     timeout_seconds = (
         normalize_claim_timeout(args.claim_timeout_minutes * 60)
         if args.claim_timeout_minutes is not None
