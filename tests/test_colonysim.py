@@ -105,6 +105,7 @@ from bunnyland.mechanics.colonysim import (
     ResourceStackComponent,
     RoomQualityComponent,
     RoomQualityConsequence,
+    RoomQualityUpdatedEvent,
     RoomRoleComponent,
     RoomStatComponent,
     SetAllowedAreaHandler,
@@ -1175,6 +1176,29 @@ async def test_craft_recipe_metadata_can_create_drinkable_nonportable_output():
     assert output.get_component(DrinkableComponent).hydration == 12.0
     assert not output.has_component(PortableComponent)
     assert not output.has_component(ConsumableComponent)
+
+
+async def test_room_quality_consequence_only_emits_on_actual_change():
+    scenario = build_scenario()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(RoomRoleComponent(role="dining room"))
+    room.add_component(RoomStatComponent(beauty=2.0, cleanliness=1.0, comfort=3.0, wealth=100.0))
+    consequence = RoomQualityConsequence()
+
+    first = consequence.process(scenario.actor.world, 100)
+    assert any(isinstance(event, RoomQualityUpdatedEvent) for event in first)
+    assert room.get_component(RoomQualityComponent).updated_at_epoch == 100
+
+    # Unchanged quality on a later tick must not re-fire or churn the timestamp.
+    later = consequence.process(scenario.actor.world, 200)
+    assert not any(isinstance(event, RoomQualityUpdatedEvent) for event in later)
+    assert room.get_component(RoomQualityComponent).updated_at_epoch == 100
+
+    # A real stat change fires again.
+    replace_component(room, RoomStatComponent(beauty=9.0, cleanliness=1.0, comfort=3.0, wealth=0.0))
+    changed = consequence.process(scenario.actor.world, 300)
+    assert any(isinstance(event, RoomQualityUpdatedEvent) for event in changed)
+    assert room.get_component(RoomQualityComponent).updated_at_epoch == 300
 
 
 async def test_work_priorities_allowed_areas_room_quality_and_wealth_fragments():

@@ -375,11 +375,12 @@ def test_drain_events_filters_by_perception():
         _event("f", visibility="private", actor_id=PLAYER),
         _event("g", visibility="private", actor_id=MARLOW),
         _event("h", visibility="system"),
+        _event("u", visibility="mystery", actor_id=MARLOW),  # unknown visibility: not perceived
         _event(None, visibility="public"),  # no id: skipped, not repeated
     ]
     shown = " | ".join(text.plain for text in repl.drain_events(messages))
     assert "note a" in shown and "note c" in shown and "note d" in shown and "note f" in shown
-    for hidden in ("note b", "note e", "note g", "note h"):
+    for hidden in ("note b", "note e", "note g", "note h", "note u"):
         assert hidden not in shown
 
 
@@ -393,6 +394,17 @@ def test_drain_events_skips_telemetry_noise():
     shown = " | ".join(text.plain for text in repl.drain_events(messages))
     assert "note k" in shown  # real activity is narrated
     assert "note p" not in shown and "note s" not in shown  # telemetry is suppressed
+
+
+def test_drain_events_narrates_own_movement_despite_system_visibility():
+    repl = _repl()  # player is in the Parlor
+    own_move = _event("m1", event_type="ActorMovedEvent", visibility="system", actor_id=PLAYER,
+                      from_room_id=PARLOR, to_room_id=HALL)
+    other_move = _event("m2", event_type="ActorMovedEvent", visibility="system", actor_id=MARLOW,
+                        from_room_id=PARLOR, to_room_id=HALL)
+    shown = " | ".join(text.plain for text in repl.drain_events([own_move, other_move]))
+    assert "Pib: Actor moved" in shown  # your own move is surfaced
+    assert "Marlow" not in shown  # someone else's system-only move is not
 
 
 def test_drain_events_dedupes_already_seen():

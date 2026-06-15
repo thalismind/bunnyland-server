@@ -48,6 +48,10 @@ _UNNARRATED_EVENT_TYPES = frozenset({
     "DailyNeedChangedEvent", "SkillXPChangedEvent",
 })
 
+# System-visibility events worth narrating back to the actor who caused them (movement is a
+# system event, but you should still see "you moved" feedback for your own command).
+_OWN_ACTION_EVENT_TYPES = frozenset({"ActorMovedEvent"})
+
 # Fields on every ``DomainEvent``; the rest of a serialized event is its specific payload.
 _EVENT_BASE_KEYS = frozenset({
     "event_id", "world_epoch", "created_at", "visibility", "actor_id", "room_id",
@@ -230,17 +234,28 @@ class BunnylandRepl:
             current.add(event_id)
             if event_id in self._seen_event_ids:
                 continue
-            if message.get("data", message).get("event_type") in _UNNARRATED_EVENT_TYPES:
+            event_type = message.get("data", message).get("event_type")
+            if event_type in _UNNARRATED_EVENT_TYPES:
                 continue
-            if self._perceives(event):
+            own_action = (
+                event_type in _OWN_ACTION_EVENT_TYPES
+                and bool(self.player_id)
+                and event.get("actor_id") == self.player_id
+            )
+            if own_action or self._perceives(event):
                 rendered.append(self._render_event(message.get("data", message)))
         self._seen_event_ids = current
         return rendered
 
     def _perceives(self, event: dict) -> bool:
         """Whether the player would perceive an event, by its visibility and scope — room
-        events only in the player's room, directed/private only when they involve them."""
+        events only in the player's room, directed/private only when they involve them.
+        You always perceive your own actions (e.g. a move scoped to the room you just left)."""
         visibility = event.get("visibility")
+        if visibility == "system":
+            return False
+        if self.player_id and event.get("actor_id") == self.player_id:
+            return True
         if visibility == "public":
             return True
         if visibility == "room":

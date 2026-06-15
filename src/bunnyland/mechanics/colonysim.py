@@ -595,33 +595,44 @@ class RoomQualityConsequence:
                     cleanliness += stats.cleanliness
                     comfort += stats.comfort
                     wealth += stats.wealth
-            impressiveness = beauty + cleanliness + comfort + (wealth / 100.0)
+            impressiveness = round(beauty + cleanliness + comfort + (wealth / 100.0), 3)
             existing = (
                 room.get_component(RoomQualityComponent)
                 if room.has_component(RoomQualityComponent)
                 else RoomQualityComponent()
             )
-            updated = RoomQualityComponent(
-                role=role,
-                beauty=beauty,
-                cleanliness=cleanliness,
-                comfort=comfort,
-                impressiveness=round(impressiveness, 3),
-                updated_at_epoch=epoch,
+            # Only react to real quality changes — comparing the whole component would also
+            # see ``updated_at_epoch`` and fire (and churn the component) every single tick.
+            if (
+                existing.role == role
+                and existing.beauty == beauty
+                and existing.cleanliness == cleanliness
+                and existing.comfort == comfort
+                and existing.impressiveness == impressiveness
+            ):
+                continue
+            replace_component(
+                room,
+                RoomQualityComponent(
+                    role=role,
+                    beauty=beauty,
+                    cleanliness=cleanliness,
+                    comfort=comfort,
+                    impressiveness=impressiveness,
+                    updated_at_epoch=epoch,
+                ),
             )
-            if existing != updated:
-                replace_component(room, updated)
-                events.append(
-                    RoomQualityUpdatedEvent(
-                        **_event_base(
-                            epoch,
-                            room_id=str(room.id),
-                            target_ids=(str(room.id),),
-                            room_id_updated=str(room.id),
-                            impressiveness=updated.impressiveness,
-                        )
+            events.append(
+                RoomQualityUpdatedEvent(
+                    **_event_base(
+                        epoch,
+                        room_id=str(room.id),
+                        target_ids=(str(room.id),),
+                        room_id_updated=str(room.id),
+                        impressiveness=impressiveness,
                     )
                 )
+            )
         return events
 
 
