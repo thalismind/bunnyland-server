@@ -537,6 +537,44 @@ async def test_remote_backend_failed_claim_returns_none():
     assert await backend.claim(PLAYER, World.parse(_snapshot())) is None
 
 
+async def test_remote_backend_recent_events_reads_endpoint():
+    class Response:
+        def raise_for_status(self) -> None: ...
+
+        def json(self) -> dict:
+            return {"events": [{"type": "event", "data": {"event_type": "PingEvent"}}]}
+
+    class Client:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        async def get(self, url: str):
+            self.urls.append(url)
+            return Response()
+
+    backend = RemoteBackend("http://server.example")
+    backend._client = Client()
+
+    events = await backend.recent_events()
+
+    assert events == [{"type": "event", "data": {"event_type": "PingEvent"}}]
+    assert backend._client.urls == ["http://server.example/world/events/recent"]
+
+
+async def test_backend_recent_events_defaults_to_empty():
+    assert await RecordingBackend(_snapshot()).recent_events() == []
+
+
+async def test_local_backend_records_recent_events():
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
+    await backend.start()
+    try:
+        events = await backend.recent_events()
+        assert isinstance(events, list)  # world generation may have recorded events
+    finally:
+        await backend.close()
+
+
 async def test_local_backend_rejects_unknown_generator():
     backend = LocalBackend(generator="missing-generator", autorun=False)
 

@@ -83,6 +83,11 @@ class Backend(ABC):
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
         """Return the controller (id, generation) the player should submit commands as."""
 
+    async def recent_events(self) -> list[dict]:
+        """Recent domain-event messages (``{"type": "event", "data": {...}}``) for clients
+        that narrate perceived activity. Backends without an event feed return nothing."""
+        return []
+
 
 class LocalBackend(Backend):
     """Generate an offline world and tick it in-process, the TUI as a real player."""
@@ -110,6 +115,7 @@ class LocalBackend(Backend):
         self._loop = None
         self._task: asyncio.Task | None = None
         self._controller = None
+        self._events = None
         self.client_id = client_id or persistent_client_id()
         self.fallback_controller = fallback_controller
         self.timeout_seconds = timeout_seconds
@@ -128,11 +134,13 @@ class LocalBackend(Backend):
             select,
         )
         from ..prompts.builder import PromptBuilder
+        from ..server.subscriptions import EventStream
         from ..worldgen import GenOptions, collect_generators
 
         plugins = select(list(bunnyland_plugins()), None)
         self.actor = WorldActor()
         apply_plugins(plugins, self.actor)
+        self._events = EventStream(self.actor)  # record events for clients that narrate them
 
         registry = collect_generators(plugins)
         generator = registry.get(self.generator_name)
@@ -184,6 +192,9 @@ class LocalBackend(Backend):
             )
         )
         return True
+
+    async def recent_events(self) -> list[dict]:
+        return self._events.recent_messages() if self._events is not None else []
 
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
         """Hand the character to a single reusable web controller, bumping its generation
@@ -252,6 +263,11 @@ class RemoteBackend(Backend):
     async def submit(self, command: dict) -> bool:
         res = await self._client.post(f"{self.base}/world/commands", json=command)
         return res.is_success
+
+    async def recent_events(self) -> list[dict]:
+        res = await self._client.get(f"{self.base}/world/events/recent")
+        res.raise_for_status()
+        return res.json().get("events", [])
 
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
         res = await self._client.post(

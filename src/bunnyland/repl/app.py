@@ -95,6 +95,7 @@ class BunnylandReplApp(App[None]):
         self.command = ReplInput(
             id="cmd", placeholder="type a command — 'help' for a list, 'quit' to exit"
         )
+        self._refresh_error: str | None = None  # last reported refresh failure, for throttling
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -105,7 +106,7 @@ class BunnylandReplApp(App[None]):
     async def on_mount(self) -> None:
         await self.repl.backend.start()
         self._load_history()
-        await self._safe_refresh()
+        await self._safe_refresh(prime=True)  # seed event history without dumping the backlog
         self.write_log(
             Text(f"Bunnyland REPL · {self.repl.backend.label}. Type 'help', 'quit' to exit.",
                  style="bold")
@@ -121,11 +122,23 @@ class BunnylandReplApp(App[None]):
     def write_log(self, renderable) -> None:
         self.log_view.write(renderable)
 
-    async def _safe_refresh(self) -> None:
+    async def _safe_refresh(self, prime: bool = False) -> None:
         try:
             await self.repl.refresh()
+            events = await self.repl.backend.recent_events()
         except Exception as exc:  # network hiccup, server restart, …
-            self.write_log(Text(f"⚠ {self.repl.backend.label} — {exc}", style="red"))
+            message = f"⚠ {self.repl.backend.label} — {exc}"
+            if message != self._refresh_error:  # report a failure once, not every tick
+                self.write_log(Text(message, style="red"))
+                self._refresh_error = message
+        else:
+            if self._refresh_error is not None:
+                self.write_log(Text(f"✓ {self.repl.backend.label} — reconnected", style="green"))
+                self._refresh_error = None
+            narration = self.repl.drain_events(events)
+            if not prime:  # on the first pass we only seed the seen-set
+                for line in narration:
+                    self.write_log(line)
         self.sub_title = self.repl.status_text()
 
     # ── events ──────────────────────────────────────────────────────────────────

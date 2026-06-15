@@ -93,6 +93,14 @@ Press Tab to complete, in order:
 When several completions are possible the line fills in as far as they agree and the choices
 are listed in the log. `help` completes command names and `play` completes player names.
 
+## Live narration
+
+The log surfaces things happening around you as they occur — speech, movement, and other
+activity your character can perceive in its current room (room-scoped events from elsewhere
+are not shown). High-frequency bookkeeping (point/need changes already in the status bar) is
+suppressed to keep the feed readable. If a `--server` connection drops, the failure is
+reported once and a reconnect is noted when it recovers, rather than repeating every second.
+
 ## History
 
 Up/Down walk previous commands, and history is saved to

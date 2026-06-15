@@ -12,6 +12,7 @@ from bunnyland.repl.app import BunnylandReplApp, ReplInput
 from bunnyland.repl.client import (
     BunnylandRepl,
     ParsedCommand,
+    _humanize_event_type,
     available_generators,
     format_generator_lines,
     link,
@@ -355,6 +356,80 @@ def test_inventory_is_completable():
     assert "inventory" in _repl().complete("inv")
 
 
+def _event(event_id, *, event_type="PingEvent", **fields):
+    return {
+        "type": "event",
+        "data": {"event_type": event_type, "event": {"event_id": event_id, "note": event_id,
+                                                      **fields}},
+    }
+
+
+def test_drain_events_filters_by_perception():
+    repl = _repl()  # the player is in the Parlor
+    messages = [
+        _event("a", visibility="room", room_id=PARLOR, actor_id=MARLOW),
+        _event("b", visibility="room", room_id=HALL, actor_id=MARLOW),
+        _event("c", visibility="public"),
+        _event("d", visibility="directed", actor_id=MARLOW, target_ids=[PLAYER]),
+        _event("e", visibility="directed", actor_id=MARLOW, target_ids=[MARLOW]),
+        _event("f", visibility="private", actor_id=PLAYER),
+        _event("g", visibility="private", actor_id=MARLOW),
+        _event("h", visibility="system"),
+        _event(None, visibility="public"),  # no id: skipped, not repeated
+    ]
+    shown = " | ".join(text.plain for text in repl.drain_events(messages))
+    assert "note a" in shown and "note c" in shown and "note d" in shown and "note f" in shown
+    for hidden in ("note b", "note e", "note g", "note h"):
+        assert hidden not in shown
+
+
+def test_drain_events_skips_telemetry_noise():
+    repl = _repl()
+    messages = [
+        _event("p", event_type="ActionPointsChangedEvent", visibility="private", actor_id=PLAYER),
+        _event("s", event_type="EntitySeenEvent", visibility="private", actor_id=PLAYER),
+        _event("k", event_type="SpokeEvent", visibility="room", room_id=PARLOR, actor_id=MARLOW),
+    ]
+    shown = " | ".join(text.plain for text in repl.drain_events(messages))
+    assert "note k" in shown  # real activity is narrated
+    assert "note p" not in shown and "note s" not in shown  # telemetry is suppressed
+
+
+def test_drain_events_dedupes_already_seen():
+    repl = _repl()
+    first = repl.drain_events([_event("x", visibility="public")])
+    assert len(first) == 1
+    assert repl.drain_events([_event("x", visibility="public")]) == []  # same event, not repeated
+    again = repl.drain_events([_event("x", visibility="public"), _event("y", visibility="public")])
+    assert len(again) == 1 and "note y" in again[0].plain
+
+
+def test_humanize_event_type_splits_camelcase_and_handles_bare():
+    assert _humanize_event_type("ResourceGatheredEvent") == "Resource gathered"
+    assert _humanize_event_type("Event") == ""
+
+
+def test_render_event_humanizes_and_resolves_names():
+    repl = _repl()
+    [text] = repl.drain_events([
+        _event("g1", event_type="GaveEvent", visibility="room", room_id=PARLOR,
+               actor_id=MARLOW, item_id=APPLE, tool_id="ghost", recipient_ids=[PLAYER],
+               witness_ids=["nobody1", "nobody2"]),
+    ])
+    assert text.plain.startswith("Marlow: Gave")
+    assert "an apple" in text.plain and "Pib" in text.plain  # item_id and _ids resolved to names
+    assert "ghost" not in text.plain  # unresolvable id dropped
+    assert "nobody" not in text.plain  # an _ids field with no resolvable names is dropped
+
+
+def test_render_event_without_details_is_just_a_label():
+    repl = _repl()
+    bare = {"type": "event", "data": {"event_type": "WaitedEvent",
+                                      "event": {"event_id": "w1", "visibility": "public"}}}
+    [text] = repl.drain_events([bare])
+    assert text.plain == "Waited"
+
+
 def test_status_text_with_and_without_player():
     repl = _repl()
     status = repl.status_text()
@@ -530,6 +605,56 @@ async def test_app_status_line_updates_as_the_world_advances():
         after = app.sub_title
         assert epoch(after) > epoch(before)  # the clock advances in the status line
         assert ap(after) > ap(before)  # AP/FP track the latest snapshot
+
+
+class NarratingBackend(RecordingBackend):
+    """A backend whose event feed the test controls."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[dict] = []
+
+    async def recent_events(self) -> list[dict]:
+        return self.events
+
+
+async def test_app_narrates_new_perceived_events():
+    app = BunnylandReplApp(NarratingBackend())
+    async with app.run_test():
+        app.repl.player_id = PLAYER  # in the Parlor
+        app.repl.backend.events = [_event("e1", visibility="room", room_id=PARLOR,
+                                          actor_id=MARLOW)]
+        await app._safe_refresh()
+        assert "note e1" in _log_text(app)
+
+
+async def test_app_primes_event_history_without_dumping_backlog():
+    backend = NarratingBackend()
+    backend.events = [_event("old", visibility="public")]  # already in the feed at startup
+    app = BunnylandReplApp(backend)
+    async with app.run_test():
+        assert "note old" not in _log_text(app)  # the backlog is seeded, not printed
+
+
+async def test_app_throttles_repeated_refresh_errors_then_reports_recovery():
+    class FlakyBackend(RecordingBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail = True
+
+        async def fetch_snapshot(self) -> dict:
+            if self.fail:
+                raise RuntimeError("down")
+            return self.snapshot
+
+    app = BunnylandReplApp(FlakyBackend())
+    async with app.run_test():
+        await app._safe_refresh()
+        await app._safe_refresh()
+        assert _log_text(app).count("down") == 1  # reported once, not every tick
+        app.repl.backend.fail = False
+        await app._safe_refresh()
+        assert "reconnected" in _log_text(app)
 
 
 async def test_app_quit_exits():
