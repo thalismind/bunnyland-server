@@ -40,7 +40,7 @@ Use a reachable decontamination station:
 Use rad medicine from your inventory or current room:
 
 ```text
-!use-rad-medicine item_id="rad-away"
+!use item_id="rad-away"
 ```
 
 Both reduce radiation dose, sickness, and radiation mutation pressure.
@@ -60,7 +60,7 @@ chem clears your system (withdrawal). Take the same chem again and the addiction
 Wasteland water is often contaminated. Drinking from a dirty source adds radiation:
 
 ```text
-!drink-water water_id="rad puddle"
+!drink source_id="rad puddle"
 ```
 
 Purify a water source first so it is safe to drink:
@@ -118,7 +118,7 @@ The wasteland is littered with ruined pre-war devices. Scavengers can recover th
 steps. First identify what a device actually is:
 
 ```text
-!identify-tech tech_id="dusty crate"
+!identify target_id="dusty crate"
 ```
 
 Once identified, restore it to working order using scrap you have on hand (each device lists
@@ -162,7 +162,7 @@ settlement salvage:
 Unlock crates, study artifacts, claim faction salvage, and repair field gear:
 
 ```text
-!unlock-crate crate_id="sealed ammo crate"
+!unlock target_id="sealed ammo crate"
 !study-wasteland-artifact artifact_id="vault relic"
 !claim-faction-salvage salvage_id="Minutemen cache"
 !install-mod item_id="pipe rifle" schematic_id="scope schematic"

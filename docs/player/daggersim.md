@@ -264,5 +264,5 @@ Magic services can make potions, recharge enchanted items, and identify ingredie
 ```text
 !make-potion maker_id="guild potionmaker"
 !recharge-enchanted-item item_id="moss charm" service_id="guild enchanter"
-!identify-ingredient ingredient_id="moon sugar"
+!identify target_id="moon sugar"
 ```

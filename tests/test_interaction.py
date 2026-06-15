@@ -83,6 +83,21 @@ def use(scenario, target_id, tool_id=None):
     )
 
 
+def use_item(scenario, item_id, target_id=None):
+    payload = {"item_id": str(item_id)}
+    if target_id is not None:
+        payload["target_id"] = str(target_id)
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="use",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload=payload,
+    )
+
+
 def write(scenario, target_id, text):
     return build_submitted_command(
         character_id=str(scenario.character),
@@ -671,6 +686,22 @@ async def test_use_opens_a_closed_door():
     assert used[0].affordance == "door_opened"
 
 
+async def test_use_item_id_opens_a_closed_door():
+    scenario = interaction_scenario()
+    door = in_room(
+        scenario,
+        [IdentityComponent(name="oak door", kind="door"), DoorComponent(open=False)],
+    )
+    used = collect(scenario.actor, ItemUsedEvent)
+
+    await scenario.actor.submit(use_item(scenario, door.id))
+    await scenario.actor.tick(HOUR)
+
+    assert door.get_component(DoorComponent).open is True
+    assert used[0].item_id == str(door.id)
+    assert used[0].target_ids == (str(door.id),)
+
+
 async def test_use_locked_door_without_key_is_rejected():
     scenario = interaction_scenario()
     door = in_room(
@@ -715,6 +746,31 @@ async def test_use_key_unlocks_then_door_opens():
     assert door.get_component(DoorComponent).open is True
 
 
+async def test_use_item_id_key_on_locked_door_unlocks():
+    scenario = interaction_scenario()
+    door = in_room(
+        scenario,
+        [
+            IdentityComponent(name="vault door", kind="door"),
+            DoorComponent(open=False),
+            LockableComponent(locked=True, key_name="brass"),
+        ],
+    )
+    key = in_inventory(
+        scenario,
+        [IdentityComponent(name="brass key", kind="key"), KeyComponent(key_name="brass")],
+    )
+    used = collect(scenario.actor, ItemUsedEvent)
+
+    await scenario.actor.submit(use_item(scenario, key.id, target_id=door.id))
+    await scenario.actor.tick(HOUR)
+
+    assert door.get_component(LockableComponent).locked is False
+    assert used[0].item_id == str(key.id)
+    assert used[0].tool_id == str(key.id)
+    assert used[0].target_ids == (str(door.id), str(key.id))
+
+
 async def test_use_button_presses_it():
     scenario = interaction_scenario()
     button = in_room(
@@ -731,6 +787,7 @@ async def test_use_button_presses_it():
 def test_use_rejects_invalid_missing_and_unreachable_targets():
     scenario = interaction_scenario()
     target = in_room(scenario, [IdentityComponent(name="lever", kind="button"), ButtonComponent()])
+    item = in_inventory(scenario, [IdentityComponent(name="brass key", kind="key")])
     far = spawn_entity(
         scenario.actor.world,
         [IdentityComponent(name="far lever", kind="button"), ButtonComponent()],
@@ -748,6 +805,14 @@ def test_use_rejects_invalid_missing_and_unreachable_targets():
     )
     assert execute_use(scenario, "entity_999").reason == "target does not exist"
     assert execute_use(scenario, far.id).reason == "target is not reachable"
+
+    ctx = handler_context(scenario)
+    assert UseHandler().execute(
+        ctx, use_item(scenario, item.id, target_id="entity_999")
+    ).reason == "target does not exist"
+    assert UseHandler().execute(
+        ctx, use_item(scenario, item.id, target_id=far.id)
+    ).reason == "target is not reachable"
 
 
 def test_use_rejects_unreachable_tool_and_wrong_key():

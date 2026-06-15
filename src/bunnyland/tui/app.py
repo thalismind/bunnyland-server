@@ -256,10 +256,10 @@ class BunnylandTUI(App[None]):
         self._render_room()
 
     @on(OptionList.OptionSelected, "#verbs")
-    async def _verb_selected(self, event: OptionList.OptionSelected) -> None:
+    def _verb_selected(self, event: OptionList.OptionSelected) -> None:
         verb = next((v for v in ACTION_VERBS if v.tool == event.option.id), None)
         if verb:
-            await self._do_verb(verb)
+            self.run_worker(self._do_verb(verb), exclusive=True)
 
     # ── actions ─────────────────────────────────────────────────────────────────
     async def _do_verb(self, verb: Verb) -> None:

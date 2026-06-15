@@ -17,7 +17,7 @@ eggs, products, ranch work, and guard duty, see
 Identify a reachable fossil by species:
 
 ```text
-!identify-fossil fossil_id="amber bone shard" species_name="velociraptor"
+!identify target_id="amber bone shard" species_name="velociraptor"
 ```
 
 Identified fossils record a `SpeciesIdentificationComponent` with the chosen species and
@@ -231,9 +231,9 @@ Collect eggs into inventory or harvest products from a reachable creature:
 
 ```text
 !collect-egg egg_id="velociraptor egg"
-!harvest-product creature_id="clever raptor" product_type="milk"
-!harvest-product creature_id="clever raptor" product_type="toxin"
-!harvest-product creature_id="clever raptor" product_type="hide"
+!harvest target_id="clever raptor" product_type="milk"
+!harvest target_id="clever raptor" product_type="toxin"
+!harvest target_id="clever raptor" product_type="hide"
 ```
 
 Assign ranch labor or guard duty to a creature:
@@ -260,7 +260,7 @@ Survey, excavate, clean, and stabilize a reachable fossil:
 Inspect and incubate eggs, including lab and brooding support:
 
 ```text
-!inspect-egg egg_id="velociraptor egg" viability=0.9
+!inspect target_id="velociraptor egg" viability=0.9
 !lab-incubate-egg egg_id="velociraptor egg" lab_id="Amber Hatchery Lab"
 !brood-egg egg_id="velociraptor egg" warmth=1
 !set-incubation-temperature egg_id="velociraptor egg" temperature=31
@@ -300,14 +300,14 @@ encounters, but it does not assume settlement damage or colony job queues exist.
 ## Example loop
 
 ```text
-!identify-fossil fossil_id="amber bone shard" species_name="velociraptor"
+!identify target_id="amber bone shard" species_name="velociraptor"
 !survey-fossil fossil_id="amber bone shard"
 !excavate-fossil fossil_id="amber bone shard" progress=0.5
 !clean-fossil fossil_id="amber bone shard"
 !stabilize-fossil fossil_id="amber bone shard"
 !extract-ancient-sample fossil_id="amber bone shard"
 !prepare-clone sample_id="velociraptor ancient sample"
-!inspect-egg egg_id="velociraptor egg" viability=0.9
+!inspect target_id="velociraptor egg" viability=0.9
 !incubate-egg egg_id="velociraptor egg"
 !set-incubation-temperature egg_id="velociraptor egg" temperature=31
 !hatch-egg egg_id="velociraptor egg"
@@ -326,7 +326,7 @@ encounters, but it does not assume settlement damage or colony job queues exist.
 !target-weak-point creature_id="clever raptor" damage=2
 !repair-damage damage_id="damaged gatehouse" amount=2
 !stock-feed feed_store_id="Fern Paddock" amount=5
-!harvest-product creature_id="clever raptor" product_type="milk"
+!harvest target_id="clever raptor" product_type="milk"
 !assign-guard creature_id="clever raptor" location_id="Fern Paddock"
 !lock-pen enclosure_id="Fern Paddock"
 !resolve-incident incident_id="kaiju attack"

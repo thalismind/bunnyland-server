@@ -35,7 +35,7 @@
     },
     {
       "tick": 31,
-      "content": "!harvest-crop garden bed",
+      "content": "!harvest garden bed",
       "expect": ["Crop harvested: soil garden bed; crop type radish; item radish x2; quantity 2."]
     },
     {

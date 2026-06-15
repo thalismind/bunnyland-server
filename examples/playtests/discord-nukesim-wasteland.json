@@ -9,6 +9,6 @@
     {"tick": 3, "content": "!scavenge site_id=\"pharmacy cache\""},
     {"tick": 4, "content": "!scrap-item item_id=\"bent pressure cooker\""},
     {"tick": 5, "content": "!decontaminate station_id=\"decon arch\""},
-    {"tick": 6, "content": "!use-rad-medicine item_id=\"rad-away\""}
+    {"tick": 6, "content": "!use item_id=\"rad-away\""}
   ]
 }

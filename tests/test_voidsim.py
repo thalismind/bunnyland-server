@@ -165,6 +165,7 @@ from bunnyland.mechanics.voidsim import (
     ShipComponent,
     ShipSystemComponent,
     ShipSystemDamagedEvent,
+    ShipSystemInspectedEvent,
     ShipSystemRepairedEvent,
     ShipUpgradeComponent,
     SignalDetectedEvent,
@@ -451,7 +452,7 @@ def test_voidsim_parity_handlers_mutate_state_directly():
         ),
         (
             InspectCustomsHandler(),
-            "inspect-customs",
+            "inspect",
             {"hold_id": str(hold_id), "contraband_found": True},
             CustomsInspectedEvent,
         ),
@@ -534,7 +535,7 @@ def test_voidsim_parity_handlers_reject_invalid_targets_directly():
         (DeliverPassengerHandler(), "deliver-passenger", {"passenger_id": fake}),
         (SurveySiteHandler(), "survey-site", {"site_id": fake}),
         (MineAsteroidHandler(), "mine-asteroid", {"site_id": fake}),
-        (InspectCustomsHandler(), "inspect-customs", {"hold_id": fake}),
+        (InspectCustomsHandler(), "inspect", {"hold_id": fake}),
         (
             SearchSmugglingCompartmentHandler(),
             "search-smuggling-compartment",
@@ -914,7 +915,7 @@ def test_voidsim_ship_system_handlers_reject_invalid_targets_and_payloads():
         ),
         (
             InspectShipSystemHandler(),
-            _handler_cmd(scenario, "inspect-ship-system", system_id=str(wrong_kind_id)),
+            _handler_cmd(scenario, "inspect", system_id=str(wrong_kind_id)),
             "target is the wrong kind",
         ),
         (
@@ -1040,7 +1041,7 @@ def test_voidsim_handlers_reject_invalid_character_ids_directly():
         ),
         (
             InspectShipSystemHandler(),
-            "inspect-ship-system",
+            "inspect",
             {"system_id": str(scenario.room_a)},
         ),
         (
@@ -1594,11 +1595,14 @@ async def test_inspect_ship_system_is_accepted():
         ],
     )
     rejects: list[CommandRejectedEvent] = []
+    inspected: list[ShipSystemInspectedEvent] = []
     scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
+    scenario.actor.bus.subscribe(ShipSystemInspectedEvent, inspected.append)
 
-    await scenario.actor.submit(_cmd(scenario, "inspect-ship-system", system_id=str(system_id)))
+    await scenario.actor.submit(_cmd(scenario, "inspect", system_id=str(system_id)))
     await scenario.actor.tick(HOUR)
     assert rejects == []
+    assert inspected and inspected[0].system_type == "engines"
 
 
 async def test_evacuate_module_moves_characters_to_destination():

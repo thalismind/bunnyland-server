@@ -50,6 +50,14 @@ from .lifesim import AgeComponent, LifeStageComponent
 
 DEFAULT_INCUBATION_SECONDS = 24 * 60 * 60
 
+
+def _payload_entity_id(command: SubmittedCommand, *keys: str):
+    for key in keys:
+        if key in command.payload:
+            return parse_entity_id(command.payload.get(key))
+    return None
+
+
 _KAIJU_NAMES = (
     "rampaging kaiju alpha",
     "rampaging kaiju beta",
@@ -1567,11 +1575,19 @@ class EscapeRiskConsequence:
 
 
 class IdentifyFossilHandler:
-    command_type = "identify-fossil"
+    command_type = "identify"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "fossil_id" in command.payload:
+            return True
+        fossil_id = _payload_entity_id(command, "fossil_id", "target_id")
+        return fossil_id is not None and ctx.world.has_entity(fossil_id) and ctx.entity(
+            fossil_id
+        ).has_component(FossilFragmentComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        fossil_id = parse_entity_id(command.payload.get("fossil_id"))
+        fossil_id = _payload_entity_id(command, "fossil_id", "target_id")
         species_name = str(command.payload.get("species_name", "")).strip()
         if character_id is None or fossil_id is None or not species_name:
             return rejected("invalid character, fossil, or species name")
@@ -2059,11 +2075,19 @@ class LabIncubateEggHandler:
 
 
 class InspectEggHandler:
-    command_type = "inspect-egg"
+    command_type = "inspect"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "egg_id" in command.payload:
+            return True
+        egg_id = _payload_entity_id(command, "egg_id", "target_id")
+        return egg_id is not None and ctx.world.has_entity(egg_id) and ctx.entity(
+            egg_id
+        ).has_component(EggComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        egg_id = parse_entity_id(command.payload.get("egg_id"))
+        egg_id = _payload_entity_id(command, "egg_id", "target_id")
         if character_id is None or egg_id is None:
             return rejected("invalid character or egg id")
         egg = _reachable_entity(ctx.world, character_id, egg_id)
@@ -3668,13 +3692,27 @@ class CollectEggHandler:
 
 
 class HarvestProductHandler:
-    command_type = "harvest-product"
+    command_type = "harvest"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "creature_id" in command.payload:
+            return True
+        creature_id = _payload_entity_id(command, "creature_id", "target_id")
+        return creature_id is not None and ctx.world.has_entity(creature_id) and (
+            ctx.entity(creature_id).has_component(CreatureProductComponent)
+            or ctx.entity(creature_id).has_component(CreatureMilkComponent)
+            or ctx.entity(creature_id).has_component(ToxinComponent)
+            or ctx.entity(creature_id).has_component(HideComponent)
+            or ctx.entity(creature_id).has_component(BoneComponent)
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
+        creature, error = _reachable_creature(
+            ctx, character_id, _payload_entity_id(command, "creature_id", "target_id")
+        )
         if creature is None:
             return rejected(error if error else "creature is required")
         product_type = str(command.payload.get("product_type") or "").strip().lower()

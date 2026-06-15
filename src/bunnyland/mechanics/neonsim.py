@@ -56,6 +56,33 @@ SCRIP_RESOURCE = "scrip"
 SECONDS_PER_HOUR = 60 * 60
 
 
+def _payload_entity_id(command: SubmittedCommand, *keys: str):
+    for key in keys:
+        if key in command.payload:
+            return parse_entity_id(command.payload.get(key))
+    return None
+
+
+def _can_handle_target_component(
+    ctx: HandlerContext,
+    command: SubmittedCommand,
+    component_type: type[Component],
+    *keys: str,
+) -> bool:
+    payload = command.payload
+    if any(key != "target_id" and key in payload for key in keys):
+        return True
+    target_id = _payload_entity_id(command, *keys)
+    if target_id is None or not ctx.world.has_entity(target_id):
+        return any(key in payload for key in keys)
+    character_id = parse_entity_id(command.character_id)
+    if character_id is None or not ctx.world.has_entity(character_id):
+        return True
+    if target_id not in reachable_ids(ctx.world, ctx.entity(character_id)):
+        return True
+    return ctx.entity(target_id).has_component(component_type)
+
+
 # --- Edges ---------------------------------------------------------------------------
 
 
@@ -488,14 +515,22 @@ class ShowCredentialsHandler:
 
 
 class BribeCheckpointHandler:
-    command_type = "bribe-checkpoint"
+    command_type = "bribe"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        return _can_handle_target_component(
+            ctx, command, CheckpointComponent, "target_id", "checkpoint_id"
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         checkpoint, error = _reachable_component(
-            ctx, character_id, command.payload.get("target_id"), CheckpointComponent
+            ctx,
+            character_id,
+            _payload_entity_id(command, "target_id", "checkpoint_id"),
+            CheckpointComponent,
         )
         if checkpoint is None:
             return rejected(error if error else "target is not a checkpoint")
@@ -534,14 +569,22 @@ class BribeCheckpointHandler:
 
 
 class SneakCheckpointHandler:
-    command_type = "sneak-through-checkpoint"
+    command_type = "sneak"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        return _can_handle_target_component(
+            ctx, command, CheckpointComponent, "target_id", "checkpoint_id"
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         checkpoint, error = _reachable_component(
-            ctx, character_id, command.payload.get("target_id"), CheckpointComponent
+            ctx,
+            character_id,
+            _payload_entity_id(command, "target_id", "checkpoint_id"),
+            CheckpointComponent,
         )
         if checkpoint is None:
             return rejected(error if error else "target is not a checkpoint")
@@ -865,13 +908,20 @@ class SurveillanceConsequence:
 
 
 class InspectDeviceHandler:
-    command_type = "inspect-device"
+    command_type = "inspect"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        return _can_handle_target_component(
+            ctx, command, DeviceComponent, "target_id", "device_id"
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        device, error = _reachable_device(ctx, character_id, command.payload.get("target_id"))
+        device, error = _reachable_device(
+            ctx, character_id, _payload_entity_id(command, "target_id", "device_id")
+        )
         if device is None:
             return rejected(error if error else "target is not a device")
         dev = device.get_component(DeviceComponent)
@@ -1644,14 +1694,22 @@ class SabotageSystemHandler:
 
 
 class UnlockDoorHandler:
-    command_type = "unlock-door"
+    command_type = "unlock"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        return _can_handle_target_component(
+            ctx, command, HackableComponent, "target_id", "device_id"
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         device, error = _reachable_component(
-            ctx, character_id, command.payload.get("target_id"), LockableComponent
+            ctx,
+            character_id,
+            _payload_entity_id(command, "target_id", "device_id"),
+            LockableComponent,
         )
         if device is None:
             return rejected(error if error else "target has no electronic lock")

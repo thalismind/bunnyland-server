@@ -34,6 +34,13 @@ from ..prompts import ComponentPromptContext
 from .history import DeedReputationComponent
 
 
+def _payload_entity_id(command: SubmittedCommand, *keys: str):
+    for key in keys:
+        if key in command.payload:
+            return parse_entity_id(command.payload.get(key))
+    return None
+
+
 @dataclass(frozen=True)
 class ProceduralSiteComponent(Component):
     site_type: str
@@ -3099,11 +3106,19 @@ class RechargeEnchantedItemHandler:
 
 
 class IdentifyIngredientHandler:
-    command_type = "identify-ingredient"
+    command_type = "identify"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "ingredient_id" in command.payload:
+            return True
+        ingredient_id = _payload_entity_id(command, "ingredient_id", "target_id")
+        return ingredient_id is not None and ctx.world.has_entity(ingredient_id) and ctx.entity(
+            ingredient_id
+        ).has_component(IngredientComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        ingredient_id = parse_entity_id(command.payload.get("ingredient_id"))
+        ingredient_id = _payload_entity_id(command, "ingredient_id", "target_id")
         if character_id is None or ingredient_id is None:
             return rejected("invalid character or ingredient id")
         if not ctx.world.has_entity(ingredient_id):

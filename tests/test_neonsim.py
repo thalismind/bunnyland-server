@@ -680,7 +680,7 @@ async def test_show_credentials_denied_without_clearance():
     assert denied[0].requirement == 2
 
 
-# --- bribe-guard ---------------------------------------------------------------------
+# --- bribe ---------------------------------------------------------------------
 
 
 async def test_bribe_guard_spends_scrip_and_passes():
@@ -696,7 +696,7 @@ async def test_bribe_guard_spends_scrip_and_passes():
     passed: list[CheckpointPassedEvent] = []
     scenario.actor.bus.subscribe(CheckpointPassedEvent, passed.append)
 
-    await scenario.actor.submit(_cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    await scenario.actor.submit(_cmd(scenario, "bribe", target_id=str(gate)))
     await scenario.actor.tick(1.0)
 
     assert passed[0].method == "bribe"
@@ -712,7 +712,7 @@ async def test_bribe_guard_consumes_full_scrip_stack():
         scenario, "toll booth", "checkpoint", [CheckpointComponent(bribe_cost=30)]
     )
 
-    await scenario.actor.submit(_cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    await scenario.actor.submit(_cmd(scenario, "bribe", target_id=str(gate)))
     await scenario.actor.tick(1.0)
 
     assert container_of(scenario.actor.world.get_entity(scrip)) is None
@@ -729,14 +729,14 @@ async def test_bribe_guard_clears_alert():
         [CheckpointComponent(bribe_cost=30, alerted=True)],
     )
 
-    await scenario.actor.submit(_cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    await scenario.actor.submit(_cmd(scenario, "bribe", target_id=str(gate)))
     await scenario.actor.tick(1.0)
 
     gate_state = scenario.actor.world.get_entity(gate).get_component(CheckpointComponent)
     assert gate_state.alerted is False
 
 
-# --- sneak-through-checkpoint --------------------------------------------------------
+# --- sneak --------------------------------------------------------
 
 
 async def test_sneak_through_calm_checkpoint_succeeds():
@@ -749,7 +749,7 @@ async def test_sneak_through_calm_checkpoint_succeeds():
     scenario.actor.bus.subscribe(CheckpointPassedEvent, passed.append)
 
     await scenario.actor.submit(
-        _cmd(scenario, "sneak-through-checkpoint", target_id=str(gate))
+        _cmd(scenario, "sneak", target_id=str(gate))
     )
     await scenario.actor.tick(1.0)
 
@@ -965,8 +965,8 @@ def test_handlers_reject_invalid_character_ids_directly():
     cases = [
         (EnterDistrictHandler(), "enter-district"),
         (ShowCredentialsHandler(), "show-credentials"),
-        (BribeCheckpointHandler(), "bribe-checkpoint"),
-        (SneakCheckpointHandler(), "sneak-through-checkpoint"),
+        (BribeCheckpointHandler(), "bribe"),
+        (SneakCheckpointHandler(), "sneak"),
         (ClaimSafehouseHandler(), "claim-safehouse"),
         (CaseLocationHandler(), "case-location"),
     ]
@@ -1015,15 +1015,15 @@ async def test_bribe_guard_rejects_non_checkpoint():
     scenario = build_scenario()
     _install(scenario.actor)
     site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
-    rejects = await _reject(scenario, _cmd(scenario, "bribe-checkpoint", target_id=str(site)))
-    assert any("wrong kind" in event.reason for event in rejects)
+    rejects = await _reject(scenario, _cmd(scenario, "bribe", target_id=str(site)))
+    assert any("no handler accepted bribe" in event.reason for event in rejects)
 
 
 async def test_bribe_guard_rejects_checkpoint_without_bribe_cost():
     scenario = build_scenario()
     _install(scenario.actor)
     gate = _room_entity(scenario, "gate", "checkpoint", [CheckpointComponent(bribe_cost=0)])
-    rejects = await _reject(scenario, _cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    rejects = await _reject(scenario, _cmd(scenario, "bribe", target_id=str(gate)))
     assert any("no guard to bribe" in event.reason for event in rejects)
 
 
@@ -1032,7 +1032,7 @@ async def test_bribe_guard_rejects_without_enough_scrip():
     _install(scenario.actor)
     _give_scrip(scenario, 10)
     gate = _room_entity(scenario, "gate", "checkpoint", [CheckpointComponent(bribe_cost=30)])
-    rejects = await _reject(scenario, _cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    rejects = await _reject(scenario, _cmd(scenario, "bribe", target_id=str(gate)))
     assert any("not enough scrip" in event.reason for event in rejects)
 
 
@@ -1040,7 +1040,7 @@ async def test_bribe_guard_rejects_with_no_scrip_at_all():
     scenario = build_scenario()
     _install(scenario.actor)
     gate = _room_entity(scenario, "gate", "checkpoint", [CheckpointComponent(bribe_cost=30)])
-    rejects = await _reject(scenario, _cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    rejects = await _reject(scenario, _cmd(scenario, "bribe", target_id=str(gate)))
     assert any("not enough scrip" in event.reason for event in rejects)
 
 
@@ -1050,9 +1050,9 @@ async def test_sneak_rejects_non_checkpoint():
     _install(scenario.actor)
     site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
     rejects = await _reject(
-        scenario, _cmd(scenario, "sneak-through-checkpoint", target_id=str(site))
+        scenario, _cmd(scenario, "sneak", target_id=str(site))
     )
-    assert any("wrong kind" in event.reason for event in rejects)
+    assert any("no handler accepted sneak" in event.reason for event in rejects)
 
 
 async def test_sneak_rejects_alerted_checkpoint():
@@ -1062,7 +1062,7 @@ async def test_sneak_rejects_alerted_checkpoint():
         scenario, "gate", "checkpoint", [CheckpointComponent(clearance_required=2, alerted=True)]
     )
     rejects = await _reject(
-        scenario, _cmd(scenario, "sneak-through-checkpoint", target_id=str(gate))
+        scenario, _cmd(scenario, "sneak", target_id=str(gate))
     )
     assert any("watching too closely" in event.reason for event in rejects)
 
@@ -1073,7 +1073,7 @@ async def test_sneak_rejects_when_already_cleared():
     _give_clearance(scenario, clearance=5)
     gate = _room_entity(scenario, "gate", "checkpoint", [CheckpointComponent(clearance_required=2)])
     rejects = await _reject(
-        scenario, _cmd(scenario, "sneak-through-checkpoint", target_id=str(gate))
+        scenario, _cmd(scenario, "sneak", target_id=str(gate))
     )
     assert any("show credentials" in event.reason for event in rejects)
 
@@ -1151,7 +1151,7 @@ async def test_bribe_skips_non_scrip_inventory_items():
         scenario, "ammo x5", "resource", [ResourceStackComponent(resource_type="ammo", quantity=5)]
     )
     gate = _room_entity(scenario, "gate", "checkpoint", [CheckpointComponent(bribe_cost=10)])
-    rejects = await _reject(scenario, _cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    rejects = await _reject(scenario, _cmd(scenario, "bribe", target_id=str(gate)))
     assert any("not enough scrip" in event.reason for event in rejects)
 
 
@@ -1211,7 +1211,7 @@ async def test_inspect_device_reports_state():
     seen: list[DeviceInspectedEvent] = []
     scenario.actor.bus.subscribe(DeviceInspectedEvent, seen.append)
 
-    await scenario.actor.submit(_cmd(scenario, "inspect-device", target_id=str(cam)))
+    await scenario.actor.submit(_cmd(scenario, "inspect", target_id=str(cam)))
     await scenario.actor.tick(1.0)
 
     assert seen[0].device_type == "camera"
@@ -1423,7 +1423,7 @@ def test_device_handlers_reject_invalid_character_ids_directly():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     target = str(scenario.room_a)
     cases = [
-        (InspectDeviceHandler(), "inspect-device"),
+        (InspectDeviceHandler(), "inspect"),
         (DisableCameraHandler(), "disable-camera"),
         (LoopCameraHandler(), "loop-camera"),
         (JamSensorHandler(), "jam-sensor"),
@@ -1442,8 +1442,8 @@ async def test_inspect_device_rejects_non_device():
     scenario = build_scenario()
     _install(scenario.actor)
     site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
-    rejects = await _reject(scenario, _cmd(scenario, "inspect-device", target_id=str(site)))
-    assert any("wrong kind" in event.reason for event in rejects)
+    rejects = await _reject(scenario, _cmd(scenario, "inspect", target_id=str(site)))
+    assert any("no handler accepted inspect" in event.reason for event in rejects)
 
 
 async def test_disable_camera_rejects_non_camera():
@@ -1843,7 +1843,7 @@ async def test_unlock_door_after_breach():
     unlocked: list[DoorUnlockedEvent] = []
     scenario.actor.bus.subscribe(DoorUnlockedEvent, unlocked.append)
 
-    await scenario.actor.submit(_cmd(scenario, "unlock-door", target_id=str(door)))
+    await scenario.actor.submit(_cmd(scenario, "unlock", target_id=str(door)))
     await scenario.actor.tick(1.0)
 
     assert unlocked[0].device_id == str(door)
@@ -1947,7 +1947,7 @@ def test_hacking_handlers_reject_invalid_character_ids_directly():
         (InstallBackdoorHandler(), "install-backdoor"),
         (ExfiltrateDataHandler(), "exfiltrate-data"),
         (SabotageSystemHandler(), "sabotage-system"),
-        (UnlockDoorHandler(), "unlock-door"),
+        (UnlockDoorHandler(), "unlock"),
         (EvadeTraceHandler(), "evade-trace"),
         (SpoofIdentityHandler(), "spoof-identity"),
     ]
@@ -2066,7 +2066,7 @@ async def test_unlock_door_rejects_when_already_unlocked():
         breached=True,
         extra=[LockableComponent(locked=False)],
     )
-    rejects = await _reject(scenario, _cmd(scenario, "unlock-door", target_id=str(door)))
+    rejects = await _reject(scenario, _cmd(scenario, "unlock", target_id=str(door)))
     assert any("already unlocked" in event.reason for event in rejects)
 
 
@@ -2074,8 +2074,8 @@ async def test_unlock_door_rejects_non_network_lock():
     scenario = build_scenario()
     _install(scenario.actor)
     chest = _room_entity(scenario, "footlocker", "container", [LockableComponent(locked=True)])
-    rejects = await _reject(scenario, _cmd(scenario, "unlock-door", target_id=str(chest)))
-    assert any("not a network device" in event.reason for event in rejects)
+    rejects = await _reject(scenario, _cmd(scenario, "unlock", target_id=str(chest)))
+    assert any("no handler accepted unlock" in event.reason for event in rejects)
 
 
 async def test_evade_trace_rejects_without_active_trace():
@@ -2108,7 +2108,7 @@ async def test_device_and_hacking_handlers_reject_wrong_kind_targets():
         "install-backdoor": "wrong kind",
         "exfiltrate-data": "wrong kind",
         "sabotage-system": "wrong kind",
-        "unlock-door": "wrong kind",
+        "unlock": "no handler accepted unlock",
     }
     for command_type, fragment in cases.items():
         rejects = await _reject(scenario, _cmd(scenario, command_type, target_id=target))
@@ -2150,11 +2150,11 @@ async def test_trace_partially_decrements_without_alarm():
 TARGET_COMMANDS = (
     "enter-district",
     "show-credentials",
-    "bribe-checkpoint",
-    "sneak-through-checkpoint",
+    "bribe",
+    "sneak",
     "claim-safehouse",
     "case-location",
-    "inspect-device",
+    "inspect",
     "disable-camera",
     "loop-camera",
     "jam-sensor",
@@ -2169,7 +2169,7 @@ TARGET_COMMANDS = (
     "install-backdoor",
     "exfiltrate-data",
     "sabotage-system",
-    "unlock-door",
+    "unlock",
     "buy-contraband",
     "call-favor",
     "post-bounty",
@@ -2214,7 +2214,7 @@ async def test_bribe_skips_stale_inventory_edge():
     # skip the stale edge and still find no spendable scrip.
     scenario.actor.world.remove(scrip)
     gate = _room_entity(scenario, "gate", "checkpoint", [CheckpointComponent(bribe_cost=30)])
-    rejects = await _reject(scenario, _cmd(scenario, "bribe-checkpoint", target_id=str(gate)))
+    rejects = await _reject(scenario, _cmd(scenario, "bribe", target_id=str(gate)))
     assert any("not enough scrip" in event.reason for event in rejects)
 
 
@@ -2699,7 +2699,7 @@ async def test_unlock_door_rejects_when_not_breached():
     door = _hackable(
         scenario, "mag lock", device_type="lock", extra=[LockableComponent(locked=True)]
     )
-    rejects = await _reject(scenario, _cmd(scenario, "unlock-door", target_id=str(door)))
+    rejects = await _reject(scenario, _cmd(scenario, "unlock", target_id=str(door)))
     assert any("breach the system first" in event.reason for event in rejects)
 
 

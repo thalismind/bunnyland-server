@@ -78,6 +78,7 @@ from bunnyland.mechanics.nukesim import (
     RadiationSourceComponent,
     RadiationSourceSealedEvent,
     RadMedicineComponent,
+    RadMedicineUsedEvent,
     RadProtectionComponent,
     RaiderPressureChangedEvent,
     RaiderPressureComponent,
@@ -322,7 +323,7 @@ def test_nukesim_parity_handlers_mutate_state_directly():
             {"sample_id": str(sample_id)},
             SampleStudiedEvent,
         ),
-        (UnlockCrateHandler(), "unlock-crate", {"crate_id": str(crate_id)}, CrateUnlockedEvent),
+        (UnlockCrateHandler(), "unlock", {"crate_id": str(crate_id)}, CrateUnlockedEvent),
         (
             StudyWastelandArtifactHandler(),
             "study-wasteland-artifact",
@@ -434,7 +435,7 @@ def test_nukesim_parity_handlers_reject_invalid_targets_directly():
         ),
         (
             UnlockCrateHandler(),
-            "unlock-crate",
+            "unlock",
             {"crate_id": fake},
             "invalid character id",
             "target does not exist",
@@ -630,8 +631,10 @@ async def test_scan_decontaminate_and_rad_medicine_reduce_radiation_state():
     )
     scanned: list[RadiationScannedEvent] = []
     decon: list[DecontaminationAppliedEvent] = []
+    used: list[RadMedicineUsedEvent] = []
     scenario.actor.bus.subscribe(RadiationScannedEvent, scanned.append)
     scenario.actor.bus.subscribe(DecontaminationAppliedEvent, decon.append)
+    scenario.actor.bus.subscribe(RadMedicineUsedEvent, used.append)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(RadiationDoseComponent(amount=4.0))
     character.add_component(RadiationSicknessComponent(severity=3.0))
@@ -647,13 +650,43 @@ async def test_scan_decontaminate_and_rad_medicine_reduce_radiation_state():
         )
     )
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(_cmd(scenario, "use-rad-medicine", item_id=str(meds)))
+    await scenario.actor.submit(_cmd(scenario, "use", item_id=str(meds)))
     await scenario.actor.tick(HOUR)
 
     assert scanned[0].source_type == "fallout hotspot"
     assert decon[0].dose >= 0.0
     assert character.get_component(RadiationDoseComponent).amount == 1.0
     assert character.get_component(RadiationMutationPressureComponent).amount == 1.0
+    assert used and used[0].item_id == str(meds)
+    assert used[0].target_id == str(scenario.character)
+
+
+async def test_use_rad_medicine_item_id_targets_reachable_patient():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    patient = _room_entity(
+        scenario,
+        "Clover",
+        "character",
+        [RadiationDoseComponent(amount=5.0), RadiationSicknessComponent(severity=2.0)],
+    )
+    meds = _inventory_entity(
+        scenario,
+        "rad-away",
+        "medicine",
+        [RadMedicineComponent(dose_reduction=3.0, sickness_reduction=1.0)],
+    )
+    used: list[RadMedicineUsedEvent] = []
+    scenario.actor.bus.subscribe(RadMedicineUsedEvent, used.append)
+
+    await scenario.actor.submit(_cmd(scenario, "use", item_id=str(meds), target_id=str(patient)))
+    await scenario.actor.tick(HOUR)
+
+    patient_entity = scenario.actor.world.get_entity(patient)
+    assert patient_entity.get_component(RadiationDoseComponent).amount == 2.0
+    assert patient_entity.get_component(RadiationSicknessComponent).severity == 1.0
+    assert used and used[0].item_id == str(meds)
+    assert used[0].target_id == str(patient)
 
 
 async def test_mutation_manifests_when_pressure_crosses_threshold_and_can_stabilize():
@@ -861,7 +894,7 @@ def test_nukesim_handlers_reject_invalid_character_ids_directly():
             {"target_id": str(scenario.room_a)},
         ),
         (DecontaminateHandler(), "decontaminate", {}),
-        (UseRadMedicineHandler(), "use-rad-medicine", {"item_id": str(scenario.room_a)}),
+        (UseRadMedicineHandler(), "use", {"item_id": str(scenario.room_a)}),
         (ScavengeHandler(), "scavenge", {"site_id": str(scenario.room_a)}),
         (ScrapItemHandler(), "scrap-item", {"item_id": str(scenario.room_a)}),
         (StabilizeMutationHandler(), "stabilize-mutation", {}),
@@ -924,7 +957,7 @@ def test_nukesim_handlers_reject_missing_and_wrong_kind_targets_directly():
         ),
         (
             UseRadMedicineHandler(),
-            _handler_cmd(scenario, "use-rad-medicine", item_id="entity_999"),
+            _handler_cmd(scenario, "use", item_id="entity_999"),
             "target does not exist",
         ),
         (
@@ -1011,17 +1044,17 @@ def test_nukesim_handlers_reject_unreachable_targets_directly():
         (
             DecontaminateHandler(),
             _handler_cmd(
-                scenario,
-                "decontaminate",
-                target_id=str(distant_patient.id),
-                station_id=str(distant_meds),
+                    scenario,
+                    "decontaminate",
+                    target_id=str(distant_patient.id),
+                    station_id=str(distant_station.id),
+                ),
             ),
-        ),
         (
             UseRadMedicineHandler(),
             _handler_cmd(
                 scenario,
-                "use-rad-medicine",
+                "use",
                 item_id=str(distant_meds),
                 target_id=str(distant_patient.id),
             ),
@@ -1080,7 +1113,7 @@ def test_nukesim_handlers_reject_spent_empty_and_invalid_states_directly():
         ),
         (
             UseRadMedicineHandler(),
-            _handler_cmd(scenario, "use-rad-medicine", item_id=str(spent_meds)),
+            _handler_cmd(scenario, "use", item_id=str(spent_meds)),
             "rad medicine is spent",
         ),
         (
@@ -1160,7 +1193,7 @@ async def test_identify_then_restore_old_world_tech_consumes_scrap():
     scenario.actor.bus.subscribe(OldWorldTechIdentifiedEvent, identified.append)
     scenario.actor.bus.subscribe(OldWorldTechRestoredEvent, restored.append)
 
-    await scenario.actor.submit(_cmd(scenario, "identify-tech", tech_id=str(tech)))
+    await scenario.actor.submit(_cmd(scenario, "identify", tech_id=str(tech)))
     await scenario.actor.tick(HOUR)
     assert identified[0].tech_name == "water purifier"
     assert scenario.actor.world.get_entity(tech).get_component(OldWorldTechComponent).identified
@@ -1500,19 +1533,19 @@ def test_old_world_tech_handlers_reject_invalid_and_cover_edges_directly():
 
     # Invalid / wrong-kind / not-yet-identified paths.
     assert identify.execute(
-        ctx, _handler_cmd(scenario, "identify-tech", character_id="x", tech_id="y")
+        ctx, _handler_cmd(scenario, "identify", character_id="x", tech_id="y")
     ).reason == "invalid character id"
     assert identify.execute(
-        ctx, _handler_cmd(scenario, "identify-tech", tech_id=str(not_tech))
+        ctx, _handler_cmd(scenario, "identify", tech_id=str(not_tech))
     ).reason == "target is the wrong kind"
     assert restore.execute(
         ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))
     ).reason == "identify the tech first"
 
     # Identify it; a second identify is rejected.
-    assert identify.execute(ctx, _handler_cmd(scenario, "identify-tech", tech_id=str(tech))).ok
+    assert identify.execute(ctx, _handler_cmd(scenario, "identify", tech_id=str(tech))).ok
     assert identify.execute(
-        ctx, _handler_cmd(scenario, "identify-tech", tech_id=str(tech))
+        ctx, _handler_cmd(scenario, "identify", tech_id=str(tech))
     ).reason == "tech is already identified"
 
     # Restore needs enough scrap.
@@ -1682,7 +1715,7 @@ async def test_drinking_contaminated_water_adds_rads_until_purified():
     scenario.actor.bus.subscribe(ContaminatedWaterDrunkEvent, drunk.append)
     scenario.actor.bus.subscribe(WaterPurifiedEvent, purified.append)
 
-    await scenario.actor.submit(_cmd(scenario, "drink-water", water_id=str(water)))
+    await scenario.actor.submit(_cmd(scenario, "drink", water_id=str(water)))
     await scenario.actor.tick(HOUR)
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.get_component(RadiationDoseComponent).amount == 4.0
@@ -1692,7 +1725,7 @@ async def test_drinking_contaminated_water_adds_rads_until_purified():
     await scenario.actor.tick(HOUR)
     assert purified
     dose_before = character.get_component(RadiationDoseComponent).amount
-    await scenario.actor.submit(_cmd(scenario, "drink-water", water_id=str(water)))
+    await scenario.actor.submit(_cmd(scenario, "drink", water_id=str(water)))
     await scenario.actor.tick(HOUR)
     assert character.get_component(RadiationDoseComponent).amount == dose_before
 
@@ -1723,12 +1756,12 @@ def test_chem_and_water_handlers_reject_bad_state_directly():
         ),
         (
             DrinkContaminatedWaterHandler(),
-            _handler_cmd(scenario, "drink-water", character_id="x"),
+            _handler_cmd(scenario, "drink", character_id="x"),
             "invalid character",
         ),
         (
             DrinkContaminatedWaterHandler(),
-            _handler_cmd(scenario, "drink-water", water_id=str(junk)),
+            _handler_cmd(scenario, "drink", water_id=str(junk)),
             "wrong kind",
         ),
     ]

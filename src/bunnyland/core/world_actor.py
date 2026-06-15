@@ -98,7 +98,7 @@ class WorldActor:
         ensure_blank_prefab(self.world)
         self.bus = EventBus()
         self.queues = CommandQueues()
-        self._handlers: dict[str, CommandHandler] = {}
+        self._handlers: dict[str, list[CommandHandler]] = {}
         self._action_definitions: dict[str, ActionDefinition] = {}
         self._consequences: list[Consequence] = [
             EncumbranceConsequence(),
@@ -125,7 +125,7 @@ class WorldActor:
     # -- registration -------------------------------------------------------------------
 
     def register_handler(self, handler: CommandHandler) -> None:
-        self._handlers[handler.command_type] = handler
+        self._handlers.setdefault(handler.command_type, []).append(handler)
 
     def register_action_definition(self, definition: ActionDefinition) -> None:
         self._action_definitions[definition.command_type] = definition
@@ -373,14 +373,19 @@ class WorldActor:
             # QUEUE: wait for regen. FIFO means we cannot skip ahead.
             return _LaneOutcome(executed=False, stop_lane=True)
 
-        handler = self._handlers.get(command.command_type)
-        if handler is None:
+        handlers = self._handlers.get(command.command_type, [])
+        if not handlers:
             self.queues.pop(character_id, lane)
             await self._reject(command, f"no handler for {command.command_type}")
             return _LaneOutcome(executed=False, stop_lane=False)
 
         # Execute. Points are spent only if the handler succeeds.
         ctx = HandlerContext(world=self.world, epoch=self.epoch)
+        handler = self._handler_for(ctx, command, handlers)
+        if handler is None:
+            self.queues.pop(character_id, lane)
+            await self._reject(command, f"no handler accepted {command.command_type}")
+            return _LaneOutcome(executed=False, stop_lane=False)
         result = handler.execute(ctx, command)
         self.queues.pop(character_id, lane)
         if not result.ok:
@@ -406,6 +411,20 @@ class WorldActor:
         for event in result.events:
             await self._publish(event)
         return _LaneOutcome(executed=True, stop_lane=False)
+
+    def _handler_for(
+        self,
+        ctx: HandlerContext,
+        command: SubmittedCommand,
+        handlers: list[CommandHandler],
+    ) -> CommandHandler | None:
+        """Pick the most recently registered handler whose predicate accepts the command."""
+
+        for handler in reversed(handlers):
+            can_handle = getattr(handler, "can_handle", None)
+            if can_handle is None or can_handle(ctx, command):
+                return handler
+        return None
 
     # -- validation helpers -------------------------------------------------------------
 

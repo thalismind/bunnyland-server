@@ -57,7 +57,7 @@ scrapping junk, void-sim salvage, and settlement salvage.
 Pre-war devices start unidentified. Identify a reachable device:
 
 ```text
-!identify-tech tech_id="dusty crate"
+!identify target_id="dusty crate"
 ```
 
 Restore an identified device with scrap:
@@ -76,7 +76,7 @@ purified, or contaminated. If it is contaminated, purify it before drinking:
 
 ```text
 !purify-water water_id="rad puddle"
-!drink-water water_id="rad puddle"
+!drink source_id="rad puddle"
 ```
 
 ## Settlement loop
@@ -87,7 +87,7 @@ purified, or contaminated. If it is contaminated, purify it before drinking:
 !scrap-item item_id="bent pressure cooker"
 !build-purifier settlement_id="Red Rocket burrow"
 !power-generator generator_id="patched generator"
-!identify-tech tech_id="dusty crate"
+!identify target_id="dusty crate"
 !restore-tech tech_id="dusty crate"
 !activate-beacon beacon_id="settlement beacon"
 !open-trader-route route_id="south road caravan"

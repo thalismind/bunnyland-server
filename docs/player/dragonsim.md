@@ -160,7 +160,7 @@ Faction rank can change over time:
 If a guard is reachable, a bribe can reduce your bounty with that guard's faction:
 
 ```text
-!bribe-guard guard_id="Moss Guard"
+!bribe target_id="Moss Guard"
 ```
 
 Jail sentences clear when their release time has passed:
@@ -184,7 +184,7 @@ artifact:
 !cast-dragon-spell spell_id=Spark
 !recover-magic amount=5
 !brew-potion recipe_id="blue tonic recipe"
-!identify-artifact artifact_id="star mirror"
+!identify target_id="star mirror"
 !use-artifact artifact_id="star mirror"
 ```
 

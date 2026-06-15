@@ -336,6 +336,19 @@ _DOMAIN_EVENT_SKIP_KEYS = frozenset(
 
 
 def _render_domain_event(actor: WorldActor, event: dict[str, Any]) -> str:
+    if event.get("event_type") == "ShipSystemInspectedEvent":
+        system = _entity_name(actor, event.get("system_id")) or str(event.get("system_id"))
+        details = _payload_summary(
+            actor,
+            {
+                key: event[key]
+                for key in ("system_type", "integrity", "online")
+                if key in event and event[key] not in (None, "", (), [])
+            },
+        )
+        if details:
+            return f"Inspect ship system complete: {system}. {details}."
+        return f"Inspect ship system complete: {system}."
     label = _humanize_event_type(str(event.get("event_type", "GameEvent")))
     details = _payload_summary(
         actor,

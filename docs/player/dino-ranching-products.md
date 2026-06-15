@@ -60,10 +60,10 @@ Collect a reachable egg:
 Harvest a reachable creature product:
 
 ```text
-!harvest-product creature_id="clever raptor" product_type="milk"
-!harvest-product creature_id="clever raptor" product_type="toxin"
-!harvest-product creature_id="clever raptor" product_type="hide"
-!harvest-product creature_id="clever raptor" product_type="bone"
+!harvest target_id="clever raptor" product_type="milk"
+!harvest target_id="clever raptor" product_type="toxin"
+!harvest target_id="clever raptor" product_type="hide"
+!harvest target_id="clever raptor" product_type="bone"
 ```
 
 Renewable products can be depleted until the world restocks them. Hide and bone harvests
@@ -112,7 +112,7 @@ If a creature escapes, recapture it into an enclosure:
 !feed-creature creature_id="clever raptor" feed_store_id="Fern Paddock"
 !calm-creature creature_id="clever raptor"
 !collect-egg egg_id="velociraptor egg"
-!harvest-product creature_id="clever raptor" product_type="milk"
+!harvest target_id="clever raptor" product_type="milk"
 !assign-ranch-work creature_id="clever raptor" work_type="haul" target_id="Fern Paddock"
 !assign-guard creature_id="clever raptor" location_id="Fern Paddock"
 ```

@@ -47,6 +47,13 @@ from .environment import CalendarComponent
 SECONDS_PER_DAY = 24 * 60 * 60
 
 
+def _payload_entity_id(command: SubmittedCommand, *keys: str):
+    for key in keys:
+        if key in command.payload:
+            return parse_entity_id(command.payload.get(key))
+    return None
+
+
 @pydantic_dataclass(frozen=True)
 class SoilComponent(Component):
     quality: float = 1.0
@@ -1307,11 +1314,19 @@ class FertilizeHandler:
 
 
 class InspectCropHandler:
-    command_type = "inspect-crop"
+    command_type = "inspect"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "soil_id" in command.payload:
+            return True
+        soil_id = _payload_entity_id(command, "soil_id", "target_id")
+        return soil_id is not None and ctx.world.has_entity(soil_id) and ctx.entity(
+            soil_id
+        ).has_component(CropComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        soil_id = parse_entity_id(command.payload.get("soil_id"))
+        soil_id = _payload_entity_id(command, "soil_id", "target_id")
         if character_id is None or soil_id is None:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
@@ -1406,11 +1421,21 @@ class TreatPestsHandler:
 
 
 class HarvestCropHandler:
-    command_type = "harvest-crop"
+    command_type = "harvest"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "soil_id" in command.payload:
+            return True
+        soil_id = _payload_entity_id(command, "soil_id", "target_id")
+        return (
+            soil_id is not None
+            and ctx.world.has_entity(soil_id)
+            and ctx.entity(soil_id).has_component(CropComponent)
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        soil_id = parse_entity_id(command.payload.get("soil_id"))
+        soil_id = _payload_entity_id(command, "soil_id", "target_id")
         if character_id is None or soil_id is None:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
@@ -1565,11 +1590,21 @@ class TapTreeHandler:
 
 
 class HarvestSapHandler:
-    command_type = "harvest-sap"
+    command_type = "harvest"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "tree_id" in command.payload:
+            return True
+        tree_id = _payload_entity_id(command, "tree_id", "target_id")
+        return (
+            tree_id is not None
+            and ctx.world.has_entity(tree_id)
+            and ctx.entity(tree_id).has_component(TreeComponent)
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        tree_id = parse_entity_id(command.payload.get("tree_id"))
+        tree_id = _payload_entity_id(command, "tree_id", "target_id")
         if character_id is None or tree_id is None:
             return rejected("invalid character or tree id")
         if not ctx.world.has_entity(tree_id):

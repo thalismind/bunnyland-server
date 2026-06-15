@@ -100,6 +100,8 @@ def require_reachable_entity(
 class CommandHandler(Protocol):
     command_type: str
 
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool: ...
+
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult: ...
 
 

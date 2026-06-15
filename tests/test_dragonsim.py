@@ -316,7 +316,7 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
         ),
         (
             IdentifyArtifactHandler(),
-            "identify-artifact",
+            "identify",
             {"artifact_id": str(artifact.id)},
             ArtifactIdentifiedEvent,
         ),
@@ -402,7 +402,7 @@ def test_dragonsim_parity_handlers_reject_invalid_targets_directly():
         ),
         (
             IdentifyArtifactHandler(),
-            "identify-artifact",
+            "identify",
             {"artifact_id": fake},
             "invalid character or artifact id",
             "artifact does not exist",
@@ -614,12 +614,12 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
         ),
         (
             BribeGuardHandler(),
-            _handler_cmd(scenario, "bribe-guard", guard_id=str(distant_npc.id)),
+            _handler_cmd(scenario, "bribe", guard_id=str(distant_npc.id)),
             "guard is not reachable",
         ),
         (
             BribeGuardHandler(),
-            _handler_cmd(scenario, "bribe-guard", guard_id=str(wrong_kind.id)),
+            _handler_cmd(scenario, "bribe", guard_id=str(wrong_kind.id)),
             "target is not a guard",
         ),
         (ServeJailTimeHandler(), _handler_cmd(scenario, "serve-jail-time"), "not jailed"),
@@ -700,12 +700,12 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
         ),
         (
             IdentifyArtifactHandler(),
-            _handler_cmd(scenario, "identify-artifact", artifact_id=str(wrong_kind.id)),
+            _handler_cmd(scenario, "identify", artifact_id=str(wrong_kind.id)),
             "target is not an artifact",
         ),
         (
             IdentifyArtifactHandler(),
-            _handler_cmd(scenario, "identify-artifact", artifact_id=str(identified_artifact.id)),
+            _handler_cmd(scenario, "identify", artifact_id=str(identified_artifact.id)),
             "artifact already identified",
         ),
         (
@@ -2017,7 +2017,7 @@ async def test_change_rank_bribe_guard_serve_jail_and_pick_lock():
     assert ranked[0].old_rank == "scout"
     assert ranked[0].new_rank == "warden"
 
-    await scenario.actor.submit(_cmd(scenario, "bribe-guard", guard_id=str(guard.id)))
+    await scenario.actor.submit(_cmd(scenario, "bribe", guard_id=str(guard.id)))
     await scenario.actor.tick(HOUR)
     assert bribed[0].amount == 10
     assert character.get_component(WantedComponent).amounts[str(faction)] == 5

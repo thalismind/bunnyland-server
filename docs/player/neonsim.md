@@ -34,8 +34,8 @@ which trips the zone alarm. At a manned checkpoint you have three options:
 
 ```text
 !show-credentials target_id="skybridge checkpoint"
-!bribe-checkpoint target_id="skybridge checkpoint"
-!sneak-through-checkpoint target_id="skybridge checkpoint"
+!bribe target_id="skybridge checkpoint"
+!sneak target_id="skybridge checkpoint"
 ```
 
 Showing valid credentials or bribing the guard (with scrip) passes you openly; sneaking
@@ -54,7 +54,7 @@ unauthorized intruders that share their room, spawning evidence you will want go
 Inspect a device to read its state:
 
 ```text
-!inspect-device target_id="lobby camera"
+!inspect target_id="lobby camera"
 ```
 
 Defeat surveillance *before* you trespass. Disabling cuts a camera entirely; looping feeds
@@ -107,7 +107,7 @@ pop an electronic door:
 !access-terminal target_id="reception terminal"
 !exfiltrate-data target_id="records server"
 !sabotage-system target_id="pump controller"
-!unlock-door target_id="vault maglock"
+!unlock target_id="vault maglock"
 ```
 
 Sensitive data needs admin privileges to exfiltrate. While a trace is live, shake it or buy

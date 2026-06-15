@@ -100,31 +100,47 @@ def _matching_key(ctx: HandlerContext, command: SubmittedCommand, lock: Lockable
     return tool_id, None
 
 
+def _resolved_use_payload(payload: Mapping[str, Any]):
+    item_id = parse_entity_id(payload.get("item_id"))
+    target_id = parse_entity_id(payload.get("target_id"))
+    tool_id = parse_entity_id(payload.get("tool_id"))
+    if item_id is None:
+        # Legacy clients used target_id as the used object and tool_id as a helper item.
+        return target_id, target_id, tool_id
+    return item_id, target_id or item_id, item_id if target_id is not None else tool_id
+
+
 class UseHandler:
     command_type = "use"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         payload: Mapping[str, Any] = command.payload
         character_id = parse_entity_id(command.character_id)
-        target_id = parse_entity_id(payload.get("target_id"))
-        tool_id = parse_entity_id(payload.get("tool_id"))
-        if character_id is None or target_id is None:
+        item_id, target_id, tool_id = _resolved_use_payload(payload)
+        has_item_payload = "item_id" in payload
+        if character_id is None or item_id is None or target_id is None:
             return rejected("invalid character or target id")
         if not ctx.world.has_entity(character_id):
             return rejected("character does not exist")
+        if not ctx.world.has_entity(item_id):
+            return rejected("item does not exist" if has_item_payload else "target does not exist")
         if not ctx.world.has_entity(target_id):
             return rejected("target does not exist")
 
         character = ctx.entity(character_id)
         reachable = reachable_ids(ctx.world, character)
+        if item_id not in reachable:
+            return rejected(
+                "item is not reachable" if has_item_payload else "target is not reachable"
+            )
         if target_id not in reachable:
             return rejected("target is not reachable")
-        if tool_id is not None and tool_id not in reachable:
+        if tool_id is not None and tool_id != item_id and tool_id not in reachable:
             return rejected("tool is not reachable")
 
         target = ctx.entity(target_id)
 
-        # Locked things must be unlocked first (with a matching key as the tool).
+        # Locked things must be unlocked first with the item being used.
         if target.has_component(LockableComponent):
             lock = target.get_component(LockableComponent)
             if lock.locked:
@@ -135,31 +151,32 @@ class UseHandler:
                     and tool.get_component(KeyComponent).key_name == lock.key_name
                 ):
                     replace_component(target, replace(lock, locked=False))
-                    return self._event(ctx, command, target_id, "unlocked", tool_id)
+                    return self._event(ctx, command, item_id, target_id, "unlocked", tool_id)
                 return rejected("it is locked")
 
         if target.has_component(DoorComponent):
             door = target.get_component(DoorComponent)
             replace_component(target, replace(door, open=not door.open))
             affordance = "door_opened" if not door.open else "door_closed"
-            return self._event(ctx, command, target_id, affordance, tool_id)
+            return self._event(ctx, command, item_id, target_id, affordance, tool_id)
 
         if target.has_component(ButtonComponent):
             button = target.get_component(ButtonComponent)
             if not button.active:
                 return rejected("nothing happens")
             replace_component(target, replace(button, pressed=not button.pressed))
-            return self._event(ctx, command, target_id, "button_pressed", tool_id)
+            return self._event(ctx, command, item_id, target_id, "button_pressed", tool_id)
 
         return rejected("you can't use that")
 
-    def _event(self, ctx, command, target_id, affordance, tool_id) -> HandlerResult:
+    def _event(self, ctx, command, item_id, target_id, affordance, tool_id) -> HandlerResult:
+        target_ids = (str(target_id),) if item_id == target_id else (str(target_id), str(item_id))
         return ok(
             ItemUsedEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
-                    target_ids=(str(target_id),),
-                    item_id=str(target_id),
+                    target_ids=target_ids,
+                    item_id=str(item_id),
                     affordance=affordance,
                     tool_id=str(tool_id) if tool_id is not None else None,
                 )

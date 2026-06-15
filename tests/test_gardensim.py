@@ -327,7 +327,7 @@ async def test_till_plant_water_grow_and_harvest_crop():
     assert grew[-1].stage == 3
     assert ready[0].crop_type == "turnip"
 
-    await scenario.actor.submit(_cmd(scenario, "harvest-crop", soil_id=str(soil)))
+    await scenario.actor.submit(_cmd(scenario, "harvest", soil_id=str(soil)))
     await scenario.actor.tick(HOUR)
 
     assert not soil_entity.has_component(CropComponent)
@@ -350,7 +350,7 @@ async def test_edible_crop_harvest_creates_food_resource_stack():
     await scenario.actor.submit(_cmd(scenario, "water-crop", soil_id=str(soil)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.tick(DAY)
-    await scenario.actor.submit(_cmd(scenario, "harvest-crop", soil_id=str(soil)))
+    await scenario.actor.submit(_cmd(scenario, "harvest", soil_id=str(soil)))
     await scenario.actor.tick(0.0)
 
     item_id = next(
@@ -422,7 +422,7 @@ async def test_harvest_rejects_before_crop_is_ready():
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "plant", soil_id=str(soil), seed_id=str(seed)))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(_cmd(scenario, "harvest-crop", soil_id=str(soil)))
+    await scenario.actor.submit(_cmd(scenario, "harvest", soil_id=str(soil)))
     await scenario.actor.tick(HOUR)
 
     assert any(event.reason == "crop is not ready" for event in rejects)
@@ -462,7 +462,7 @@ async def test_wait_tap_tree_wait_and_harvest_sap():
     assert tree_entity.has_component(TreeTapComponent)
     assert tree_entity.get_component(HarvestableComponent).ready is False
 
-    await scenario.actor.submit(_cmd(scenario, "harvest-sap", tree_id=str(tree)))
+    await scenario.actor.submit(_cmd(scenario, "harvest", tree_id=str(tree)))
     await scenario.actor.tick(HOUR)
 
     assert rejects[-1].reason == "sap is not ready"
@@ -472,7 +472,7 @@ async def test_wait_tap_tree_wait_and_harvest_sap():
     assert ready[0].tree_id == str(tree)
     assert tree_entity.get_component(HarvestableComponent).ready is True
 
-    await scenario.actor.submit(_cmd(scenario, "harvest-sap", tree_id=str(tree)))
+    await scenario.actor.submit(_cmd(scenario, "harvest", tree_id=str(tree)))
     await scenario.actor.tick(HOUR)
 
     sap = scenario.actor.world.get_entity(parse_entity_id(harvested[0].item_id))
@@ -1250,7 +1250,7 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
             HarvestCropHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-crop",
+                "harvest",
                 character_id="not-an-id",
                 soil_id=str(soil.id),
             ),
@@ -1258,22 +1258,22 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         ),
         (
             HarvestCropHandler(),
-            _handler_cmd(scenario, "harvest-crop", soil_id="entity_999"),
+            _handler_cmd(scenario, "harvest", soil_id="entity_999"),
             "soil does not exist",
         ),
         (
             HarvestCropHandler(),
-            _handler_cmd(scenario, "harvest-crop", soil_id=str(distant_soil.id)),
+            _handler_cmd(scenario, "harvest", soil_id=str(distant_soil.id)),
             "soil is not reachable",
         ),
         (
             HarvestCropHandler(),
-            _handler_cmd(scenario, "harvest-crop", soil_id=str(soil.id)),
+            _handler_cmd(scenario, "harvest", soil_id=str(soil.id)),
             "soil has no harvestable crop",
         ),
         (
             HarvestCropHandler(),
-            _handler_cmd(scenario, "harvest-crop", soil_id=str(dead_soil.id)),
+            _handler_cmd(scenario, "harvest", soil_id=str(dead_soil.id)),
             "crop is dead",
         ),
         (
@@ -1343,43 +1343,43 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest-sap", character_id="not-an-id",
+            _handler_cmd(scenario, "harvest", character_id="not-an-id",
                          tree_id=str(tapped_tree.id)),
             "invalid character or tree id",
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest-sap", tree_id="entity_999"),
+            _handler_cmd(scenario, "harvest", tree_id="entity_999"),
             "tree does not exist",
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest-sap", tree_id=str(distant_tree.id)),
+            _handler_cmd(scenario, "harvest", tree_id=str(distant_tree.id)),
             "tree is not reachable",
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest-sap", tree_id=str(wrong_kind.id)),
+            _handler_cmd(scenario, "harvest", tree_id=str(wrong_kind.id)),
             "target is not a tree",
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest-sap", tree_id=str(dead_tree.id)),
+            _handler_cmd(scenario, "harvest", tree_id=str(dead_tree.id)),
             "tree is dead",
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest-sap", tree_id=str(mature_tree.id)),
+            _handler_cmd(scenario, "harvest", tree_id=str(mature_tree.id)),
             "tree is not tapped",
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest-sap", tree_id=str(bucketless_tree.id)),
+            _handler_cmd(scenario, "harvest", tree_id=str(bucketless_tree.id)),
             "tree has no sap bucket",
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest-sap", tree_id=str(tapped_tree.id)),
+            _handler_cmd(scenario, "harvest", tree_id=str(tapped_tree.id)),
             "sap is not ready",
         ),
     ]
@@ -2608,13 +2608,13 @@ async def test_gardensim_catalogue_crops_machines_animals_mines_and_collections(
     scenario.actor.bus.subscribe(ItemsShippedEvent, shipped.append)
     scenario.actor.bus.subscribe(MailClaimedEvent, mail_claimed.append)
 
-    await scenario.actor.submit(_cmd(scenario, "inspect-crop", soil_id=str(soil.id)))
+    await scenario.actor.submit(_cmd(scenario, "inspect", soil_id=str(soil.id)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "weed-crop", soil_id=str(soil.id)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "treat-pests", soil_id=str(soil.id)))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(_cmd(scenario, "harvest-crop", soil_id=str(soil.id)))
+    await scenario.actor.submit(_cmd(scenario, "harvest", soil_id=str(soil.id)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "cancel-machine", machine_id=str(task_machine.id)))
     await scenario.actor.tick(HOUR)
@@ -2864,20 +2864,20 @@ def test_gardensim_catalogue_handlers_reject_bad_state_directly():
     cases = [
         (
             InspectCropHandler(),
-            "inspect-crop",
+            "inspect",
             {"soil_id": "not-an-id"},
             "invalid character or soil id",
         ),
-        (InspectCropHandler(), "inspect-crop", {"soil_id": "entity_999"}, "soil does not exist"),
+        (InspectCropHandler(), "inspect", {"soil_id": "entity_999"}, "soil does not exist"),
         (
             InspectCropHandler(),
-            "inspect-crop",
+            "inspect",
             {"soil_id": str(unreachable_crop.id)},
             "soil is not reachable",
         ),
         (
             InspectCropHandler(),
-            "inspect-crop",
+            "inspect",
             {"soil_id": str(no_crop_soil.id)},
             "soil has no crop",
         ),

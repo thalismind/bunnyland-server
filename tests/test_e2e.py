@@ -779,7 +779,7 @@ async def test_scripted_agent_buys_grows_harvests_and_sells_garden_crop():
             ToolCall("water_crop", {"soil_id": "garden bed"}),
             ToolCall("wait", {}),
             ToolCall("open_business", {"name": "Hazel's Farm Stand", "default_price": 8}),
-            ToolCall("harvest_crop", {"soil_id": "garden bed"}),
+            ToolCall("harvest", {"target_id": "garden bed"}),
             ToolCall("sell_item", {"item_id": "radish x2", "customer_id": "Marigold"}),
         ]
     )
@@ -840,8 +840,8 @@ async def test_scripted_agent_identifies_fossil_clones_and_hatches_dino_e2e():
     agent = ScriptedAgent(
         [
             ToolCall(
-                "identify_fossil",
-                {"fossil_id": "amber bone shard", "species_name": "velociraptor"},
+                "identify",
+                {"target_id": "amber bone shard", "species_name": "velociraptor"},
             ),
             ToolCall("extract_ancient_sample", {"fossil_id": "amber bone shard"}),
             ToolCall("prepare_clone", {"sample_id": "velociraptor ancient sample"}),

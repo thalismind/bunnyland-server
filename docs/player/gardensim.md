@@ -99,7 +99,7 @@ Clear a dead crop before planting again:
 When the crop is ready, harvest the bed:
 
 ```text
-!harvest-crop garden bed
+!harvest garden bed
 ```
 
 Harvesting fails if the crop is missing, dead, or not ready. A successful harvest removes
@@ -137,7 +137,7 @@ sap ready:
 Then collect the sap:
 
 ```text
-!harvest-sap sugar maple
+!harvest sugar maple
 ```
 
 Harvesting sap fails if the tree is not tapped or the sap is not ready yet. A successful
@@ -184,11 +184,11 @@ One verified end-to-end cycle looks like this:
 !plant soil_id="garden bed" seed_id="radish seeds"
 !water-crop garden bed
 !wait
-!harvest-crop garden bed
+!harvest garden bed
 !wait
 !tap-tree sugar maple
 !wait
-!harvest-sap sugar maple
+!harvest sugar maple
 !open-business name="Hazel's Farm Stand" default_price=8
 !sell-item item_id="radish x2" customer_id=Marigold price=8
 ```

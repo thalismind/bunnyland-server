@@ -1313,6 +1313,33 @@ def test_render_action_result_summarizes_result_events(scenario):
     assert discord_view._humanize_event_type("") == ""
 
 
+def test_render_action_result_summarizes_ship_system_without_details(scenario):
+    system = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="life support unit", kind="ship-system")],
+    )
+    event = CommandExecutedEvent(
+        event_id="event-1",
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        visibility=EventVisibility.PRIVATE,
+        actor_id=str(scenario.character),
+        command_id="cmd-1",
+        command_type="inspect",
+        result_events=(
+            {
+                "event_type": "ShipSystemInspectedEvent",
+                "actor_id": str(scenario.character),
+                "system_id": str(system.id),
+            },
+        ),
+    )
+
+    text = render_action_result(scenario.actor, 123, "inspect", event)
+
+    assert text == "Inspect ship system complete: life support unit."
+
+
 def test_render_action_result_reports_non_move_rejection(scenario):
     event = CommandRejectedEvent(
         event_id="event-1",

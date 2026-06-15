@@ -39,6 +39,13 @@ from ..prompts import ComponentPromptContext
 from .lifesim import SkillSetComponent, _add_skill_xp
 
 
+def _payload_entity_id(command: SubmittedCommand, *keys: str):
+    for key in keys:
+        if key in command.payload:
+            return parse_entity_id(command.payload.get(key))
+    return None
+
+
 @dataclass(frozen=True)
 class PointOfInterestComponent(Component):
     location_type: str = "landmark"
@@ -1579,11 +1586,19 @@ class ChangeFactionRankHandler:
 
 
 class BribeGuardHandler:
-    command_type = "bribe-guard"
+    command_type = "bribe"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "guard_id" in command.payload:
+            return True
+        guard_id = _payload_entity_id(command, "guard_id", "target_id")
+        return guard_id is not None and ctx.world.has_entity(guard_id) and ctx.entity(
+            guard_id
+        ).has_component(GuardComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        guard_id = parse_entity_id(command.payload.get("guard_id"))
+        guard_id = _payload_entity_id(command, "guard_id", "target_id")
         if character_id is None or guard_id is None:
             return rejected("invalid character or guard id")
         if not ctx.world.has_entity(guard_id):
@@ -2117,11 +2132,19 @@ class RecoverMagicHandler:
 
 
 class IdentifyArtifactHandler:
-    command_type = "identify-artifact"
+    command_type = "identify"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "artifact_id" in command.payload:
+            return True
+        artifact_id = _payload_entity_id(command, "artifact_id", "target_id")
+        return artifact_id is not None and ctx.world.has_entity(artifact_id) and ctx.entity(
+            artifact_id
+        ).has_component(ArtifactComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        artifact_id = parse_entity_id(command.payload.get("artifact_id"))
+        artifact_id = _payload_entity_id(command, "artifact_id", "target_id")
         if character_id is None or artifact_id is None:
             return rejected("invalid character or artifact id")
         if not ctx.world.has_entity(artifact_id):

@@ -305,7 +305,7 @@ def test_dinosim_reachable_entity_rejects_missing_character_without_crashing():
         HandlerContext(scenario.actor.world, scenario.actor.epoch),
         _handler_cmd(
             scenario,
-            "identify-fossil",
+            "identify",
             character_id="entity_999999",
             fossil_id=str(scenario.room_a),
             species_name="triceratops",
@@ -413,7 +413,7 @@ def test_dinosim_parity_handlers_mutate_state_directly():
         ),
         (
             InspectEggHandler(),
-            "inspect-egg",
+            "inspect",
             {"egg_id": str(egg.id), "viability": 0.9},
             EggInspectedEvent,
         ),
@@ -531,7 +531,7 @@ def test_dinosim_parity_handlers_reject_invalid_targets_directly():
         ),
         (
             InspectEggHandler(),
-            "inspect-egg",
+            "inspect",
             {"egg_id": fake},
             "invalid character or egg id",
             "egg is not reachable",
@@ -663,7 +663,7 @@ def test_dinosim_parity_handlers_reject_reachable_wrong_kind_and_state_directly(
         ),
         (
             InspectEggHandler(),
-            _handler_cmd(scenario, "inspect-egg", egg_id=str(wrong_kind.id)),
+            _handler_cmd(scenario, "inspect", egg_id=str(wrong_kind.id)),
             "egg is not reachable",
         ),
         (
@@ -714,7 +714,7 @@ def test_dinosim_parity_handlers_reject_reachable_wrong_kind_and_state_directly(
         ctx, _handler_cmd(scenario, "stabilize-fossil", fossil_id=str(fossil.id))
     ).ok
     assert InspectEggHandler().execute(
-        ctx, _handler_cmd(scenario, "inspect-egg", egg_id=str(egg.id), viability=0.5)
+        ctx, _handler_cmd(scenario, "inspect", egg_id=str(egg.id), viability=0.5)
     ).ok
     assert ImprintCreatureHandler().execute(
         ctx, _handler_cmd(scenario, "imprint-creature", creature_id=str(creature.id), bond=0.5)
@@ -907,7 +907,7 @@ async def test_fossil_identification_extracts_sample_and_prepares_clone_egg():
     await scenario.actor.submit(
         _cmd(
             scenario,
-            "identify-fossil",
+            "identify",
             fossil_id=str(fossil.id),
             species_name="velociraptor",
         )
@@ -1552,33 +1552,33 @@ async def test_creature_products_feed_store_ranch_work_and_guard_assignment_loop
         _cmd(scenario, "collect-egg", egg_id=str(egg.id)),
         _cmd(
             scenario,
-            "harvest-product",
+            "harvest",
             creature_id=str(raptor.id),
             product_type="milk",
             quantity=2.0,
         ),
         _cmd(
             scenario,
-            "harvest-product",
+            "harvest",
             creature_id=str(raptor.id),
             product_type="toxin",
             quantity=1.0,
         ),
         _cmd(
             scenario,
-            "harvest-product",
+            "harvest",
             creature_id=str(raptor.id),
             product_type="hide",
         ),
         _cmd(
             scenario,
-            "harvest-product",
+            "harvest",
             creature_id=str(raptor.id),
             product_type="bone",
         ),
         _cmd(
             scenario,
-            "harvest-product",
+            "harvest",
             creature_id=str(raptor.id),
             product_type="fertilizer",
             quantity=2.0,
@@ -1967,24 +1967,24 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
         ),
         (
             HarvestProductHandler(),
-            _handler_cmd(scenario, "harvest-product", character_id="not-an-id"),
+            _handler_cmd(scenario, "harvest", character_id="not-an-id"),
             "invalid character id",
         ),
         (
             HarvestProductHandler(),
-            _handler_cmd(scenario, "harvest-product", creature_id=str(rock.id)),
+            _handler_cmd(scenario, "harvest", creature_id=str(rock.id)),
             "target is not a creature",
         ),
         (
             HarvestProductHandler(),
-            _handler_cmd(scenario, "harvest-product", creature_id=str(plain.id)),
+            _handler_cmd(scenario, "harvest", creature_id=str(plain.id)),
             "creature has no harvestable product",
         ),
         (
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(plain.id),
                 product_type="milk",
             ),
@@ -1994,7 +1994,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(milkless.id),
                 product_type="milk",
             ),
@@ -2004,7 +2004,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(plain.id),
                 product_type="toxin",
             ),
@@ -2014,7 +2014,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(toxinless.id),
                 product_type="toxin",
             ),
@@ -2024,7 +2024,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(plain.id),
                 product_type="hide",
             ),
@@ -2034,7 +2034,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(harvested.id),
                 product_type="hide",
             ),
@@ -2044,7 +2044,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(plain.id),
                 product_type="bone",
             ),
@@ -2054,7 +2054,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(harvested.id),
                 product_type="bone",
             ),
@@ -2064,7 +2064,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(depleted.id),
                 product_type="meat",
             ),
@@ -2074,7 +2074,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(depleted.id),
                 product_type="fertilizer",
             ),
@@ -2084,7 +2084,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             HarvestProductHandler(),
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(plain.id),
                 product_type="scale",
             ),
@@ -2139,7 +2139,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
         ctx,
         _handler_cmd(
             scenario,
-            "harvest-product",
+            "harvest",
             creature_id=str(meat.id),
             product_type="meat",
             quantity=2,
@@ -2151,7 +2151,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
             ctx,
             _handler_cmd(
                 scenario,
-                "harvest-product",
+                "harvest",
                 creature_id=str(creature.id),
             ),
         ).ok
@@ -2690,13 +2690,13 @@ async def test_dinosim_rejects_invalid_fossil_sample_and_parent_targets():
         room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
 
     await scenario.actor.submit(
-        _cmd(scenario, "identify-fossil", fossil_id="not-an-id", species_name="raptor")
+        _cmd(scenario, "identify", fossil_id="not-an-id", species_name="raptor")
     )
     await scenario.actor.submit(
-        _cmd(scenario, "identify-fossil", fossil_id="entity_999", species_name="raptor")
+        _cmd(scenario, "identify", fossil_id="entity_999", species_name="raptor")
     )
     await scenario.actor.submit(
-        _cmd(scenario, "identify-fossil", fossil_id=str(non_fossil.id), species_name="raptor")
+        _cmd(scenario, "identify", fossil_id=str(non_fossil.id), species_name="raptor")
     )
     await scenario.actor.submit(_cmd(scenario, "extract-ancient-sample", fossil_id=str(fossil.id)))
     await scenario.actor.submit(_cmd(scenario, "prepare-clone", sample_id=str(sample_target.id)))
@@ -2886,7 +2886,7 @@ def test_dinosim_handlers_reject_invalid_and_unreachable_targets_directly():
             IdentifyFossilHandler(),
             _handler_cmd(
                 scenario,
-                "identify-fossil",
+                "identify",
                 character_id="not-an-id",
                 fossil_id=str(fossil.id),
                 species_name="raptor",
@@ -2897,7 +2897,7 @@ def test_dinosim_handlers_reject_invalid_and_unreachable_targets_directly():
             IdentifyFossilHandler(),
             _handler_cmd(
                 scenario,
-                "identify-fossil",
+                "identify",
                 fossil_id=str(distant_fossil.id),
                 species_name="raptor",
             ),

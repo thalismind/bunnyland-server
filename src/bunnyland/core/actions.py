@@ -464,9 +464,13 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("remove", ("item_id",), tool_name="remove", patterns=("remove {item_id}",)),
     _definition(
         "use",
-        ("target_id", "tool_id"),
+        ("item_id", "target_id", "tool_id"),
         tool_name="use",
-        patterns=("use {target_id} with {tool_id}", "use {target_id}"),
+        patterns=(
+            "use {item_id}",
+            "use {item_id} on {target_id}",
+            "use {item_id} with {target_id}",
+        ),
     ),
     _definition(
         "write",
@@ -576,15 +580,21 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="fertilize",
         patterns=("fertilize {soil_id} with {fertilizer_id}",),
     ),
-    _definition("inspect-crop", ("soil_id",), tool_name="inspect_crop"),
+    _definition(
+        "harvest",
+        ("target_id", "product_type", "quantity"),
+        tool_name="harvest",
+        patterns=("harvest {target_id}",),
+    ),
+    _definition(
+        "identify",
+        ("target_id", "species_name"),
+        tool_name="identify",
+        patterns=("identify {target_id}",),
+    ),
+    _definition("bribe", ("target_id",), tool_name="bribe", patterns=("bribe {target_id}",)),
     _definition("weed-crop", ("soil_id",), tool_name="weed_crop"),
     _definition("treat-pests", ("soil_id",), tool_name="treat_pests"),
-    _definition(
-        "harvest-crop",
-        ("soil_id",),
-        tool_name="harvest_crop",
-        patterns=("harvest {soil_id}",),
-    ),
     _definition(
         "clear-dead-crop",
         ("soil_id",),
@@ -596,12 +606,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("tree_id",),
         tool_name="tap_tree",
         patterns=("tap {tree_id}", "tap tree {tree_id}"),
-    ),
-    _definition(
-        "harvest-sap",
-        ("tree_id",),
-        tool_name="harvest_sap",
-        patterns=("harvest sap from {tree_id}", "collect sap from {tree_id}"),
     ),
     _definition("start-machine", ("machine_id", "recipe_id"), tool_name="start_machine"),
     _definition(
@@ -646,11 +650,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("claim-reward", ("reward_id",), tool_name="claim_reward"),
     # Dino sim.
     _definition(
-        "identify-fossil",
-        ("fossil_id", "species_name"),
-        tool_name="identify_fossil",
-    ),
-    _definition(
         "extract-ancient-sample",
         ("fossil_id",),
         tool_name="extract_ancient_sample",
@@ -676,11 +675,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "lab-incubate-egg",
         ("egg_id", "lab_id"),
         tool_name="lab_incubate_egg",
-    ),
-    _definition(
-        "inspect-egg",
-        ("egg_id", "viability"),
-        tool_name="inspect_egg",
     ),
     _definition(
         "imprint-creature",
@@ -841,11 +835,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="stock_feed",
     ),
     _definition("collect-egg", ("egg_id",), tool_name="collect_egg"),
-    _definition(
-        "harvest-product",
-        ("creature_id", "product_type", "quantity"),
-        tool_name="harvest_product",
-    ),
     _definition(
         "assign-ranch-work",
         ("creature_id", "work_type", "target_id"),
@@ -1191,7 +1180,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("faction_id", "rank"),
         tool_name="change_faction_rank",
     ),
-    _definition("bribe-guard", ("guard_id",), tool_name="bribe_guard"),
     _definition("serve-jail-time", tool_name="serve_jail_time"),
     _definition("pick-lock", ("lock_id",), tool_name="pick_lock"),
     _definition(
@@ -1219,7 +1207,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="report_crime",
     ),
     _definition("recover-magic", ("amount",), tool_name="recover_magic"),
-    _definition("identify-artifact", ("artifact_id",), tool_name="identify_artifact"),
     _definition(
         "appease-ancient-beast",
         ("beast_id", "method"),
@@ -1400,11 +1387,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("item_id", "service_id"),
         tool_name="recharge_enchanted_item",
     ),
-    _definition(
-        "identify-ingredient",
-        ("ingredient_id",),
-        tool_name="identify_ingredient",
-    ),
     _definition("attempt-pacify", ("target_id", "language"), tool_name="attempt_pacify"),
     _definition("contract-affliction", ("affliction_type",), tool_name="contract_affliction"),
     _definition(
@@ -1438,7 +1420,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("seal-bulkhead", ("bulkhead_id",), tool_name="seal_bulkhead"),
     _definition("repair-system", ("system_id",), tool_name="repair_system"),
     _definition("reroute-power", ("grid_id", "system_id", "amount"), tool_name="reroute_power"),
-    _definition("inspect-ship-system", ("system_id",), tool_name="inspect_ship_system"),
     _definition("fabricate", ("fabricator_id", "blueprint_id"), tool_name="fabricate"),
     _definition("install-upgrade", ("upgrade_id", "system_id"), tool_name="install_upgrade"),
     _definition("accept-contract", ("contract_id",), tool_name="accept_contract"),
@@ -1522,11 +1503,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="mine_asteroid",
     ),
     _definition(
-        "inspect-customs",
-        ("hold_id", "contraband_found"),
-        tool_name="inspect_customs",
-    ),
-    _definition(
         "search-smuggling-compartment",
         ("compartment_id",),
         tool_name="search_smuggling_compartment",
@@ -1547,11 +1523,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("target_id", "station_id"),
         tool_name="decontaminate",
     ),
-    _definition(
-        "use-rad-medicine",
-        ("item_id", "target_id"),
-        tool_name="use_rad_medicine",
-    ),
     _definition("scavenge", ("site_id",), tool_name="scavenge"),
     _definition("scrap-item", ("item_id",), tool_name="scrap_item"),
     _definition("stabilize-mutation", ("mutation_id",), tool_name="stabilize_mutation"),
@@ -1563,7 +1534,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("use-suppressant", ("item_id",), tool_name="use_suppressant"),
     _definition("harvest-sample", ("sample_type",), tool_name="harvest_sample"),
     _definition("study-sample", ("sample_id",), tool_name="study_sample"),
-    _definition("unlock-crate", ("crate_id",), tool_name="unlock_crate"),
     _definition(
         "study-wasteland-artifact",
         ("artifact_id",),
@@ -1595,13 +1565,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     _definition("take-chem", ("chem_id",), tool_name="take_chem"),
     _definition("purify-water", ("water_id",), tool_name="purify_water"),
-    _definition("drink-water", ("water_id",), tool_name="drink_water"),
-    _definition(
-        "identify-tech",
-        ("tech_id",),
-        tool_name="identify_tech",
-        patterns=("identify {tech_id}",),
-    ),
     _definition(
         "restore-tech",
         ("tech_id",),
@@ -1627,18 +1590,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="show_credentials",
         patterns=("show credentials at {target_id}",),
     ),
-    _definition(
-        "bribe-checkpoint",
-        ("target_id",),
-        tool_name="bribe_checkpoint",
-        patterns=("bribe the guard at {target_id}",),
-    ),
-    _definition(
-        "sneak-through-checkpoint",
-        ("target_id",),
-        tool_name="sneak_through_checkpoint",
-        patterns=("sneak through {target_id}",),
-    ),
     _definition("claim-safehouse", ("target_id",), tool_name="claim_safehouse"),
     _definition(
         "case-location",
@@ -1646,7 +1597,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="case_location",
         patterns=("case {target_id}", "scope out {target_id}"),
     ),
-    _definition("inspect-device", ("target_id",), tool_name="inspect_device"),
     _definition(
         "disable-camera",
         ("target_id",),
@@ -1705,12 +1655,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("target_id",),
         tool_name="sabotage_system",
         patterns=("sabotage {target_id}",),
-    ),
-    _definition(
-        "unlock-door",
-        ("target_id",),
-        tool_name="unlock_door",
-        patterns=("unlock door {target_id}",),
     ),
     _definition("evade-trace", (), tool_name="evade_trace", patterns=("evade the trace",)),
     _definition("spoof-identity", (), tool_name="spoof_identity", patterns=("spoof your id",)),

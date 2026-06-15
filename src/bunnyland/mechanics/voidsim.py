@@ -55,6 +55,13 @@ from .mutation import (
     RadiationShieldComponent,
 )
 
+
+def _payload_entity_id(command: SubmittedCommand, *keys: str):
+    for key in keys:
+        if key in command.payload:
+            return parse_entity_id(command.payload.get(key))
+    return None
+
 SECONDS_PER_HOUR = 60 * 60
 SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
 
@@ -692,6 +699,13 @@ class ShipSystemRepairedEvent(DomainEvent):
     system_type: str
 
 
+class ShipSystemInspectedEvent(DomainEvent):
+    system_id: str
+    system_type: str
+    integrity: float
+    online: bool
+
+
 class ItemFabricatedEvent(DomainEvent):
     fabricator_id: str
     blueprint_id: str
@@ -1008,18 +1022,43 @@ class ReroutePowerHandler:
 
 
 class InspectShipSystemHandler:
-    command_type = "inspect-ship-system"
+    command_type = "inspect"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "system_id" in command.payload:
+            return True
+        system_id = _payload_entity_id(command, "system_id", "target_id")
+        return system_id is not None and ctx.world.has_entity(system_id) and ctx.entity(
+            system_id
+        ).has_component(ShipSystemComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         system, error = _reachable_component(
-            ctx.world, character_id, command.payload.get("system_id"), ShipSystemComponent
+            ctx.world,
+            character_id,
+            _payload_entity_id(command, "system_id", "target_id"),
+            ShipSystemComponent,
         )
         if system is None:
             return rejected(error if error else "target is not a ship system")
-        return ok()
+        state = system.get_component(ShipSystemComponent)
+        return ok(
+            ShipSystemInspectedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(system.id),),
+                    system_id=str(system.id),
+                    system_type=state.system_type,
+                    integrity=state.integrity,
+                    online=state.online,
+                )
+            )
+        )
 
 
 def _tech_unlocked(world: World, tech_id: str) -> bool:
@@ -3004,14 +3043,25 @@ class MineAsteroidHandler:
 
 
 class InspectCustomsHandler:
-    command_type = "inspect-customs"
+    command_type = "inspect"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "hold_id" in command.payload:
+            return True
+        hold_id = _payload_entity_id(command, "hold_id", "target_id")
+        return hold_id is not None and ctx.world.has_entity(hold_id) and ctx.entity(
+            hold_id
+        ).has_component(CustomsHoldComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         hold, error = _reachable_entity_with(
-            ctx, character_id, command.payload.get("hold_id"), CustomsHoldComponent
+            ctx,
+            character_id,
+            _payload_entity_id(command, "hold_id", "target_id"),
+            CustomsHoldComponent,
         )
         if error is not None:
             return error

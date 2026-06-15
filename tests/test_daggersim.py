@@ -557,7 +557,7 @@ def test_daggersim_parity_handlers_mutate_state_directly():
         ),
         (
             IdentifyIngredientHandler(),
-            "identify-ingredient",
+            "identify",
             {"ingredient_id": str(ingredient.id)},
             IngredientIdentifiedEvent,
         ),
@@ -732,7 +732,7 @@ def test_daggersim_parity_handlers_reject_invalid_targets_directly():
         ),
         (
             IdentifyIngredientHandler(),
-            "identify-ingredient",
+            "identify",
             {"ingredient_id": fake},
             "invalid character or ingredient id",
             "ingredient does not exist",
@@ -1210,19 +1210,19 @@ def test_daggersim_parity_handlers_reject_wrong_kind_and_state_directly():
         ),
         (
             IdentifyIngredientHandler(),
-            _handler_cmd(scenario, "identify-ingredient", ingredient_id=str(distant_ingredient.id)),
+            _handler_cmd(scenario, "identify", ingredient_id=str(distant_ingredient.id)),
             "ingredient is not reachable",
         ),
         (
             IdentifyIngredientHandler(),
-            _handler_cmd(scenario, "identify-ingredient", ingredient_id=str(wrong_kind.id)),
+            _handler_cmd(scenario, "identify", ingredient_id=str(wrong_kind.id)),
             "target is not an ingredient",
         ),
         (
             IdentifyIngredientHandler(),
             _handler_cmd(
                 scenario,
-                "identify-ingredient",
+                "identify",
                 ingredient_id=str(identified_ingredient.id),
             ),
             "ingredient already identified",

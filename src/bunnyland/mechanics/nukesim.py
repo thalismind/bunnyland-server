@@ -52,6 +52,13 @@ SECONDS_PER_HOUR = 60 * 60
 DEFAULT_MUTATION_THRESHOLD = 10.0
 
 
+def _payload_entity_id(command: SubmittedCommand, *keys: str):
+    for key in keys:
+        if key in command.payload:
+            return parse_entity_id(command.payload.get(key))
+    return None
+
+
 @dataclass(frozen=True)
 class RadiationSourceComponent(Component):
     source_type: str = "fallout hotspot"
@@ -958,7 +965,12 @@ class DecontaminateHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        target_id = parse_entity_id(command.payload.get("target_id")) or character_id
+        target_raw = command.payload.get("target_character_id")
+        if target_raw is None:
+            target_raw = command.payload.get("patient_id")
+        if target_raw is None and "item_id" in command.payload:
+            target_raw = command.payload.get("target_id")
+        target_id = parse_entity_id(target_raw) or character_id
         if not ctx.world.has_entity(target_id):
             return rejected("target does not exist")
         character = ctx.entity(character_id)
@@ -1001,14 +1013,25 @@ class DecontaminateHandler:
 
 
 class UseRadMedicineHandler:
-    command_type = "use-rad-medicine"
+    command_type = "use"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        item_id = _payload_entity_id(command, "item_id")
+        if item_id is None or not ctx.world.has_entity(item_id):
+            return "item_id" in command.payload
+        return item_id is not None and ctx.world.has_entity(item_id) and ctx.entity(
+            item_id
+        ).has_component(RadMedicineComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         medicine, error = _reachable_component(
-            ctx.world, character_id, command.payload.get("item_id"), RadMedicineComponent
+            ctx.world,
+            character_id,
+            _payload_entity_id(command, "item_id"),
+            RadMedicineComponent,
         )
         if medicine is None:
             return rejected(error if error else "item is not rad medicine")
@@ -1137,14 +1160,25 @@ class PurifyWaterHandler:
 
 
 class DrinkContaminatedWaterHandler:
-    command_type = "drink-water"
+    command_type = "drink"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "water_id" in command.payload:
+            return True
+        water_id = _payload_entity_id(command, "water_id", "source_id", "target_id")
+        return water_id is not None and ctx.world.has_entity(water_id) and ctx.entity(
+            water_id
+        ).has_component(WaterPurityComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         water, error = _reachable_component(
-            ctx.world, character_id, command.payload.get("water_id"), WaterPurityComponent
+            ctx.world,
+            character_id,
+            _payload_entity_id(command, "water_id", "source_id", "target_id"),
+            WaterPurityComponent,
         )
         if water is None:
             return rejected(error if error else "target is not a water source")
@@ -1496,14 +1530,25 @@ class StudySampleHandler:
 
 
 class UnlockCrateHandler:
-    command_type = "unlock-crate"
+    command_type = "unlock"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "crate_id" in command.payload:
+            return True
+        crate_id = _payload_entity_id(command, "crate_id", "target_id")
+        return crate_id is not None and ctx.world.has_entity(crate_id) and ctx.entity(
+            crate_id
+        ).has_component(LockedCrateComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         crate, error = _reachable_component(
-            ctx.world, character_id, command.payload.get("crate_id"), LockedCrateComponent
+            ctx.world,
+            character_id,
+            _payload_entity_id(command, "crate_id", "target_id"),
+            LockedCrateComponent,
         )
         if crate is None:
             return rejected(error if error else "target is not a locked crate")
@@ -1929,14 +1974,25 @@ class GeneratorPoweredEvent(DomainEvent):
 
 
 class IdentifyTechHandler:
-    command_type = "identify-tech"
+    command_type = "identify"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "tech_id" in command.payload:
+            return True
+        tech_id = _payload_entity_id(command, "tech_id", "target_id")
+        return tech_id is not None and ctx.world.has_entity(tech_id) and ctx.entity(
+            tech_id
+        ).has_component(OldWorldTechComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         item, error = _reachable_component(
-            ctx.world, character_id, command.payload.get("tech_id"), OldWorldTechComponent
+            ctx.world,
+            character_id,
+            _payload_entity_id(command, "tech_id", "target_id"),
+            OldWorldTechComponent,
         )
         if item is None:
             return rejected(error if error else "target is not old-world tech")

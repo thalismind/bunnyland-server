@@ -688,10 +688,12 @@ async def test_app_member_and_verb_selection_handlers():
         app._member_selected(SimpleNamespace(option=SimpleNamespace(id=APPLE)))
         assert app.selected_id == APPLE
 
-        await app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="wait")))
+        app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="wait")))
+        await pilot.pause()
         assert app.backend.commands[-1]["command_type"] == "wait"
 
-        await app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="missing")))
+        app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="missing")))
+        await pilot.pause()
         assert app.backend.commands[-1]["command_type"] == "wait"
 
 

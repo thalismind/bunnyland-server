@@ -6,6 +6,7 @@ import pytest
 from conftest import build_scenario
 
 import bunnyland.core.world_actor as world_actor_module
+from bunnyland.claims import controlled_character
 from bunnyland.core import (
     ActionPointsComponent,
     AttentionComponent,
@@ -45,8 +46,10 @@ from bunnyland.core import (
     WorldActor,
     build_submitted_command,
     parse_entity_id,
+    remove_from_container,
     spawn_entity,
 )
+from bunnyland.core.claim_timeout import normalize_claim_timeout
 from bunnyland.core.edges import ControlledBy
 from bunnyland.core.events import (
     ActionPointsChangedEvent,
@@ -61,7 +64,7 @@ from bunnyland.core.events import (
     InjuryAddedEvent,
     NoiseHeardEvent,
 )
-from bunnyland.core.handlers.base import HandlerContext
+from bunnyland.core.handlers.base import HandlerContext, require_reachable_entity
 from bunnyland.mechanics.barbariansim import AttackHandler
 
 HOUR = 3600.0
@@ -71,6 +74,96 @@ def collect(actor, event_type):
     seen = []
     actor.bus.subscribe(event_type, seen.append)
     return seen
+
+
+def test_require_reachable_entity_reports_validation_failures():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    reachable = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="reachable lever", kind="button")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), reachable.id
+    )
+    far = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far lever", kind="button")],
+    )
+
+    assert require_reachable_entity(
+        ctx,
+        character,
+        "not-an-id",
+        invalid_reason="invalid target",
+        missing_reason="missing target",
+        unreachable_reason="unreachable target",
+    )[2].reason == "invalid target"
+    assert require_reachable_entity(
+        ctx,
+        character,
+        "entity_999999",
+        invalid_reason="invalid target",
+        missing_reason="missing target",
+        unreachable_reason="unreachable target",
+    )[2].reason == "missing target"
+    assert require_reachable_entity(
+        ctx,
+        character,
+        str(far.id),
+        invalid_reason="invalid target",
+        missing_reason="missing target",
+        unreachable_reason="unreachable target",
+    )[2].reason == "unreachable target"
+
+    entity_id, entity, error = require_reachable_entity(
+        ctx,
+        character,
+        str(reachable.id),
+        invalid_reason="invalid target",
+        missing_reason="missing target",
+        unreachable_reason="unreachable target",
+    )
+    assert entity_id == reachable.id
+    assert entity is not None
+    assert error is None
+
+
+def test_controlled_character_returns_none_for_unassigned_matching_controller():
+    actor = WorldActor()
+    controller = spawn_entity(
+        actor.world,
+        [WebControllerComponent(client_id="web-1")],
+    )
+    other_controller = spawn_entity(
+        actor.world,
+        [WebControllerComponent(client_id="web-2")],
+    )
+    character = spawn_entity(
+        actor.world,
+        [IdentityComponent(name="Juniper", kind="character"), CharacterComponent()],
+    )
+    character.add_relationship(ControlledBy(generation=1), other_controller.id)
+
+    result = controlled_character(
+        actor,
+        WebControllerComponent,
+        lambda component: component.client_id == controller.get_component(
+            WebControllerComponent
+        ).client_id,
+    )
+
+    assert result is None
+
+
+def test_normalize_claim_timeout_allows_unspecified_timeout():
+    assert normalize_claim_timeout(None) is None
+
+
+def test_remove_from_container_ignores_missing_entity():
+    scenario = build_scenario()
+    remove_from_container(scenario.actor.world, parse_entity_id("entity_999999"))
 
 
 def test_generated_entity_event_exposes_generation_intent_fields():
@@ -355,6 +448,38 @@ async def test_world_actor_rejects_gate_affordability_missing_handler_and_handle
     scenario.actor.submit_nowait(_command(scenario, "fail", payload={}))
     await scenario.actor.tick(0.0)
     assert rejected[-1].reason == "rejected by handler"
+
+
+async def test_world_actor_tries_latest_matching_handler_for_shared_verbs():
+    scenario = build_scenario()
+    events: list[str] = []
+
+    class FallbackHandler:
+        command_type = "shared"
+
+        def execute(self, _ctx, _command):
+            events.append("fallback")
+            return HandlerResult(ok=True)
+
+    class SpecificHandler:
+        command_type = "shared"
+
+        def can_handle(self, _ctx, command):
+            return command.payload.get("kind") == "specific"
+
+        def execute(self, _ctx, _command):
+            events.append("specific")
+            return HandlerResult(ok=True)
+
+    scenario.actor.register_handler(FallbackHandler())
+    scenario.actor.register_handler(SpecificHandler())
+
+    scenario.actor.submit_nowait(_command(scenario, "shared", payload={"kind": "specific"}))
+    await scenario.actor.tick(0.0)
+    scenario.actor.submit_nowait(_command(scenario, "shared", payload={"kind": "other"}))
+    await scenario.actor.tick(0.0)
+
+    assert events == ["specific", "fallback"]
 
 
 def test_world_actor_initiative_order_handles_missing_and_unscored_entities():

@@ -91,7 +91,7 @@ def test_tool_schemas_cover_every_verb():
         "drop",
         "enchant_item",
         "fertilize",
-        "harvest_crop",
+            "harvest",
         "join_household",
         "plant",
         "pickpocket",
@@ -130,6 +130,22 @@ def test_command_from_tool_call_drops_unknown_arguments():
     assert command.payload == {"direction": "north"}
 
 
+def test_action_argument_json_schema_includes_only_declared_metadata():
+    assert ActionArgument().json_schema() == {"type": "string"}
+    assert ActionArgument(description="How many.").json_schema() == {
+        "type": "string",
+        "description": "How many.",
+    }
+    assert ActionArgument(title="Count", kind="number").json_schema() == {
+        "type": "number",
+        "title": "Count",
+    }
+    assert ActionArgument(title="Enabled", kind="boolean").json_schema() == {
+        "type": "boolean",
+        "title": "Enabled",
+    }
+
+
 def test_custom_action_definition_drives_tool_schema_and_command_mapping():
     definition = ActionDefinition(
         command_type="wave",
@@ -137,6 +153,7 @@ def test_custom_action_definition_drives_tool_schema_and_command_mapping():
         description="Wave to a reachable character.",
         arguments={
             "target_id": ActionArgument(
+                title="Target",
                 description="The character to wave at.",
                 kind="entity",
                 required=True,
@@ -158,6 +175,11 @@ def test_custom_action_definition_drives_tool_schema_and_command_mapping():
     )
 
     assert schema["description"] == "Wave to a reachable character."
+    assert schema["parameters"]["properties"]["target_id"] == {
+        "type": "string",
+        "title": "Target",
+        "description": "The character to wave at.",
+    }
     assert schema["parameters"]["required"] == ["target_id"]
     assert command.command_type == "wave"
     assert command.payload == {"target_id": "char_1"}
@@ -211,7 +233,7 @@ def test_parse_natural_command_maps_common_phrases_to_tool_calls():
         "water_crop", {"soil_id": "garden bed"}
     )
     assert parse_natural_command("harvest garden bed") == ToolCall(
-        "harvest_crop", {"soil_id": "garden bed"}
+        "harvest", {"target_id": "garden bed"}
     )
     assert parse_natural_command("discover old watchtower") == ToolCall(
         "discover_location", {"location_id": "old watchtower"}
@@ -285,9 +307,9 @@ def test_parse_natural_command_covers_alternate_command_shapes():
         "drop", {"item_id": "brass key in"}
     )
     assert parse_natural_command("use brass key with old lock") == ToolCall(
-        "use", {"target_id": "brass key", "tool_id": "old lock"}
+        "use", {"item_id": "brass key", "target_id": "old lock"}
     )
-    assert parse_natural_command("use brass key") == ToolCall("use", {"target_id": "brass key"})
+    assert parse_natural_command("use brass key") == ToolCall("use", {"item_id": "brass key"})
     assert parse_natural_command("enchant moss charm with Mend Moss") == ToolCall(
         "enchant_item", {"item_id": "moss charm", "spell_id": "Mend Moss"}
     )
@@ -312,13 +334,16 @@ def test_parse_natural_command_covers_alternate_command_shapes():
     assert parse_natural_command("write hello on slate") == ToolCall(
         "write", {"target_id": "slate", "text": "hello"}
     )
+    assert parse_natural_command('say "unterminated') == ToolCall(
+        "say", {"text": '"unterminated'}
+    )
 
 
 def test_parse_natural_command_rejects_incomplete_command_shapes():
     assert parse_natural_command("go") is None
     assert parse_natural_command("drop") is None
     assert parse_natural_command("use brass key with") == ToolCall(
-        "use", {"target_id": "brass key with"}
+        "use", {"item_id": "brass key with"}
     )
     assert parse_natural_command("enchant moss charm with Mend Moss") == ToolCall(
         "enchant_item", {"item_id": "moss charm", "spell_id": "Mend Moss"}
@@ -401,6 +426,17 @@ def test_parse_natural_command_rejects_adjacent_pattern_slots():
     )
 
     assert parse_natural_command("give carrot Hazel", (definition,)) is None
+
+
+def test_parse_natural_command_rejects_trailing_separator_patterns():
+    definition = ActionDefinition(
+        command_type="use",
+        tool_name="use",
+        arguments={"item_id": ActionArgument(kind="entity")},
+        natural_patterns=(ActionPattern("use {item_id} "),),
+    )
+
+    assert parse_natural_command("use brass key", (definition,)) is None
 
 
 def test_parse_natural_command_ignores_patterns_without_slots():

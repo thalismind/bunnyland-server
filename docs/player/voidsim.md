@@ -53,7 +53,7 @@ Reroute power to it:
 Inspect a system:
 
 ```text
-!inspect-ship-system system_id="life support unit"
+!inspect target_id="life support unit"
 ```
 
 Ship systems track integrity and online state. Power grids track available power.
@@ -304,7 +304,7 @@ contract economy:
 !deliver-passenger passenger_id="quiet scientist"
 !survey-site site_id="ice moon ridge"
 !mine-asteroid site_id="nickel rock" quantity=3
-!inspect-customs hold_id="cargo hold" contraband_found=false
+!inspect target_id="cargo hold" contraband_found=false
 !search-smuggling-compartment compartment_id="false panel"
 !claim-insurance policy_id="hull policy"
 !pay-mortgage mortgage_id="ship lien" amount=100

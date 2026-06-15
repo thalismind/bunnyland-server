@@ -10,7 +10,7 @@
     },
     {
       "tick": 1,
-      "content": "!identify-fossil fossil_id=\"amber bone shard\" species_name=\"velociraptor\""
+      "content": "!identify target_id=\"amber bone shard\" species_name=\"velociraptor\""
     },
     {
       "tick": 2,
