@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 
+from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -15,10 +16,12 @@ from textual.widgets.option_list import Option
 
 from ..core.claim_timeout import normalize_claim_timeout
 from .backend import Backend, LocalBackend, RemoteBackend
+from .events import EventNarrator
 from .model import World, entity_icon, entity_name, fmt_points, has
 from .verbs import ACTION_VERBS, Verb
 
 REFRESH_SECONDS = 1.0
+ACTIVITY_LIMIT = 8
 
 
 def _queued_command_label(command: dict) -> str:
@@ -128,8 +131,9 @@ class BunnylandTUI(App[None]):
     #actions { width: 2fr; padding: 0 1; }
     #status { padding: 0 1; color: $text-muted; height: 1; }
     .col-title { padding: 0 1; color: $accent; text-style: bold; }
-    #members, #doors, #verbs { height: auto; max-height: 1fr; }
+    #members, #doors, #activity, #verbs { height: auto; max-height: 1fr; }
     #doors { border-top: solid $panel; }
+    #activity { border-top: solid $panel; }
     #queued { height: auto; max-height: 1fr; border-top: solid $panel; }
     #points { padding: 0 1; height: 1; }
     #picker, #prompt {
@@ -158,6 +162,10 @@ class BunnylandTUI(App[None]):
         self.selected_id: str | None = None
         self._player_choice_ids: list[str] = []
         self.queued_commands: list[dict] = []
+        self.activity_lines: list[Text] = []
+        self._events = EventNarrator()
+        self._events_primed = False
+        self._refresh_error: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -168,6 +176,8 @@ class BunnylandTUI(App[None]):
                 yield OptionList(id="members")
                 yield Static("Doors", classes="col-title")
                 yield OptionList(id="doors")
+                yield Static("Activity", classes="col-title")
+                yield OptionList(id="activity")
             with Vertical(id="actions"):
                 yield Select([], prompt="— pick a player —", allow_blank=True, id="player")
                 yield Static("", id="points")
@@ -188,10 +198,18 @@ class BunnylandTUI(App[None]):
     async def refresh_world(self) -> None:
         try:
             self.world = World.parse(await self.backend.fetch_snapshot())
+            events = await self.backend.recent_events()
             status = self.backend.label
         except Exception as exc:  # network hiccup, server restart, …
-            self.query_one("#status", Static).update(f"⚠ {self.backend.label} — {exc}")
+            message = f"⚠ {self.backend.label} — {exc}"
+            if message != self._refresh_error:
+                self._append_activity(Text(message, style="red"))
+                self._refresh_error = message
+            self.query_one("#status", Static).update(message)
             return
+        if self._refresh_error is not None:
+            self._append_activity(Text(f"✓ {self.backend.label} — reconnected", style="green"))
+            self._refresh_error = None
 
         self._sync_players()
         if self.player_id and self.player_id not in self.world.entities:
@@ -206,6 +224,8 @@ class BunnylandTUI(App[None]):
         self.query_one("#status", Static).update(f"{status} · epoch {epoch}s · {who}")
         self._render_room()
         self._render_actions()
+        self._drain_activity(events, prime=not self._events_primed)
+        self._events_primed = True
 
     async def _fetch_queued_commands(self) -> list[dict]:
         if not self.player_id:
@@ -298,6 +318,37 @@ class BunnylandTUI(App[None]):
             queued.add_option(
                 Option(_queued_command_label(command), id=f"queued:{index}", disabled=True)
             )
+
+    def _drain_activity(self, events: list[dict], *, prime: bool = False) -> None:
+        lines = self._events.drain_events(
+            events,
+            player_id=self.player_id,
+            room_of=self.world.room_of,
+            name_for=self._name_for,
+        )
+        if prime:
+            self._render_activity()
+            return
+        for line in lines:
+            self._append_activity(line)
+
+    def _append_activity(self, line: Text) -> None:
+        self.activity_lines.append(line)
+        self.activity_lines = self.activity_lines[-ACTIVITY_LIMIT:]
+        self._render_activity()
+
+    def _render_activity(self) -> None:
+        activity = self.query_one("#activity", OptionList)
+        activity.clear_options()
+        if not self.activity_lines:
+            activity.add_option(Option("No recent activity.", id="activity-empty", disabled=True))
+            return
+        for index, line in enumerate(self.activity_lines):
+            activity.add_option(Option(line, id=f"activity:{index}", disabled=True))
+
+    def _name_for(self, entity_id: str) -> str | None:
+        entity = self.world.get(entity_id)
+        return entity_name(entity) if entity else None
 
     # ── events ──────────────────────────────────────────────────────────────────
     @on(Select.Changed, "#player")

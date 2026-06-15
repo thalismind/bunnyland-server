@@ -28,6 +28,7 @@ from rich.text import Text
 from ..core.actions import ActionDefinition, definitions_by_tool_name
 from ..llm_agents.dispatch import suggest_names
 from ..llm_agents.natural_language import NaturalCommandParser
+from ..tui import events as tui_events
 from ..tui.backend import Backend
 from ..tui.model import World, entity_icon, entity_name, fmt_points, has
 from .completion import complete_line, reference_candidates
@@ -39,40 +40,9 @@ META_COMMANDS = (
     "help", "who", "look", "inventory", "points", "play", "refresh", "quit", "exit"
 )
 
-# Events that would drown out narration rather than describe activity: command lifecycle
-# (the "» …" echo already confirms your command), continuous point/need/affect telemetry
-# (points are shown in the status bar), and perception/look bookkeeping. ``CommandRejected``
-# is deliberately kept so a failed action tells you why instead of silently doing nothing.
-_UNNARRATED_EVENT_TYPES = frozenset({
-    "CommandSubmittedEvent", "CommandAcceptedEvent", "CommandQueuedEvent",
-    "CommandExecutedEvent", "CommandExpiredEvent",
-    "ActionPointsChangedEvent", "FocusPointsChangedEvent", "EncumbranceChangedEvent",
-    "PainChangedEvent", "BleedingChangedEvent", "AttentionShiftedEvent", "AffectChangedEvent",
-    "EntitySeenEvent", "RoomLookedEvent", "RoomQualityUpdatedEvent", "HungerChangedEvent",
-    "ThirstChangedEvent", "DailyNeedChangedEvent", "SkillXPChangedEvent",
-})
-
-# Fields on every ``DomainEvent``; the rest of a serialized event is its specific payload.
-_EVENT_BASE_KEYS = frozenset({
-    "event_id", "world_epoch", "created_at", "visibility", "actor_id", "room_id",
-    "target_ids", "causation_id", "correlation_id",
-})
-
 
 def _humanize_event_type(event_type: str) -> str:
-    """``ResourceGatheredEvent`` -> ``Resource gathered`` (splits on CamelCase)."""
-    name = event_type.removesuffix("Event")
-    words: list[str] = []
-    current = ""
-    for char in name:
-        if char.isupper() and current:
-            words.append(current)
-            current = char
-        else:
-            current += char
-    if current:
-        words.append(current)
-    return " ".join(words).capitalize()
+    return tui_events._humanize_event_type(event_type)
 
 
 def history_path() -> Path:
@@ -183,7 +153,7 @@ class BunnylandRepl:
         self.player_id = ""
         self.control: tuple[str, int] | None = None
         self._defs = definitions_by_tool_name()
-        self._seen_event_ids: set[str] = set()
+        self._events = tui_events.EventNarrator()
 
     # ── data ──────────────────────────────────────────────────────────────────
     async def refresh(self) -> None:
@@ -224,74 +194,12 @@ class BunnylandRepl:
     def drain_events(self, messages: list[dict]) -> list[Text]:
         """Render the not-yet-seen events the current player can perceive, then mark the
         whole window seen. ``messages`` are ``recent_events()`` payloads."""
-        rendered: list[Text] = []
-        current: set[str] = set()
-        for message in messages:
-            event = message.get("data", message).get("event", {})
-            event_id = event.get("event_id")
-            if event_id is None:  # cannot de-duplicate without an id; skip rather than repeat
-                continue
-            current.add(event_id)
-            if event_id in self._seen_event_ids:
-                continue
-            event_type = message.get("data", message).get("event_type")
-            if event_type in _UNNARRATED_EVENT_TYPES:
-                continue
-            # You always see your own actions (many are system-visibility, e.g. take/move);
-            # others' activity is shown only when its visibility/scope lets you perceive it.
-            own = bool(self.player_id) and event.get("actor_id") == self.player_id
-            if own or self._perceives(event):
-                rendered.append(self._render_event(message.get("data", message)))
-        self._seen_event_ids = current
-        return rendered
-
-    def _perceives(self, event: dict) -> bool:
-        """Whether the player would perceive *another* character's event, by its visibility
-        and scope — room events only in the player's room, directed/private only when they
-        involve them. (Your own events are surfaced separately in :meth:`drain_events`.)"""
-        visibility = event.get("visibility")
-        if visibility == "public":
-            return True
-        if visibility == "room":
-            return bool(self.player_id) and event.get("room_id") == self.world.room_of(
-                self.player_id
-            )
-        if visibility == "directed":
-            return bool(self.player_id) and (
-                self.player_id == event.get("actor_id")
-                or self.player_id in (event.get("target_ids") or ())
-            )
-        if visibility == "private":
-            return bool(self.player_id) and self.player_id == event.get("actor_id")
-        return False  # system and unknown visibilities are not narrated
-
-    def _render_event(self, data: dict) -> Text:
-        event = data.get("event", {})
-        event_type = str(data.get("event_type", "Event"))
-        label = _humanize_event_type(event_type)
-        actor = self.name_for(event.get("actor_id") or "") if event.get("actor_id") else None
-        details: list[str] = []
-        for key, value in event.items():
-            if key in _EVENT_BASE_KEYS or value in (None, "", (), []):
-                continue
-            if key.endswith("_ids"):
-                names = [self.name_for(str(item)) for item in value]
-                names = [name for name in names if name]
-                if names:
-                    details.append(", ".join(names))
-            elif key.endswith("_id"):
-                name = self.name_for(str(value))
-                if name is not None:
-                    details.append(name)
-            else:
-                details.append(f"{key.replace('_', ' ')} {value}")
-        line = f"{actor}: {label}" if actor else label
-        if details:
-            line += f" — {'; '.join(details)}"
-        # Rejections are failures worth noticing (orange); the rest is ambient, dim narration.
-        # Connection/runtime errors use red, set where they are written in the app.
-        style = "dark_orange" if event_type == "CommandRejectedEvent" else "dim italic"
-        return Text(line, style=style)
+        return self._events.drain_events(
+            messages,
+            player_id=self.player_id,
+            room_of=self.world.room_of,
+            name_for=self.name_for,
+        )
 
     # ── dispatch ──────────────────────────────────────────────────────────────
     async def dispatch(self, line: str) -> Text:

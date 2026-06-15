@@ -177,6 +177,20 @@ def _queued_command(**overrides) -> dict:
     return command
 
 
+def _event(event_id: str | None, event_type="CustomEvent", **fields) -> dict:
+    return {
+        "type": "event",
+        "data": {
+            "event_type": event_type,
+            "event": {
+                "event_id": event_id,
+                "note": event_id,
+                **fields,
+            },
+        },
+    }
+
+
 # ── lazy package exports ──────────────────────────────────────────────────────
 def test_tui_package_lazily_exports_app_symbols():
     import bunnyland.tui as tui
@@ -675,9 +689,15 @@ async def test_backend_default_queued_commands_response():
 class RecordingBackend(Backend):
     """A static-snapshot backend that records submitted commands, for app tests."""
 
-    def __init__(self, snapshot: dict, queued_response: dict | None = None) -> None:
+    def __init__(
+        self,
+        snapshot: dict,
+        queued_response: dict | None = None,
+        events: list[dict] | None = None,
+    ) -> None:
         self.snapshot = snapshot
         self.queued_response = queued_response or _queued_response()
+        self.events = events or []
         self.queued_requests: list[str] = []
         self.commands: list[dict] = []
         self.label = "test"
@@ -695,19 +715,28 @@ class RecordingBackend(Backend):
         self.commands.append(command)
         return True
 
+    async def recent_events(self) -> list[dict]:
+        return copy.deepcopy(self.events)
+
     async def claim(self, player_id, world):
         return world.control(player_id)
-
-
-class FailingBackend(RecordingBackend):
-    async def fetch_snapshot(self) -> dict:
-        raise RuntimeError("snapshot failed")
 
 
 class FailingQueueBackend(RecordingBackend):
     async def fetch_queued_commands(self, character_id: str) -> dict:
         self.queued_requests.append(character_id)
         raise RuntimeError("queue failed")
+
+
+class FlakyBackend(RecordingBackend):
+    def __init__(self, snapshot: dict) -> None:
+        super().__init__(snapshot)
+        self.fail = True
+
+    async def fetch_snapshot(self) -> dict:
+        if self.fail:
+            raise RuntimeError("snapshot failed")
+        return await super().fetch_snapshot()
 
 
 async def _select_player(app, pilot):
@@ -773,11 +802,23 @@ async def test_text_prompt_submits_text_and_cancel():
 
 
 async def test_app_reports_refresh_errors():
-    from textual.widgets import Static
+    from textual.widgets import OptionList, Static
 
-    app = BunnylandTUI(FailingBackend(_snapshot()))
+    backend = FlakyBackend(_snapshot())
+    app = BunnylandTUI(backend)
     async with app.run_test():
         assert "snapshot failed" in str(app.query_one("#status", Static).render())
+        activity = app.query_one("#activity", OptionList)
+        assert activity.option_count == 1
+        assert "snapshot failed" in str(activity.get_option_at_index(0).prompt)
+
+        await app.refresh_world()
+        assert activity.option_count == 1
+
+        backend.fail = False
+        await app.refresh_world()
+        assert activity.option_count == 2
+        assert "reconnected" in str(activity.get_option_at_index(1).prompt)
 
 
 async def test_app_renders_room_and_actions():
@@ -801,6 +842,42 @@ async def test_app_renders_room_and_actions():
         assert "Say [focus]" in str(queued.get_option_at_index(0).prompt)
         assert "1 AP + 1 FP" in str(queued.get_option_at_index(0).prompt)
         assert "text: next" in str(queued.get_option_at_index(0).prompt)
+
+
+async def test_app_renders_perceived_activity_after_initial_prime():
+    from textual.widgets import OptionList
+
+    backend = RecordingBackend(_snapshot())
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        activity = app.query_one("#activity", OptionList)
+        assert "No recent activity." in str(activity.get_option_at_index(0).prompt)
+
+        backend.events = [
+            _event(
+                "r1",
+                event_type="CommandRejectedEvent",
+                visibility="system",
+                actor_id=PLAYER,
+                command_type="take",
+                reason="that item is not portable",
+            ),
+            _event(
+                "r2",
+                event_type="CommandRejectedEvent",
+                visibility="system",
+                actor_id=MARLOW,
+                command_type="take",
+                reason="secret",
+            ),
+        ]
+        await app.refresh_world()
+
+        assert activity.option_count == 1
+        shown = str(activity.get_option_at_index(0).prompt)
+        assert "Command rejected" in shown and "not portable" in shown
+        assert "secret" not in shown
 
 
 async def test_app_renders_empty_and_snapshot_fallback_queued_actions():
