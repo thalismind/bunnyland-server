@@ -51,6 +51,14 @@ from bunnyland.core.events import (
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.mechanics.storyteller import IncidentComponent
+from bunnyland.mechanics.toonsim import (
+    SpriteBounds,
+    SpriteImage,
+    SpriteLayer,
+    SpritePosition,
+    SpriteScale,
+    ToonRoomComponent,
+)
 from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.prompts.builder import PromptBuilder
@@ -58,8 +66,10 @@ from bunnyland.server import (
     CommandRequest,
     EventStream,
     serialize_character_projection,
+    serialize_character_queued_commands,
     serialize_dm_projection,
     serialize_event,
+    serialize_room_projection,
     serialize_world,
 )
 from bunnyland.server import admin as server_admin
@@ -280,6 +290,130 @@ def test_client_view_scopes_visible_state_points_controller_and_actions(scenario
         argument["key"] == "exit_id" and argument["target_group"] == "exits"
         for argument in move["arguments"]
     )
+
+
+def test_room_projection_scopes_visible_state_and_sprite_facts(scenario):
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    room.add_component(ToonRoomComponent(default_start=True))
+    room.add_component(SpriteImage(url="/rooms/moss.png"))
+    room.add_component(SpriteBounds(width=120.0, height=80.0))
+    visible_item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Painted Stool", kind="stool"),
+            PortableComponent(),
+            SpritePosition(x=12.0, y=34.0),
+            SpriteLayer(layer=10),
+            SpriteScale(scale=1.25),
+            SpriteBounds(width=8.0, height=6.0, solid=True),
+        ],
+    )
+    hidden_item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="hidden ledger", kind="item"),
+            PortableComponent(),
+            StealthComponent(hiding=True, visibility_level=0.0),
+            SpritePosition(x=50.0, y=50.0),
+        ],
+    )
+    remote_item = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="remote candle", kind="item"),
+            PortableComponent(),
+            SpritePosition(x=10.0, y=10.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), visible_item.id
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hidden_item.id
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), remote_item.id
+    )
+
+    view = serialize_room_projection(scenario.actor, str(scenario.room_a)).model_dump(mode="json")
+
+    assert view["room"]["id"] == str(scenario.room_a)
+    assert view["room"]["title"] == "Mosslit Burrow"
+    assert view["room"]["default_start"] is True
+    assert view["room"]["sprite"]["image_url"] == "/rooms/moss.png"
+    assert view["room"]["sprite"]["bounds"] == {"width": 120.0, "height": 80.0, "solid": False}
+    rendered = json.dumps(view)
+    assert "Painted Stool" in rendered
+    assert "hidden ledger" not in rendered
+    assert "remote candle" not in rendered
+    assert "components" not in rendered
+    assert "relationships" not in rendered
+    stool = next(
+        entity for entity in view["room"]["entities"] if entity["id"] == str(visible_item.id)
+    )
+    assert stool["sprite"]["position"] == {"x": 12.0, "y": 34.0}
+    assert stool["sprite"]["layer"] == 10
+    assert stool["sprite"]["scale"] == 1.25
+    assert stool["sprite"]["bounds"] == {"width": 8.0, "height": 6.0, "solid": True}
+    assert any(exit["id"] == str(scenario.room_b) for exit in view["room"]["exits"])
+
+
+def test_room_projection_rejects_invalid_ids_and_wrong_kind(scenario):
+    with pytest.raises(ValueError, match="room does not exist"):
+        serialize_room_projection(scenario.actor, "not-an-id")
+
+    with pytest.raises(ValueError, match="entity is not a room"):
+        serialize_room_projection(scenario.actor, str(scenario.character))
+
+
+def test_character_queued_commands_scopes_commands_to_character(scenario):
+    other = spawn_entity(
+        scenario.actor.world,
+        [CharacterComponent(), IdentityComponent(name="Hazel", kind="character")],
+    )
+    included = CommandRequest(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="say",
+        payload={"text": "next"},
+        cost={"action": 1},
+        lane=Lane.WORLD,
+        command_id="cmd-included",
+    ).to_submitted(submitted_at_epoch=42)
+    pending = CommandRequest(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="wait",
+        payload={},
+        lane=Lane.FOCUS,
+        command_id="cmd-pending",
+    ).to_submitted(submitted_at_epoch=43)
+    excluded = CommandRequest(
+        character_id=str(other.id),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="say",
+        payload={"text": "elsewhere"},
+        command_id="cmd-excluded",
+    ).to_submitted(submitted_at_epoch=44)
+    scenario.actor.queues.enqueue(included)
+    scenario.actor.queues.enqueue(excluded)
+    scenario.actor.submit_nowait(pending)
+
+    view = serialize_character_queued_commands(
+        scenario.actor, str(scenario.character)
+    ).model_dump(mode="json")
+
+    assert view["character_id"] == str(scenario.character)
+    assert [command["command_id"] for command in view["commands"]] == [
+        "cmd-pending",
+        "cmd-included",
+    ]
+    assert view["commands"][0]["lane"] == "focus"
+    assert view["commands"][1]["cost"] == {"action": 1, "focus": 0}
 
 
 def test_client_view_action_menu_uses_advisory_target_groups(scenario):
@@ -546,6 +680,8 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/health" in paths
     assert "/world/snapshot" in paths
     assert "/world/character/{id}" in paths
+    assert "/world/character/{id}/commands" in paths
+    assert "/world/room/{id}" in paths
     assert "/world/dm/{id}" in paths
     assert "/world/client-view/{character_id}" not in paths
     assert "/world/schema" in paths
@@ -580,6 +716,8 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
     library = client.get("/world/library")
     recent = client.get("/world/events/recent")
     character_view = client.get(f"/world/character/{scenario.character}")
+    room_view = client.get(f"/world/room/{scenario.room_a}")
+    queued = client.get(f"/world/character/{scenario.character}/commands")
 
     assert health.status_code == 200
     assert health.json() == {"ok": True, "world_epoch": scenario.actor.epoch}
@@ -594,6 +732,17 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
     assert character_view.status_code == 200
     assert character_view.json()["character_id"] == str(scenario.character)
     assert "entities" not in character_view.json()
+    assert room_view.status_code == 200
+    assert room_view.json()["room"]["id"] == str(scenario.room_a)
+    assert "components" not in room_view.text
+    assert queued.status_code == 200
+    assert queued.json() == {
+        "ok": True,
+        "schema_version": 1,
+        "world_epoch": scenario.actor.epoch,
+        "character_id": str(scenario.character),
+        "commands": [],
+    }
 
 
 def test_fastapi_character_projection_maps_invalid_ids_to_http_errors(scenario):
@@ -610,6 +759,26 @@ def test_fastapi_character_projection_maps_invalid_ids_to_http_errors(scenario):
     assert wrong_kind.json()["detail"] == "entity is not a character"
 
 
+def test_fastapi_room_projection_and_queue_map_invalid_ids_to_http_errors(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    missing_room = client.get("/world/room/not-an-id")
+    wrong_room_kind = client.get(f"/world/room/{scenario.character}")
+    missing_queue = client.get("/world/character/not-an-id/commands")
+    wrong_queue_kind = client.get(f"/world/character/{scenario.room_a}/commands")
+
+    assert missing_room.status_code == 404
+    assert missing_room.json()["detail"] == "room does not exist"
+    assert wrong_room_kind.status_code == 400
+    assert wrong_room_kind.json()["detail"] == "entity is not a room"
+    assert missing_queue.status_code == 404
+    assert missing_queue.json()["detail"] == "character does not exist"
+    assert wrong_queue_kind.status_code == 400
+    assert wrong_queue_kind.json()["detail"] == "entity is not a character"
+
+
 def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     pytest.importorskip("fastapi")
     app = create_app(scenario.actor, mcp_admin_token="secret")
@@ -620,6 +789,18 @@ def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     assert operation["parameters"][0]["name"] == "id"
     assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CharacterProjectionResponse"
+    }
+    queue_operation = schema["paths"]["/world/character/{id}/commands"]["get"]
+    assert queue_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CharacterQueuedCommandsResponse"
+    }
+    room_operation = schema["paths"]["/world/room/{id}"]["get"]
+    assert room_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RoomProjectionResponse"
+    }
+    library_operation = schema["paths"]["/world/library"]["get"]
+    assert library_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/WorldLibraryResponse"
     }
     dm_operation = schema["paths"]["/world/dm/{id}"]["get"]
     assert {parameter["name"] for parameter in dm_operation["parameters"]} == {

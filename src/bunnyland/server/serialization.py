@@ -14,19 +14,34 @@ from ..core.commands import Lane, SubmittedCommand
 from ..core.components import (
     ActionPointsComponent,
     CharacterComponent,
+    EditorDisplayComponent,
     FocusPointsComponent,
     IdentityComponent,
     PortableComponent,
     RoomComponent,
+    StealthComponent,
 )
 from ..core.ecs import contents, entity_name, parse_entity_id
-from ..core.edges import ControlledBy, Holding, Wearing
+from ..core.edges import Contains, ControlledBy, ExitTo, Holding, Wearing
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
+from ..mechanics.toonsim import (
+    ROOM_HEIGHT,
+    ROOM_WIDTH,
+    SpriteBounds,
+    SpriteImage,
+    SpriteLayer,
+    SpritePosition,
+    SpriteScale,
+    ToonRoomComponent,
+    default_bounds_for,
+    default_layer_for,
+)
 from ..persistence import WorldMeta
 from ..projections import PerceivedEntity, build_room_facts, perceive
 from .models import (
     CharacterProjectionResponse,
+    CharacterQueuedCommandsResponse,
     ClientActionArgumentView,
     ClientActionView,
     ClientControllerView,
@@ -34,10 +49,16 @@ from .models import (
     ClientExitView,
     ClientPointsView,
     ClientRoomView,
+    ClientSpriteBoundsView,
+    ClientSpritePositionView,
+    ClientSpriteView,
     ClientTargetView,
     CommandCostRequest,
     DmProjectionResponse,
     DmRoomProjectionView,
+    RoomProjectionEntityView,
+    RoomProjectionResponse,
+    RoomProjectionRoomView,
 )
 
 
@@ -113,6 +134,16 @@ def serialize_queued_command(command: SubmittedCommand) -> dict[str, Any]:
     }
 
 
+def _character_entity(actor: WorldActor, character_id: str):
+    parsed = parse_entity_id(character_id)
+    if parsed is None or not actor.world.has_entity(parsed):
+        raise ValueError("character does not exist")
+    character = actor.world.get_entity(parsed)
+    if not character.has_component(CharacterComponent):
+        raise ValueError("entity is not a character")
+    return character
+
+
 def serialize_queued_commands(actor: WorldActor) -> list[dict[str, Any]]:
     """Return volatile queued commands grouped by character and lane."""
 
@@ -125,6 +156,28 @@ def serialize_queued_commands(actor: WorldActor) -> list[dict[str, Any]]:
         for lane in Lane
         for command in actor.queues.pending(character_id, lane)
     ]
+
+
+def serialize_character_queued_commands(
+    actor: WorldActor, character_id: str
+) -> CharacterQueuedCommandsResponse:
+    """Return queued commands attached to one acting character."""
+
+    character = _character_entity(actor, character_id)
+    command_dicts = [
+        serialize_queued_command(command)
+        for command in actor.pending_submissions()
+        if command.character_id == str(character.id)
+    ] + [
+        serialize_queued_command(command)
+        for lane in Lane
+        for command in actor.queues.pending(str(character.id), lane)
+    ]
+    return CharacterQueuedCommandsResponse(
+        world_epoch=actor.epoch,
+        character_id=str(character.id),
+        commands=command_dicts,
+    )
 
 
 def serialize_world(actor: WorldActor, meta: WorldMeta | None = None) -> dict[str, Any]:
@@ -151,6 +204,13 @@ def _entity_kind(entity) -> str:
     return "other"
 
 
+def _is_hidden(entity) -> bool:
+    if not entity.has_component(StealthComponent):
+        return False
+    stealth = entity.get_component(StealthComponent)
+    return stealth.hiding and stealth.visibility_level <= stealth.hidden_threshold
+
+
 def _perceived_entity_view(entity: PerceivedEntity) -> ClientEntityView:
     return ClientEntityView(
         id=entity.id,
@@ -158,6 +218,107 @@ def _perceived_entity_view(entity: PerceivedEntity) -> ClientEntityView:
         kind="character" if entity.is_character else "object",
         is_character=entity.is_character,
         contents=[_perceived_entity_view(child) for child in entity.contents],
+    )
+
+
+def _sprite_position_view(entity) -> ClientSpritePositionView:
+    if entity.has_component(SpritePosition):
+        position = entity.get_component(SpritePosition)
+        return ClientSpritePositionView(x=position.x, y=position.y)
+    return ClientSpritePositionView(x=ROOM_WIDTH / 2, y=ROOM_HEIGHT / 2)
+
+
+def _sprite_bounds_view(entity) -> ClientSpriteBoundsView:
+    bounds = entity.get_component(SpriteBounds) if entity.has_component(SpriteBounds) else None
+    if bounds is None:
+        bounds = default_bounds_for(entity)
+    if bounds is None:
+        bounds = SpriteBounds()
+    return ClientSpriteBoundsView(
+        width=bounds.width,
+        height=bounds.height,
+        solid=bounds.solid,
+    )
+
+
+def _sprite_view(entity) -> ClientSpriteView:
+    image = entity.get_component(SpriteImage) if entity.has_component(SpriteImage) else None
+    layer = entity.get_component(SpriteLayer).layer if entity.has_component(SpriteLayer) else None
+    scale = entity.get_component(SpriteScale).scale if entity.has_component(SpriteScale) else 1.0
+    display = (
+        entity.get_component(EditorDisplayComponent)
+        if entity.has_component(EditorDisplayComponent)
+        else None
+    )
+    return ClientSpriteView(
+        position=_sprite_position_view(entity),
+        image_url=image.url if image is not None else "",
+        image_data=image.data if image is not None else "",
+        layer=layer if layer is not None else (default_layer_for(entity) or 20),
+        scale=scale,
+        bounds=_sprite_bounds_view(entity),
+        emoji=display.emoji if display is not None else "",
+    )
+
+
+def _room_projection_entity(entity) -> RoomProjectionEntityView:
+    return RoomProjectionEntityView(
+        id=str(entity.id),
+        name=entity_name(entity),
+        kind=_entity_kind(entity),
+        is_character=entity.has_component(CharacterComponent),
+        sprite=_sprite_view(entity),
+    )
+
+
+def _room_exits(room) -> list[ClientExitView]:
+    exits = [
+        ClientExitView(
+            id=str(target),
+            direction=edge.direction,
+            label=f"{edge.direction}: {target}" if edge.direction else str(target),
+            locked=edge.locked,
+        )
+        for edge, target in room.get_relationships(ExitTo)
+        if not edge.hidden
+    ]
+    return sorted(exits, key=lambda exit: (exit.direction, exit.id))
+
+
+def serialize_room_projection(actor: WorldActor, room_id: str) -> RoomProjectionResponse:
+    """Return a play-facing room view without raw ECS components or hidden state."""
+
+    parsed = parse_entity_id(room_id)
+    if parsed is None or not actor.world.has_entity(parsed):
+        raise ValueError("room does not exist")
+    room = actor.world.get_entity(parsed)
+    if not room.has_component(RoomComponent):
+        raise ValueError("entity is not a room")
+
+    entities = []
+    for edge, child_id in room.get_relationships(Contains):
+        if not edge.visible or not actor.world.has_entity(child_id):
+            continue
+        child = actor.world.get_entity(child_id)
+        if _is_hidden(child):
+            continue
+        entities.append(_room_projection_entity(child))
+
+    room_component = room.get_component(RoomComponent)
+    toon = room.get_component(ToonRoomComponent) if room.has_component(ToonRoomComponent) else None
+    return RoomProjectionResponse(
+        world_epoch=actor.epoch,
+        room=RoomProjectionRoomView(
+            id=str(room.id),
+            title=room_component.title,
+            default_start=toon.default_start if toon is not None else False,
+            sprite=_sprite_view(room),
+            entities=sorted(
+                entities,
+                key=lambda entity: (entity.sprite.layer, entity.name.lower()),
+            ),
+            exits=_room_exits(room),
+        ),
     )
 
 
@@ -320,12 +481,7 @@ def serialize_character_projection(
     character can use for normal play instead of raw ECS components and relationships.
     """
 
-    parsed = parse_entity_id(character_id)
-    if parsed is None or not actor.world.has_entity(parsed):
-        raise ValueError("character does not exist")
-    character = actor.world.get_entity(parsed)
-    if not character.has_component(CharacterComponent):
-        raise ValueError("entity is not a character")
+    character = _character_entity(actor, character_id)
 
     perception = perceive(actor.world, character)
     room = ClientRoomView()
@@ -446,10 +602,12 @@ __all__ = [
     "event_message",
     "jsonable",
     "serialize_character_projection",
+    "serialize_character_queued_commands",
     "serialize_dm_projection",
     "serialize_entity",
     "serialize_event",
     "serialize_queued_command",
     "serialize_queued_commands",
+    "serialize_room_projection",
     "serialize_world",
 ]

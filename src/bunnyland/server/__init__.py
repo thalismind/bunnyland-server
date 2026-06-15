@@ -6,10 +6,12 @@ FastAPI app factory is imported lazily by callers that install web-server depend
 
 from .models import (
     CharacterProjectionResponse,
+    CharacterQueuedCommandsResponse,
     CommandRequest,
     CommandResponse,
     DmProjectionResponse,
     DmRoomProjectionView,
+    RoomProjectionResponse,
     WebControllerClaimRequest,
     WebControllerClaimResponse,
     WebControllerFallbackRequest,
@@ -23,6 +25,7 @@ from .models import (
     WorldGeneratorListResponse,
     WorldItemGenerationRequest,
     WorldItemGenerationResponse,
+    WorldLibraryResponse,
     WorldPatchRequest,
     WorldPatchResponse,
     WorldRoomGenerationRequest,
@@ -34,8 +37,10 @@ from .models import (
 from .serialization import (
     event_message,
     serialize_character_projection,
+    serialize_character_queued_commands,
     serialize_dm_projection,
     serialize_event,
+    serialize_room_projection,
     serialize_world,
 )
 from .subscriptions import EventStream, EventSubscription
@@ -46,8 +51,10 @@ __all__ = [
     "DmProjectionResponse",
     "DmRoomProjectionView",
     "CharacterProjectionResponse",
+    "CharacterQueuedCommandsResponse",
     "EventStream",
     "EventSubscription",
+    "RoomProjectionResponse",
     "WebControllerFallbackRequest",
     "WebControllerFallbackResponse",
     "WebControllerClaimRequest",
@@ -61,6 +68,7 @@ __all__ = [
     "WorldGeneratorListResponse",
     "WorldItemGenerationRequest",
     "WorldItemGenerationResponse",
+    "WorldLibraryResponse",
     "WorldPatchRequest",
     "WorldPatchResponse",
     "WorldRoomGenerationRequest",
@@ -69,8 +77,10 @@ __all__ = [
     "WorldSaveResponse",
     "WorldSchemaResponse",
     "event_message",
+    "serialize_character_queued_commands",
     "serialize_character_projection",
     "serialize_dm_projection",
     "serialize_event",
+    "serialize_room_projection",
     "serialize_world",
 ]

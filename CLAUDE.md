@@ -33,6 +33,8 @@ Every changed line should trace to the user request.
 - Remove imports, variables, and helpers made unused by your own changes.
 - Leave unrelated user or generated work alone. Mention unrelated issues; do not clean
   them up unless asked.
+- Prefer one clear null check over repeated `foo?.bar || {}` fallback chains; normalize
+  optional data at the boundary, then use the normalized shape internally.
 
 ## 3. Relics ECS Modeling
 

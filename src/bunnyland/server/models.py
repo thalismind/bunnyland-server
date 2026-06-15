@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from ..content import ContentLibrary
 from ..core.claim_timeout import CLAIM_TIMEOUT_MAX_SECONDS, CLAIM_TIMEOUT_MIN_SECONDS
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, SubmittedCommand
 
@@ -47,6 +48,25 @@ class CommandRequest(BaseModel):
 class CommandResponse(BaseModel):
     queued: bool
     command_id: str
+
+
+class QueuedCommandView(BaseModel):
+    command_id: str
+    character_id: str
+    command_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
+    lane: Lane = Lane.WORLD
+    submitted_at_epoch: int
+    expires_at_epoch: int | None = None
+
+
+class CharacterQueuedCommandsResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    character_id: str
+    commands: list[QueuedCommandView] = Field(default_factory=list)
 
 
 class ClientEntityView(BaseModel):
@@ -107,6 +127,51 @@ class ClientRoomView(BaseModel):
     exits: list[ClientExitView] = Field(default_factory=list)
 
 
+class ClientSpritePositionView(BaseModel):
+    x: float = 0.0
+    y: float = 0.0
+
+
+class ClientSpriteBoundsView(BaseModel):
+    width: float = 4.0
+    height: float = 4.0
+    solid: bool = False
+
+
+class ClientSpriteView(BaseModel):
+    position: ClientSpritePositionView = Field(default_factory=ClientSpritePositionView)
+    image_url: str = ""
+    image_data: str = ""
+    layer: int = 20
+    scale: float = 1.0
+    bounds: ClientSpriteBoundsView = Field(default_factory=ClientSpriteBoundsView)
+    emoji: str = ""
+
+
+class RoomProjectionEntityView(BaseModel):
+    id: str
+    name: str
+    kind: str = "other"
+    is_character: bool = False
+    sprite: ClientSpriteView = Field(default_factory=ClientSpriteView)
+
+
+class RoomProjectionRoomView(BaseModel):
+    id: str
+    title: str = ""
+    default_start: bool = False
+    sprite: ClientSpriteView = Field(default_factory=ClientSpriteView)
+    entities: list[RoomProjectionEntityView] = Field(default_factory=list)
+    exits: list[ClientExitView] = Field(default_factory=list)
+
+
+class RoomProjectionResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    room: RoomProjectionRoomView
+
+
 class CharacterProjectionResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1
@@ -138,6 +203,10 @@ class DmProjectionResponse(BaseModel):
     dm_id: str
     rooms: list[DmRoomProjectionView] = Field(default_factory=list)
     characters: list[ClientTargetView] = Field(default_factory=list)
+
+
+class WorldLibraryResponse(ContentLibrary):
+    pass
 
 
 ClaimFallbackController = Literal["suspend", "llm"]
@@ -382,14 +451,22 @@ __all__ = [
     "ClientActionArgumentView",
     "ClientActionView",
     "CharacterProjectionResponse",
+    "CharacterQueuedCommandsResponse",
     "ClientControllerView",
     "ClientEntityView",
     "ClientExitView",
     "ClientPointsView",
     "ClientRoomView",
+    "ClientSpriteBoundsView",
+    "ClientSpritePositionView",
+    "ClientSpriteView",
     "ClientTargetView",
     "DmProjectionResponse",
     "DmRoomProjectionView",
+    "QueuedCommandView",
+    "RoomProjectionEntityView",
+    "RoomProjectionResponse",
+    "RoomProjectionRoomView",
     "ComponentPatchSpec",
     "EcsTypeSchema",
     "EdgePatchSpec",
@@ -405,6 +482,7 @@ __all__ = [
     "WorldGeneratorListResponse",
     "WorldItemGenerationRequest",
     "WorldItemGenerationResponse",
+    "WorldLibraryResponse",
     "WorldRoomGenerationRequest",
     "WorldRoomGenerationResponse",
     "WorldPatchRequest",

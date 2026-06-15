@@ -30,9 +30,11 @@ from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .models import (
     CharacterProjectionResponse,
+    CharacterQueuedCommandsResponse,
     CommandRequest,
     CommandResponse,
     DmProjectionResponse,
+    RoomProjectionResponse,
     WebControllerClaimRequest,
     WebControllerClaimResponse,
     WebControllerFallbackRequest,
@@ -48,6 +50,7 @@ from .models import (
     WorldGeneratorListResponse,
     WorldItemGenerationRequest,
     WorldItemGenerationResponse,
+    WorldLibraryResponse,
     WorldPatchRequest,
     WorldPatchResponse,
     WorldRoomGenerationRequest,
@@ -60,7 +63,9 @@ from .patches import WorldPatchError, apply_world_patch
 from .schema import world_schema
 from .serialization import (
     serialize_character_projection,
+    serialize_character_queued_commands,
     serialize_dm_projection,
+    serialize_room_projection,
     serialize_world,
 )
 from .subscriptions import EventStream
@@ -168,6 +173,24 @@ def create_app(
             status = 400 if detail == "entity is not a character" else 404
             raise HTTPException(status_code=status, detail=detail) from exc
 
+    @app.get("/world/character/{id}/commands", response_model=CharacterQueuedCommandsResponse)
+    async def world_character_queued_commands(id: str) -> CharacterQueuedCommandsResponse:
+        try:
+            return serialize_character_queued_commands(actor, id)
+        except ValueError as exc:
+            detail = str(exc)
+            status = 400 if detail == "entity is not a character" else 404
+            raise HTTPException(status_code=status, detail=detail) from exc
+
+    @app.get("/world/room/{id}", response_model=RoomProjectionResponse)
+    async def world_room_projection(id: str) -> RoomProjectionResponse:
+        try:
+            return serialize_room_projection(actor, id)
+        except ValueError as exc:
+            detail = str(exc)
+            status = 400 if detail == "entity is not a room" else 404
+            raise HTTPException(status_code=status, detail=detail) from exc
+
     def _require_projection_admin(supplied: str | None) -> None:
         expected = (mcp_admin_token or os.environ.get(ADMIN_TOKEN_ENV) or "").strip()
         if not expected:
@@ -193,9 +216,9 @@ def create_app(
     async def get_world_schema() -> WorldSchemaResponse:
         return world_schema(actor)
 
-    @app.get("/world/library")
-    async def get_world_library() -> dict:
-        return load_content_library().model_dump(mode="json")
+    @app.get("/world/library", response_model=WorldLibraryResponse)
+    async def get_world_library() -> WorldLibraryResponse:
+        return WorldLibraryResponse.model_validate(load_content_library().model_dump(mode="json"))
 
     @app.get("/world/events/recent")
     async def recent_events() -> dict:
