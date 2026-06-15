@@ -1,4 +1,4 @@
-# How to respond to storyteller incidents
+# Storyteller incidents
 
 Storyteller incidents are timed events spawned by the world. They create visible incident
 state, nearby objects, or threats depending on the world budget.

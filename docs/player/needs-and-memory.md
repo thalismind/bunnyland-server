@@ -1,4 +1,4 @@
-# How to manage needs and memory
+# Needs and memory
 
 Needs are character meters. Memory commands are private focus actions. In Discord, prefix
 commands with `!`.

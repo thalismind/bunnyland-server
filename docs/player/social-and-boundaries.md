@@ -1,4 +1,4 @@
-# How to handle social play and boundaries
+# Social play and boundaries
 
 Social state comes from explicit commands and from speech. Boundaries are world policy:
 they decide which sensitive mechanics are enabled and who must opt in.

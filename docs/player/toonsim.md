@@ -1,4 +1,4 @@
-# Toon-sim and the Bunnyland Toon client
+# The Toon client
 
 Toon-sim turns a Bunnyland world into something you can see. It attaches three pieces of
 presentation data to entities - a sprite image, a float X/Y position, and an integer draw

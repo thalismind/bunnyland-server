@@ -7,7 +7,7 @@ that fits how you want to play:
   menu, action search, target pickers, and a queued-action panel.
 - **[Terminal REPL](repl.md)** - a compact terminal command line with clickable targets,
   command history, and tab completion.
-- **[Bunnyland Toon](../toonsim.md)** - the sprite-based web client from the web repo.
+- **[The Toon client](../toonsim.md)** - the sprite-based web client from the web repo.
 
 The clients can present different controls, but submitted commands still go through the
 same authoritative server checks. A menu entry or clickable target is a convenience, not a
@@ -43,4 +43,4 @@ bunnyland-repl --list-generators
 ```
 
 The web toon client connects to a running HTTP server from the browser. See
-[Toon-sim and the Bunnyland Toon client](../toonsim.md) for details.
+[The Toon client](../toonsim.md) for details.

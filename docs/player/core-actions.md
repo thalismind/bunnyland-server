@@ -1,4 +1,4 @@
-# How to use core actions
+# Core actions
 
 Core actions are the shared verbs every controller uses. In Discord, prefix them with `!`.
 

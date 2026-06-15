@@ -1,4 +1,4 @@
-# How to use environment and mechanisms
+# Environment and mechanisms
 
 Environment mechanics track time, weather, light, and fire. Mechanisms are objects such
 as doors and buttons.
