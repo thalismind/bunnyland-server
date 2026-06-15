@@ -177,6 +177,19 @@ def _queued_command(**overrides) -> dict:
     return command
 
 
+# ── lazy package exports ──────────────────────────────────────────────────────
+def test_tui_package_lazily_exports_app_symbols():
+    import bunnyland.tui as tui
+
+    # The Textual app is imported lazily; the package exposes it on access so the REPL can
+    # reuse the textual-free backend/model without importing Textual.
+    assert tui.main is tui_app.main
+    assert tui.BunnylandTUI is BunnylandTUI
+    unknown = "does_not_exist"
+    with pytest.raises(AttributeError):
+        getattr(tui, unknown)
+
+
 # ── world model ───────────────────────────────────────────────────────────────
 def test_parse_normalizes_relationships_and_epoch():
     snapshot = _snapshot()

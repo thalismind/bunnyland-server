@@ -16,11 +16,13 @@ llm = ["ollama>=0.3", "openrouter>=0.9.1"]
 mcp = ["mcp>=1.10"]
 server = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 tui = ["textual>=0.60", "httpx>=0.27"]
+repl = ["textual>=0.60", "httpx>=0.27"]
 yaml = ["PyYAML>=6.0"]
 
 [project.scripts]
 bunnyland = "bunnyland.cli:main"
 bunnyland-tui = "bunnyland.tui:main"
+bunnyland-repl = "bunnyland.repl:main"
 
 [dependency-groups]
 dev = [

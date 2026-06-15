@@ -280,6 +280,26 @@ uv run -m pytest -m live_llm
 check it matches both the proposal and the agent's prompt, then play several rounds and
 assert each action is processed.
 
+## Clients
+
+Bunnyland is played through several clients. The web graph and web toon clients ship from
+the separate frontend/web repo; the rest ship from this repo. *Offline* means the client can
+host a world in its own process with no network port; *Over HTTP* means it can drive a
+running server through the web controller; *Role* is whether it can act in the world or only
+observe it.
+
+| Client | Role | Offline | Over HTTP | Agent-driven | 2D graphics | ASCII / rich text | Clickable targets |
+|--------|------|:------:|:--------:|:------------:|:-----------:|:-----------------:|:-----------------:|
+| Web graph †                       | Spectator | | ✓ | | ✓ (world graph) | | ✓ |
+| Web toon †                        | Playable  | | ✓ | | ✓ (sprites)     | | ✓ |
+| Discord bot                       | Playable  | ✓ ‡ | | | | ✓ | |
+| MCP endpoint                      | Playable  | | ✓ | ✓ | | | |
+| Terminal TUI (`bunnyland-tui`)    | Playable  | ✓ | ✓ | | | ✓ | ✓ |
+| Terminal REPL (`bunnyland-repl`)  | Playable  | ✓ | ✓ | | | ✓ | ✓ |
+
+† Implemented in the frontend/web repo; capabilities summarized here.
+‡ The Discord bot hosts the world in its own process.
+
 ## Optional extras
 
 | Extra      | Enables                                  | Install                      |
@@ -288,3 +308,5 @@ assert each action is processed.
 | `discord`  | the Discord player front-end             | `uv sync --extra discord`    |
 | `mcp`      | HTTP MCP endpoint for agentic clients    | `uv sync --extra mcp`        |
 | `chroma`   | ChromaDB vector memory store             | `uv sync --extra chroma`     |
+| `tui`      | the Textual terminal client (`bunnyland-tui`) | `uv sync --extra tui`   |
+| `repl`     | the Textual REPL client (`bunnyland-repl`), local or over HTTP | `uv sync --extra repl` |
