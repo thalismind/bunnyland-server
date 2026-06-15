@@ -264,6 +264,7 @@ def test_action_list_height_leaves_queue_visible():
     assert "#verbs { height: auto; max-height: 12; }" in BunnylandTUI.CSS
     assert "#queued { height: 1fr; min-height: 4;" in BunnylandTUI.CSS
     assert "#action-filter-row { height: 3; }" in BunnylandTUI.CSS
+    assert "#action-filter-clear { width: 9; min-width: 9; }" in BunnylandTUI.CSS
     assert "#doors-title, #activity-title, #queued-title { border-top:" in BunnylandTUI.CSS
     assert "#doors { border-top:" not in BunnylandTUI.CSS
 

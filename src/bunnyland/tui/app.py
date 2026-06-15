@@ -205,7 +205,7 @@ class BunnylandTUI(App[None]):
     #points { padding: 0 1; height: 1; }
     #action-filter-row { height: 3; }
     #action-filter { width: 1fr; }
-    #action-filter-clear { width: 5; min-width: 5; }
+    #action-filter-clear { width: 9; min-width: 9; }
     #picker, #prompt {
         width: 60; height: auto; max-height: 80%;
         border: thick $accent; background: $surface; padding: 1 2;
