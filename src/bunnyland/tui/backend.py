@@ -25,7 +25,12 @@ from ..core import (
 )
 from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.ecs import parse_entity_id
-from ..server.serialization import serialize_character_queued_commands, serialize_world
+from ..server.serialization import (
+    serialize_character_projection,
+    serialize_character_queued_commands,
+    serialize_room_projection,
+    serialize_world,
+)
 from .model import World
 
 logger = logging.getLogger("bunnyland.tui")
@@ -66,6 +71,12 @@ class Backend(ABC):
 
     @abstractmethod
     async def fetch_snapshot(self) -> dict: ...
+
+    async def fetch_character_projection(self, character_id: str) -> dict | None:
+        return None
+
+    async def fetch_room_projection(self, room_id: str) -> dict | None:
+        return None
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
         return {
@@ -171,6 +182,12 @@ class LocalBackend(Backend):
     async def fetch_snapshot(self) -> dict:
         return serialize_world(self.actor, self.meta)
 
+    async def fetch_character_projection(self, character_id: str) -> dict | None:
+        return serialize_character_projection(self.actor, character_id).model_dump(mode="json")
+
+    async def fetch_room_projection(self, room_id: str) -> dict | None:
+        return serialize_room_projection(self.actor, room_id).model_dump(mode="json")
+
     async def fetch_queued_commands(self, character_id: str) -> dict:
         return serialize_character_queued_commands(self.actor, character_id).model_dump(mode="json")
 
@@ -250,6 +267,16 @@ class RemoteBackend(Backend):
 
     async def fetch_snapshot(self) -> dict:
         res = await self._client.get(f"{self.base}/world/snapshot")
+        res.raise_for_status()
+        return res.json()
+
+    async def fetch_character_projection(self, character_id: str) -> dict | None:
+        res = await self._client.get(f"{self.base}/world/character/{character_id}")
+        res.raise_for_status()
+        return res.json()
+
+    async def fetch_room_projection(self, room_id: str) -> dict | None:
+        res = await self._client.get(f"{self.base}/world/room/{room_id}")
         res.raise_for_status()
         return res.json()
 

@@ -10,6 +10,7 @@ from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
@@ -24,8 +25,8 @@ REFRESH_SECONDS = 1.0
 ACTIVITY_LIMIT = 8
 
 
-def _queued_command_label(command: dict) -> str:
-    name = _queued_command_name(command)
+def _queued_command_label(command: dict, actions: list[dict] | None = None) -> str:
+    name = _queued_command_name(command, actions)
     lane = command.get("lane") or ""
     cost = _queued_command_cost(command)
     detail = _queued_command_detail(command)
@@ -35,7 +36,10 @@ def _queued_command_label(command: dict) -> str:
     return f"{name}{lane_suffix}{suffix}"
 
 
-def _queued_command_name(command: dict) -> str:
+def _queued_command_name(command: dict, actions: list[dict] | None = None) -> str:
+    for action in actions or []:
+        if action.get("command_type") == command.get("command_type"):
+            return _action_title(action)
     verb = next(
         (verb for verb in ACTION_VERBS if verb.cmd == command.get("command_type")),
         None,
@@ -64,19 +68,81 @@ def _queued_command_detail(command: dict) -> str:
     )
 
 
+def _legacy_action_view(verb: Verb) -> dict:
+    arguments = []
+    if verb.target_key and verb.target_kind:
+        arguments.append({
+            "key": verb.target_key,
+            "title": verb.target_key.removesuffix("_id").replace("_", " "),
+            "kind": "entity",
+            "required": True,
+            "target_group": verb.target_kind,
+        })
+    if verb.prompt:
+        arguments.append({
+            "key": verb.prompt,
+            "title": verb.prompt.replace("_", " "),
+            "kind": "string",
+            "required": True,
+            "target_group": None,
+        })
+    return {
+        "command_type": verb.cmd,
+        "tool_name": verb.tool,
+        "title": verb.label,
+        "lane": verb.lane,
+        "cost": {"action": verb.ap, "focus": verb.fp},
+        "arguments": arguments,
+    }
+
+
+def _action_title(action: dict) -> str:
+    return str(
+        action.get("title")
+        or action.get("tool_name")
+        or action.get("command_type")
+        or "Action"
+    )
+
+
+def _action_tool(action: dict) -> str:
+    return str(action.get("tool_name") or action.get("command_type") or "action")
+
+
+def _action_command_type(action: dict) -> str:
+    return str(action.get("command_type") or _action_tool(action))
+
+
+def _action_lane(action: dict) -> str:
+    lane = action.get("lane") or "world"
+    return str(lane)
+
+
+def _action_cost(action: dict) -> dict:
+    cost = action.get("cost") or {}
+    return {
+        "action": int(cost.get("action") or 0),
+        "focus": int(cost.get("focus") or 0),
+    }
+
+
+def _action_arguments(action: dict) -> list[dict]:
+    return list(action.get("arguments") or [])
+
+
 class TargetPicker(ModalScreen[str]):
     """Modal list of candidate targets for a verb; dismisses with the chosen id or None."""
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, verb: Verb, candidates) -> None:
+    def __init__(self, verb: Verb | str, candidates) -> None:
         super().__init__()
-        self.verb = verb
+        self.title_text = verb.label if isinstance(verb, Verb) else verb
         self.candidates = candidates
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker"):
-            yield Label(f"{self.verb.label} — choose a target", id="picker-title")
+            yield Label(f"{self.title_text} — choose a target", id="picker-title")
             if self.candidates:
                 yield OptionList(
                     *[Option(f"{c.icon} {c.label}", id=c.value) for c in self.candidates],
@@ -162,6 +228,8 @@ class BunnylandTUI(App[None]):
         self.selected_id: str | None = None
         self._player_choice_ids: list[str] = []
         self.queued_commands: list[dict] = []
+        self.action_views: list[dict] = []
+        self._action_options: dict[str, dict] = {}
         self.activity_lines: list[Text] = []
         self._events = EventNarrator()
         self._events_primed = False
@@ -205,7 +273,10 @@ class BunnylandTUI(App[None]):
             if message != self._refresh_error:
                 self._append_activity(Text(message, style="red"))
                 self._refresh_error = message
-            self.query_one("#status", Static).update(message)
+            try:
+                self.query_one("#status", Static).update(message)
+            except NoMatches:
+                return
             return
         if self._refresh_error is not None:
             self._append_activity(Text(f"✓ {self.backend.label} — reconnected", style="green"))
@@ -215,13 +286,21 @@ class BunnylandTUI(App[None]):
         if self.player_id and self.player_id not in self.world.entities:
             self.player_id = ""
             self.control = None
+            self.action_views = []
+        if self.player_id:
+            await self._refresh_character_projection()
+        else:
+            self.action_views = []
         self.queued_commands = await self._fetch_queued_commands()
         if self.follow or not self.world.get(self.view_room_id):
             self.view_room_id = self.world.room_of(self.player_id) or self.world.first_room_id()
 
         epoch = self.world.epoch
         who = entity_name(self.world.get(self.player_id)) if self.player_id else "no player"
-        self.query_one("#status", Static).update(f"{status} · epoch {epoch}s · {who}")
+        try:
+            self.query_one("#status", Static).update(f"{status} · epoch {epoch}s · {who}")
+        except NoMatches:
+            return
         self._render_room()
         self._render_actions()
         self._drain_activity(events, prime=not self._events_primed)
@@ -237,6 +316,22 @@ class BunnylandTUI(App[None]):
         if data.get("character_id") != self.player_id:
             return []
         return list(data.get("commands") or [])
+
+    async def _refresh_character_projection(self) -> None:
+        try:
+            projection = await self.backend.fetch_character_projection(self.player_id)
+        except Exception:
+            self.action_views = []
+            return
+        if not projection or projection.get("character_id") != self.player_id:
+            self.action_views = []
+            return
+        projected = World.parse(projection)
+        self.world.target_groups = projected.target_groups
+        self.action_views = list(projection.get("actions") or [])
+        controller = projection.get("controller")
+        if controller:
+            self.control = (controller["controller_id"], int(controller.get("generation", 0)))
 
     def _sync_players(self) -> None:
         ids = [c["id"] for c in self.world.characters()]
@@ -299,14 +394,26 @@ class BunnylandTUI(App[None]):
 
         verbs = self.query_one("#verbs", OptionList)
         verbs.clear_options()
-        for verb in ACTION_VERBS:
-            affordable = pts.get("has") and pts["ap"] >= verb.ap and pts["fp"] >= verb.fp
+        self._action_options = {}
+        for index, action in enumerate(self._available_actions()):
+            cost_view = _action_cost(action)
+            affordable = (
+                pts.get("has")
+                and pts["ap"] >= cost_view["action"]
+                and pts["fp"] >= cost_view["focus"]
+            )
             cost = (" · ".join(
-                [f"{verb.ap} AP"] * bool(verb.ap) + [f"{verb.fp} FP"] * bool(verb.fp)
+                [f"{cost_view['action']} AP"] * bool(cost_view["action"])
+                + [f"{cost_view['focus']} FP"] * bool(cost_view["focus"])
             ) or "free")
-            tgt = " ⌖" if verb.target_kind else ""
+            tgt = " ⌖" if any(arg.get("target_group") for arg in _action_arguments(action)) else ""
+            option_id = _action_tool(action)
+            if option_id in self._action_options:
+                option_id = f"{option_id}:{index}"
+            self._action_options[option_id] = action
             verbs.add_option(
-                Option(f"{verb.label}{tgt}  ({cost})", id=verb.tool, disabled=not affordable)
+                Option(f"{_action_title(action)}{tgt}  ({cost})", id=option_id,
+                       disabled=not affordable)
             )
 
         queued = self.query_one("#queued", OptionList)
@@ -316,8 +423,15 @@ class BunnylandTUI(App[None]):
             return
         for index, command in enumerate(self.queued_commands):
             queued.add_option(
-                Option(_queued_command_label(command), id=f"queued:{index}", disabled=True)
+                Option(
+                    _queued_command_label(command, self._available_actions()),
+                    id=f"queued:{index}",
+                    disabled=True,
+                )
             )
+
+    def _available_actions(self) -> list[dict]:
+        return self.action_views or [_legacy_action_view(verb) for verb in ACTION_VERBS]
 
     def _drain_activity(self, events: list[dict], *, prime: bool = False) -> None:
         lines = self._events.drain_events(
@@ -338,7 +452,10 @@ class BunnylandTUI(App[None]):
         self._render_activity()
 
     def _render_activity(self) -> None:
-        activity = self.query_one("#activity", OptionList)
+        try:
+            activity = self.query_one("#activity", OptionList)
+        except NoMatches:
+            return
         activity.clear_options()
         if not self.activity_lines:
             activity.add_option(Option("No recent activity.", id="activity-empty", disabled=True))
@@ -374,35 +491,53 @@ class BunnylandTUI(App[None]):
 
     @on(OptionList.OptionSelected, "#verbs")
     def _verb_selected(self, event: OptionList.OptionSelected) -> None:
-        verb = next((v for v in ACTION_VERBS if v.tool == event.option.id), None)
-        if verb:
-            self.run_worker(self._do_verb(verb), exclusive=True)
+        action = self._action_options.get(str(event.option.id))
+        if action is None:
+            legacy = next((verb for verb in ACTION_VERBS if verb.tool == event.option.id), None)
+            action = _legacy_action_view(legacy) if legacy else None
+        if action:
+            self.run_worker(self._do_action(action), exclusive=True)
 
     # ── actions ─────────────────────────────────────────────────────────────────
     async def _do_verb(self, verb: Verb) -> None:
+        await self._do_action(_legacy_action_view(verb))
+
+    async def _do_action(self, action: dict) -> None:
         if not self.player_id or not self.control:
             return
         payload: dict = {}
-        if verb.target_kind:
-            candidates = self.world.target_candidates(self.player_id, verb.target_kind)
-            choice = await self.push_screen_wait(TargetPicker(verb, candidates))
-            if not choice:
-                return
-            payload[verb.target_key] = choice
-        if verb.prompt:
-            value = await self.push_screen_wait(TextPrompt(f"{verb.label} — {verb.prompt}"))
-            if not value:
-                return
-            payload[verb.prompt] = value
+        for argument in _action_arguments(action):
+            key = argument.get("key")
+            if not key:
+                continue
+            target_group = argument.get("target_group")
+            if target_group:
+                candidates = self.world.target_candidates(self.player_id, target_group)
+                choice = await self.push_screen_wait(
+                    TargetPicker(_action_title(action), candidates)
+                )
+                if not choice:
+                    return
+                payload[key] = choice
+                continue
+            if argument.get("required"):
+                label = argument.get("title") or key
+                value = await self.push_screen_wait(
+                    TextPrompt(f"{_action_title(action)} — {label}")
+                )
+                if not value:
+                    return
+                payload[key] = value
 
+        cost = _action_cost(action)
         await self.backend.submit({
             "character_id": self.player_id,
             "controller_id": self.control[0],
             "controller_generation": self.control[1],
-            "command_type": verb.cmd,
+            "command_type": _action_command_type(action),
             "payload": payload,
-            "cost": {"action": verb.ap, "focus": verb.fp},
-            "lane": verb.lane,
+            "cost": cost,
+            "lane": _action_lane(action),
             "on_insufficient_points": "queue",
         })
         await self.refresh_world()

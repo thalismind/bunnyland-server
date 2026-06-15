@@ -148,8 +148,30 @@ def _client_view() -> dict:
                 {"id": KEY, "label": "a brass key", "kind": "item"},
             ],
         },
-        "actions": [],
+        "actions": [_projected_action()],
     }
+
+
+def _projected_action(**overrides) -> dict:
+    action = {
+        "command_type": "inspect",
+        "tool_name": "inspect",
+        "title": "Inspect",
+        "description": "Inspect something nearby.",
+        "lane": "world",
+        "cost": {"action": 1, "focus": 0},
+        "arguments": [
+            {
+                "key": "target_id",
+                "title": "target",
+                "kind": "entity",
+                "required": True,
+                "target_group": "reachableItems",
+            }
+        ],
+    }
+    action.update(overrides)
+    return action
 
 
 def _queued_response(*commands: dict) -> dict:
@@ -260,6 +282,7 @@ def test_parse_client_view_supports_filtered_structured_surface():
     assert {target.value for target in world.target_candidates(PLAYER, "exits")} == {HALL}
     assert {target.value for target in world.target_candidates(PLAYER, "roomItems")} == {APPLE}
     assert {target.value for target in world.target_candidates(PLAYER, "inventory")} == {KEY}
+    assert [action["command_type"] for action in world.actions] == ["inspect"]
 
 
 @pytest.mark.parametrize(
@@ -428,6 +451,12 @@ async def test_local_backend_hosts_claims_and_submits():
         queued = await backend.fetch_queued_commands(player)
         assert queued["character_id"] == player
         assert queued["commands"][-1]["command_type"] == "say"
+
+        character_projection = await backend.fetch_character_projection(player)
+        assert character_projection["character_id"] == player
+        assert character_projection["actions"]
+        room_projection = await backend.fetch_room_projection(refreshed.room_of(player))
+        assert room_projection["room"]["id"] == refreshed.room_of(player)
     finally:
         await backend.close()
 
@@ -638,16 +667,22 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
 
     await backend.start()
     snapshot = await backend.fetch_snapshot()
+    character = await backend.fetch_character_projection(PLAYER)
+    room = await backend.fetch_room_projection(PARLOR)
     queued = await backend.fetch_queued_commands(PLAYER)
     submitted = await backend.submit({"command_type": "wait"})
     await backend.close()
 
     assert snapshot == {"world_epoch": 7}
+    assert character == {"world_epoch": 7}
+    assert room == {"world_epoch": 7}
     assert queued == {"world_epoch": 7}
     assert submitted is False
     assert clients[0].closed is True
     assert clients[0].requests == [
         ("GET", "http://server.example/world/snapshot", None),
+        ("GET", f"http://server.example/world/character/{PLAYER}", None),
+        ("GET", f"http://server.example/world/room/{PARLOR}", None),
         ("GET", f"http://server.example/world/character/{PLAYER}/commands", None),
         ("POST", "http://server.example/world/commands", {"command_type": "wait"}),
     ]
@@ -694,10 +729,12 @@ class RecordingBackend(Backend):
         snapshot: dict,
         queued_response: dict | None = None,
         events: list[dict] | None = None,
+        character_projection: dict | None = None,
     ) -> None:
         self.snapshot = snapshot
         self.queued_response = queued_response or _queued_response()
         self.events = events or []
+        self.character_projection = character_projection
         self.queued_requests: list[str] = []
         self.commands: list[dict] = []
         self.label = "test"
@@ -710,6 +747,11 @@ class RecordingBackend(Backend):
     async def fetch_queued_commands(self, character_id: str) -> dict:
         self.queued_requests.append(character_id)
         return copy.deepcopy(self.queued_response)
+
+    async def fetch_character_projection(self, character_id: str) -> dict | None:
+        if self.character_projection is None:
+            return None
+        return copy.deepcopy(self.character_projection)
 
     async def submit(self, command: dict) -> bool:
         self.commands.append(command)
@@ -842,6 +884,42 @@ async def test_app_renders_room_and_actions():
         assert "Say [focus]" in str(queued.get_option_at_index(0).prompt)
         assert "1 AP + 1 FP" in str(queued.get_option_at_index(0).prompt)
         assert "text: next" in str(queued.get_option_at_index(0).prompt)
+
+
+async def test_app_uses_projected_actions_and_target_groups(monkeypatch):
+    from textual.widgets import OptionList
+
+    projection = _client_view()
+    projection["actions"] = [
+        _projected_action(
+            command_type="custom-inspect",
+            tool_name="custom_inspect",
+            title="Custom Inspect",
+            lane="focus",
+            cost={"action": 0, "focus": 1},
+        )
+    ]
+    app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        verbs = app.query_one("#verbs", OptionList)
+        assert verbs.option_count == 1
+        assert "Custom Inspect" in str(verbs.get_option_at_index(0).prompt)
+        assert "1 FP" in str(verbs.get_option_at_index(0).prompt)
+
+        async def fake_pick(screen):
+            assert isinstance(screen, TargetPicker)
+            return APPLE
+
+        monkeypatch.setattr(app, "push_screen_wait", fake_pick)
+        app._verb_selected(SimpleNamespace(option=SimpleNamespace(id=verbs.get_option_at_index(0).id)))
+        await pilot.pause()
+
+        command = app.backend.commands[-1]
+        assert command["command_type"] == "custom-inspect"
+        assert command["payload"] == {"target_id": APPLE}
+        assert command["cost"] == {"action": 0, "focus": 1}
+        assert command["lane"] == "focus"
 
 
 async def test_app_renders_perceived_activity_after_initial_prime():

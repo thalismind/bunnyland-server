@@ -49,6 +49,7 @@ class World:
     epoch: int = 0
     target_groups: dict[str, list[Target]] = field(default_factory=dict)
     queued_commands: list[dict[str, Any]] = field(default_factory=list)
+    actions: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def parse(cls, data: dict | None) -> World:
@@ -71,6 +72,7 @@ class World:
             entities=entities,
             epoch=(data or {}).get("world_epoch", 0),
             queued_commands=list((data or {}).get("queued_commands") or []),
+            actions=list((data or {}).get("actions") or []),
         )
 
     @classmethod
@@ -171,6 +173,7 @@ class World:
             epoch=data.get("world_epoch", 0),
             target_groups=target_groups,
             queued_commands=list(data.get("queued_commands") or []),
+            actions=list(data.get("actions") or []),
         )
 
     # ── lookups ──────────────────────────────────────────────────────────────

@@ -50,6 +50,10 @@ class CommandResponse(BaseModel):
     command_id: str
 
 
+class RecentEventsResponse(BaseModel):
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class QueuedCommandView(BaseModel):
     command_id: str
     character_id: str
@@ -464,6 +468,7 @@ __all__ = [
     "DmProjectionResponse",
     "DmRoomProjectionView",
     "QueuedCommandView",
+    "RecentEventsResponse",
     "RoomProjectionEntityView",
     "RoomProjectionResponse",
     "RoomProjectionRoomView",

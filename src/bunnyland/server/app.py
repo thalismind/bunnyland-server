@@ -34,6 +34,7 @@ from .models import (
     CommandRequest,
     CommandResponse,
     DmProjectionResponse,
+    RecentEventsResponse,
     RoomProjectionResponse,
     WebControllerClaimRequest,
     WebControllerClaimResponse,
@@ -220,9 +221,9 @@ def create_app(
     async def get_world_library() -> WorldLibraryResponse:
         return WorldLibraryResponse.model_validate(load_content_library().model_dump(mode="json"))
 
-    @app.get("/world/events/recent")
-    async def recent_events() -> dict:
-        return {"events": stream.recent_messages()}
+    @app.get("/world/events/recent", response_model=RecentEventsResponse)
+    async def recent_events() -> RecentEventsResponse:
+        return RecentEventsResponse(events=stream.recent_messages())
 
     def _runtime_response() -> WorldRuntimeResponse:
         if loop is None:

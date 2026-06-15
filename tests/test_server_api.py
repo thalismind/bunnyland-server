@@ -802,6 +802,10 @@ def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     assert library_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/WorldLibraryResponse"
     }
+    recent_operation = schema["paths"]["/world/events/recent"]["get"]
+    assert recent_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RecentEventsResponse"
+    }
     dm_operation = schema["paths"]["/world/dm/{id}"]["get"]
     assert {parameter["name"] for parameter in dm_operation["parameters"]} == {
         "id",
