@@ -231,6 +231,9 @@ class BunnylandTUI(App[None]):
         self.queued_commands: list[dict] = []
         self.action_views: list[dict] = []
         self._action_options: dict[str, dict] = {}
+        self._verbs_signature: tuple[tuple[str, str, bool], ...] = ()
+        self._queued_signature: tuple[tuple[str, str], ...] = ()
+        self._points_line = ""
         self.activity_lines: list[Text] = []
         self._events = EventNarrator()
         self._events_primed = False
@@ -391,12 +394,14 @@ class BunnylandTUI(App[None]):
                     f"🔹 {fmt_points(pts['fp'])}/{fmt_points(pts['fp_max'])} FP")
         else:
             line = "Pick a player to see their actions."
-        self.query_one("#points", Static).update(line)
+        if line != self._points_line:
+            self.query_one("#points", Static).update(line)
+            self._points_line = line
 
-        verbs = self.query_one("#verbs", OptionList)
-        verbs.clear_options()
-        self._action_options = {}
-        for index, action in enumerate(self._available_actions()):
+        actions = self._available_actions()
+        action_options: dict[str, dict] = {}
+        verb_entries: list[tuple[str, str, bool]] = []
+        for index, action in enumerate(actions):
             cost_view = _action_cost(action)
             affordable = (
                 pts.get("has")
@@ -409,27 +414,50 @@ class BunnylandTUI(App[None]):
             ) or "free")
             tgt = " ⌖" if any(arg.get("target_group") for arg in _action_arguments(action)) else ""
             option_id = _action_tool(action)
-            if option_id in self._action_options:
+            if option_id in action_options:
                 option_id = f"{option_id}:{index}"
-            self._action_options[option_id] = action
-            verbs.add_option(
-                Option(f"{_action_title(action)}{tgt}  ({cost})", id=option_id,
-                       disabled=not affordable)
-            )
+            label = f"{_action_title(action)}{tgt}  ({cost})"
+            action_options[option_id] = action
+            verb_entries.append((option_id, label, not affordable))
+        self._action_options = action_options
 
+        verbs_signature = tuple(verb_entries)
+        if verbs_signature != self._verbs_signature:
+            verbs = self.query_one("#verbs", OptionList)
+            highlighted_id = None
+            try:
+                highlighted = verbs.highlighted
+                highlighted_id = (
+                    verbs.get_option_at_index(highlighted).id
+                    if highlighted is not None and highlighted >= 0
+                    else None
+                )
+            except Exception:
+                highlighted_id = None
+            verbs.clear_options()
+            for option_id, label, disabled in verb_entries:
+                verbs.add_option(Option(label, id=option_id, disabled=disabled))
+            if highlighted_id is not None:
+                try:
+                    verbs.highlighted = verbs.get_option_index(highlighted_id)
+                except Exception:
+                    pass
+            self._verbs_signature = verbs_signature
+
+        if not self.queued_commands:
+            queued_entries = (("queued-empty", "No queued actions."),)
+        else:
+            queued_entries = tuple(
+                (f"queued:{index}", _queued_command_label(command, actions))
+                for index, command in enumerate(self.queued_commands)
+            )
+        if queued_entries == self._queued_signature:
+            return
         queued = self.query_one("#queued", OptionList)
         queued.clear_options()
-        if not self.queued_commands:
-            queued.add_option(Option("No queued actions.", id="queued-empty", disabled=True))
-            return
-        for index, command in enumerate(self.queued_commands):
-            queued.add_option(
-                Option(
-                    _queued_command_label(command, self._available_actions()),
-                    id=f"queued:{index}",
-                    disabled=True,
-                )
-            )
+        for option_id, label in queued_entries:
+            queued.add_option(Option(label, id=option_id, disabled=True))
+        self._queued_signature = queued_entries
 
     def _available_actions(self) -> list[dict]:
         return self.action_views or [_legacy_action_view(verb) for verb in ACTION_VERBS]

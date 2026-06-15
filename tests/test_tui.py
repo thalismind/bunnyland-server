@@ -955,6 +955,32 @@ async def test_app_uses_projected_actions_and_target_groups(monkeypatch):
         assert command["lane"] == "focus"
 
 
+async def test_app_refresh_preserves_stable_action_list_position():
+    from textual.widgets import OptionList
+
+    projection = _client_view()
+    projection["actions"] = [
+        _projected_action(
+            command_type=f"custom-{index}",
+            tool_name=f"custom_{index}",
+            title=f"Custom {index}",
+        )
+        for index in range(18)
+    ]
+    app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
+
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        verbs = app.query_one("#verbs", OptionList)
+        verbs.highlighted = 17
+
+        await app.refresh_world()
+
+        assert verbs.option_count == 18
+        assert verbs.highlighted == 17
+        assert "Custom 17" in str(verbs.get_option_at_index(17).prompt)
+
+
 async def test_app_renders_perceived_activity_after_initial_prime():
     from textual.widgets import OptionList
 
