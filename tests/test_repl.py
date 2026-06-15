@@ -422,9 +422,11 @@ def test_drain_events_surfaces_own_command_rejections():
         _event("r2", event_type="CommandRejectedEvent", visibility="system", actor_id=MARLOW,
                command_type="take", reason="secret"),
     ]
-    shown = " | ".join(text.plain for text in repl.drain_events(messages))
+    rendered = repl.drain_events(messages)
+    shown = " | ".join(text.plain for text in rendered)
     assert "Command rejected" in shown and "not portable" in shown  # your failure explains itself
     assert "secret" not in shown  # another character's rejection is private to them
+    assert str(rendered[0].style) == "dark_orange"  # rejections stand out in orange
 
 
 def test_drain_events_dedupes_already_seen():

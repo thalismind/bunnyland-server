@@ -267,7 +267,8 @@ class BunnylandRepl:
 
     def _render_event(self, data: dict) -> Text:
         event = data.get("event", {})
-        label = _humanize_event_type(str(data.get("event_type", "Event")))
+        event_type = str(data.get("event_type", "Event"))
+        label = _humanize_event_type(event_type)
         actor = self.name_for(event.get("actor_id") or "") if event.get("actor_id") else None
         details: list[str] = []
         for key, value in event.items():
@@ -287,7 +288,10 @@ class BunnylandRepl:
         line = f"{actor}: {label}" if actor else label
         if details:
             line += f" — {'; '.join(details)}"
-        return Text(line, style="dim italic")
+        # Rejections are failures worth noticing (orange); the rest is ambient, dim narration.
+        # Connection/runtime errors use red, set where they are written in the app.
+        style = "dark_orange" if event_type == "CommandRejectedEvent" else "dim italic"
+        return Text(line, style=style)
 
     # ── dispatch ──────────────────────────────────────────────────────────────
     async def dispatch(self, line: str) -> Text:
