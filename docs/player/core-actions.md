@@ -19,11 +19,19 @@ direction when an exit is listed:
 !look
 ```
 
-Inspect a specific reachable object for details:
+Inspect a specific reachable target for a closer `look`. Where `!look` summarizes the
+room, `!inspect` reports the detail you could observe up close — a thing's description and
+any writing on it, its open/closed/locked state, and for a character their species, the
+gear they are visibly holding or wearing, and how hurt they appear:
 
 ```text
 !inspect woven basket
+!inspect injured bunny
 ```
+
+Inspect never reveals hidden state. Concealed items, the contents of a closed opaque
+container, and exact numbers (such as health points) stay out of view; a wounded
+character simply looks "wounded" or "bleeding".
 
 ## Carry and place items
 

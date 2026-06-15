@@ -349,6 +349,7 @@ class EntityInspectedEvent(DomainEvent):
     description: str = ""
     text: str = ""
     state: str = ""
+    details: str = ""
 
 
 # --------------------------------------------------------------------------------------

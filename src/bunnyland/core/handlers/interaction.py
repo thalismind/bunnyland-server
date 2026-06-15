@@ -13,19 +13,23 @@ from typing import Any
 
 from ..commands import SubmittedCommand
 from ..components import (
+    BleedingComponent,
     ButtonComponent,
+    CharacterComponent,
     ContainerComponent,
     DescriptionComponent,
     DoorComponent,
+    HealthComponent,
     IdentityComponent,
     KeyComponent,
     LockableComponent,
     ReadableComponent,
     RoomComponent,
+    StealthComponent,
     WritableComponent,
 )
 from ..ecs import container_of, parse_entity_id, reachable_ids, replace_component
-from ..edges import Contains
+from ..edges import Contains, Holding, Wearing
 from ..events import (
     ContainerClosedEvent,
     ContainerOpenedEvent,
@@ -80,6 +84,86 @@ def _lock_state(entity) -> bool:
     if entity.has_component(ContainerComponent) and entity.get_component(ContainerComponent).locked:
         return True
     return False
+
+
+def _condition_states(entity) -> list[str]:
+    """Qualitative, observable condition for a living target.
+
+    Inspect is a fourth-wall-safe ``look++``: it reports how something *appears* to a
+    bystander, never raw stats. Health is mapped to coarse tiers and bleeding is binary;
+    no numbers ever reach the player.
+    """
+    states: list[str] = []
+    if entity.has_component(HealthComponent):
+        health = entity.get_component(HealthComponent)
+        ratio = health.current / health.maximum if health.maximum > 0 else 0.0
+        if ratio <= 0:
+            states.append("gravely injured")
+        elif ratio < 0.33:
+            states.append("badly wounded")
+        elif ratio < 0.66:
+            states.append("wounded")
+        elif ratio < 0.99:
+            states.append("hurt")
+    if (
+        entity.has_component(BleedingComponent)
+        and entity.get_component(BleedingComponent).rate > 0
+    ):
+        states.append("bleeding")
+    return states
+
+
+def _is_hidden(entity) -> bool:
+    return entity.has_component(StealthComponent) and entity.get_component(StealthComponent).hiding
+
+
+def _equipped_names(ctx: HandlerContext, entity, edge_type) -> list[str]:
+    names: list[str] = []
+    for _edge, child_id in entity.get_relationships(edge_type):
+        if not ctx.world.has_entity(child_id):
+            continue
+        child = ctx.entity(child_id)
+        if _is_hidden(child):
+            continue
+        names.append(_entity_label(child)[0])
+    return sorted(names)
+
+
+def _visible_contents(ctx: HandlerContext, entity) -> list[str]:
+    names: list[str] = []
+    for edge, child_id in entity.get_relationships(Contains):
+        if not (edge.visible and edge.discovered):
+            continue
+        if not ctx.world.has_entity(child_id):
+            continue
+        child = ctx.entity(child_id)
+        if _is_hidden(child):
+            continue
+        names.append(_entity_label(child)[0])
+    return sorted(names)
+
+
+def _observable_specifics(ctx: HandlerContext, entity) -> list[str]:
+    """Visible, in-world specifics a bystander could note: species, worn/held gear, and
+    the contents of anything they can actually see into."""
+    specifics: list[str] = []
+    if entity.has_component(CharacterComponent):
+        species = entity.get_component(CharacterComponent).species
+        if species:
+            specifics.append(f"a {species}")
+    holding = _equipped_names(ctx, entity, Holding)
+    if holding:
+        specifics.append(f"holding {', '.join(holding)}")
+    wearing = _equipped_names(ctx, entity, Wearing)
+    if wearing:
+        specifics.append(f"wearing {', '.join(wearing)}")
+    if entity.has_component(ContainerComponent):
+        container = entity.get_component(ContainerComponent)
+        if container.open or container.transparent:
+            contents = _visible_contents(ctx, entity)
+            if contents:
+                specifics.append(f"containing {', '.join(contents)}")
+    return specifics
 
 
 def _matching_key(ctx: HandlerContext, command: SubmittedCommand, lock: LockableComponent):
@@ -246,6 +330,7 @@ class InspectHandler:
             and target.get_component(LockableComponent).locked
         ):
             states.append("locked")
+        states.extend(_condition_states(target))
         return ok(
             EntityInspectedEvent(
                 **ctx.event_base(
@@ -258,6 +343,7 @@ class InspectHandler:
                     description=_description_text(target),
                     text=readable.text if readable else "",
                     state=", ".join(states),
+                    details=", ".join(_observable_specifics(ctx, target)),
                 )
             )
         )

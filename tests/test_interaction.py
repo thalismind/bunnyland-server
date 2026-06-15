@@ -5,7 +5,9 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    BleedingComponent,
     ButtonComponent,
+    CharacterComponent,
     CloseHandler,
     CommandCost,
     ContainerComponent,
@@ -16,6 +18,8 @@ from bunnyland.core import (
     DoorComponent,
     DoorOpenedEvent,
     EntityInspectedEvent,
+    HealthComponent,
+    Holding,
     IdentityComponent,
     InspectHandler,
     KeyComponent,
@@ -26,8 +30,10 @@ from bunnyland.core import (
     OpenHandler,
     ReadableComponent,
     RoomLookedEvent,
+    StealthComponent,
     UnlockHandler,
     UseHandler,
+    Wearing,
     WritableComponent,
     WriteHandler,
     build_submitted_command,
@@ -310,6 +316,133 @@ def test_inspect_describes_rooms_nameless_entities_descriptions_and_locked_state
         target_cmd(scenario, "inspect", door.id),
     )
     assert door_result.events[0].state == "closed, locked"
+
+
+def equipped(scenario, holder_id, item, edge):
+    scenario.actor.world.get_entity(holder_id).add_relationship(edge, item.id)
+    return item
+
+
+def test_inspect_reports_condition_qualitatively_without_leaking_numbers():
+    scenario = interaction_scenario()
+    hurt = in_room(
+        scenario,
+        [
+            IdentityComponent(name="injured bunny", kind="character"),
+            CharacterComponent(species="bunny"),
+            HealthComponent(current=40.0, maximum=100.0),
+            BleedingComponent(rate=2.0),
+        ],
+    )
+    result = InspectHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "inspect", hurt.id),
+    )
+    event = result.events[0]
+    assert event.state == "wounded, bleeding"
+    assert event.details == "a bunny"
+    # No raw stats may reach the player.
+    assert "40" not in event.state and "100" not in event.state
+    assert not any(char.isdigit() for char in event.state + event.details)
+
+
+def test_inspect_lists_visible_equipment_and_open_container_contents():
+    scenario = interaction_scenario()
+    holder = in_room(
+        scenario,
+        [
+            IdentityComponent(name="forager", kind="character"),
+            CharacterComponent(species="bunny"),
+            HealthComponent(current=100.0, maximum=100.0),
+        ],
+    )
+    equipped(
+        scenario,
+        holder.id,
+        spawn_entity(scenario.actor.world, [IdentityComponent(name="lantern", kind="item")]),
+        Holding(slot="hand"),
+    )
+    equipped(
+        scenario,
+        holder.id,
+        spawn_entity(scenario.actor.world, [IdentityComponent(name="straw hat", kind="item")]),
+        Wearing(slot="head"),
+    )
+    result = InspectHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "inspect", holder.id),
+    )
+    # Full health adds no condition noise; equipment is sorted and qualitative.
+    assert result.events[0].state == ""
+    assert result.events[0].details == "a bunny, holding lantern, wearing straw hat"
+
+    basket = in_room(
+        scenario,
+        [
+            IdentityComponent(name="woven basket", kind="container"),
+            ContainerComponent(open=True),
+        ],
+    )
+    equipped(
+        scenario,
+        basket.id,
+        spawn_entity(scenario.actor.world, [IdentityComponent(name="ripe carrot", kind="item")]),
+        Contains(mode=ContainmentMode.CONTAINER),
+    )
+    basket_result = InspectHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "inspect", basket.id),
+    )
+    assert basket_result.events[0].details == "containing ripe carrot"
+
+
+def test_inspect_hides_concealed_items_and_closed_container_contents():
+    scenario = interaction_scenario()
+    crate = in_room(
+        scenario,
+        [
+            IdentityComponent(name="sealed crate", kind="container"),
+            ContainerComponent(open=False),
+        ],
+    )
+    equipped(
+        scenario,
+        crate.id,
+        spawn_entity(scenario.actor.world, [IdentityComponent(name="secret map", kind="item")]),
+        Contains(mode=ContainmentMode.CONTAINER),
+    )
+    closed_result = InspectHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "inspect", crate.id),
+    )
+    # An opaque, closed container reveals nothing of its contents.
+    assert closed_result.events[0].details == ""
+
+    holder = in_room(
+        scenario,
+        [
+            IdentityComponent(name="sneaky bunny", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    equipped(
+        scenario,
+        holder.id,
+        spawn_entity(
+            scenario.actor.world,
+            [
+                IdentityComponent(name="concealed dagger", kind="item"),
+                StealthComponent(hiding=True),
+            ],
+        ),
+        Holding(slot="hand"),
+    )
+    holder_result = InspectHandler().execute(
+        handler_context(scenario),
+        target_cmd(scenario, "inspect", holder.id),
+    )
+    # A hidden item is not surfaced even though it is being held.
+    assert holder_result.events[0].details == "a bunny"
 
 
 def test_reachable_target_rejects_invalid_and_missing_target_directly():
