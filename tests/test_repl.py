@@ -396,15 +396,35 @@ def test_drain_events_skips_telemetry_noise():
     assert "note p" not in shown and "note s" not in shown  # telemetry is suppressed
 
 
-def test_drain_events_narrates_own_movement_despite_system_visibility():
+def test_drain_events_narrates_own_system_actions_uniformly():
     repl = _repl()  # player is in the Parlor
-    own_move = _event("m1", event_type="ActorMovedEvent", visibility="system", actor_id=PLAYER,
-                      from_room_id=PARLOR, to_room_id=HALL)
-    other_move = _event("m2", event_type="ActorMovedEvent", visibility="system", actor_id=MARLOW,
-                        from_room_id=PARLOR, to_room_id=HALL)
-    shown = " | ".join(text.plain for text in repl.drain_events([own_move, other_move]))
-    assert "Pib: Actor moved" in shown  # your own move is surfaced
-    assert "Marlow" not in shown  # someone else's system-only move is not
+    messages = [
+        _event("m1", event_type="ActorMovedEvent", visibility="system", actor_id=PLAYER,
+               from_room_id=PARLOR, to_room_id=HALL),
+        _event("t1", event_type="ItemTakenEvent", visibility="system", actor_id=PLAYER,
+               item_id=APPLE),
+        _event("x1", event_type="CommandExecutedEvent", visibility="system", actor_id=PLAYER),
+        _event("m2", event_type="ActorMovedEvent", visibility="system", actor_id=MARLOW,
+               from_room_id=PARLOR, to_room_id=HALL),
+    ]
+    shown = " | ".join(text.plain for text in repl.drain_events(messages))
+    assert "Pib: Actor moved" in shown  # your own move (system) is surfaced
+    assert "Pib: Item taken" in shown and "an apple" in shown  # ...and so is your own take
+    assert "Command executed" not in shown  # command lifecycle stays suppressed
+    assert "Marlow" not in shown  # someone else's system-only action is not perceived
+
+
+def test_drain_events_surfaces_own_command_rejections():
+    repl = _repl()
+    messages = [
+        _event("r1", event_type="CommandRejectedEvent", visibility="system", actor_id=PLAYER,
+               command_type="take", reason="that item is not portable"),
+        _event("r2", event_type="CommandRejectedEvent", visibility="system", actor_id=MARLOW,
+               command_type="take", reason="secret"),
+    ]
+    shown = " | ".join(text.plain for text in repl.drain_events(messages))
+    assert "Command rejected" in shown and "not portable" in shown  # your failure explains itself
+    assert "secret" not in shown  # another character's rejection is private to them
 
 
 def test_drain_events_dedupes_already_seen():

@@ -81,9 +81,10 @@ class ReplInput(Input):
 class BunnylandReplApp(App[None]):
     TITLE = "Bunnyland REPL"
 
+    # The log fills the space; the input and Footer flow beneath it. (Docking the input to
+    # the bottom collides with the docked Footer and clips the input's last row.)
     CSS = """
     #log { height: 1fr; }
-    #cmd { dock: bottom; }
     """
 
     BINDINGS = [Binding("ctrl+c", "quit", "Quit")]

@@ -39,18 +39,18 @@ META_COMMANDS = (
     "help", "who", "look", "inventory", "points", "play", "refresh", "quit", "exit"
 )
 
-# High-frequency telemetry/bookkeeping events that would drown out narration: point and
-# need/affect deltas (the status bar already shows points), and per-look perception notes.
+# Events that would drown out narration rather than describe activity: command lifecycle
+# (the "» …" echo already confirms your command), continuous point/need/affect telemetry
+# (points are shown in the status bar), and perception/look bookkeeping. ``CommandRejected``
+# is deliberately kept so a failed action tells you why instead of silently doing nothing.
 _UNNARRATED_EVENT_TYPES = frozenset({
+    "CommandSubmittedEvent", "CommandAcceptedEvent", "CommandQueuedEvent",
+    "CommandExecutedEvent", "CommandExpiredEvent",
     "ActionPointsChangedEvent", "FocusPointsChangedEvent", "EncumbranceChangedEvent",
     "PainChangedEvent", "BleedingChangedEvent", "AttentionShiftedEvent", "AffectChangedEvent",
-    "EntitySeenEvent", "RoomQualityUpdatedEvent", "HungerChangedEvent", "ThirstChangedEvent",
-    "DailyNeedChangedEvent", "SkillXPChangedEvent",
+    "EntitySeenEvent", "RoomLookedEvent", "RoomQualityUpdatedEvent", "HungerChangedEvent",
+    "ThirstChangedEvent", "DailyNeedChangedEvent", "SkillXPChangedEvent",
 })
-
-# System-visibility events worth narrating back to the actor who caused them (movement is a
-# system event, but you should still see "you moved" feedback for your own command).
-_OWN_ACTION_EVENT_TYPES = frozenset({"ActorMovedEvent"})
 
 # Fields on every ``DomainEvent``; the rest of a serialized event is its specific payload.
 _EVENT_BASE_KEYS = frozenset({
@@ -237,25 +237,19 @@ class BunnylandRepl:
             event_type = message.get("data", message).get("event_type")
             if event_type in _UNNARRATED_EVENT_TYPES:
                 continue
-            own_action = (
-                event_type in _OWN_ACTION_EVENT_TYPES
-                and bool(self.player_id)
-                and event.get("actor_id") == self.player_id
-            )
-            if own_action or self._perceives(event):
+            # You always see your own actions (many are system-visibility, e.g. take/move);
+            # others' activity is shown only when its visibility/scope lets you perceive it.
+            own = bool(self.player_id) and event.get("actor_id") == self.player_id
+            if own or self._perceives(event):
                 rendered.append(self._render_event(message.get("data", message)))
         self._seen_event_ids = current
         return rendered
 
     def _perceives(self, event: dict) -> bool:
-        """Whether the player would perceive an event, by its visibility and scope — room
-        events only in the player's room, directed/private only when they involve them.
-        You always perceive your own actions (e.g. a move scoped to the room you just left)."""
+        """Whether the player would perceive *another* character's event, by its visibility
+        and scope — room events only in the player's room, directed/private only when they
+        involve them. (Your own events are surfaced separately in :meth:`drain_events`.)"""
         visibility = event.get("visibility")
-        if visibility == "system":
-            return False
-        if self.player_id and event.get("actor_id") == self.player_id:
-            return True
         if visibility == "public":
             return True
         if visibility == "room":
