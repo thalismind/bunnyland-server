@@ -13,9 +13,11 @@ from bunnyland.core.components import (
     IdentityComponent,
     LightComponent,
     ReadableComponent,
+    RegionComponent,
     RoomComponent,
     TemperatureComponent,
 )
+from bunnyland.core.edges import ContainmentMode, Contains
 from bunnyland.mechanics.barbariansim import WeaponComponent
 from bunnyland.mechanics.colonysim import (
     ColonyIncidentComponent,
@@ -155,6 +157,22 @@ def _has(actor: WorldActor, component_type) -> bool:
     return bool(list(actor.world.query().with_all([component_type]).execute_entities()))
 
 
+def _regions(actor: WorldActor):
+    return list(actor.world.query().with_all([RegionComponent]).execute_entities())
+
+
+def _rooms_under_regions(actor: WorldActor) -> set:
+    """Room ids reached from any region via a REGION-mode ``Contains`` edge."""
+    room_ids = set()
+    for region in _regions(actor):
+        for edge, child_id in region.get_relationships(Contains):
+            if edge.mode != ContainmentMode.REGION:
+                continue
+            if actor.world.get_entity(child_id).has_component(RoomComponent):
+                room_ids.add(child_id)
+    return room_ids
+
+
 def _visible_text(actor: WorldActor) -> str:
     texts: list[str] = []
     for entity in actor.world.query().execute_entities():
@@ -183,6 +201,26 @@ async def test_demo_world_has_rooms_characters_and_needs(demo):
     assert world.characters, "demo world should have characters"
     # Every demo builds on life-sim: characters get needs from instantiate.
     assert _has(actor, HungerComponent)
+
+
+@pytest.mark.parametrize("demo", ALL_DEMOS, ids=lambda d: d.name)
+async def test_demo_world_has_a_multi_level_region_above_its_rooms(demo):
+    actor = WorldActor()
+
+    world = await demo.generate(actor, demo.name, GenOptions())
+
+    regions = _regions(actor)
+    # Nested levels above the rooms populate the inspector's region view.
+    assert len(regions) >= 2
+    # Every room sits under a region via REGION-mode Contains edges.
+    assert _rooms_under_regions(actor) == set(world.rooms.values())
+    # The levels are distinct: at least one region nests another region.
+    assert any(
+        edge.mode == ContainmentMode.REGION
+        and actor.world.get_entity(child_id).has_component(RegionComponent)
+        for region in regions
+        for edge, child_id in region.get_relationships(Contains)
+    )
 
 
 @pytest.mark.parametrize("demo", PACKAGE_DEMOS, ids=lambda d: d.name)

@@ -12,6 +12,7 @@ build on life-sim needs, which every character already gets from ``instantiate``
 
 from __future__ import annotations
 
+from ..core.components import RegionComponent
 from ..core.ecs import replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains
 from .generators import GenOptions, WorldGenerator
@@ -33,6 +34,34 @@ def _augment(actor, entity_id, *components):
     for component in components:
         entity.add_component(component)
     return entity
+
+
+def _region_stack(actor, room_ids, levels):
+    """Build nested ``RegionComponent`` containers above ``room_ids``.
+
+    ``levels`` is outermost-first ``(name, kind)`` pairs joined by ``Contains`` edges in
+    ``REGION`` mode; the innermost region contains every room. This gives the inspector's
+    region view a populated, multi-level hierarchy above the rooms, mirroring the web
+    repo's ``regional-hierarchy.json`` (planet -> ... -> building -> story -> room).
+    """
+    children = list(room_ids)
+    for name, kind in reversed(levels):
+        region = spawn_entity(actor.world, [RegionComponent(name=name, kind=kind)])
+        for child_id in children:
+            region.add_relationship(Contains(mode=ContainmentMode.REGION), child_id)
+        children = [region.id]
+
+
+def _with_regions(generate, levels):
+    """Wrap a demo generator so it lays nested regions above the rooms it builds."""
+
+    async def generate_with_regions(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+        world = await generate(actor, seed, options)
+        async with actor._lock:
+            _region_stack(actor, world.rooms.values(), levels)
+        return world
+
+    return generate_with_regions
 
 
 # --------------------------------------------------------------------------------------
@@ -851,7 +880,7 @@ async def nukesim_example(actor, seed: str, options: GenOptions) -> Instantiated
 
 async def neonsim_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
     del options
-    from ..core.components import IdentityComponent, PortableComponent, RegionComponent
+    from ..core.components import IdentityComponent, PortableComponent
     from ..core.edges import ContainmentMode, Contains
     from ..mechanics.colonysim import ResourceStackComponent
     from ..mechanics.neonsim import (
@@ -2596,136 +2625,187 @@ async def county_fair_example(actor, seed: str, options: GenOptions) -> Instanti
 
 
 LIFESIM_DEMO = WorldGenerator(
-    name="lifesim-demo", generate=lifesim_example,
+    name="lifesim-demo",
+    generate=_with_regions(
+        lifesim_example, (("Cloverbrook Vale", "region"), ("Clover Hollow", "area"))),
     description="A household with careers, skills, money, relationships, and aspirations.",
     group="simpack sandbox",
     uses_seed=False)
 GARDENSIM_DEMO = WorldGenerator(
-    name="gardensim-demo", generate=gardensim_example,
+    name="gardensim-demo",
+    generate=_with_regions(
+        gardensim_example, (("Greenhollow", "region"), ("Bramblewick Farm", "area"))),
     description="A farm with tilled soil, a growing crop, and seeds.",
     group="simpack sandbox",
     uses_seed=False)
 MAPLE_FARM_DEMO = WorldGenerator(
-    name="maple-farm-demo", generate=maple_farm_example,
+    name="maple-farm-demo",
+    generate=_with_regions(
+        maple_farm_example, (("Laurentian Uplands", "region"), ("Snowbank Farm", "area"))),
     description="A Canadian maple syrup farm with trees to wait for, tap, and harvest sap from.",
     group="simpack sandbox",
     uses_seed=False)
 COLONYSIM_DEMO = WorldGenerator(
-    name="colonysim-demo", generate=colonysim_example,
+    name="colonysim-demo",
+    generate=_with_regions(
+        colonysim_example, (("Verdant Frontier", "region"), ("Camp Theta", "zone"))),
     description="A work camp with resources, a workstation, a recipe, and a job.",
     group="simpack sandbox",
     uses_seed=False)
 BARBARIANSIM_DEMO = WorldGenerator(
-    name="barbariansim-demo", generate=barbariansim_example,
+    name="barbariansim-demo",
+    generate=_with_regions(
+        barbariansim_example, (("Frostfang Reaches", "region"), ("Wolfwind Pass", "zone"))),
     description="A frozen ridge with a sheltered cave, gear, and corruption pressure.",
     group="simpack sandbox",
     uses_seed=False)
 DRAGONSIM_DEMO = WorldGenerator(
-    name="dragonsim-demo", generate=dragonsim_example,
+    name="dragonsim-demo",
+    generate=_with_regions(
+        dragonsim_example, (("Mistmoor Vale", "region"), ("Mistmoor Village", "neighborhood"))),
     description="A village with an undiscovered barrow, a faction, and a quest.",
     group="simpack sandbox",
     uses_seed=False)
 DAGGERSIM_DEMO = WorldGenerator(
-    name="daggersim-demo", generate=daggersim_example,
+    name="daggersim-demo",
+    generate=_with_regions(
+        daggersim_example, (("Daggerfell Reach", "region"), ("Greywall", "city"))),
     description="A town with a bank, guild, rumor, travel, and a frontier site.",
     group="simpack sandbox",
     uses_seed=False)
 VOIDSIM_DEMO = WorldGenerator(
-    name="voidsim-demo", generate=voidsim_example,
+    name="voidsim-demo",
+    generate=_with_regions(
+        voidsim_example, (("Helios Sector", "sector"), ("ISV Wanderer", "ship"))),
     description="A modular ship with life support, power, and a damaged reactor.",
     group="simpack sandbox",
     uses_seed=False)
 NUKESIM_DEMO = WorldGenerator(
-    name="nukesim-demo", generate=nukesim_example,
+    name="nukesim-demo",
+    generate=_with_regions(
+        nukesim_example, (("The Glowlands", "region"), ("Rustwater Flats", "area"))),
     description="A wasteland checkpoint with radiation, scavenging, decon, and scrap crafting.",
     group="simpack sandbox",
     uses_seed=False)
 NEONSIM_DEMO = WorldGenerator(
-    name="neonsim-demo", generate=neonsim_example,
+    name="neonsim-demo",
+    generate=_with_regions(
+        neonsim_example, (("Night City", "city"), ("Watson", "neighborhood"))),
     description="A neon strip and corp office with surveillance, a hackable server, a fixer "
                 "contract, a ripperdoc, and a runner ready to break in.",
     group="simpack sandbox",
     uses_seed=False)
 DINOSIM_DEMO = WorldGenerator(
-    name="dinosim-demo", generate=dinosim_example,
+    name="dinosim-demo",
+    generate=_with_regions(
+        dinosim_example, (("Isla Vega", "region"), ("Cretaceous Compound", "zone"))),
     description="A hatchery with fossils, a ready egg, and a fertile dinosaur parent.",
     group="simpack sandbox",
     uses_seed=False)
 CLUE_SNACK_DEMO = WorldGenerator(
-    name="clue-snack-demo", generate=clue_snack_example,
+    name="clue-snack-demo",
+    generate=_with_regions(
+        clue_snack_example, (("Pinecrest", "area"), ("Mascot Lodge", "building"))),
     description=(
         "A legally distinct comic mystery with snacks, a talking hound, and a fake haunting."
     ),
     group="pop culture",
     uses_seed=False)
 DIVE_SCHEME_DEMO = WorldGenerator(
-    name="dive-scheme-demo", generate=dive_scheme_example,
+    name="dive-scheme-demo",
+    generate=_with_regions(
+        dive_scheme_example,
+        (("Saltport Harbor", "neighborhood"), ("The Gull & Grift", "building"))),
     description="A legally distinct dysfunctional tavern sitcom full of bad schemes.",
     group="pop culture",
     uses_seed=False)
 STAR_OPERA_DEMO = WorldGenerator(
-    name="star-opera-demo", generate=star_opera_example,
+    name="star-opera-demo",
+    generate=_with_regions(
+        star_opera_example, (("Saffron Sector", "sector"), ("Duneport", "city"))),
     description="A legally distinct star-opera rebellion at a desert port and rusty freighter.",
     group="pop culture",
     uses_seed=False)
 GOTHIC_COUNT_DEMO = WorldGenerator(
-    name="gothic-count-demo", generate=gothic_count_example,
+    name="gothic-count-demo",
+    generate=_with_regions(
+        gothic_count_example, (("Carpathian Marches", "country"), ("Castle Mordrath", "building"))),
     description="A legally distinct gothic night-host castle with papers, secrets, and hunger.",
     group="pop culture",
     uses_seed=False)
 MIDNIGHT_BURGER_DEMO = WorldGenerator(
-    name="midnight-burger-demo", generate=midnight_burger_example,
+    name="midnight-burger-demo",
+    generate=_with_regions(
+        midnight_burger_example, (("East Side", "neighborhood"), ("Patty Stack", "building"))),
     description="An inner-city burger shack that opens at dusk and rolls into night, with a "
                 "hungry night cook and a hidden cellar that is only dangerous after dark.",
     group="pop culture",
     uses_seed=False)
 DUNGEON_VAULT_DEMO = WorldGenerator(
-    name="dungeon-vault-demo", generate=dungeon_vault_example,
+    name="dungeon-vault-demo",
+    generate=_with_regions(
+        dungeon_vault_example, (("Emberdeep", "region"), ("Ember Vault", "dungeon"))),
     description="A torchlit hand-built vault with a hidden relic room and dungeon map.",
     group="dungeon",
     uses_seed=False)
 DUNGEON_MAZE_DEMO = WorldGenerator(
-    name="dungeon-maze-demo", generate=dungeon_maze_example,
+    name="dungeon-maze-demo",
+    generate=_with_regions(
+        dungeon_maze_example, (("Slatewarren", "region"), ("Slate Maze", "dungeon"))),
     description="A looping slate maze for classic mapping, backtracking, and secret hunting.",
     group="dungeon",
     uses_seed=False)
 DUNGEON_CRYPT_DEMO = WorldGenerator(
-    name="dungeon-crypt-demo", generate=dungeon_crypt_example,
+    name="dungeon-crypt-demo",
+    generate=_with_regions(
+        dungeon_crypt_example, (("Saintswood", "region"), ("Hollow Crypt", "dungeon"))),
     description="A chapel crypt with locked passages, readable clues, and a reliquary.",
     group="dungeon",
     uses_seed=False)
 STORM_LIGHTHOUSE_DEMO = WorldGenerator(
-    name="storm-lighthouse-demo", generate=storm_lighthouse_example,
+    name="storm-lighthouse-demo",
+    generate=_with_regions(
+        storm_lighthouse_example, (("Saltreef Coast", "area"), ("Gull Point Light", "building"))),
     description="A coastal lighthouse in an autumn squall, with a beacon to keep fueled, a "
                 "stranded sailor, and a wrecker's secret hidden under the lens.",
     group="scene demo",
     uses_seed=False)
 VACANCY_MOTEL_DEMO = WorldGenerator(
-    name="vacancy-motel-demo", generate=vacancy_motel_example,
+    name="vacancy-motel-demo",
+    generate=_with_regions(
+        vacancy_motel_example, (("Route 9", "region"), ("The Vacancy Motel", "building"))),
     description="A roadside motel that checks in by day and rolls into night, where Room 6 "
                 "only opens after dark and the night clerk gets hungry.",
     group="scene demo",
     uses_seed=False)
 FROZEN_GREENHOUSE_DEMO = WorldGenerator(
-    name="frozen-greenhouse-demo", generate=frozen_greenhouse_example,
+    name="frozen-greenhouse-demo",
+    generate=_with_regions(
+        frozen_greenhouse_example, (("Borealis Flats", "region"), ("Dome Station 7", "building"))),
     description="A greenhouse dome on a frozen winter plain with crops to keep warm, a boiler "
                 "to stoke, and a specimen that grows too fast in the dark and cold.",
     group="scene demo",
     uses_seed=False)
 STUCK_SUBWAY_DEMO = WorldGenerator(
-    name="stuck-subway-demo", generate=stuck_subway_example,
+    name="stuck-subway-demo",
+    generate=_with_regions(
+        stuck_subway_example, (("Metro Line 4", "zone"), ("Tunnel Section 12", "area"))),
     description="A subway car stalled between stations with dim power, dead ventilation, a "
                 "dead traction motor, and strangers waiting out the hold in the dark.",
     group="scene demo",
     uses_seed=False)
 MIDNIGHT_LAUNDROMAT_DEMO = WorldGenerator(
-    name="midnight-laundromat-demo", generate=midnight_laundromat_example,
+    name="midnight-laundromat-demo",
+    generate=_with_regions(
+        midnight_laundromat_example, (("Riverside", "neighborhood"), ("Suds & Such", "building"))),
     description="A 24-hour laundromat in the small hours rolling toward dawn, with late-night "
                 "strangers, a broken dryer, and a lost-and-found nobody remembers filling.",
     group="scene demo",
     uses_seed=False)
 COUNTY_FAIR_DEMO = WorldGenerator(
-    name="county-fair-demo", generate=county_fair_example,
+    name="county-fair-demo",
+    generate=_with_regions(
+        county_fair_example, (("Harvest County", "region"), ("County Fairgrounds", "zone"))),
     description="A closing night at an autumn county fair, with a pie contest, a championship "
                 "prize pumpkin, a smug rival, and a blue ribbon still up for grabs.",
     group="scene demo",

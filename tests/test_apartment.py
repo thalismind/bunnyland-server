@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from bunnyland.core import WorldActor
-from bunnyland.core.components import CharacterComponent, ReadableComponent, RoomComponent
-from bunnyland.core.edges import ExitTo
+from bunnyland.core.components import (
+    CharacterComponent,
+    ReadableComponent,
+    RegionComponent,
+    RoomComponent,
+)
+from bunnyland.core.edges import ContainmentMode, Contains, ExitTo
 from bunnyland.mechanics.lifesim import (
     CareerComponent,
     HomeComponent,
@@ -65,6 +70,31 @@ async def test_has_a_hidden_passage_and_findable_secrets():
         if e.get_component(ReadableComponent).text.strip()
     ]
     assert len(notes_with_text) >= 5
+
+
+async def test_building_sits_under_a_neighborhood_region():
+    actor = await _build()
+
+    regions = {
+        r.get_component(RegionComponent).name: r for r in _entities(actor, RegionComponent)
+    }
+    assert {"The Mulberry Walk-up", "Greenwich Warren"} <= set(regions)
+
+    building = regions["The Mulberry Walk-up"]
+    rooms_under_building = {
+        child_id
+        for edge, child_id in building.get_relationships(Contains)
+        if edge.mode == ContainmentMode.REGION
+        and actor.world.get_entity(child_id).has_component(RoomComponent)
+    }
+    assert rooms_under_building == {room.id for room in _entities(actor, RoomComponent)}
+
+    # The neighborhood nests the building one level up.
+    neighborhood = regions["Greenwich Warren"]
+    assert any(
+        edge.mode == ContainmentMode.REGION and child_id == building.id
+        for edge, child_id in neighborhood.get_relationships(Contains)
+    )
 
 
 def test_apartment_demo_is_registered():

@@ -18,6 +18,7 @@ from ..core.components import (
     KeyComponent,
     PortableComponent,
     ReadableComponent,
+    RegionComponent,
 )
 from ..core.ecs import replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains, ExitTo
@@ -507,6 +508,16 @@ async def apartment_example(actor, seed: str, options: GenOptions) -> Instantiat
               "My dear, by the time the moonflower blooms again I will be gone from this roof, "
               "but the garden is yours. Mind the rat-man; he kept my secret, and now he keeps "
               "yours.")
+
+        # A neighborhood and building above every room, so the inspector's region view
+        # shows a multi-level hierarchy over this map (region-mode Contains edges).
+        building = spawn_entity(
+            actor.world, [RegionComponent(name="The Mulberry Walk-up", kind="building")])
+        for room_id in rooms.values():
+            building.add_relationship(Contains(mode=ContainmentMode.REGION), room_id)
+        neighborhood = spawn_entity(
+            actor.world, [RegionComponent(name="Greenwich Warren", kind="neighborhood")])
+        neighborhood.add_relationship(Contains(mode=ContainmentMode.REGION), building.id)
 
     return world
 
