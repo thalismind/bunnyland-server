@@ -259,6 +259,14 @@ def test_tui_package_lazily_exports_app_symbols():
         getattr(tui, unknown)
 
 
+def test_action_list_height_leaves_queue_visible():
+    assert "#members, #doors, #activity {" in BunnylandTUI.CSS
+    assert "#verbs { height: auto; max-height: 12; }" in BunnylandTUI.CSS
+    assert "#queued { height: 1fr; min-height: 4;" in BunnylandTUI.CSS
+    assert "#doors-title, #activity-title, #queued-title { border-top:" in BunnylandTUI.CSS
+    assert "#doors { border-top:" not in BunnylandTUI.CSS
+
+
 # ── world model ───────────────────────────────────────────────────────────────
 def test_parse_normalizes_relationships_and_epoch():
     snapshot = _snapshot()

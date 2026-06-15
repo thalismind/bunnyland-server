@@ -195,13 +195,13 @@ class BunnylandTUI(App[None]):
     CSS = """
     #body { height: 1fr; }
     #world { width: 3fr; border-right: solid $panel; }
-    #actions { width: 2fr; padding: 0 1; }
+    #actions { width: 2fr; height: 1fr; padding: 0 1; }
     #status { padding: 0 1; color: $text-muted; height: 1; }
     .col-title { padding: 0 1; color: $accent; text-style: bold; }
-    #members, #doors, #activity, #verbs { height: auto; max-height: 1fr; }
-    #doors { border-top: solid $panel; }
-    #activity { border-top: solid $panel; }
-    #queued { height: auto; max-height: 1fr; border-top: solid $panel; }
+    #doors-title, #activity-title, #queued-title { border-top: solid $panel; }
+    #members, #doors, #activity { height: auto; max-height: 1fr; }
+    #verbs { height: auto; max-height: 12; }
+    #queued { height: 1fr; min-height: 4; }
     #points { padding: 0 1; height: 1; }
     #picker, #prompt {
         width: 60; height: auto; max-height: 80%;
@@ -246,15 +246,15 @@ class BunnylandTUI(App[None]):
             with Vertical(id="world"):
                 yield Static("Room", id="room-title", classes="col-title")
                 yield OptionList(id="members")
-                yield Static("Doors", classes="col-title")
+                yield Static("Doors", id="doors-title", classes="col-title")
                 yield OptionList(id="doors")
-                yield Static("Activity", classes="col-title")
+                yield Static("Activity", id="activity-title", classes="col-title")
                 yield OptionList(id="activity")
             with Vertical(id="actions"):
                 yield Select([], prompt="— pick a player —", allow_blank=True, id="player")
                 yield Static("", id="points")
                 yield OptionList(id="verbs")
-                yield Static("Queued actions", classes="col-title")
+                yield Static("Queued actions", id="queued-title", classes="col-title")
                 yield OptionList(id="queued")
         yield Footer()
 
