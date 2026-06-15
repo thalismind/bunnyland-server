@@ -103,6 +103,8 @@ branch tags and `latest` for the default branch. The web repo publishes
 
 - **[Getting started](docs/player/getting-started.md)** — looking around, moving, inventory,
   and talking to other characters.
+- **[Client guides](docs/player/clients/README.md)** — choosing and using the terminal
+  TUI, terminal REPL, and Bunnyland Toon clients.
 - **[Running your own game](docs/player/running-your-own-game.md)** — running a private,
   semi-single-player server, saving it, and generating a fresh world.
 - **[Core actions](docs/player/core-actions.md)** — how to look, move, carry items, use

@@ -1,0 +1,46 @@
+# Client guides
+
+Bunnyland clients all drive the same server-side verbs and validation. Pick the surface
+that fits how you want to play:
+
+- **[Terminal TUI](tui.md)** - a panel-based terminal client with room lists, an action
+  menu, action search, target pickers, and a queued-action panel.
+- **[Terminal REPL](repl.md)** - a compact terminal command line with clickable targets,
+  command history, and tab completion.
+- **[Bunnyland Toon](../toonsim.md)** - the sprite-based web client from the web repo.
+
+The clients can present different controls, but submitted commands still go through the
+same authoritative server checks. A menu entry or clickable target is a convenience, not a
+shortcut around reachability, permissions, points, or command validation.
+
+## Quick comparison
+
+| Client | Best for | How you act |
+|--------|----------|-------------|
+| Terminal TUI | browsing a room and picking actions without memorizing command syntax | choose a player, search or select an action, then pick a target or enter text |
+| Terminal REPL | keyboard-first play, scripts, and fast command entry | type canonical or natural commands, with tab completion and clickable names |
+| Bunnyland Toon | visual room play with sprites and mouse movement | click in the room or use the web action menu |
+
+## Running local or remote
+
+The terminal clients can either host a local world in their own process or connect to a
+running Bunnyland server:
+
+```bash
+bunnyland-tui --generator apartment-demo
+bunnyland-repl --generator apartment-demo
+
+bunnyland-tui --server http://localhost:8765
+bunnyland-repl --server http://localhost:8765
+```
+
+Use `--list-generators` in either terminal client to see grouped demo worlds and
+algorithmic generators:
+
+```bash
+bunnyland-tui --list-generators
+bunnyland-repl --list-generators
+```
+
+The web toon client connects to a running HTTP server from the browser. See
+[Toon-sim and the Bunnyland Toon client](../toonsim.md) for details.
