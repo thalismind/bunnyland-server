@@ -515,6 +515,7 @@ APARTMENT_DEMO = WorldGenerator(
     name="apartment-demo", generate=apartment_example,
     description="A quirky NYC apartment building: nine eccentric tenants with backstories, "
                 "homes, and daily routines, a rat-man below, and a few hidden corners.",
+    group="pop culture",
     uses_seed=False)
 
 

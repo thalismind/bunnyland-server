@@ -341,6 +341,7 @@ class WorldGeneratorInfo(BaseModel):
     name: str
     description: str = ""
     uses_seed: bool = True
+    group: str = "custom"
 
 
 class WorldGeneratorListResponse(BaseModel):

@@ -1969,31 +1969,36 @@ def worldgen_plugin() -> Plugin:
                 WorldGenerator(
                     "empty",
                     empty_generator,
-                    "blank ECS world with only the world clock",
+                    "Blank ECS world with only the world clock.",
+                    group="administrative",
                     uses_seed=False,
                 ),
                 WorldGenerator(
                     "waiting-room",
                     waiting_room_generator,
-                    "a single stark white room with one red chair",
+                    "A single stark white room with one red chair.",
+                    group="scene demo",
                     uses_seed=False,
                 ),
                 WorldGenerator(
                     "halloween",
                     halloween_generator,
-                    "a haunted autumn porch, foyer, and cellar with seasonal props",
+                    "A haunted autumn porch, foyer, and cellar with seasonal props.",
+                    group="seasonal",
                     uses_seed=False,
                 ),
                 WorldGenerator(
                     "holiday",
                     holiday_generator,
-                    "a snowy holiday workshop, stable, and field with festive props",
+                    "A snowy holiday workshop, stable, and field with festive props.",
+                    group="seasonal",
                     uses_seed=False,
                 ),
                 WorldGenerator(
                     "tower-debate",
                     tower_debate_generator,
-                    "a locked tower room where an angel and devil debate forever",
+                    "A locked tower room where an angel and devil debate forever.",
+                    group="scene demo",
                     uses_seed=False,
                 ),
                 CLUE_SNACK_DEMO,
@@ -2004,10 +2009,16 @@ def worldgen_plugin() -> Plugin:
                 *DUNGEON_DEMOS,
                 *SCENE_DEMOS,
                 WorldGenerator(
-                    "oneshot", oneshot_generator, "single LLM proposal, instantiated at once"
+                    "oneshot",
+                    oneshot_generator,
+                    "Single LLM proposal, instantiated at once.",
+                    group="algorithmic",
                 ),
                 WorldGenerator(
-                    "recursive", recursive_generator, "breadth-first graph, grown room-by-room"
+                    "recursive",
+                    recursive_generator,
+                    "Breadth-first graph, grown room-by-room.",
+                    group="algorithmic",
                 ),
             )
         ),

@@ -7,15 +7,29 @@ a server-admin reset, or a deterministic demo for testing one sim package.
 
 Enabled plugins contribute named generators. The built-in worldgen plugin provides:
 
-| Generator | Use it for |
-|-----------|------------|
-| `empty` | A blank administrative reset with only the world clock. Not playable until patched or regenerated. |
-| `clue-snack-demo` | A legally distinct comic mystery with snacks, a talking hound, and a fake haunting. |
-| `dive-scheme-demo` | A legally distinct dysfunctional tavern sitcom full of bad schemes. |
-| `gothic-count-demo` | A legally distinct gothic night-host castle with papers, secrets, and hunger. |
-| `oneshot` | Small worlds generated in one proposal. Fastest and simplest. |
-| `recursive` | Larger room graphs grown room-by-room with `--max-rooms`. Better for coherent explorable spaces. |
-| `star-opera-demo` | A legally distinct star-opera rebellion at a desert port and rusty freighter. |
+| Generator | Group | Use it for |
+|-----------|-------|------------|
+| `empty` | Administrative | Blank ECS world with only the world clock. |
+| `oneshot` | Algorithmic | Single LLM proposal, instantiated at once. |
+| `recursive` | Algorithmic | Breadth-first graph, grown room-by-room. |
+| `clue-snack-demo` | Pop culture | A legally distinct comic mystery with snacks, a talking hound, and a fake haunting. |
+| `dive-scheme-demo` | Pop culture | A legally distinct dysfunctional tavern sitcom full of bad schemes. |
+| `gothic-count-demo` | Pop culture | A legally distinct gothic night-host castle with papers, secrets, and hunger. |
+| `midnight-burger-demo` | Pop culture | An inner-city burger shack that opens at dusk and rolls into night, with a hungry night cook and a hidden cellar that is only dangerous after dark. |
+| `star-opera-demo` | Pop culture | A legally distinct star-opera rebellion at a desert port and rusty freighter. |
+| `dungeon-crypt-demo` | Dungeon | A chapel crypt with locked passages, readable clues, and a reliquary. |
+| `dungeon-maze-demo` | Dungeon | A looping slate maze for classic mapping, backtracking, and secret hunting. |
+| `dungeon-vault-demo` | Dungeon | A torchlit hand-built vault with a hidden relic room and dungeon map. |
+| `halloween` | Seasonal | A haunted autumn porch, foyer, and cellar with seasonal props. |
+| `holiday` | Seasonal | A snowy holiday workshop, stable, and field with festive props. |
+| `county-fair-demo` | Scene demo | A closing night at an autumn county fair, with a pie contest, a championship prize pumpkin, a smug rival, and a blue ribbon still up for grabs. |
+| `frozen-greenhouse-demo` | Scene demo | A greenhouse dome on a frozen winter plain with crops to keep warm, a boiler to stoke, and a specimen that grows too fast in the dark and cold. |
+| `midnight-laundromat-demo` | Scene demo | A 24-hour laundromat in the small hours rolling toward dawn, with late-night strangers, a broken dryer, and a lost-and-found nobody remembers filling. |
+| `storm-lighthouse-demo` | Scene demo | A coastal lighthouse in an autumn squall, with a beacon to keep fueled, a stranded sailor, and a wrecker's secret hidden under the lens. |
+| `stuck-subway-demo` | Scene demo | A subway car stalled between stations with dim power, dead ventilation, a dead traction motor, and strangers waiting out the hold in the dark. |
+| `tower-debate` | Scene demo | A locked tower room where an angel and devil debate forever. |
+| `vacancy-motel-demo` | Scene demo | A roadside motel that checks in by day and rolls into night, where Room 6 only opens after dark and the night clerk gets hungry. |
+| `waiting-room` | Scene demo | A single stark white room with one red chair. |
 
 Implemented sim packages also provide deterministic demo worlds, such as `lifesim-demo`,
 `gardensim-demo`, `daggersim-demo`, `voidsim-demo`, `nukesim-demo`, and `dinosim-demo`.

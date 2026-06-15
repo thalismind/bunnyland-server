@@ -846,9 +846,11 @@ def test_format_generator_lines_flags_seed_and_description():
         SimpleNamespace(name="recursive", uses_seed=True, description=""),
     ]
     assert format_generator_lines(generators) == [
-        "apartment-demo  (ignores --seed)",
+        "apartment-demo *",
         "    a demo",
         "recursive",
+        "",
+        "* ignores --seed",
     ]
 
 

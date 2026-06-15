@@ -206,18 +206,32 @@ def test_worldgen_plugin_contributes_named_generators():
     assert "nukesim-demo" in registry
     assert "dinosim-demo" in registry
     assert registry["empty"].uses_seed is False
+    assert registry["empty"].description == "Blank ECS world with only the world clock."
+    assert registry["empty"].group == "administrative"
     assert registry["waiting-room"].uses_seed is False
+    assert registry["waiting-room"].group == "scene demo"
     assert registry["halloween"].uses_seed is False
+    assert registry["halloween"].group == "seasonal"
     assert registry["holiday"].uses_seed is False
     assert registry["tower-debate"].uses_seed is False
     assert registry["clue-snack-demo"].uses_seed is False
+    assert registry["clue-snack-demo"].group == "pop culture"
     assert registry["dive-scheme-demo"].uses_seed is False
     assert registry["star-opera-demo"].uses_seed is False
     assert registry["gothic-count-demo"].uses_seed is False
     assert registry["recursive"].uses_seed is True
+    assert registry["recursive"].description == "Breadth-first graph, grown room-by-room."
+    assert registry["recursive"].group == "algorithmic"
     assert registry["voidsim-demo"].uses_seed is False
+    assert registry["voidsim-demo"].group == "simpack sandbox"
     assert registry["nukesim-demo"].uses_seed is False
     assert registry["dinosim-demo"].uses_seed is False
+    assert registry["dungeon-vault-demo"].group == "dungeon"
+    assert registry["storm-lighthouse-demo"].group == "scene demo"
+    for generator in registry.values():
+        assert generator.group
+        assert generator.description[0].isupper()
+        assert generator.description.endswith(".")
     without_void = collect_generators([p for p in bunnyland_plugins() if p.id != VOIDSIM])
     assert "voidsim-demo" not in without_void
     without_nuke = collect_generators([p for p in bunnyland_plugins() if p.id != NUKESIM])

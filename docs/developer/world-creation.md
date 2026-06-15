@@ -23,7 +23,7 @@ World generators are **named strategies contributed by plugins**, selected with
 uv run bunnyland serve --generator recursive --max-rooms 8
 ```
 
-Three are built in (from the `bunnyland.worldgen` plugin):
+The base strategies from the `bunnyland.worldgen` plugin are:
 
 ### `empty`
 
@@ -67,17 +67,18 @@ uv run bunnyland serve --generator voidsim-demo --ticks 5
 
 | Generator            | What it sets up |
 |----------------------|-----------------|
-| `lifesim-demo`       | A married couple with careers, skills, money, and aspirations |
-| `gardensim-demo`     | A farm with tilled soil, a half-grown crop, and seeds |
-| `maple-farm-demo`    | A Canadian sugarbush with maple trees to wait for, tap, and harvest sap from |
-| `colonysim-demo`     | A camp with a resource node, workstation, recipe, and a job |
-| `barbariansim-demo`  | A frozen ridge and sheltered cave, with gear, stamina, and corruption |
-| `dragonsim-demo`     | A village, an undiscovered barrow, a faction, and a quest |
-| `daggersim-demo`     | A town with a bank, guild, rumor, travel route, and a frontier site to expand |
-| `voidsim-demo`       | A ship of habitat modules with life support, power, a damaged reactor, and a distress beacon |
-| `nukesim-demo`       | A wasteland checkpoint with radiation, scavenging, decontamination, and scrap crafting |
-| `dinosim-demo`       | A hatchery and fenced paddock with fossils, a ready egg, and a fertile dinosaur parent |
-| `apartment-demo`     | A five-storey NYC apartment building of quirky tenants with backstories, homes, and daily routines, a rat-man in the warren below, and hidden corners to find |
+| `lifesim-demo`       | A household with careers, skills, money, relationships, and aspirations. |
+| `gardensim-demo`     | A farm with tilled soil, a growing crop, and seeds. |
+| `maple-farm-demo`    | A Canadian maple syrup farm with trees to wait for, tap, and harvest sap from. |
+| `colonysim-demo`     | A work camp with resources, a workstation, a recipe, and a job. |
+| `barbariansim-demo`  | A frozen ridge with a sheltered cave, gear, and corruption pressure. |
+| `dragonsim-demo`     | A village with an undiscovered barrow, a faction, and a quest. |
+| `daggersim-demo`     | A town with a bank, guild, rumor, travel, and a frontier site. |
+| `voidsim-demo`       | A modular ship with life support, power, and a damaged reactor. |
+| `nukesim-demo`       | A wasteland checkpoint with radiation, scavenging, decon, and scrap crafting. |
+| `neonsim-demo`       | A neon strip and corp office with surveillance, a hackable server, a fixer contract, a ripperdoc, and a runner ready to break in. |
+| `dinosim-demo`       | A hatchery with fossils, a ready egg, and a fertile dinosaur parent. |
+| `apartment-demo`     | A quirky NYC apartment building: nine eccentric tenants with backstories, homes, and daily routines, a rat-man below, and a few hidden corners. |
 
 Each demo builds on the shared life-sim basics (every character has needs), then layers on
 its own package's components. Each is contributed by its sim's plugin, so it only appears
@@ -94,10 +95,11 @@ new names, and changed locations without copying protected names or settings:
 
 | Generator | What it sets up |
 |-----------|-----------------|
-| `clue-snack-demo` | A comic mystery with a nervous snack-lover, a talking hound, a lodge, and a fake haunting |
-| `dive-scheme-demo` | A dysfunctional city tavern where every room contains a terrible business plan |
-| `star-opera-demo` | A desert starport, rusty courier ship, rebel cell, and ceremonial checkpoint |
-| `gothic-count-demo` | A moor inn, moonlit castle hall, hidden crypt, courtly night host, and suspicious deed |
+| `clue-snack-demo` | A legally distinct comic mystery with snacks, a talking hound, and a fake haunting. |
+| `dive-scheme-demo` | A legally distinct dysfunctional tavern sitcom full of bad schemes. |
+| `star-opera-demo` | A legally distinct star-opera rebellion at a desert port and rusty freighter. |
+| `gothic-count-demo` | A legally distinct gothic night-host castle with papers, secrets, and hunger. |
+| `midnight-burger-demo` | An inner-city burger shack that opens at dusk and rolls into night, with a hungry night cook and a hidden cellar that is only dangerous after dark. |
 
 An unknown `--generator` name lists what the enabled plugins actually provide:
 
@@ -163,7 +165,14 @@ def bunnyland_plugins():
             id="mygame.worldgen",
             name="My Generators",
             content=ContentContribution(
-                world_generators=(WorldGenerator("arena", generate_arena, "a single combat room"),),
+                world_generators=(
+                    WorldGenerator(
+                        "arena",
+                        generate_arena,
+                        "A single combat room.",
+                        group="custom",
+                    ),
+                ),
             ),
         )
     ]

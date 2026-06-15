@@ -1556,8 +1556,11 @@ def test_admin_world_generators_lists_enabled_generators(scenario):
     assert "/admin/world/generation" in paths
     assert {"empty", "oneshot", "recursive"} <= set(registry)
     assert generators["empty"].uses_seed is False
+    assert generators["empty"].group == "administrative"
     assert generators["oneshot"].uses_seed is True
+    assert generators["oneshot"].group == "algorithmic"
     assert generators["recursive"].uses_seed is True
+    assert generators["recursive"].group == "algorithmic"
 
 
 async def test_admin_world_generate_defaults_to_recursive_when_available(scenario):

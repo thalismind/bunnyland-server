@@ -2598,112 +2598,137 @@ async def county_fair_example(actor, seed: str, options: GenOptions) -> Instanti
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo", generate=lifesim_example,
     description="A household with careers, skills, money, relationships, and aspirations.",
+    group="simpack sandbox",
     uses_seed=False)
 GARDENSIM_DEMO = WorldGenerator(
     name="gardensim-demo", generate=gardensim_example,
     description="A farm with tilled soil, a growing crop, and seeds.",
+    group="simpack sandbox",
     uses_seed=False)
 MAPLE_FARM_DEMO = WorldGenerator(
     name="maple-farm-demo", generate=maple_farm_example,
     description="A Canadian maple syrup farm with trees to wait for, tap, and harvest sap from.",
+    group="simpack sandbox",
     uses_seed=False)
 COLONYSIM_DEMO = WorldGenerator(
     name="colonysim-demo", generate=colonysim_example,
     description="A work camp with resources, a workstation, a recipe, and a job.",
+    group="simpack sandbox",
     uses_seed=False)
 BARBARIANSIM_DEMO = WorldGenerator(
     name="barbariansim-demo", generate=barbariansim_example,
     description="A frozen ridge with a sheltered cave, gear, and corruption pressure.",
+    group="simpack sandbox",
     uses_seed=False)
 DRAGONSIM_DEMO = WorldGenerator(
     name="dragonsim-demo", generate=dragonsim_example,
     description="A village with an undiscovered barrow, a faction, and a quest.",
+    group="simpack sandbox",
     uses_seed=False)
 DAGGERSIM_DEMO = WorldGenerator(
     name="daggersim-demo", generate=daggersim_example,
     description="A town with a bank, guild, rumor, travel, and a frontier site.",
+    group="simpack sandbox",
     uses_seed=False)
 VOIDSIM_DEMO = WorldGenerator(
     name="voidsim-demo", generate=voidsim_example,
     description="A modular ship with life support, power, and a damaged reactor.",
+    group="simpack sandbox",
     uses_seed=False)
 NUKESIM_DEMO = WorldGenerator(
     name="nukesim-demo", generate=nukesim_example,
     description="A wasteland checkpoint with radiation, scavenging, decon, and scrap crafting.",
+    group="simpack sandbox",
     uses_seed=False)
 NEONSIM_DEMO = WorldGenerator(
     name="neonsim-demo", generate=neonsim_example,
     description="A neon strip and corp office with surveillance, a hackable server, a fixer "
                 "contract, a ripperdoc, and a runner ready to break in.",
+    group="simpack sandbox",
     uses_seed=False)
 DINOSIM_DEMO = WorldGenerator(
     name="dinosim-demo", generate=dinosim_example,
     description="A hatchery with fossils, a ready egg, and a fertile dinosaur parent.",
+    group="simpack sandbox",
     uses_seed=False)
 CLUE_SNACK_DEMO = WorldGenerator(
     name="clue-snack-demo", generate=clue_snack_example,
     description=(
         "A legally distinct comic mystery with snacks, a talking hound, and a fake haunting."
     ),
+    group="pop culture",
     uses_seed=False)
 DIVE_SCHEME_DEMO = WorldGenerator(
     name="dive-scheme-demo", generate=dive_scheme_example,
     description="A legally distinct dysfunctional tavern sitcom full of bad schemes.",
+    group="pop culture",
     uses_seed=False)
 STAR_OPERA_DEMO = WorldGenerator(
     name="star-opera-demo", generate=star_opera_example,
     description="A legally distinct star-opera rebellion at a desert port and rusty freighter.",
+    group="pop culture",
     uses_seed=False)
 GOTHIC_COUNT_DEMO = WorldGenerator(
     name="gothic-count-demo", generate=gothic_count_example,
     description="A legally distinct gothic night-host castle with papers, secrets, and hunger.",
+    group="pop culture",
     uses_seed=False)
 MIDNIGHT_BURGER_DEMO = WorldGenerator(
     name="midnight-burger-demo", generate=midnight_burger_example,
     description="An inner-city burger shack that opens at dusk and rolls into night, with a "
                 "hungry night cook and a hidden cellar that is only dangerous after dark.",
+    group="pop culture",
     uses_seed=False)
 DUNGEON_VAULT_DEMO = WorldGenerator(
     name="dungeon-vault-demo", generate=dungeon_vault_example,
     description="A torchlit hand-built vault with a hidden relic room and dungeon map.",
+    group="dungeon",
     uses_seed=False)
 DUNGEON_MAZE_DEMO = WorldGenerator(
     name="dungeon-maze-demo", generate=dungeon_maze_example,
     description="A looping slate maze for classic mapping, backtracking, and secret hunting.",
+    group="dungeon",
     uses_seed=False)
 DUNGEON_CRYPT_DEMO = WorldGenerator(
     name="dungeon-crypt-demo", generate=dungeon_crypt_example,
     description="A chapel crypt with locked passages, readable clues, and a reliquary.",
+    group="dungeon",
     uses_seed=False)
 STORM_LIGHTHOUSE_DEMO = WorldGenerator(
     name="storm-lighthouse-demo", generate=storm_lighthouse_example,
     description="A coastal lighthouse in an autumn squall, with a beacon to keep fueled, a "
                 "stranded sailor, and a wrecker's secret hidden under the lens.",
+    group="scene demo",
     uses_seed=False)
 VACANCY_MOTEL_DEMO = WorldGenerator(
     name="vacancy-motel-demo", generate=vacancy_motel_example,
     description="A roadside motel that checks in by day and rolls into night, where Room 6 "
                 "only opens after dark and the night clerk gets hungry.",
+    group="scene demo",
     uses_seed=False)
 FROZEN_GREENHOUSE_DEMO = WorldGenerator(
     name="frozen-greenhouse-demo", generate=frozen_greenhouse_example,
     description="A greenhouse dome on a frozen winter plain with crops to keep warm, a boiler "
                 "to stoke, and a specimen that grows too fast in the dark and cold.",
+    group="scene demo",
     uses_seed=False)
 STUCK_SUBWAY_DEMO = WorldGenerator(
     name="stuck-subway-demo", generate=stuck_subway_example,
     description="A subway car stalled between stations with dim power, dead ventilation, a "
                 "dead traction motor, and strangers waiting out the hold in the dark.",
+    group="scene demo",
     uses_seed=False)
 MIDNIGHT_LAUNDROMAT_DEMO = WorldGenerator(
     name="midnight-laundromat-demo", generate=midnight_laundromat_example,
     description="A 24-hour laundromat in the small hours rolling toward dawn, with late-night "
                 "strangers, a broken dryer, and a lost-and-found nobody remembers filling.",
+    group="scene demo",
     uses_seed=False)
 COUNTY_FAIR_DEMO = WorldGenerator(
     name="county-fair-demo", generate=county_fair_example,
-    description="Closing night of an autumn county fair, with a pie contest, a championship "
+    description="A closing night at an autumn county fair, with a pie contest, a championship "
                 "prize pumpkin, a smug rival, and a blue ribbon still up for grabs.",
+    group="scene demo",
     uses_seed=False)
 
 POP_CULTURE_DEMOS = (

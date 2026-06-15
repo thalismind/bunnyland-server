@@ -62,14 +62,22 @@ def available_generators() -> list[WorldGenerator]:
 
 
 def format_generator_lines(generators: list[WorldGenerator]) -> list[str]:
-    """Human-readable lines for ``--list-generators``: a name (flagging seed-less ones) and
+    """Human-readable lines for ``--list-generators``: name, optional seed marker, and
     an indented description where one is set."""
     lines: list[str] = []
+    seedless = False
     for generator in generators:
-        suffix = "" if generator.uses_seed else "  (ignores --seed)"
-        lines.append(f"{generator.name}{suffix}")
+        marker = ""
+        if not generator.uses_seed:
+            marker = " *"
+            seedless = True
+        lines.append(f"{generator.name}{marker}")
         if generator.description:
             lines.append(f"    {generator.description}")
+    if seedless:
+        if lines:
+            lines.append("")
+        lines.append("* ignores --seed")
     return lines
 
 

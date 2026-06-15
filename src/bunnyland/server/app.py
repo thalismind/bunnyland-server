@@ -385,6 +385,7 @@ def create_app(
                 WorldGeneratorInfo(
                     name=generator.name,
                     description=generator.description,
+                    group=generator.group,
                     uses_seed=generator.uses_seed,
                 )
                 for generator in sorted(generator_registry.values(), key=lambda item: item.name)
