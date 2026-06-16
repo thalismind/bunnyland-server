@@ -147,6 +147,11 @@ if b"Bunnyland World Editor" not in body:
 config = json.loads(expect_status("frontend config", "GET", "/config.json", 200).decode())
 if config.get("serverUrl") != "/api/":
     fail(f"frontend config: expected serverUrl '/api/', got {config.get('serverUrl')!r}")
+# config.json is rendered from the frontend environment at container start; the discordUrl
+# key is always present (empty when no invite is configured), so its absence means the
+# render step did not run.
+if "discordUrl" not in config:
+    fail("frontend config: discordUrl key missing (config.json was not rendered)")
 ok("frontend config: same-origin /api/")
 
 health = json.loads(expect_status("REST health", "GET", "/api/health", 200).decode())

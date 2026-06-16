@@ -144,6 +144,16 @@ To use a custom favicon, add `BUNNYLAND_FAVICON_FILE` to the setup command:
 BUNNYLAND_FAVICON_FILE='/opt/bunnyland/favicon.png' \
 ```
 
+To show a Discord invite on the web welcome page and in every client's menu, add
+`BUNNYLAND_DISCORD_URL`. It must be empty or an `http(s)` URL. The frontend renders it into
+`config.json` at container start, so changing it later only needs a rerun (or a
+`compose.user.yml` edit) and a frontend restart — no image rebuild. Leave it unset and no
+Discord link is shown anywhere.
+
+```bash
+BUNNYLAND_DISCORD_URL='https://discord.gg/your-invite' \
+```
+
 To serve a separate static homepage from the same frontend nginx container, add
 `BUNNYLAND_HOME_DOMAIN` and `BUNNYLAND_HOME_DIR`. The homepage directory must contain its
 own `index.html`. The setup script requests or reuses a separate Let's Encrypt certificate
@@ -178,9 +188,10 @@ elsewhere), rerun setup with `BUNNYLAND_CONFIGURE_FIREWALL=0`.
 
 ### Verify the smoke test
 
-After the smoke test, open `https://sandbox.example.com/`. The frontend image ships a
-default `/config.json` that points the browser at same-origin `/api/`, so the web UI and
-API proxy come up together.
+After the smoke test, open `https://sandbox.example.com/`. The frontend renders
+`/config.json` from its environment at container start; by default it points the browser at
+same-origin `/api/` (and carries the optional `discordUrl`), so the web UI and API proxy
+come up together.
 
 Verify the public route and admin auth:
 

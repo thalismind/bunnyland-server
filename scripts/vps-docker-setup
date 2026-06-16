@@ -42,6 +42,7 @@ enable_llm="${BUNNYLAND_ENABLE_LLM:-}"
 enable_discord="${BUNNYLAND_ENABLE_DISCORD:-}"
 enable_mcp="${BUNNYLAND_ENABLE_MCP:-0}"
 admin_token="${BUNNYLAND_ADMIN_TOKEN:-}"
+discord_url="${BUNNYLAND_DISCORD_URL:-}"
 llm_provider="${BUNNYLAND_LLM_PROVIDER:-ollama}"
 worldgen_provider="${BUNNYLAND_WORLDGEN_PROVIDER:-$llm_provider}"
 enable_tls="${BUNNYLAND_TLS:-1}"
@@ -66,6 +67,13 @@ esac
 case "$starter_pack" in
   "" | peaceful | fantastic | futuristic) ;;
   *) die "unsupported BUNNYLAND_STARTER_PACK: $starter_pack" ;;
+esac
+
+# Optional public Discord invite shown on the web welcome page and client menu. Empty means
+# no link is surfaced; otherwise require an http(s) URL so a typo never renders a broken link.
+case "$discord_url" in
+  "" | http://* | https://*) ;;
+  *) die "BUNNYLAND_DISCORD_URL must be empty or an http(s) URL: $discord_url" ;;
 esac
 
 # Explicit BUNNYLAND_ENABLE_LLM=0 and BUNNYLAND_ENABLE_DISCORD=0 force the offline smoke
@@ -365,6 +373,8 @@ render_frontend_service() {
   # Always define it (empty when MCP is off) so the nginx envsubst that fills the injected
   # X-Bunnyland-Admin-Token never leaves a literal ${BUNNYLAND_ADMIN_TOKEN} nginx cannot parse.
   printf '      BUNNYLAND_ADMIN_TOKEN: %s\n' "$(yaml_quote "$admin_token")"
+  # Rendered into config.json at frontend start; empty hides the welcome/menu Discord link.
+  printf '      BUNNYLAND_DISCORD_URL: %s\n' "$(yaml_quote "$discord_url")"
   if [[ "$enable_tls" == "1" ]]; then
     printf '      BUNNYLAND_CERT_NAME: %s\n' "$(yaml_quote "$cert_name")"
   fi
