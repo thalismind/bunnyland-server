@@ -25,7 +25,9 @@ from ..core import (
 )
 from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.ecs import parse_entity_id
+from ..server.models import CharacterListResponse, CharacterSummaryView
 from ..server.serialization import (
+    serialize_character_list,
     serialize_character_projection,
     serialize_character_queued_commands,
     serialize_room_projection,
@@ -71,6 +73,13 @@ class Backend(ABC):
 
     @abstractmethod
     async def fetch_snapshot(self) -> dict: ...
+
+    async def fetch_character_list(self) -> list[CharacterSummaryView]:
+        """The claim lobby — one typed :class:`CharacterSummaryView` per character — used to
+        populate the player picker without the admin-gated full snapshot. Remote backends
+        re-validate the server JSON back into the shared model, so the client owns
+        validation of its server interaction layer."""
+        return []
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return None
@@ -182,6 +191,9 @@ class LocalBackend(Backend):
     async def fetch_snapshot(self) -> dict:
         return serialize_world(self.actor, self.meta)
 
+    async def fetch_character_list(self) -> list[CharacterSummaryView]:
+        return list(serialize_character_list(self.actor).characters)
+
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return serialize_character_projection(self.actor, character_id).model_dump(mode="json")
 
@@ -269,6 +281,11 @@ class RemoteBackend(Backend):
         res = await self._client.get(f"{self.base}/world/snapshot")
         res.raise_for_status()
         return res.json()
+
+    async def fetch_character_list(self) -> list[CharacterSummaryView]:
+        res = await self._client.get(f"{self.base}/world/characters")
+        res.raise_for_status()
+        return list(CharacterListResponse.model_validate(res.json()).characters)
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         res = await self._client.get(f"{self.base}/world/character/{character_id}")

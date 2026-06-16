@@ -29,6 +29,7 @@ from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .models import (
+    CharacterListResponse,
     CharacterProjectionResponse,
     CharacterQueuedCommandsResponse,
     CommandRequest,
@@ -64,6 +65,7 @@ from .models import (
 from .patches import WorldPatchError, apply_world_patch
 from .schema import world_schema
 from .serialization import (
+    serialize_character_list,
     serialize_character_projection,
     serialize_character_queued_commands,
     serialize_dm_projection,
@@ -174,6 +176,12 @@ def create_app(
         # projections so it is not a back door around the per-room player views.
         _require_projection_admin(admin_token)
         return serialize_world(actor, meta)
+
+    @app.get("/world/characters", response_model=CharacterListResponse)
+    async def world_character_list() -> CharacterListResponse:
+        # The claim lobby: ids and names only, so a player can pick a character without
+        # the admin-gated full snapshot. Per-character state stays behind the projections.
+        return serialize_character_list(actor)
 
     @app.get("/world/character/{id}", response_model=CharacterProjectionResponse)
     async def world_character_projection(id: str) -> CharacterProjectionResponse:

@@ -710,6 +710,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
 
     await backend.start()
     snapshot = await backend.fetch_snapshot()
+    character_list = await backend.fetch_character_list()
     character = await backend.fetch_character_projection(PLAYER)
     room = await backend.fetch_room_projection(PARLOR)
     queued = await backend.fetch_queued_commands(PLAYER)
@@ -717,6 +718,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     await backend.close()
 
     assert snapshot == {"world_epoch": 7}
+    assert character_list == []  # validated CharacterListResponse with no characters
     assert character == {"world_epoch": 7}
     assert room == {"world_epoch": 7}
     assert queued == {"world_epoch": 7}
@@ -724,6 +726,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     assert clients[0].closed is True
     assert clients[0].requests == [
         ("GET", "http://server.example/world/snapshot", None),
+        ("GET", "http://server.example/world/characters", None),
         ("GET", f"http://server.example/world/character/{PLAYER}", None),
         ("GET", f"http://server.example/world/room/{PARLOR}", None),
         ("GET", f"http://server.example/world/character/{PLAYER}/commands", None),

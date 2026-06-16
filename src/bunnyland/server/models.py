@@ -73,6 +73,22 @@ class CharacterQueuedCommandsResponse(BaseModel):
     commands: list[QueuedCommandView] = Field(default_factory=list)
 
 
+class CharacterSummaryView(BaseModel):
+    """A claim-lobby entry: enough to list and pick a character, never their state."""
+
+    character_id: str
+    name: str
+    kind: str = "character"
+    suspended: bool = False
+
+
+class CharacterListResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    characters: list[CharacterSummaryView] = Field(default_factory=list)
+
+
 class ClientEntityView(BaseModel):
     id: str
     name: str

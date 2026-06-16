@@ -53,8 +53,10 @@ from ..persistence import WorldMeta
 from ..projections import PerceivedEntity, build_room_facts, perceive
 from .models import (
     ActionSearchResponse,
+    CharacterListResponse,
     CharacterProjectionResponse,
     CharacterQueuedCommandsResponse,
+    CharacterSummaryView,
     ClientActionArgumentView,
     ClientActionView,
     ClientControllerView,
@@ -194,6 +196,29 @@ def serialize_character_queued_commands(
         character_id=str(character.id),
         commands=command_dicts,
     )
+
+
+def serialize_character_list(actor: WorldActor) -> CharacterListResponse:
+    """Return the claim lobby: every character's id, name, kind, and suspended flag.
+
+    This is the player-facing replacement for scanning the full snapshot to populate a
+    character picker. It deliberately exposes no per-character state (position, points,
+    inventory); a client claims a character and then reads its own ``character_view``.
+    """
+
+    summaries = [
+        CharacterSummaryView(
+            character_id=str(character.id),
+            name=character.get_component(IdentityComponent).name,
+            kind=character.get_component(IdentityComponent).kind or "character",
+            suspended=character.has_component(SuspendedComponent),
+        )
+        for character in actor.world.query()
+        .with_all([CharacterComponent, IdentityComponent])
+        .execute_entities()
+    ]
+    summaries.sort(key=lambda summary: summary.name.lower())
+    return CharacterListResponse(world_epoch=actor.epoch, characters=summaries)
 
 
 def serialize_world(actor: WorldActor, meta: WorldMeta | None = None) -> dict[str, Any]:

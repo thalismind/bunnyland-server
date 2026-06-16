@@ -679,6 +679,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     paths = {route.path for route in app.routes}
     assert "/health" in paths
     assert "/world/snapshot" in paths
+    assert "/world/characters" in paths
     assert "/world/character/{id}" in paths
     assert "/world/character/{id}/commands" in paths
     assert "/world/room/{id}" in paths
@@ -743,6 +744,36 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
         "character_id": str(scenario.character),
         "commands": [],
     }
+
+
+def test_fastapi_character_list_returns_claim_lobby_without_state(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    suspended = spawn_entity(
+        scenario.actor.world,
+        [
+            CharacterComponent(),
+            IdentityComponent(name="Aspen", kind="character"),
+            SuspendedComponent(),
+        ],
+    )
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    response = client.get("/world/characters")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["world_epoch"] == scenario.actor.epoch
+    characters = {entry["character_id"]: entry for entry in body["characters"]}
+    # Sorted by name: Aspen before Juniper.
+    assert [entry["name"] for entry in body["characters"]] == ["Aspen", "Juniper"]
+    assert characters[str(suspended.id)]["suspended"] is True
+    assert characters[str(scenario.character)]["suspended"] is False
+    # The lobby is ids and names only -- no per-character state leaks through.
+    assert "points" not in response.text
+    assert "inventory" not in response.text
+    assert "components" not in response.text
 
 
 def test_fastapi_character_projection_maps_invalid_ids_to_http_errors(scenario):
