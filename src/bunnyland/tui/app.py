@@ -21,6 +21,7 @@ from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, LocalBackend, RemoteBackend
 from .events import EventNarrator
 from .model import World, entity_icon, entity_name, fmt_points, has
+from .splash import IntroSplash
 from .verbs import ACTION_VERBS, Verb
 
 REFRESH_SECONDS = 1.0
@@ -221,9 +222,10 @@ class BunnylandTUI(App[None]):
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, backend: Backend) -> None:
+    def __init__(self, backend: Backend, *, show_intro: bool = False) -> None:
         super().__init__()
         self.backend = backend
+        self.show_intro = show_intro
         self.world = World()
         self.player_id = ""
         self.control: tuple[str, int] | None = None
@@ -266,6 +268,8 @@ class BunnylandTUI(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        if self.show_intro:
+            await self.push_screen(IntroSplash())
         await self.backend.start()
         await self.refresh_world()
         self.set_interval(REFRESH_SECONDS, self.refresh_world)
@@ -649,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=timeout_seconds,
         )
     )
-    BunnylandTUI(backend).run()
+    BunnylandTUI(backend, show_intro=True).run()
     return 0
 
 

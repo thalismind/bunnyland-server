@@ -20,6 +20,7 @@ from textual.widgets import Footer, Header, Input, RichLog
 
 from ..core.claim_timeout import normalize_claim_timeout
 from ..tui.backend import Backend, LocalBackend, RemoteBackend
+from ..tui.splash import IntroSplash
 from .client import BunnylandRepl, available_generators, format_generator_lines, history_path
 
 REFRESH_SECONDS = 1.0
@@ -89,9 +90,10 @@ class BunnylandReplApp(App[None]):
 
     BINDINGS = [Binding("ctrl+c", "quit", "Quit")]
 
-    def __init__(self, backend: Backend) -> None:
+    def __init__(self, backend: Backend, *, show_intro: bool = False) -> None:
         super().__init__()
         self.repl = BunnylandRepl(backend)
+        self.show_intro = show_intro
         self.log_view = RichLog(id="log", wrap=True)
         self.command = ReplInput(
             id="cmd", placeholder="type a command — 'help' for a list, 'quit' to exit"
@@ -105,6 +107,8 @@ class BunnylandReplApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        if self.show_intro:
+            await self.push_screen(IntroSplash())
         await self.repl.backend.start()
         self._load_history()
         await self._safe_refresh(prime=True)  # seed event history without dumping the backlog
@@ -226,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=timeout_seconds,
         )
     )
-    BunnylandReplApp(backend).run()
+    BunnylandReplApp(backend, show_intro=True).run()
     return 0
 
 
