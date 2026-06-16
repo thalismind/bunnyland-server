@@ -653,7 +653,9 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=timeout_seconds,
         )
     )
-    BunnylandTUI(backend, show_intro=True).run()
+    app = BunnylandTUI(backend)
+    app.show_intro = True
+    app.run()
     return 0
 
 
