@@ -104,16 +104,21 @@ tag scheme.
 
 ### Player guides
 
-- **[Getting started](docs/player/getting-started.md)** — looking around, moving, inventory,
-  and talking to other characters.
+- **[Getting started](docs/player/getting-started.md)** — the first few turns and where
+  to go next.
 - **[Client guides](docs/player/clients/README.md)** — choosing and using the terminal
   TUI, terminal REPL, and Bunnyland Toon clients.
 - **[Running your own game](docs/player/running-your-own-game.md)** — running a private,
   semi-single-player server, saving it, and generating a fresh world.
-- **[Core actions](docs/player/core-actions.md)** — how to look, move, carry items, use
-  objects, write, rest, and talk.
-- **[Needs and memory](docs/player/needs-and-memory.md)** — how to eat, drink, take notes,
-  remember, reflect, and forget.
+- **[Movement and looking](docs/player/movement-and-looking.md)** — room summaries,
+  narration, visible targets, exits, and movement.
+- **[Inventory and use](docs/player/inventory-and-use.md)** — take, drop, put, hold,
+  wear, use, unlock, open, close, write, rest, wait, and talk.
+- **[Hunger and thirst](docs/player/hunger-and-thirst.md)** — eating, drinking,
+  consumables, renewable water sources, and need decay.
+- **[Focus, notes, and memories](docs/player/focus-notes-and-memories.md)** — private
+  notes, remember, reflect, contextual recall, and forget.
+- **[Core actions](docs/player/core-actions.md)** — a compact reference for shared verbs.
 - **[Daily needs](docs/player/daily-needs.md)** — fatigue, hygiene, comfort, fun, social
   contact, privacy, safety, and self-care actions.
 - **[Environment and mechanisms](docs/player/environment-and-mechanisms.md)** — how to use

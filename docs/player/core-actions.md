@@ -2,6 +2,12 @@
 
 Core actions are the shared verbs every controller uses. In Discord, prefix them with `!`.
 
+For first-time play, start with the focused guides:
+[Movement and looking](movement-and-looking.md),
+[Inventory and use](inventory-and-use.md),
+[Hunger and thirst](hunger-and-thirst.md), and
+[Focus, notes, and memories](focus-notes-and-memories.md).
+
 ## Look and move
 
 Start by claiming a character and checking the room:
