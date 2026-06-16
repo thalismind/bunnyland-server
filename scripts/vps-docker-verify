@@ -132,9 +132,13 @@ if home_domain:
     if home_expect_text:
         ok("homepage: expected text present")
 
-body = expect_status("web client", "GET", "/", 200)
+body = expect_status("welcome page", "GET", "/", 200)
+if b"Welcome to Bunnyland" not in body:
+    fail("welcome page: response did not contain the welcome front door")
+
+body = expect_status("inspector", "GET", "/inspector.html", 200)
 if b"Bunnyland Inspector" not in body:
-    fail("web client: response did not contain Bunnyland Inspector")
+    fail("inspector: response did not contain Bunnyland Inspector")
 
 body = expect_status("world editor", "GET", "/world-editor.html", 200)
 if b"Bunnyland World Editor" not in body:
