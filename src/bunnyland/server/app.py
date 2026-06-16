@@ -35,6 +35,7 @@ from .models import (
     CommandRequest,
     CommandResponse,
     DmProjectionResponse,
+    HealthResponse,
     RecentEventsResponse,
     RoomProjectionResponse,
     WebControllerClaimRequest,
@@ -102,6 +103,7 @@ except ImportError:  # pragma: no cover - exercised only without optional deps
 
 
 ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
+GIT_HASH_ENV = "BUNNYLAND_GIT_HASH"
 
 
 async def next_websocket_update(actor: WorldActor, subscription: EventSubscription) -> dict:
@@ -161,9 +163,13 @@ def create_app(
     generator_registry = collect_generators(plugins or ())
     generation_job = None
 
-    @app.get("/health")
-    async def health() -> dict:
-        return {"ok": True, "world_epoch": actor.epoch}
+    def _git_hash() -> str:
+        hash_value = os.environ.get(GIT_HASH_ENV, "").strip()
+        return hash_value if hash_value else "unknown"
+
+    @app.get("/health", response_model=HealthResponse)
+    async def health() -> HealthResponse:
+        return HealthResponse(world_epoch=actor.epoch, git_hash=_git_hash())
 
     @app.get("/world/snapshot")
     async def world_snapshot(

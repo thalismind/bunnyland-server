@@ -114,6 +114,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            BUNNYLAND_GIT_HASH=${{ github.sha }}
           target: server
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.server-meta.outputs.tags }}
@@ -131,6 +133,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            BUNNYLAND_GIT_HASH=${{ github.sha }}
           target: tui
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.tui-meta.outputs.tags }}
@@ -150,6 +154,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            BUNNYLAND_GIT_HASH=${{ github.sha }}
           target: repl
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.repl-meta.outputs.tags }}

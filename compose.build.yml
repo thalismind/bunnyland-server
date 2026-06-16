@@ -3,3 +3,5 @@ services:
     build:
       context: .
       target: server
+      args:
+        BUNNYLAND_GIT_HASH: ${BUNNYLAND_GIT_HASH:-}

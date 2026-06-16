@@ -705,9 +705,10 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/updates" in paths
 
 
-def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
+def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, monkeypatch):
     testclient = pytest.importorskip("fastapi.testclient")
     meta = WorldMeta(seed="moss", generator="oneshot", plugins=("bunnyland.core_verbs",))
+    monkeypatch.setenv("BUNNYLAND_GIT_HASH", "deadbeefcafebabe")
     app = create_app(scenario.actor, meta=meta, admin_token="secret")
     client = testclient.TestClient(app)
 
@@ -721,7 +722,11 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
     queued = client.get(f"/world/character/{scenario.character}/commands")
 
     assert health.status_code == 200
-    assert health.json() == {"ok": True, "world_epoch": scenario.actor.epoch}
+    assert health.json() == {
+        "ok": True,
+        "world_epoch": scenario.actor.epoch,
+        "git_hash": "deadbeefcafebabe",
+    }
     assert snapshot.status_code == 200
     assert snapshot.json()["metadata"]["seed"] == "moss"
     assert schema.status_code == 200
@@ -743,6 +748,22 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
         "world_epoch": scenario.actor.epoch,
         "character_id": str(scenario.character),
         "commands": [],
+    }
+
+
+def test_health_reports_unknown_git_hash_when_env_is_missing(scenario, monkeypatch):
+    testclient = pytest.importorskip("fastapi.testclient")
+    monkeypatch.delenv("BUNNYLAND_GIT_HASH", raising=False)
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    health = client.get("/health")
+
+    assert health.status_code == 200
+    assert health.json() == {
+        "ok": True,
+        "world_epoch": scenario.actor.epoch,
+        "git_hash": "unknown",
     }
 
 

@@ -54,6 +54,12 @@ class RecentEventsResponse(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class HealthResponse(BaseModel):
+    ok: bool = True
+    world_epoch: int
+    git_hash: str = "unknown"
+
+
 class QueuedCommandView(BaseModel):
     command_id: str
     character_id: str

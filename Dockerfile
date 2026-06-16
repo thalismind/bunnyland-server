@@ -2,11 +2,14 @@
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm AS runtime
 
+ARG BUNNYLAND_GIT_HASH="unknown"
+
 WORKDIR /app
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    BUNNYLAND_GIT_HASH="$BUNNYLAND_GIT_HASH"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git \
