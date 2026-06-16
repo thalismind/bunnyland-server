@@ -1,8 +1,10 @@
 # Running your own game
 
-This guide is for semi-single-player Bunnyland: you run a private server, open the web
-client, and explore your own world instead of joining a shared community server. Start with
-the demo world first; once that works, generate a custom world from the browser.
+This is a quick start for semi-single-player Bunnyland: run a private server, get a client
+connected, and explore your own world instead of joining a shared community server. Start
+with the demo world; once it works, choose a client and generate a custom world. To learn
+any one client in depth, branch out to the [client guides](clients/README.md) this page
+points to.
 
 ## Start the demo world
 
@@ -22,12 +24,14 @@ Open the web client:
 https://bunnyland.dev/?server=http://127.0.0.1:8765
 ```
 
-If you have the web repo checked out locally, opening `bunnyland-web/index.html` also works.
-Use the `Server` field if you need to enter `http://127.0.0.1:8765` manually.
+The root page is the welcome/client chooser; open the **Inspector** for the entities list
+and event feed used below. If you have the web repo checked out locally,
+`bunnyland-web/inspector.html` works too — use its `Server` field to enter
+`http://127.0.0.1:8765` manually.
 
 Try a short first session:
 
-1. Open the world view and connect live.
+1. Open the Inspector and connect live.
 2. Pick a character or room in the entities list.
 3. Look at the character's current room, inventory, needs, and nearby exits.
 4. Watch the event feed while the server ticks.
@@ -35,6 +39,26 @@ Try a short first session:
 The demo is useful because it proves the server, API, web client, and basic game loop work
 before you spend time tuning a custom world. You do not need to claim a character for this
 first check.
+
+## Choose how to play
+
+The Inspector above is a developer view of the whole world. To actually *play*, claim a
+character in a player client pointed at your server (`http://127.0.0.1:8765`). Each client
+is a different classic style, and they all drive the same server-validated verbs — a world
+you play in one is the same world in any other:
+
+- **Bunnyland Toon** — the web client. A room-at-a-time view with sprites, doors pinned to
+  the walls, and click-to-move, in the spirit of a Flash-era browser game. Open it from the
+  welcome page and connect, or pass `?server=`. See [the Toon client](toonsim.md).
+- **Terminal TUI** — a full-screen panel client with a room list, action menu, action
+  search, and queued actions, like a modern terminal MUD client. See
+  [the TUI](clients/tui.md).
+- **Terminal REPL** — a single command line with tab completion and clickable names, like a
+  classic text MUD or interactive fiction. See [the REPL](clients/repl.md).
+- **Discord** — play by typing commands in a channel when the server runs the Discord bot.
+
+Browse [the client guides](clients/README.md) for launch commands, controls, and per-client
+tips, then pick whichever surface fits how you like to play.
 
 ## Generate your own world
 

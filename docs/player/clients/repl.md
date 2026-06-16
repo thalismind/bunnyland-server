@@ -120,7 +120,7 @@ Up/Down walk previous commands, and history is saved to
 | `points` | show your action/focus points |
 | `play <name>` | take control of a character |
 | `help [command]` | list commands, or show one command's parameters |
-| `refresh` | re-fetch the world snapshot now |
+| `refresh` | refresh your view now |
 | `quit` / `exit` | leave; Ctrl-C also quits |
 
 ## Example session

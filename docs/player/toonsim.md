@@ -12,10 +12,11 @@ with its contents layered on top and doors leading to the neighbouring rooms.
 
 ## Opening Bunnyland Toon
 
-Open the Bunnyland Toon page, type your server's address into the **Server** box, and
-press **Connect Live**. Once the status reads connected, choose your character from the
-**Player** menu. The view centres on the room your character is in, and your character's
-sprite is highlighted.
+Open the Bunnyland Toon page. On a hosted deployment the **Server** box is pre-filled with
+the site's API (`/api/`) and the page connects automatically; otherwise type your server's
+address and press **Connect Live**. Once the status reads connected, choose your character
+from the **Player** menu. The view centres on the room your character is in, and your
+character's sprite is highlighted.
 
 If a world was generated without sprite art, entities still appear: each falls back to an
 icon based on its kind, and rooms show their name as a labeled backdrop. Art can be filled
@@ -35,8 +36,8 @@ desks, shelves, and counters. The room still contains both the furniture and the
 `PlacedOn` only tells Bunnyland Toon to draw the item resting on that surface instead of
 as a loose floor object.
 
-Transparent containers use the normal container data already present in the world
-snapshot. When a container has `ContainerComponent.transparent = true`, Bunnyland Toon
+Transparent containers use the normal container data already present in the world. When a
+container has `ContainerComponent.transparent = true`, Bunnyland Toon
 can query or read that container's `Contains` relationships and draw those contents as
 visible through the container without changing core reachability or inventory rules.
 

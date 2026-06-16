@@ -42,15 +42,12 @@ connection drops, the activity log reports the failure once and reports when it 
 The left panel has three sections:
 
 - the room title and visible occupants or objects;
-- doors leading out of the room;
+- doors out of the room, each labeled by the direction it leads;
 - recent activity your character can perceive.
 
-Selecting a door previews that destination room without moving your character. While you
-are previewing another room, the title shows that you are spectating. Press `f` to follow
-your player back to their current room.
-
-When your character moves through an exit, the server sends a destination-room summary so
-the TUI can immediately show what is in the new room.
+The TUI always shows your own character's room. A door names its direction, not where it
+leads — you learn that by going through it. When your character moves through an exit, the
+server sends a destination-room summary so the TUI immediately shows what is in the new room.
 
 ## Use actions
 
@@ -83,8 +80,7 @@ character's queue.
 
 | Key | Effect |
 |-----|--------|
-| `r` | refresh the world snapshot now |
-| `f` | follow your selected player |
+| `r` | refresh your view now |
 | `q` | quit |
 | `Esc` | close a target or text prompt |
 
