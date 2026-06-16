@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm AS runtime
 
 WORKDIR /app
 
@@ -16,14 +16,28 @@ RUN apt-get update \
 # cached and only rebuilt when pyproject.toml / uv.lock change.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv,sharing=locked \
-    uv sync --frozen --extra server --extra llm --extra discord --extra chroma --extra mcp --no-dev --no-install-project
+    uv sync --frozen --all-extras --no-dev --no-install-project
 
 # Then add the source and install the project on top of the cached deps.
 COPY README.md ./
 COPY src ./src
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv,sharing=locked \
-    uv sync --frozen --extra server --extra llm --extra discord --extra chroma --extra mcp --no-dev
+    uv sync --frozen --all-extras --no-dev
 
 EXPOSE 8765
 
+FROM runtime AS server
+
 CMD ["bunnyland", "serve", "--generator", "lifesim-demo", "--ticks", "0", "--api-host", "0.0.0.0", "--api-port", "8765", "--save", "/data/worlds/main.json", "--autosave-every", "20"]
+
+FROM server AS tui
+
+ENTRYPOINT ["bunnyland-tui"]
+CMD ["--server", "http://server:8765"]
+
+FROM server AS repl
+
+ENTRYPOINT ["bunnyland-repl"]
+CMD ["--server", "http://server:8765"]
+
+FROM server AS default

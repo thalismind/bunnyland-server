@@ -93,9 +93,12 @@ To override the browser favicon, set `BUNNYLAND_FAVICON_FILE` during setup:
 BUNNYLAND_FAVICON_FILE=/opt/bunnyland/favicon.png
 ```
 
-CI builds and publishes `ghcr.io/thalismind/bunnyland-server` on pushes to `main`, with
-branch tags and `latest` for the default branch. The web repo publishes
-`ghcr.io/thalismind/bunnyland-web` with the same tag scheme.
+CI builds and publishes `ghcr.io/thalismind/bunnyland-server`,
+`ghcr.io/thalismind/bunnyland-tui`, and `ghcr.io/thalismind/bunnyland-repl` on pushes to
+`main`, with branch tags and `latest` for the default branch. The server image includes
+all optional extras; the TUI and REPL images inherit from it and change only the default
+client entrypoint. The web repo publishes `ghcr.io/thalismind/bunnyland-web` with the same
+tag scheme.
 
 ## Documentation
 

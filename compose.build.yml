@@ -2,3 +2,4 @@ services:
   server:
     build:
       context: .
+      target: server
