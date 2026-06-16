@@ -269,7 +269,7 @@ class BunnylandTUI(App[None]):
 
     async def on_mount(self) -> None:
         if self.show_intro:
-            await self.push_screen(IntroSplash())
+            self.push_screen(IntroSplash())
         await self.backend.start()
         await self.refresh_world()
         self.set_interval(REFRESH_SECONDS, self.refresh_world)

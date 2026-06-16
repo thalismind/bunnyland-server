@@ -108,7 +108,7 @@ class BunnylandReplApp(App[None]):
 
     async def on_mount(self) -> None:
         if self.show_intro:
-            await self.push_screen(IntroSplash())
+            self.push_screen(IntroSplash())
         await self.repl.backend.start()
         self._load_history()
         await self._safe_refresh(prime=True)  # seed event history without dumping the backlog

@@ -6,6 +6,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Static
 
 BUNNY_ASCII = r"""
@@ -28,23 +29,25 @@ class IntroSplash(ModalScreen[None]):
         opacity: 1;
     }
     IntroSplash > #splash {
-        width: auto;
-        opacity: 1;
+        width: 28;
+        height: auto;
+        min-width: 28;
         border: thick $accent;
         padding: 1 2;
         background: $panel;
+        content-align: center middle;
     }
     #splash-title {
-        content-align: center middle;
         text-style: bold;
         width: 100%;
-        color: $accent;
+        color: $text;
         margin-bottom: 1;
+        text-align: center;
     }
     #splash-bunny {
-        content-align: center middle;
         width: 100%;
         color: $text;
+        text-align: center;
     }
     """
 
@@ -62,5 +65,20 @@ class IntroSplash(ModalScreen[None]):
         except NoMatches:
             self.dismiss()
             return
-        splash.animate("opacity", 0, duration=0.8)
-        self.set_timer(0.8, self.dismiss)
+        splash.styles.opacity = 1
+        steps = 8
+        duration = 0.8
+        interval = duration / steps
+        for index in range(1, steps + 1):
+            opacity = 1 - index / steps
+            self.set_timer(
+                index * interval,
+                lambda level=opacity: self._set_opacity(splash, level),
+            )
+        self.set_timer(duration, self._finish)
+
+    def _set_opacity(self, widget: Widget, value: float) -> None:
+        widget.styles.opacity = value
+
+    def _finish(self) -> None:
+        self.dismiss()

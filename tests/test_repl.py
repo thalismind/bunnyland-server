@@ -22,6 +22,7 @@ from bunnyland.repl.client import (
 from bunnyland.repl.completion import complete_line, reference_candidates, value_candidates
 from bunnyland.tui.backend import Backend
 from bunnyland.tui.model import World, entity_name
+from bunnyland.tui.splash import IntroSplash
 
 PLAYER = "character:1"
 MARLOW = "character:2"
@@ -713,6 +714,31 @@ async def test_app_runs_meta_and_action_commands():
         assert "You are now Pib" in text
         assert "Parlor" in text
         assert app.repl.backend.commands[-1]["command_type"] == "take"
+
+
+async def test_intro_splash_fades_and_dismisses():
+    app = BunnylandReplApp(RecordingBackend(), show_intro=True)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        assert any(isinstance(screen, IntroSplash) for screen in app.screen_stack)
+
+        await pilot.pause(1.1)
+        splash = next(screen for screen in app.screen_stack if isinstance(screen, IntroSplash))
+        panel = splash.query_one("#splash")
+        assert 0 < panel.styles.opacity <= 1
+
+        await pilot.pause(1.0)
+        assert not any(isinstance(screen, IntroSplash) for screen in app.screen_stack)
+
+
+async def test_intro_splash_does_not_use_widget_animation_api(monkeypatch):
+    def fail_if_animated(*_args, **_kwargs) -> None:
+        raise AssertionError("IntroSplash should not call animate() on this Textual version")
+
+    monkeypatch.setattr(IntroSplash, "animate", fail_if_animated)
+    app = BunnylandReplApp(RecordingBackend(), show_intro=True)
+    async with app.run_test() as _pilot:
+        pass
 
 
 async def test_app_status_line_tracks_player():

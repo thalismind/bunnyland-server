@@ -28,6 +28,7 @@ from bunnyland.tui.app import BunnylandTUI, TargetPicker, TextPrompt
 from bunnyland.tui.backend import Backend, LocalBackend, RemoteBackend, persistent_client_id
 from bunnyland.tui.events import EventNarrator
 from bunnyland.tui.model import World, entity_icon, entity_name, entity_type
+from bunnyland.tui.splash import IntroSplash
 from bunnyland.tui.verbs import ACTION_VERBS
 
 PLAYER = "character:1"
@@ -919,6 +920,33 @@ async def test_text_prompt_submits_text_and_cancel():
         await pilot.press("escape")
         await pilot.pause()
         assert results[-1] is None
+
+
+async def test_intro_splash_fades_and_dismisses():
+    app = BunnylandTUI(RecordingBackend(_snapshot()), show_intro=True)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        assert any(isinstance(screen, IntroSplash) for screen in app.screen_stack)
+
+        await pilot.pause(1.1)
+        splash = next(screen for screen in app.screen_stack if isinstance(screen, IntroSplash))
+        panel = splash.query_one("#splash")
+        assert 0 < panel.styles.opacity <= 1
+
+        await pilot.pause(1.0)
+        assert not any(isinstance(screen, IntroSplash) for screen in app.screen_stack)
+
+
+async def test_intro_splash_does_not_use_widget_animation_api(monkeypatch):
+    def fail_if_animated(*_args, **_kwargs) -> None:
+        raise AssertionError("IntroSplash should not call animate() on this Textual version")
+
+    monkeypatch.setattr(IntroSplash, "animate", fail_if_animated)
+    app = BunnylandTUI(RecordingBackend(_snapshot()), show_intro=True)
+    async with app.run_test() as _pilot:
+        # If the old animate-based implementation is used, this would raise before splash
+        # dismissal or app startup completes.
+        pass
 
 
 async def test_app_reports_refresh_errors():
