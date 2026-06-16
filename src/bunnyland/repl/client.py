@@ -1,7 +1,8 @@
 """Command handling for the Bunnyland REPL — the I/O-free core behind the Textual app.
 
-It reuses the TUI's snapshot backends (``LocalBackend``/``RemoteBackend``) and read-only
-``World`` model, and accepts two input styles:
+It reuses the TUI's backends (``LocalBackend``/``RemoteBackend``) — reading the claim
+lobby for the player picker and the player's own room projection for the world — and the
+read-only ``World`` model, and accepts two input styles:
 
 * named: ``move direction=north``, ``take item_id=a brass key`` — Tab completes the
   command, then each parameter name, then its value;
@@ -28,11 +29,12 @@ from rich.text import Text
 from ..core.actions import ActionDefinition, definitions_by_tool_name
 from ..llm_agents.dispatch import suggest_names
 from ..llm_agents.natural_language import NaturalCommandParser
+from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators as available_generators
 from ..terminal_generators import format_generator_lines as format_generator_lines
 from ..tui import events as tui_events
 from ..tui.backend import Backend
-from ..tui.model import World, entity_icon, entity_name, fmt_points, has
+from ..tui.model import KIND_ICON, World, entity_icon, entity_name, fmt_points, has
 from .completion import complete_line, reference_candidates
 
 META_COMMANDS = (
@@ -129,29 +131,41 @@ class BunnylandRepl:
         self.world = World()
         self.player_id = ""
         self.control: tuple[str, int] | None = None
+        self.character_list: list[CharacterSummaryView] = []
         self._defs = definitions_by_tool_name()
         self._events = tui_events.EventNarrator()
 
     # ── data ──────────────────────────────────────────────────────────────────
     async def refresh(self) -> None:
-        self.world = World.parse(await self.backend.fetch_snapshot())
-        if self.player_id and self.player_id not in self.world.entities:
+        # The picker comes from the claim lobby; the world is only ever the player's own
+        # perceived room (their character projection), never the admin-gated full snapshot.
+        self.character_list = await self.backend.fetch_character_list()
+        known_ids = {summary.character_id for summary in self.character_list}
+        if self.player_id and self.player_id not in known_ids:
             self.player_id = ""
             self.control = None
+        if self.player_id:
+            projection = await self.backend.fetch_character_projection(self.player_id)
+            if projection and projection.get("character_id") == self.player_id:
+                self.world = World.parse(projection)
+            else:
+                self.world = World()
+        else:
+            self.world = World()
 
     async def select_player(self, name: str) -> str:
-        characters = self.world.characters()
-        candidates = [(entity_name(c), c["id"]) for c in characters]
-        chosen = resolve_name(name, self.world, candidates)
-        character = self.world.get(chosen)
-        if character is None or not has(character, "CharacterComponent"):
+        candidates = [(summary.name, summary.character_id) for summary in self.character_list]
+        ids = {summary.character_id for summary in self.character_list}
+        chosen = name if name in ids else resolve_name(name, self.world, candidates)
+        summary = next((s for s in self.character_list if s.character_id == chosen), None)
+        if summary is None:
             return f"No such player: {name!r}. Try 'who'."
         self.control = await self.backend.claim(chosen, self.world)
         if self.control is None:
-            return f"Could not claim {entity_name(character)}."
+            return f"Could not claim {summary.name}."
         self.player_id = chosen
         await self.refresh()
-        return f"You are now {entity_name(character)}."
+        return f"You are now {summary.name}."
 
     def name_for(self, entity_id: str) -> str | None:
         """The display name of a reachable entity id, used by the app's click action."""
@@ -298,16 +312,16 @@ class BunnylandRepl:
         return out if len(out) else Text("You aren't carrying anything.")
 
     def render_players(self) -> Text:
-        characters = self.world.characters()
-        if not characters:
+        if not self.character_list:
             return Text("No players.")
         out = Text()
-        for index, character in enumerate(characters):
+        for index, summary in enumerate(self.character_list):
             if index:
                 out.append("\n")
-            out.append(f"  {entity_icon(character)} ")
-            out.append_text(link(entity_name(character), character["id"]))
-            if character["id"] == self.player_id:
+            icon = KIND_ICON.get(summary.kind) or KIND_ICON["other"]
+            out.append(f"  {icon} ")
+            out.append_text(link(summary.name, summary.character_id))
+            if summary.character_id == self.player_id:
                 out.append(" (you)")
         return out
 
@@ -345,5 +359,5 @@ class BunnylandRepl:
             # ``look``/``inventory`` are both tools and meta commands; list each word once.
             commands=tuple(dict.fromkeys((*self._defs, *META_COMMANDS))),
             entity_names=[name for name, _ in reference_candidates(self.world, self.player_id)],
-            players=[entity_name(c) for c in self.world.characters()],
+            players=[summary.name for summary in self.character_list],
         )

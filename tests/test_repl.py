@@ -21,7 +21,7 @@ from bunnyland.repl.client import (
 )
 from bunnyland.repl.completion import complete_line, reference_candidates, value_candidates
 from bunnyland.tui.backend import Backend
-from bunnyland.tui.model import World
+from bunnyland.tui.model import World, entity_name
 
 PLAYER = "character:1"
 MARLOW = "character:2"
@@ -103,8 +103,118 @@ def _snapshot() -> dict:
     }
 
 
+def _character_list_from_snapshot(snapshot: dict) -> list:
+    """The claim-lobby records, derived from a snapshot fixture."""
+    from bunnyland.server.models import CharacterSummaryView
+
+    world = World.parse(snapshot)
+    return [
+        CharacterSummaryView(
+            character_id=character["id"],
+            name=entity_name(character),
+            kind=character["components"].get("IdentityComponent", {}).get("kind", "character"),
+            suspended="SuspendedComponent" in character["components"],
+        )
+        for character in world.characters()
+    ]
+
+
+def _client_view_from_snapshot(snapshot: dict, character_id: str = PLAYER) -> dict | None:
+    """Synthesize a character projection (own-room view) from a snapshot fixture, so the
+    REPL — which now reads projections, not the full snapshot — sees the same world."""
+    entities = {entity["id"]: entity for entity in snapshot["entities"]}
+    character = entities.get(character_id)
+    if character is None:
+        return None
+    room = next(
+        (
+            entity
+            for entity in snapshot["entities"]
+            if "RoomComponent" in entity["components"]
+            and any(
+                link["target_id"] == character_id
+                for link in entity["relationships"].get("Contains", [])
+            )
+        ),
+        None,
+    )
+    room_entities = []
+    exits = []
+    if room is not None:
+        for link in room["relationships"].get("Contains", []):
+            target = entities.get(link["target_id"])
+            if target is None or link["target_id"] == character_id:
+                continue
+            identity = target["components"].get("IdentityComponent", {})
+            room_entities.append({
+                "id": link["target_id"],
+                "name": identity.get("name", link["target_id"]),
+                "kind": identity.get("kind", "other"),
+                "is_character": "CharacterComponent" in target["components"],
+                "contents": [],
+            })
+        for link in room["relationships"].get("ExitTo", []):
+            direction = link["edge"].get("direction", "")
+            exits.append({
+                "id": link["target_id"],
+                "direction": direction,
+                "label": f"{direction}: {link['target_id']}" if direction else link["target_id"],
+                "locked": link["edge"].get("locked", False),
+            })
+    inventory = []
+    for relationship in ("Holding", "Wearing", "Contains"):
+        for link in character["relationships"].get(relationship, []):
+            target = entities.get(link["target_id"])
+            if target is None:
+                continue
+            identity = target["components"].get("IdentityComponent", {})
+            inventory.append({
+                "id": link["target_id"],
+                "label": identity.get("name", link["target_id"]),
+                "kind": identity.get("kind", "item"),
+            })
+    ap = character["components"].get("ActionPointsComponent", {})
+    fp = character["components"].get("FocusPointsComponent", {})
+    controlled_by = character["relationships"].get("ControlledBy", [])
+    controller = (
+        {
+            "controller_id": controlled_by[0]["target_id"],
+            "generation": controlled_by[0]["edge"].get("generation", 0),
+        }
+        if controlled_by
+        else None
+    )
+    identity = character["components"].get("IdentityComponent", {})
+    return {
+        "world_epoch": snapshot.get("world_epoch", 0),
+        "character_id": character_id,
+        "character_name": identity.get("name", character_id),
+        "room": {
+            "id": room["id"] if room else None,
+            "title": room["components"]["RoomComponent"].get("title") if room else None,
+            "entities": room_entities,
+            "exits": exits,
+        },
+        "inventory": inventory,
+        "points": {
+            "action": ap.get("current", 0),
+            "action_max": ap.get("maximum", 0),
+            "focus": fp.get("current", 0),
+            "focus_max": fp.get("maximum", 0),
+        },
+        "controller": controller,
+        "target_groups": {},
+        "actions": [],
+    }
+
+
 class RecordingBackend(Backend):
-    """Static-snapshot backend recording submitted commands, like the TUI test double."""
+    """A projection backend recording submitted commands, like the TUI test double.
+
+    The REPL now reads the claim lobby and the player's own room projection (never the full
+    snapshot), so this backend synthesizes both from its snapshot fixture. Subclasses that
+    override ``fetch_snapshot`` to drive the world keep working, since the list and
+    projection are derived from it."""
 
     def __init__(self, snapshot: dict | None = None) -> None:
         self.snapshot = snapshot or _snapshot()
@@ -122,17 +232,24 @@ class RecordingBackend(Backend):
     async def fetch_snapshot(self) -> dict:
         return self.snapshot
 
+    async def fetch_character_list(self) -> list:
+        return _character_list_from_snapshot(await self.fetch_snapshot())
+
+    async def fetch_character_projection(self, character_id: str) -> dict | None:
+        return _client_view_from_snapshot(await self.fetch_snapshot(), character_id)
+
     async def submit(self, command: dict) -> bool:
         self.commands.append(command)
         return True
 
     async def claim(self, player_id, world):
-        return world.control(player_id) or ("controller:new", 0)
+        return World.parse(self.snapshot).control(player_id) or ("controller:new", 0)
 
 
 def _repl(snapshot: dict | None = None, *, player: bool = True) -> BunnylandRepl:
     repl = BunnylandRepl(RecordingBackend(snapshot))
     repl.world = World.parse(snapshot or _snapshot())
+    repl.character_list = _character_list_from_snapshot(snapshot or _snapshot())
     if player:
         repl.player_id = PLAYER
         repl.control = ("controller:1", 2)
@@ -548,7 +665,7 @@ async def test_select_player_rejects_unknown_and_failed_claim():
             return None
 
     repl = BunnylandRepl(NoClaimBackend())
-    repl.world = World.parse(_snapshot())
+    repl.character_list = _character_list_from_snapshot(_snapshot())
     assert "Could not claim" in await repl.select_player("Pib")
 
 
@@ -726,6 +843,9 @@ async def test_app_refresh_errors_are_reported():
 async def test_app_click_inserts_target_name():
     app = BunnylandReplApp(RecordingBackend())
     async with app.run_test():
+        # Target links resolve against the player's own room, so claim one first.
+        app.repl.player_id = PLAYER
+        await app._safe_refresh()
         app.action_insert(APPLE)
         assert app.query_one(ReplInput).value == "an apple"
         app.action_insert("missing")  # unknown id falls back to the raw reference
