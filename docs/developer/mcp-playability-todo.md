@@ -85,8 +85,9 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
 10. **[DONE] Surface turn/tick timing.**
     `runtime_status` reports `tick_seconds` (real time between ticks), `time_scale`, and
     `game_seconds_per_tick`, so an agent paces its `perceived_events` polling to the loop.
-    `send_command` also states resolution is async and points at the observe tools.
-    FOLLOW-UP (minor): per-command "resolves at epoch"/queue position not exposed.
+    `send_command` also states resolution is async and points at the observe tools, and
+    now returns `resolves_at_epoch` (the next-tick epoch the command is expected to resolve
+    at); `character_commands` reports it per queued command too.
 
 11. **[FOLLOW-UP] Disambiguate the consume verb.**
     Confirm canonical food verb (`consume` vs `use`) and document it; the test queued both

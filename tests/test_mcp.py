@@ -1079,6 +1079,34 @@ def test_runtime_status_reports_tick_cadence(monkeypatch, scenario):
     assert no_loop["game_seconds_per_tick"] is None
 
 
+def test_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):
+    loop = SimpleNamespace(
+        running=True, paused=False, tick_seconds=2.0, time_scale=1800.0
+    )
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor, loop=loop)
+    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+
+    expected = scenario.actor.epoch + 3600  # tick_seconds * time_scale
+    queued = asyncio.run(
+        tools["send_command"](
+            agent_id="a", command_type="move", payload={"direction": "north"}
+        )
+    )
+    assert queued["resolves_at_epoch"] == expected
+
+    pending = tools["character_commands"](agent_id="a")
+    assert pending["commands"][0]["resolves_at_epoch"] == expected
+
+    # With no loop attached, the estimate is null rather than wrong.
+    no_loop = _capture_mcp_tools(monkeypatch, scenario.actor, loop=None)
+    queued_no_loop = asyncio.run(
+        no_loop["send_command"](
+            agent_id="a", command_type="move", payload={"direction": "north"}
+        )
+    )
+    assert queued_no_loop["resolves_at_epoch"] is None
+
+
 def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, scenario):
     from bunnyland.core import ContainmentMode, Contains
     from bunnyland.core.components import PortableComponent

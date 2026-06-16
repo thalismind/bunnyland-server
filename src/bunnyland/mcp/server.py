@@ -510,6 +510,20 @@ def create_bunnyland_mcp_app(
     )
     event_bridge = MCPEventBridge(actor)
 
+    def _next_tick_epoch() -> int | None:
+        """Estimated world epoch a freshly-queued command resolves at (the next tick).
+
+        Queued commands are dispatched on the following tick, which advances the world
+        clock by ``tick_seconds * time_scale``. Returns None when no loop is attached or a
+        command is deferred for insufficient points -- it is the earliest expected epoch.
+        """
+
+        tick = getattr(loop, "tick_seconds", None)
+        scale = getattr(loop, "time_scale", None)
+        if tick is None or scale is None:
+            return None
+        return actor.epoch + int(round(float(tick) * float(scale)))
+
     low_server = mcp._mcp_server
     original_get_capabilities = low_server.get_capabilities
 
@@ -757,7 +771,11 @@ def create_bunnyland_mcp_app(
             character, _controller, _generation = _controlled_or_requested_character(
                 actor, agent_id, character_id
             )
-            return serialize_character_queued_commands(actor, str(character)).model_dump()
+            data = serialize_character_queued_commands(actor, str(character)).model_dump()
+            resolves_at_epoch = _next_tick_epoch()
+            for queued in data["commands"]:
+                queued["resolves_at_epoch"] = resolves_at_epoch
+            return data
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
@@ -897,6 +915,7 @@ def create_bunnyland_mcp_app(
             "command_id": command.command_id,
             "character_id": command.character_id,
             "command_type": command.command_type,
+            "resolves_at_epoch": _next_tick_epoch(),
             "note": (
                 "Queued only. Commands resolve on a later world tick and may still be "
                 "rejected. Observe the outcome via perceived_events (execution or "
