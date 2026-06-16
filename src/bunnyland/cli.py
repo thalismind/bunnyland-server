@@ -605,8 +605,8 @@ async def _run_api_runtime(
                 save_path=args.save,
                 worldgen_options=_worldgen_options(args, credentials, models),
                 plugins=plugins,
-                mcp_admin_token=args.mcp_admin_token
-                or os.environ.get("BUNNYLAND_MCP_ADMIN_TOKEN"),
+                admin_token=args.admin_token
+                or os.environ.get("BUNNYLAND_ADMIN_TOKEN"),
                 max_ticks=max_ticks,
             ),
             loop,
@@ -864,9 +864,10 @@ def main(argv: list[str] | None = None) -> int:
         help="mount the HTTP MCP server on the existing API port (needs mcp and server extras)",
     )
     serve.add_argument(
-        "--mcp-admin-token",
+        "--admin-token",
         default=None,
-        help="admin token required by MCP world mutation tools (or BUNNYLAND_MCP_ADMIN_TOKEN)",
+        help="admin token gating snapshot/overview/DM projections, the world-updates "
+        "stream, and MCP world mutation tools (or BUNNYLAND_ADMIN_TOKEN)",
     )
 
     tui = sub.add_parser("tui", help="open the terminal client (needs the tui extra)")

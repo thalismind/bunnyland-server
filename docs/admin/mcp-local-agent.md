@@ -33,7 +33,7 @@ uv sync --extra server --extra mcp
 Start the API with MCP enabled:
 
 ```bash
-BUNNYLAND_MCP_ADMIN_TOKEN='change-this-admin-token' \
+BUNNYLAND_ADMIN_TOKEN='change-this-admin-token' \
 uv run --extra server --extra mcp bunnyland serve \
   --api-host 127.0.0.1 \
   --api-port 8765 \
@@ -46,8 +46,8 @@ The local MCP URL is:
 http://127.0.0.1:8765/mcp
 ```
 
-Local-only servers do not need reverse-proxy Basic auth. Admin tools still require the MCP
-admin token as an argument.
+Local-only servers do not need reverse-proxy Basic auth. Without a proxy injecting
+`X-Bunnyland-Admin-Token`, admin tools take the admin token as an `admin_token` argument.
 
 ## Enable MCP on the VPS
 
@@ -56,7 +56,7 @@ the wizard:
 
 ```bash
 BUNNYLAND_ENABLE_MCP=1 \
-BUNNYLAND_MCP_ADMIN_TOKEN='change-this-admin-token' \
+BUNNYLAND_ADMIN_TOKEN='change-this-admin-token' \
   scripts/vps-docker-setup
 ```
 
@@ -236,5 +236,5 @@ restart the server container. When rotating Basic auth on the VPS, update the ng
 htpasswd file and reload nginx.
 
 If `/api/mcp` returns `404`, confirm `BUNNYLAND_ENABLE_MCP=1` and that the server command
-includes `--mcp`. If admin tools report that `BUNNYLAND_MCP_ADMIN_TOKEN` is not configured,
+includes `--mcp`. If admin tools report that `BUNNYLAND_ADMIN_TOKEN` is not configured,
 confirm the token is present in the server environment.

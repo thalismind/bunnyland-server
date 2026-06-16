@@ -72,7 +72,7 @@ if TYPE_CHECKING:  # pragma: no cover - import-only typing aliases
     from ..worldgen import GenOptions
 
 MCP_MOUNT_PATH = "/mcp"
-ADMIN_TOKEN_ENV = "BUNNYLAND_MCP_ADMIN_TOKEN"
+ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
 EVENTS_RESOURCE_URI = "bunnyland://events/recent"
 
 
@@ -549,9 +549,23 @@ def create_bunnyland_mcp_app(
         context = mcp.get_context()
         event_bridge.unsubscribe(str(uri), context.session)
 
-    def admin(supplied: str | None) -> None:
+    def _request_admin_header() -> str | None:
+        """The X-Bunnyland-Admin-Token header from the active streamable-HTTP request, if
+        any. nginx injects it after Basic auth so proxied callers need not pass the token."""
         try:
-            _require_admin_token(supplied, admin_token)
+            request = mcp.get_context().request_context.request
+        except (LookupError, AttributeError, ValueError):
+            return None
+        if request is None:
+            return None
+        return request.headers.get("X-Bunnyland-Admin-Token")
+
+    def admin(supplied: str | None) -> None:
+        # Prefer the X-Bunnyland-Admin-Token header the authenticating nginx proxy injects;
+        # fall back to the explicit tool argument for direct (non-proxied) MCP clients.
+        resolved = supplied or _request_admin_header()
+        try:
+            _require_admin_token(resolved, admin_token)
         except PermissionError as exc:
             raise ToolError(str(exc)) from exc
 
@@ -600,7 +614,7 @@ def create_bunnyland_mcp_app(
         return {"ok": True, "characters": list_mcp_characters(actor)}
 
     @mcp.tool()
-    def world_snapshot_admin(admin_token: str) -> dict[str, Any]:
+    def world_snapshot_admin(admin_token: str | None = None) -> dict[str, Any]:
         """Return the full raw ECS world snapshot (large; admin/debug and persistence).
 
         This is the heavy dump of every entity and component, so it is admin-only: seeing
@@ -613,7 +627,7 @@ def create_bunnyland_mcp_app(
         return serialize_world(actor, meta)
 
     @mcp.tool()
-    def world_overview_admin(admin_token: str) -> dict[str, Any]:
+    def world_overview_admin(admin_token: str | None = None) -> dict[str, Any]:
         """Return a slim, admin-only map of the whole room network (admin token required).
 
         Rooms with ids, titles, exits, and occupant/item counts -- the privileged graph the
@@ -927,8 +941,8 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     async def patch_world_admin(
-        admin_token: str,
         operations: list[dict[str, Any]],
+        admin_token: str | None = None,
     ) -> dict[str, Any]:
         """Apply a world editor patch. Requires the MCP admin token."""
 
@@ -943,12 +957,12 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     async def generate_world_admin(
-        admin_token: str,
         seed: str | None = None,
         generator: str | None = None,
         max_rooms: int | None = None,
         confirm_reset: bool = False,
         save: bool = False,
+        admin_token: str | None = None,
     ) -> dict[str, Any]:
         """Start replacing the world through an enabled generator. Requires admin token."""
 
@@ -968,7 +982,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @mcp.tool()
-    async def world_generation_status_admin(admin_token: str) -> dict[str, Any]:
+    async def world_generation_status_admin(admin_token: str | None = None) -> dict[str, Any]:
         """Return the current async world generation job status. Requires admin token."""
 
         admin(admin_token)
@@ -976,10 +990,10 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def generate_room_patch_admin(
-        admin_token: str,
         door_entity_id: str,
         direction: str | None = None,
         prompt: str = "",
+        admin_token: str | None = None,
     ) -> dict[str, Any]:
         """Generate a room patch behind a door. Requires admin token."""
 
@@ -998,9 +1012,9 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def generate_character_patch_admin(
-        admin_token: str,
         room_entity_id: str,
         prompt: str = "",
+        admin_token: str | None = None,
     ) -> dict[str, Any]:
         """Generate a character patch for a room. Requires admin token."""
 
@@ -1015,9 +1029,9 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def generate_item_patch_admin(
-        admin_token: str,
         container_entity_id: str,
         prompt: str = "",
+        admin_token: str | None = None,
     ) -> dict[str, Any]:
         """Generate an item patch for a room or container. Requires admin token."""
 
@@ -1035,9 +1049,9 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def generate_event_patch_admin(
-        admin_token: str,
         room_entity_id: str,
         prompt: str = "",
+        admin_token: str | None = None,
     ) -> dict[str, Any]:
         """Generate a story event patch for a room. Requires admin token."""
 

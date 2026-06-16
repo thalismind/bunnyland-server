@@ -41,7 +41,7 @@ web_tag="${BUNNYLAND_WEB_TAG:-main}"
 enable_llm="${BUNNYLAND_ENABLE_LLM:-}"
 enable_discord="${BUNNYLAND_ENABLE_DISCORD:-}"
 enable_mcp="${BUNNYLAND_ENABLE_MCP:-0}"
-mcp_admin_token="${BUNNYLAND_MCP_ADMIN_TOKEN:-}"
+admin_token="${BUNNYLAND_ADMIN_TOKEN:-}"
 llm_provider="${BUNNYLAND_LLM_PROVIDER:-ollama}"
 worldgen_provider="${BUNNYLAND_WORLDGEN_PROVIDER:-$llm_provider}"
 enable_tls="${BUNNYLAND_TLS:-1}"
@@ -102,8 +102,8 @@ case "$enable_mcp" in
   *) die "BUNNYLAND_ENABLE_MCP must be 0 or 1" ;;
 esac
 
-if [[ "$enable_mcp" == "1" && -z "$mcp_admin_token" ]]; then
-  die "set BUNNYLAND_MCP_ADMIN_TOKEN when BUNNYLAND_ENABLE_MCP=1"
+if [[ "$enable_mcp" == "1" && -z "$admin_token" ]]; then
+  die "set BUNNYLAND_ADMIN_TOKEN when BUNNYLAND_ENABLE_MCP=1"
 fi
 
 install_nerdctl() {
@@ -318,7 +318,7 @@ render_server_service() {
   printf '      BUNNYLAND_ENABLE_DISCORD: %s\n' "$(yaml_quote "$enable_discord")"
   printf '      BUNNYLAND_ENABLE_MCP: %s\n' "$(yaml_quote "$enable_mcp")"
   if [[ "$enable_mcp" == "1" ]]; then
-    printf '      BUNNYLAND_MCP_ADMIN_TOKEN: %s\n' "$(yaml_quote "$mcp_admin_token")"
+    printf '      BUNNYLAND_ADMIN_TOKEN: %s\n' "$(yaml_quote "$admin_token")"
   fi
   if [[ "$enable_llm" == "1" ]]; then
     if [[ "$llm_provider" == "ollama" || "$worldgen_provider" == "ollama" ]]; then
@@ -362,6 +362,9 @@ render_frontend_service() {
   printf '    environment:\n'
   printf '      BUNNYLAND_API_UPSTREAM: %s\n' "$(yaml_quote "http://server:8765")"
   printf '      BUNNYLAND_SERVER_NAME: %s\n' "$(yaml_quote "$BUNNYLAND_DOMAIN")"
+  # Always define it (empty when MCP is off) so the nginx envsubst that fills the injected
+  # X-Bunnyland-Admin-Token never leaves a literal ${BUNNYLAND_ADMIN_TOKEN} nginx cannot parse.
+  printf '      BUNNYLAND_ADMIN_TOKEN: %s\n' "$(yaml_quote "$admin_token")"
   if [[ "$enable_tls" == "1" ]]; then
     printf '      BUNNYLAND_CERT_NAME: %s\n' "$(yaml_quote "$cert_name")"
   fi
@@ -373,6 +376,12 @@ render_frontend_service() {
   printf '      - type: bind\n'
   printf '        source: %s\n' "$(yaml_quote "$nginx_template")"
   printf '        target: /etc/nginx/templates/default.conf.template\n'
+  printf '        read_only: true\n'
+  # Shared /api/* locations, envsubst-rendered to /etc/nginx/conf.d/api-locations.inc and
+  # pulled in by every server config so the admin auth rules live in one place.
+  printf '      - type: bind\n'
+  printf '        source: %s\n' "$(yaml_quote "./deploy/nginx/api-locations.inc")"
+  printf '        target: /etc/nginx/templates/api-locations.inc.template\n'
   printf '        read_only: true\n'
   printf '      - type: bind\n'
   printf '        source: %s\n' "$(yaml_quote "$auth_dir")"

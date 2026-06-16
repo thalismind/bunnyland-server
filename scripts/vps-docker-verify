@@ -13,6 +13,9 @@ export BUNNYLAND_VERIFY_PORT="${BUNNYLAND_VERIFY_PORT:-443}"
 export BUNNYLAND_VERIFY_SCHEME="${BUNNYLAND_VERIFY_SCHEME:-https}"
 export BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS="${BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS:-401}"
 export BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS="${BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS:-200}"
+# Set to 1 when the deployment configured an admin token (so nginx injects it and the
+# Basic-authenticated snapshot/stream return data). Left unset, verify only asserts the gates.
+export BUNNYLAND_VERIFY_ADMIN_DATA="${BUNNYLAND_VERIFY_ADMIN_DATA:-0}"
 export BUNNYLAND_HOME_DOMAIN="${BUNNYLAND_HOME_DOMAIN:-}"
 export BUNNYLAND_HOME_EXPECT_TEXT="${BUNNYLAND_HOME_EXPECT_TEXT:-}"
 
@@ -34,9 +37,12 @@ admin_unauth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS"])
 admin_auth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS"])
 admin_user = os.environ["BUNNYLAND_ADMIN_USER"]
 admin_password = os.environ["BUNNYLAND_ADMIN_PASSWORD"]
+verify_admin_data = os.environ["BUNNYLAND_VERIFY_ADMIN_DATA"] == "1"
 home_domain = os.environ["BUNNYLAND_HOME_DOMAIN"]
 home_expect_text = os.environ["BUNNYLAND_HOME_EXPECT_TEXT"]
 base_url = f"{scheme}://{domain}"
+good_auth = f"{admin_user}:{admin_password}"
+bad_auth = f"{admin_user}:definitely-not-the-right-password"
 
 
 def fail(message: str) -> None:
@@ -143,15 +149,27 @@ health = json.loads(expect_status("REST health", "GET", "/api/health", 200).deco
 if health.get("ok") is not True:
     fail(f"REST health: expected ok=true, got {health!r}")
 
-snapshot = json.loads(expect_status("world snapshot", "GET", "/api/world/snapshot", 200).decode())
-metadata = snapshot.get("metadata") or {}
-ok(
-    "world snapshot: "
-    + f"seed={metadata.get('seed')!r} generator={metadata.get('generator')!r} "
-    + f"epoch={snapshot.get('world_epoch')!r}"
-)
+# The claim lobby is the public liveness signal -- no admin needed to pick a character.
+lobby = json.loads(expect_status("world characters", "GET", "/api/world/characters", 200).decode())
+ok(f"world characters: {len(lobby.get('characters', []))} claimable")
 
-bad_auth = f"{admin_user}:definitely-not-the-right-password"
+# The raw snapshot is admin-gated now: an unauthenticated caller gets the Basic-auth gate.
+expect_status(
+    "world snapshot requires admin", "GET", "/api/world/snapshot", admin_unauth_status
+)
+if verify_admin_data:
+    snapshot = json.loads(
+        expect_status(
+            "world snapshot (admin)", "GET", "/api/world/snapshot", 200, auth=good_auth
+        ).decode()
+    )
+    metadata = snapshot.get("metadata") or {}
+    ok(
+        "world snapshot: "
+        + f"seed={metadata.get('seed')!r} generator={metadata.get('generator')!r} "
+        + f"epoch={snapshot.get('world_epoch')!r}"
+    )
+
 expect_status(
     "admin rejects bad credentials",
     "POST",
@@ -160,7 +178,6 @@ expect_status(
     auth=bad_auth,
 )
 
-good_auth = f"{admin_user}:{admin_password}"
 pause_body = expect_status(
     "admin accepts good credentials",
     "POST",
@@ -185,52 +202,69 @@ if admin_auth_status == 200:
     if resume.get("ok") is not True or resume.get("paused") is not False:
         fail(f"admin resume: unexpected response {resume!r}")
 
-key = base64.b64encode(os.urandom(16)).decode()
-with socket.create_connection((connect_host, port), timeout=15) as raw:
-    ctx = ssl.create_default_context() if scheme == "https" else None
-    stream = ctx.wrap_socket(raw, server_hostname=domain) if ctx else nullcontext(raw)
-    with stream as sock:
-        sock.sendall(
-            (
-                "GET /api/world/updates HTTP/1.1\r\n"
-                f"Host: {domain}\r\n"
-                "Upgrade: websocket\r\n"
-                "Connection: Upgrade\r\n"
-                f"Sec-WebSocket-Key: {key}\r\n"
-                "Sec-WebSocket-Version: 13\r\n\r\n"
-            ).encode("ascii")
-        )
-        data = b""
-        while b"\r\n\r\n" not in data:
-            chunk = sock.recv(4096)
-            if not chunk:
-                fail("websocket: connection closed before headers")
-            data += chunk
-        headers, rest = data.split(b"\r\n\r\n", 1)
-        status_line = headers.split(b"\r\n", 1)[0].decode("ascii", "replace")
-        if " 101 " not in status_line:
-            fail(f"websocket: expected HTTP 101, got {status_line}")
+def websocket_handshake(auth: str | None = None) -> tuple[str, bytes | None]:
+    """Open the updates stream and return (status line, first frame payload). The payload is
+    None unless the server completed the upgrade (HTTP 101)."""
+    key = base64.b64encode(os.urandom(16)).decode()
+    lines = [
+        "GET /api/world/updates HTTP/1.1",
+        f"Host: {domain}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+    ]
+    if auth is not None:
+        lines.append("Authorization: Basic " + base64.b64encode(auth.encode()).decode())
+    raw_request = "\r\n".join(lines) + "\r\n\r\n"
+    with socket.create_connection((connect_host, port), timeout=15) as raw:
+        ctx = ssl.create_default_context() if scheme == "https" else None
+        stream = ctx.wrap_socket(raw, server_hostname=domain) if ctx else nullcontext(raw)
+        with stream as sock:
+            sock.sendall(raw_request.encode("ascii"))
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    fail("websocket: connection closed before headers")
+                data += chunk
+            headers, rest = data.split(b"\r\n\r\n", 1)
+            status_line = headers.split(b"\r\n", 1)[0].decode("ascii", "replace")
+            if " 101 " not in status_line:
+                return status_line, None
 
-        while len(rest) < 2:
-            rest += sock.recv(4096)
-        length = rest[1] & 0x7F
-        offset = 2
-        if length == 126:
-            while len(rest) < offset + 2:
+            while len(rest) < 2:
                 rest += sock.recv(4096)
-            length = struct.unpack("!H", rest[offset : offset + 2])[0]
-            offset += 2
-        elif length == 127:
-            while len(rest) < offset + 8:
-                rest += sock.recv(4096)
-            length = struct.unpack("!Q", rest[offset : offset + 8])[0]
-            offset += 8
-        while len(rest) < offset + length:
-            rest += sock.recv(65536)
-        payload = rest[offset : offset + length]
-        if b'"type":"snapshot"' not in payload:
-            fail("websocket: first frame was not a snapshot event")
-        ok("websocket: HTTP 101 and snapshot frame")
+            length = rest[1] & 0x7F
+            offset = 2
+            if length == 126:
+                while len(rest) < offset + 2:
+                    rest += sock.recv(4096)
+                length = struct.unpack("!H", rest[offset : offset + 2])[0]
+                offset += 2
+            elif length == 127:
+                while len(rest) < offset + 8:
+                    rest += sock.recv(4096)
+                length = struct.unpack("!Q", rest[offset : offset + 8])[0]
+                offset += 8
+            while len(rest) < offset + length:
+                rest += sock.recv(65536)
+            return status_line, rest[offset : offset + length]
+
+
+# The stream is admin-gated: an unauthenticated handshake is rejected before the upgrade.
+unauth_status, _ = websocket_handshake()
+if " 101 " in unauth_status:
+    fail(f"websocket: expected the stream to require admin auth, got {unauth_status}")
+ok(f"websocket requires admin: {unauth_status.strip()}")
+
+if verify_admin_data:
+    status_line, payload = websocket_handshake(auth=good_auth)
+    if " 101 " not in status_line:
+        fail(f"websocket (admin): expected HTTP 101, got {status_line}")
+    if not payload or b'"type":"snapshot"' not in payload:
+        fail("websocket (admin): first frame was not a snapshot event")
+    ok("websocket (admin): HTTP 101 and snapshot frame")
 
 print(f"Verified Bunnyland VPS Docker deployment at {base_url}/")
 PY

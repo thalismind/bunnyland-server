@@ -41,7 +41,7 @@ services:
       BUNNYLAND_ENABLE_LLM: ${BUNNYLAND_ENABLE_LLM:-0}
       BUNNYLAND_ENABLE_DISCORD: ${BUNNYLAND_ENABLE_DISCORD:-0}
       BUNNYLAND_ENABLE_MCP: ${BUNNYLAND_ENABLE_MCP:-0}
-      BUNNYLAND_MCP_ADMIN_TOKEN: ${BUNNYLAND_MCP_ADMIN_TOKEN:-}
+      BUNNYLAND_ADMIN_TOKEN: ${BUNNYLAND_ADMIN_TOKEN:-}
     expose:
       - "8765"
     restart: unless-stopped
@@ -53,6 +53,7 @@ services:
     environment:
       BUNNYLAND_API_UPSTREAM: http://server:8765
       BUNNYLAND_SERVER_NAME: ${BUNNYLAND_SERVER_NAME:-_}
+      BUNNYLAND_ADMIN_TOKEN: ${BUNNYLAND_ADMIN_TOKEN:-}
     expose:
       - "80"
     restart: unless-stopped

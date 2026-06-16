@@ -390,7 +390,7 @@ def test_mcp_release_validation_and_llm_fallback(monkeypatch):
 def test_mcp_admin_token_and_prompt_errors(monkeypatch, scenario):
     monkeypatch.delenv(mcp_server.ADMIN_TOKEN_ENV, raising=False)
 
-    with pytest.raises(PermissionError, match="BUNNYLAND_MCP_ADMIN_TOKEN is not configured"):
+    with pytest.raises(PermissionError, match="BUNNYLAND_ADMIN_TOKEN is not configured"):
         mcp_server._require_admin_token("secret", None)
 
     monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "secret")
@@ -515,7 +515,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     app = create_app(
         scenario.actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
-        mcp_admin_token="secret",
+        admin_token="secret",
     )
 
     paths = {route.path for route in app.routes}
@@ -552,10 +552,10 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     create_app(
         scenario.actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
-        mcp_admin_token=None,
+        admin_token=None,
     )
     patch_world_admin = registered_tools["patch_world_admin"]
-    with pytest.raises(RuntimeError, match="BUNNYLAND_MCP_ADMIN_TOKEN is not configured"):
+    with pytest.raises(RuntimeError, match="BUNNYLAND_ADMIN_TOKEN is not configured"):
         asyncio.run(patch_world_admin(admin_token="secret", operations=[]))
 
     monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "env-secret")
@@ -894,7 +894,7 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
     from mcp.types import ResourceUpdatedNotification, ServerNotification
 
     plugins = select(bunnyland_plugins(), [MCP, WORLDGEN])
-    app = create_app(scenario.actor, plugins=plugins, mcp_admin_token="secret")
+    app = create_app(scenario.actor, plugins=plugins, admin_token="secret")
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
@@ -1005,9 +1005,13 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
 
 
 def _capture_mcp_tools(
-    monkeypatch, actor, *, admin_token: str = "secret", loop=None
+    monkeypatch, actor, *, admin_token: str = "secret", loop=None, request_headers=None
 ) -> dict:
-    """Build the MCP app with a fake FastMCP and return its registered tool closures."""
+    """Build the MCP app with a fake FastMCP and return its registered tool closures.
+
+    ``request_headers`` simulates the headers an authenticating proxy attaches to the
+    streamable-HTTP request the tools run under (e.g. the injected admin token); when None,
+    ``get_context()`` exposes no request, matching a direct/argument-only caller."""
 
     registered_tools: dict = {}
 
@@ -1038,7 +1042,14 @@ def _capture_mcp_tools(
             return lambda func: func
 
         def get_context(self):
-            return SimpleNamespace(session=object())
+            if request_headers is None:
+                return SimpleNamespace(session=object())
+            return SimpleNamespace(
+                session=object(),
+                request_context=SimpleNamespace(
+                    request=SimpleNamespace(headers=request_headers)
+                ),
+            )
 
         def streamable_http_app(self):
             async def asgi_app(scope, receive, send):
@@ -1057,7 +1068,7 @@ def _capture_mcp_tools(
     create_app(
         actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
-        mcp_admin_token=admin_token,
+        admin_token=admin_token,
         loop=loop,
     )
     return registered_tools
@@ -1298,6 +1309,41 @@ def test_world_overview_admin_tool_is_gated_and_returns_room_network(monkeypatch
     assert overview["character_count"] == 1
     titles = {room["title"] for room in overview["rooms"]}
     assert titles == {"Mosslit Burrow", "North Tunnel"}
+
+
+def test_admin_tool_authorizes_via_injected_header_without_arg(monkeypatch, scenario):
+    # The authenticating proxy injects X-Bunnyland-Admin-Token, so a proxied caller does not
+    # pass admin_token: the tool authorizes from the header alone.
+    tools = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        admin_token="secret",
+        request_headers={"X-Bunnyland-Admin-Token": "secret"},
+    )
+
+    overview = tools["world_overview_admin"]()
+    assert overview["room_count"] == 2
+
+    # A wrong injected header is still rejected.
+    rejected = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        admin_token="secret",
+        request_headers={"X-Bunnyland-Admin-Token": "wrong"},
+    )
+    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+        rejected["world_overview_admin"]()
+
+
+def test_admin_tool_falls_back_to_argument_without_header(monkeypatch, scenario):
+    # With no proxy-injected header, the explicit admin_token argument still authorizes.
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor, admin_token="secret")
+
+    overview = tools["world_overview_admin"](admin_token="secret")
+    assert overview["room_count"] == 2
+
+    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+        tools["world_overview_admin"]()
 
 
 def test_room_view_and_component_schema_tools(monkeypatch, scenario):

@@ -64,7 +64,7 @@ The MCP server is mounted into the same FastAPI app as the HTTP/websocket API. I
 not start a second process or listen on a second port.
 
 ```bash
-BUNNYLAND_MCP_ADMIN_TOKEN=change-me \
+BUNNYLAND_ADMIN_TOKEN=change-me \
 uv run --extra server --extra mcp bunnyland serve \
   --ticks 0 \
   --api-host 127.0.0.1 \
@@ -146,7 +146,7 @@ uv run bunnyland serve --llm --generator recursive \
 | `--api-host`     | `127.0.0.1`    | Host for the optional HTTP/websocket client API.                |
 | `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
 | `--mcp`          | off            | Mount the MCP endpoint at `/mcp` on the existing API server.    |
-| `--mcp-admin-token` | env         | Token required by MCP admin tools; defaults to `BUNNYLAND_MCP_ADMIN_TOKEN`. |
+| `--admin-token`  | env            | Admin token for snapshot/overview/DM projections, the world-updates stream, and MCP admin tools; defaults to `BUNNYLAND_ADMIN_TOKEN`. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
 | `--starter-pack` | (none)         | Enable a startup preset: `peaceful`, `fantastic`, or `futuristic`. |
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](./).   |

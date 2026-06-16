@@ -708,7 +708,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
 def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     meta = WorldMeta(seed="moss", generator="oneshot", plugins=("bunnyland.core_verbs",))
-    app = create_app(scenario.actor, meta=meta, mcp_admin_token="secret")
+    app = create_app(scenario.actor, meta=meta, admin_token="secret")
     client = testclient.TestClient(app)
 
     health = client.get("/health")
@@ -812,7 +812,7 @@ def test_fastapi_room_projection_and_queue_map_invalid_ids_to_http_errors(scenar
 
 def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     pytest.importorskip("fastapi")
-    app = create_app(scenario.actor, mcp_admin_token="secret")
+    app = create_app(scenario.actor, admin_token="secret")
 
     schema = app.openapi()
     operation = schema["paths"]["/world/character/{id}"]["get"]
@@ -861,7 +861,7 @@ def test_fastapi_dm_projection_requires_permission_and_returns_typed_view(scenar
     world.get_entity(scenario.room_b).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), hidden_item.id
     )
-    app = create_app(scenario.actor, mcp_admin_token="secret")
+    app = create_app(scenario.actor, admin_token="secret")
     client = testclient.TestClient(app)
 
     missing = client.get("/world/dm/dm-1")
@@ -890,7 +890,7 @@ def test_fastapi_world_overview_requires_permission_and_returns_room_network(sce
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), berry.id
     )
-    app = create_app(scenario.actor, mcp_admin_token="secret")
+    app = create_app(scenario.actor, admin_token="secret")
     client = testclient.TestClient(app)
 
     missing = client.get("/world/overview")
@@ -917,7 +917,7 @@ def test_fastapi_world_overview_requires_permission_and_returns_room_network(sce
 
 def test_fastapi_world_snapshot_requires_admin_token(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, mcp_admin_token="secret")
+    app = create_app(scenario.actor, admin_token="secret")
     client = testclient.TestClient(app)
 
     missing = client.get("/world/snapshot")
@@ -934,7 +934,7 @@ def test_fastapi_world_snapshot_requires_admin_token(scenario):
 
 def test_fastapi_dm_projection_uses_configured_admin_token_env(monkeypatch, scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    monkeypatch.setenv("BUNNYLAND_MCP_ADMIN_TOKEN", "env-secret")
+    monkeypatch.setenv("BUNNYLAND_ADMIN_TOKEN", "env-secret")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
@@ -948,14 +948,14 @@ def test_fastapi_dm_projection_uses_configured_admin_token_env(monkeypatch, scen
 
 def test_fastapi_dm_projection_rejects_when_admin_token_unconfigured(monkeypatch, scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    monkeypatch.delenv("BUNNYLAND_MCP_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("BUNNYLAND_ADMIN_TOKEN", raising=False)
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
     response = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "secret"})
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "BUNNYLAND_MCP_ADMIN_TOKEN is not configured"
+    assert response.json()["detail"] == "BUNNYLAND_ADMIN_TOKEN is not configured"
 
 
 def test_room_description_prefers_long_then_short_description(scenario):
@@ -2658,10 +2658,12 @@ async def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypat
 
 def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), mcp_admin_token="secret")
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
     client = testclient.TestClient(app)
 
-    with client.websocket_connect("/world/updates?admin_token=secret") as websocket:
+    with client.websocket_connect(
+        "/world/updates", headers={"X-Bunnyland-Admin-Token": "secret"}
+    ) as websocket:
         message = websocket.receive_json()
 
     assert message["type"] == "snapshot"
@@ -2673,7 +2675,7 @@ def test_fastapi_world_updates_websocket_requires_admin_token(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
 
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), mcp_admin_token="secret")
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
     client = testclient.TestClient(app)
 
     with pytest.raises(StarletteWebSocketDisconnect) as missing:
@@ -2681,8 +2683,15 @@ def test_fastapi_world_updates_websocket_requires_admin_token(scenario):
             websocket.receive_json()
     assert missing.value.code == 1008
 
+    # A token in the query string is no longer honored -- only the injected header is.
     with pytest.raises(StarletteWebSocketDisconnect):
-        with client.websocket_connect("/world/updates?admin_token=wrong") as websocket:
+        with client.websocket_connect("/world/updates?admin_token=secret") as websocket:
+            websocket.receive_json()
+
+    with pytest.raises(StarletteWebSocketDisconnect):
+        with client.websocket_connect(
+            "/world/updates", headers={"X-Bunnyland-Admin-Token": "wrong"}
+        ) as websocket:
             websocket.receive_json()
 
 

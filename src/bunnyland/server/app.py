@@ -101,7 +101,7 @@ except ImportError:  # pragma: no cover - exercised only without optional deps
     FastAPI = Header = HTTPException = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
 
 
-ADMIN_TOKEN_ENV = "BUNNYLAND_MCP_ADMIN_TOKEN"
+ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
 
 
 async def next_websocket_update(actor: WorldActor, subscription: EventSubscription) -> dict:
@@ -122,7 +122,7 @@ def create_app(
     save_path: str | Path | None = None,
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
-    mcp_admin_token: str | None = None,
+    admin_token: str | None = None,
     title: str = "bunnyland",
 ):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
@@ -211,7 +211,7 @@ def create_app(
             raise HTTPException(status_code=status, detail=detail) from exc
 
     def _require_projection_admin(supplied: str | None) -> None:
-        expected = (mcp_admin_token or os.environ.get(ADMIN_TOKEN_ENV) or "").strip()
+        expected = (admin_token or os.environ.get(ADMIN_TOKEN_ENV) or "").strip()
         if not expected:
             raise HTTPException(status_code=403, detail=f"{ADMIN_TOKEN_ENV} is not configured")
         if supplied != expected:
@@ -602,11 +602,12 @@ def create_app(
 
     @app.websocket("/world/updates")
     async def world_updates(websocket: WebSocket) -> None:
-        # This stream pushes the full world snapshot (and snapshot/patch broadcasts), so it
-        # is the same privileged surface as ``/world/snapshot``. Browsers cannot set custom
-        # headers on a websocket handshake, so the admin token is read from the query string.
+        # This stream pushes the full world snapshot — the same privileged surface as
+        # /world/snapshot. The production nginx config does Basic auth and then injects
+        # X-Bunnyland-Admin-Token before proxying, so the token never rides in the query
+        # string. Direct (non-proxied) clients must set the header themselves.
         try:
-            _require_projection_admin(websocket.query_params.get("admin_token"))
+            _require_projection_admin(websocket.headers.get("x-bunnyland-admin-token"))
         except HTTPException:
             await websocket.close(code=1008)  # policy violation
             return
@@ -626,7 +627,7 @@ def create_app(
             actor=actor,
             meta=meta,
             loop=loop,
-            admin_token=mcp_admin_token,
+            admin_token=admin_token,
             patch_world=_patch_world_request,
             generate_world=_generate_world_request,
             generation_status=_world_generation_status_response,

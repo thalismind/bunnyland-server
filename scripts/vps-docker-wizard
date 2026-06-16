@@ -280,10 +280,10 @@ if [[ "$full_deployment" == "1" ]]; then
 fi
 
 enable_mcp=0
-mcp_admin_token=""
+admin_token=""
 if confirm "Enable the HTTP MCP endpoint for agentic clients?" "n"; then
   enable_mcp=1
-  mcp_admin_token="$(prompt_secret "BUNNYLAND_MCP_ADMIN_TOKEN")"
+  admin_token="$(prompt_secret "BUNNYLAND_ADMIN_TOKEN")"
 fi
 
 env_file="$(mktemp)"
@@ -302,7 +302,7 @@ if [[ -n "$starter_pack" ]]; then
   write_env BUNNYLAND_STARTER_PACK "$starter_pack"
 fi
 if [[ "$enable_mcp" == "1" ]]; then
-  write_env BUNNYLAND_MCP_ADMIN_TOKEN "$mcp_admin_token"
+  write_env BUNNYLAND_ADMIN_TOKEN "$admin_token"
 fi
 if [[ -n "$cert_email" ]]; then write_env BUNNYLAND_CERT_EMAIL "$cert_email"; fi
 if [[ -n "$world_save" ]]; then write_env BUNNYLAND_WORLD_SAVE "$world_save"; fi

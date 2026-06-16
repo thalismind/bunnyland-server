@@ -18,7 +18,7 @@ uv sync --extra server --extra mcp
 ## Run
 
 ```bash
-BUNNYLAND_MCP_ADMIN_TOKEN=change-me \
+BUNNYLAND_ADMIN_TOKEN=change-me \
 uv run --extra server --extra mcp bunnyland serve \
   --ticks 0 \
   --api-host 127.0.0.1 \
@@ -42,16 +42,21 @@ https://sandbox.example.com/api/mcp
 
 ## Authentication
 
-There are two auth layers to think about:
+There is a single admin secret, `BUNNYLAND_ADMIN_TOKEN` (also `--admin-token`), checked via
+the `X-Bunnyland-Admin-Token` header. It gates the snapshot/overview/DM projections, the
+`/world/updates` stream, and the MCP `*_admin` tools.
 
-- MCP admin tools require `--mcp-admin-token` or `BUNNYLAND_MCP_ADMIN_TOKEN`.
-- The ordinary HTTP admin API under `/admin/*` should still be protected at the reverse
-  proxy, as described in the server and VPS docs.
-- On the VPS Docker deployment, `/api/mcp` is protected by the same nginx htpasswd file as
-  the world editor before it reaches the backend MCP endpoint.
+Two layers cooperate on the VPS Docker deployment:
 
-The MCP token is passed as a tool argument named `admin_token` for admin tools. Player
-tools do not require it.
+- nginx protects `/api/admin/`, `/api/mcp[/]`, and the admin world paths with one Basic-auth
+  realm (the world-editor htpasswd). After a login it injects `X-Bunnyland-Admin-Token`
+  before proxying, so a single browser login also authorizes the same-origin WebSocket.
+- The backend independently verifies that injected token, so reaching the app directly (not
+  through nginx) still requires it.
+
+Because nginx injects the token on `/api/mcp[/]`, MCP admin tools authorize from the header
+automatically: a proxied client need not pass `admin_token`. The argument remains as a
+fallback for direct, non-proxied MCP clients. Player tools never require it.
 
 Do not expose MCP admin tools with a weak shared token. They can patch or replace the live
 world.
@@ -222,7 +227,9 @@ indirectly through room events, nearby actors, conditions, and regenerated point
 
 ## Admin tools
 
-Admin tools require `admin_token`.
+Admin tools authorize from the `X-Bunnyland-Admin-Token` header an authenticating proxy
+injects, so a proxied client need not pass anything. The examples below show the explicit
+`admin_token` argument, which is the fallback for direct, non-proxied MCP clients.
 
 Start async world replacement:
 
@@ -321,8 +328,8 @@ If the server fails to start with an MCP import error, install the extra:
 uv sync --extra server --extra mcp
 ```
 
-If admin tools return `BUNNYLAND_MCP_ADMIN_TOKEN is not configured`, set
-`BUNNYLAND_MCP_ADMIN_TOKEN` or pass `--mcp-admin-token` when starting the server.
+If admin tools return `BUNNYLAND_ADMIN_TOKEN is not configured`, set
+`BUNNYLAND_ADMIN_TOKEN` or pass `--admin-token` when starting the server.
 
 If a command queues but does not run immediately, check `runtime_status`. A paused server
 will keep queued commands pending until resumed. Commands can also wait for action/focus

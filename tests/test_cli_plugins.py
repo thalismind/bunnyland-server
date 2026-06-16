@@ -46,6 +46,7 @@ from bunnyland.plugins.builtin import (
 
 def _serve_args(**overrides):
     values = {
+        "admin_token": None,
         "api_host": "127.0.0.1",
         "api_port": None,
         "autosave_every": 0,
@@ -69,7 +70,6 @@ def _serve_args(**overrides):
         "load_paused": False,
         "max_rooms": 6,
         "mcp": False,
-        "mcp_admin_token": None,
         "memory_backend": "in-memory",
         "memory_path": None,
         "module": [],
@@ -427,7 +427,7 @@ def test_cli_mcp_runs_api_with_admin_token(monkeypatch, tmp_path):
         [
             "serve",
             "--mcp",
-            "--mcp-admin-token",
+            "--admin-token",
             "admin-token",
             "--api-port",
             "9876",
@@ -443,7 +443,7 @@ def test_cli_mcp_runs_api_with_admin_token(monkeypatch, tmp_path):
     assert result == 0
     assert calls["kwargs"]["host"] == "127.0.0.1"
     assert calls["kwargs"]["port"] == 9876
-    assert calls["kwargs"]["mcp_admin_token"] == "admin-token"
+    assert calls["kwargs"]["admin_token"] == "admin-token"
     assert calls["kwargs"]["max_ticks"] == 4
     assert MCP in {plugin.id for plugin in calls["kwargs"]["plugins"]}
 
@@ -1166,7 +1166,7 @@ async def test_run_api_runtime_without_mcp_uses_env_admin_token(monkeypatch, tmp
     args = _serve_args(api_port=8765, max_rooms=9, save=str(tmp_path / "world.json"))
     loop = type("Loop", (), {"run": lambda self, *, max_ticks: asyncio.sleep(0, result=1)})()
 
-    monkeypatch.setenv("BUNNYLAND_MCP_ADMIN_TOKEN", "env-admin")
+    monkeypatch.setenv("BUNNYLAND_ADMIN_TOKEN", "env-admin")
     monkeypatch.setattr(runtime, "run_loop_with_api", fake_run_loop_with_api)
 
     ticks = await cli._run_api_runtime(
@@ -1182,7 +1182,7 @@ async def test_run_api_runtime_without_mcp_uses_env_admin_token(monkeypatch, tmp
     )
 
     assert ticks == 3
-    assert calls["kwargs"]["mcp_admin_token"] == "env-admin"
+    assert calls["kwargs"]["admin_token"] == "env-admin"
     assert calls["kwargs"]["worldgen_options"].max_rooms == 9
     assert "Serving MCP" not in capsys.readouterr().out
 
