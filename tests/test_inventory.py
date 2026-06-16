@@ -6,10 +6,12 @@ import pytest
 from conftest import build_scenario
 
 from bunnyland.core import (
+    CharacterComponent,
     CommandCost,
     ContainerComponent,
     ContainmentMode,
     Contains,
+    DeadComponent,
     DropHandler,
     HoldableComponent,
     HoldHandler,
@@ -171,6 +173,52 @@ async def test_take_unreachable_item_is_rejected():
     await scenario.actor.tick(HOUR)
 
     assert container_of(scenario.actor.world.get_entity(item)) == scenario.room_b
+
+
+async def test_take_rejects_item_held_by_living_character():
+    scenario = setup_inventory_scenario()
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="berry", kind="item"), PortableComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
+    )
+    other.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+
+    result = execute_take(scenario, item.id)
+
+    assert result.reason == "item is not reachable"
+    assert container_of(scenario.actor.world.get_entity(item.id)) == other.id
+
+
+async def test_take_allows_item_from_dead_character():
+    scenario = setup_inventory_scenario()
+    other = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            DeadComponent(died_at_epoch=0, cause="test"),
+        ],
+    )
+    item = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="berry", kind="item"), PortableComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
+    )
+    other.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+
+    result = execute_take(scenario, item.id)
+
+    assert result.ok is True
+    assert container_of(scenario.actor.world.get_entity(item.id)) == scenario.character
 
 
 async def test_non_portable_item_cannot_be_taken():
