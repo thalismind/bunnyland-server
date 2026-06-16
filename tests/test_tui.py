@@ -767,8 +767,29 @@ async def test_backend_default_queued_commands_response():
 
 
 # ── the app (Textual pilot) ───────────────────────────────────────────────────
+def _character_list_from_snapshot(snapshot: dict) -> list:
+    """The claim-lobby records the app's picker needs, derived from a snapshot fixture."""
+    from bunnyland.server.models import CharacterSummaryView
+
+    world = World.parse(snapshot)
+    return [
+        CharacterSummaryView(
+            character_id=character["id"],
+            name=entity_name(character),
+            kind=character["components"].get("IdentityComponent", {}).get("kind", "character"),
+            suspended="SuspendedComponent" in character["components"],
+        )
+        for character in world.characters()
+    ]
+
+
 class RecordingBackend(Backend):
-    """A static-snapshot backend that records submitted commands, for app tests."""
+    """A static projection backend that records submitted commands, for app tests.
+
+    The app now reads the claim lobby (``fetch_character_list``) for the picker and the
+    player's own room (``fetch_character_projection``) for the world, never the full
+    snapshot, so this backend defaults the projection to the parlor client-view and derives
+    the lobby from the snapshot fixture."""
 
     def __init__(
         self,
@@ -776,11 +797,19 @@ class RecordingBackend(Backend):
         queued_response: dict | None = None,
         events: list[dict] | None = None,
         character_projection: dict | None = None,
+        character_list: list | None = None,
     ) -> None:
         self.snapshot = snapshot
         self.queued_response = queued_response or _queued_response()
         self.events = events or []
-        self.character_projection = character_projection
+        self.character_projection = (
+            character_projection if character_projection is not None else _client_view()
+        )
+        self.character_list = (
+            character_list
+            if character_list is not None
+            else _character_list_from_snapshot(snapshot)
+        )
         self.queued_requests: list[str] = []
         self.commands: list[dict] = []
         self.label = "test"
@@ -789,6 +818,9 @@ class RecordingBackend(Backend):
     async def close(self) -> None: ...
     async def fetch_snapshot(self) -> dict:
         return copy.deepcopy(self.snapshot)
+
+    async def fetch_character_list(self) -> list:
+        return list(self.character_list)
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
         self.queued_requests.append(character_id)
@@ -807,7 +839,7 @@ class RecordingBackend(Backend):
         return copy.deepcopy(self.events)
 
     async def claim(self, player_id, world):
-        return world.control(player_id)
+        return World.parse(self.snapshot).control(player_id)
 
 
 class FailingQueueBackend(RecordingBackend):
@@ -821,10 +853,10 @@ class FlakyBackend(RecordingBackend):
         super().__init__(snapshot)
         self.fail = True
 
-    async def fetch_snapshot(self) -> dict:
+    async def fetch_character_list(self) -> list:
         if self.fail:
-            raise RuntimeError("snapshot failed")
-        return await super().fetch_snapshot()
+            raise RuntimeError("lobby failed")
+        return await super().fetch_character_list()
 
 
 async def _select_player(app, pilot):
@@ -895,10 +927,10 @@ async def test_app_reports_refresh_errors():
     backend = FlakyBackend(_snapshot())
     app = BunnylandTUI(backend)
     async with app.run_test():
-        assert "snapshot failed" in str(app.query_one("#status", Static).render())
+        assert "lobby failed" in str(app.query_one("#status", Static).render())
         activity = app.query_one("#activity", OptionList)
         assert activity.option_count == 1
-        assert "snapshot failed" in str(activity.get_option_at_index(0).prompt)
+        assert "lobby failed" in str(activity.get_option_at_index(0).prompt)
 
         await app.refresh_world()
         assert activity.option_count == 1
@@ -923,7 +955,7 @@ async def test_app_renders_room_and_actions():
         assert {o.id for o in members.options} == {PLAYER, MARLOW, APPLE}
         doors = app.query_one("#doors", OptionList)
         assert [o.id for o in doors.options] == [f"door:{HALL}"]
-        assert "5/5 AP" in text("#points")
+        assert "4/5 AP" in text("#points")
         queued = app.query_one("#queued", OptionList)
         assert backend.queued_requests[-1] == PLAYER
         assert queued.option_count == 1
@@ -1083,7 +1115,7 @@ async def test_app_renders_perceived_activity_after_initial_prime():
         assert "secret" not in shown
 
 
-async def test_app_renders_empty_and_snapshot_fallback_queued_actions():
+async def test_app_renders_empty_and_keeps_last_queue_on_fetch_failure():
     from textual.widgets import OptionList
 
     app = BunnylandTUI(RecordingBackend(_snapshot()))
@@ -1093,14 +1125,14 @@ async def test_app_renders_empty_and_snapshot_fallback_queued_actions():
         assert queued.option_count == 1
         assert "No queued actions." in str(queued.get_option_at_index(0).prompt)
 
-    snapshot = _snapshot()
-    snapshot["queued_commands"] = [_queued_command(command_id="cmd-fallback")]
-    fallback_app = BunnylandTUI(FailingQueueBackend(snapshot))
-    async with fallback_app.run_test() as pilot:
-        await _select_player(fallback_app, pilot)
-        queued = fallback_app.query_one("#queued", OptionList)
-        assert queued.option_count == 1
-        assert "text: next" in str(queued.get_option_at_index(0).prompt)
+    # A transient queue-fetch failure keeps the last-known queue rather than blanking it.
+    fallback_app = BunnylandTUI(FailingQueueBackend(_snapshot()))
+    fallback_app.player_id = PLAYER
+    fallback_app.queued_commands = [_queued_command(command_id="cmd-last")]
+    async with fallback_app.run_test():
+        assert await fallback_app._fetch_queued_commands() == [
+            _queued_command(command_id="cmd-last")
+        ]
 
 
 async def test_app_discards_mismatched_queued_command_response():
@@ -1134,27 +1166,26 @@ async def test_app_rendering_restores_highlight_and_handles_missing_room():
         assert members.option_count == 3
 
         app.view_room_id = "room:missing"
-        app.follow = False
         app.player_id = ""
         app._render_room()
         assert str(app.query_one("#room-title", Static).render()) == "No room"
 
 
-async def test_app_door_selection_spectating_and_follow():
-    from textual.widgets import Static
+async def test_app_renders_only_the_players_own_room():
+    from textual.widgets import OptionList, Static
 
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
-        app._door_selected(SimpleNamespace(option=SimpleNamespace(id=f"door:{HALL}")))
-        assert app.view_room_id == HALL
-        assert not app.follow
-        assert "spectating" in str(app.query_one("#room-title", Static).render())
-
-        app.action_follow()
-        assert app.follow
+        # The view is always the player's own perceived room; there is no door-spectating.
         assert app.view_room_id == PARLOR
+        assert "Parlor" in str(app.query_one("#room-title", Static).render())
         assert "spectating" not in str(app.query_one("#room-title", Static).render())
+        # Exits are labelled by direction, not the neighbouring room's name (no map leak).
+        doors = app.query_one("#doors", OptionList)
+        assert [o.id for o in doors.options] == [f"door:{HALL}"]
+        assert "north" in str(doors.get_option_at_index(0).prompt)
+        assert "Hallway" not in str(doors.get_option_at_index(0).prompt)
 
 
 async def test_app_member_and_verb_selection_handlers():
@@ -1202,7 +1233,8 @@ async def test_app_wait_submits_a_command():
         wait = next(v for v in ACTION_VERBS if v.tool == "wait")
         await app._do_verb(wait)
         assert app.backend.commands[-1]["command_type"] == "wait"
-        assert app.backend.commands[-1]["controller_generation"] == 2
+        # Generation comes from the character projection's controller (gen 3 in _client_view).
+        assert app.backend.commands[-1]["controller_generation"] == 3
 
 
 async def test_app_refresh_action_resyncs_existing_player():
@@ -1215,22 +1247,22 @@ async def test_app_refresh_action_resyncs_existing_player():
         assert app.query_one("#player", Select).value == PLAYER
 
 
-async def test_app_refresh_preserves_valid_room_view_and_noops_same_player():
+async def test_app_syncs_picker_and_noops_reselecting_same_player():
     from textual.widgets import Select
 
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test():
-        app.world = World.parse(_snapshot())
+        app.character_list = _character_list_from_snapshot(_snapshot())
         app.player_id = PLAYER
         app._player_choice_ids = [MARLOW]
         app._sync_players()
         assert app.query_one("#player", Select).value == PLAYER
 
-        app.view_room_id = HALL
-        app.follow = False
+        # The view always tracks the player's own room after a refresh.
         await app.refresh_world()
-        assert app.view_room_id == HALL
+        assert app.view_room_id == PARLOR
 
+        # Re-selecting the player you already control is a no-op (selection preserved).
         app.selected_id = APPLE
         await app._player_changed(SimpleNamespace(value=PLAYER))
         assert app.selected_id == APPLE
@@ -1312,14 +1344,25 @@ async def test_app_cancelled_target_submits_nothing(monkeypatch):
 async def test_app_disables_unaffordable_verbs():
     from textual.widgets import OptionList
 
-    snapshot = _snapshot()
-    # Drain the player's points so nothing is affordable except free verbs.
-    for entity in snapshot["entities"]:
-        if entity["id"] == PLAYER:
-            entity["components"]["ActionPointsComponent"]["current"] = 0
-            entity["components"]["FocusPointsComponent"]["current"] = 0
+    # Drain the projected points so only free verbs are affordable.
+    projection = _client_view()
+    projection["points"] = {"action": 0, "action_max": 5, "focus": 0, "focus_max": 3}
+    projection["actions"] = [
+        _projected_action(
+            command_type="move", tool_name="move", title="Move",
+            cost={"action": 1, "focus": 0}, arguments=[],
+        ),
+        _projected_action(
+            command_type="say", tool_name="say", title="Say",
+            cost={"action": 1, "focus": 1}, arguments=[],
+        ),
+        _projected_action(
+            command_type="wait", tool_name="wait", title="Wait",
+            cost={"action": 0, "focus": 0}, arguments=[],
+        ),
+    ]
 
-    app = BunnylandTUI(RecordingBackend(snapshot))
+    app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
         verbs = {o.id: o for o in app.query_one("#verbs", OptionList).options}

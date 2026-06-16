@@ -16,6 +16,7 @@ from textual.widgets import Button, Footer, Header, Input, Label, OptionList, Se
 from textual.widgets.option_list import Option
 
 from ..core.claim_timeout import normalize_claim_timeout
+from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, LocalBackend, RemoteBackend
 from .events import EventNarrator
@@ -217,7 +218,6 @@ class BunnylandTUI(App[None]):
 
     BINDINGS = [
         ("r", "refresh", "Refresh"),
-        ("f", "follow", "Follow player"),
         ("q", "quit", "Quit"),
     ]
 
@@ -228,7 +228,7 @@ class BunnylandTUI(App[None]):
         self.player_id = ""
         self.control: tuple[str, int] | None = None
         self.view_room_id: str | None = None
-        self.follow = True
+        self.character_list: list[CharacterSummaryView] = []
         self.selected_id: str | None = None
         self._player_choice_ids: list[str] = []
         self.queued_commands: list[dict] = []
@@ -275,8 +275,15 @@ class BunnylandTUI(App[None]):
 
     # ── data ────────────────────────────────────────────────────────────────
     async def refresh_world(self) -> None:
+        # The picker is sourced from the claim lobby; the world is only ever the player's
+        # own perceived room (their character projection), never the full map.
         try:
-            self.world = World.parse(await self.backend.fetch_snapshot())
+            self.character_list = await self.backend.fetch_character_list()
+            projection = (
+                await self.backend.fetch_character_projection(self.player_id)
+                if self.player_id
+                else None
+            )
             events = await self.backend.recent_events()
             status = self.backend.label
         except Exception as exc:  # network hiccup, server restart, …
@@ -293,18 +300,23 @@ class BunnylandTUI(App[None]):
             self._append_activity(Text(f"✓ {self.backend.label} — reconnected", style="green"))
             self._refresh_error = None
 
-        self._sync_players()
-        if self.player_id and self.player_id not in self.world.entities:
+        known_ids = {summary.character_id for summary in self.character_list}
+        if self.player_id and self.player_id not in known_ids:
             self.player_id = ""
             self.control = None
-            self.action_views = []
-        if self.player_id:
-            await self._refresh_character_projection()
+            projection = None
+        if self.player_id and projection and projection.get("character_id") == self.player_id:
+            self.world = World.parse(projection)
+            self.action_views = list(projection.get("actions") or [])
+            controller = projection.get("controller")
+            if controller:
+                self.control = (controller["controller_id"], int(controller.get("generation", 0)))
         else:
+            self.world = World()
             self.action_views = []
+        self._sync_players()
         self.queued_commands = await self._fetch_queued_commands()
-        if self.follow or not self.world.get(self.view_room_id):
-            self.view_room_id = self.world.room_of(self.player_id) or self.world.first_room_id()
+        self.view_room_id = self.world.room_of(self.player_id)
 
         epoch = self.world.epoch
         who = entity_name(self.world.get(self.player_id)) if self.player_id else "no player"
@@ -323,35 +335,21 @@ class BunnylandTUI(App[None]):
         try:
             data = await self.backend.fetch_queued_commands(self.player_id)
         except Exception:
-            return self.world.queued_for(self.player_id)
+            # The projection world carries no queue, so keep the last-known one on a
+            # transient fetch failure rather than blanking it.
+            return self.queued_commands
         if data.get("character_id") != self.player_id:
             return []
         return list(data.get("commands") or [])
 
-    async def _refresh_character_projection(self) -> None:
-        try:
-            projection = await self.backend.fetch_character_projection(self.player_id)
-        except Exception:
-            self.action_views = []
-            return
-        if not projection or projection.get("character_id") != self.player_id:
-            self.action_views = []
-            return
-        projected = World.parse(projection)
-        self.world.target_groups = projected.target_groups
-        self.action_views = list(projection.get("actions") or [])
-        controller = projection.get("controller")
-        if controller:
-            self.control = (controller["controller_id"], int(controller.get("generation", 0)))
-
     def _sync_players(self) -> None:
-        ids = [c["id"] for c in self.world.characters()]
+        ids = [summary.character_id for summary in self.character_list]
         if ids == self._player_choice_ids:
             return
         self._player_choice_ids = ids
         select = self.query_one("#player", Select)
         select.set_options(
-            [(entity_name(self.world.get(i)), i) for i in ids]
+            [(summary.name, summary.character_id) for summary in self.character_list]
         )
         if self.player_id in ids:
             select.value = self.player_id
@@ -359,11 +357,7 @@ class BunnylandTUI(App[None]):
     # ── rendering ─────────────────────────────────────────────────────────────
     def _render_room(self) -> None:
         room = self.world.get(self.view_room_id)
-        player_room = self.world.room_of(self.player_id)
-        spectating = bool(self.player_id) and self.view_room_id != player_room
         title = entity_name(room) if room else "No room"
-        if spectating:
-            title += "  · spectating (f to follow)"
         self.query_one("#room-title", Static).update(title)
 
         members = self.query_one("#members", OptionList)
@@ -383,8 +377,10 @@ class BunnylandTUI(App[None]):
         doors = self.query_one("#doors", OptionList)
         doors.clear_options()
         for target_id, direction, dest in self.world.doors(self.view_room_id):
-            tag = f"[{direction}] " if direction else ""
-            doors.add_option(Option(f"🚪 {tag}{entity_name(dest)}", id=f"door:{target_id}"))
+            # Own-room view: the projection names the direction, not the room it leads to
+            # (you learn that by going there), so label each exit by its direction.
+            label = direction or (entity_name(dest) if dest else target_id)
+            doors.add_option(Option(f"🚪 {label}", id=f"door:{target_id}"))
 
     def _restore_highlight(self, members: OptionList) -> None:
         if not self.selected_id:
@@ -523,19 +519,12 @@ class BunnylandTUI(App[None]):
             return
         self.player_id = new_id
         self.selected_id = None
-        self.follow = True
         self.control = await self.backend.claim(new_id, self.world) if new_id else None
         await self.refresh_world()
 
     @on(OptionList.OptionSelected, "#members")
     def _member_selected(self, event: OptionList.OptionSelected) -> None:
         self.selected_id = event.option.id
-
-    @on(OptionList.OptionSelected, "#doors")
-    def _door_selected(self, event: OptionList.OptionSelected) -> None:
-        self.view_room_id = event.option.id.removeprefix("door:")
-        self.follow = False
-        self._render_room()
 
     @on(OptionList.OptionSelected, "#verbs")
     def _verb_selected(self, event: OptionList.OptionSelected) -> None:
@@ -607,11 +596,6 @@ class BunnylandTUI(App[None]):
 
     async def action_refresh(self) -> None:
         await self.refresh_world()
-
-    def action_follow(self) -> None:
-        self.follow = True
-        self.view_room_id = self.world.room_of(self.player_id)
-        self._render_room()
 
 
 def main(argv: list[str] | None = None) -> int:
