@@ -96,6 +96,25 @@ creates a physical mark, creator signature, and shared world history, so later p
 cite who marked an object after a save and reload. Inspecting the object still shows the
 readable text.
 
+## Containers
+
+Containers are world objects that can hold other items. Look or inspect first to find out
+whether a container is reachable, open, closed, locked, or empty:
+
+```text
+!inspect oak chest
+!open oak chest
+!take brass key from oak chest
+!put brass key in oak chest
+!close oak chest
+```
+
+You can only remove from or add to containers your character can reach. Closed containers
+usually need to be opened before inventory can move through them, and locked containers
+need the right key or another package-specific way to unlock them. Container contents are
+still server-side state: a client may offer a convenient target picker, but the command
+must pass normal reachability and lock/open checks.
+
 ## Rest, wait, and talk
 
 Sleep changes your character's state until they wake:
