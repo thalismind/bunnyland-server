@@ -34,11 +34,17 @@ class RecentContextProjection:
         self._log: dict[str, deque[str]] = defaultdict(lambda: deque(maxlen=capacity))
 
     def subscribe(self, bus) -> None:
+        # Eat/drink events live in the mechanics layer; import lazily so this core
+        # projection module does not form an import cycle (needs -> prompts -> projections).
+        from ..mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
+
         for event_type in (
             ActorMovedEvent,
             SpeechSaidEvent,
             ItemTakenEvent,
             ItemDroppedEvent,
+            FoodEatenEvent,
+            DrinkConsumedEvent,
             CharacterDownedEvent,
             CharacterDiedEvent,
         ):
@@ -82,6 +88,10 @@ class RecentContextProjection:
             self._append(event.room_id, f"{actor} picked up {self._name(event.item_id)}.")
         elif isinstance(event, ItemDroppedEvent):
             self._append(event.room_id, f"{actor} dropped {self._name(event.item_id)}.")
+        elif type(event).__name__ == "FoodEatenEvent":
+            self._append(event.room_id, f"{actor} ate {self._name(event.item_id)}.")
+        elif type(event).__name__ == "DrinkConsumedEvent":
+            self._append(event.room_id, f"{actor} drank from {self._name(event.source_id)}.")
         elif isinstance(event, CharacterDownedEvent):
             room = event.room_id or self._room_of_actor(event.actor_id)
             self._append(room, f"{actor} collapsed.")

@@ -454,3 +454,44 @@ def test_recent_context_records_inventory_and_lifecycle_fallbacks():
 
     assert recent.recent("missing") == ()
     assert recent.recent(scenario.room_a) == ("Juniper collapsed.", "someone died.")
+
+
+def test_recent_context_records_eating_and_drinking():
+    from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
+
+    scenario = build_scenario()
+    recent = RecentContextProjection(scenario.actor.world)
+    bun = add_object(
+        scenario, scenario.room_a, [IdentityComponent(name="steamed bun", kind="food")]
+    )
+    basin = add_object(
+        scenario, scenario.room_a, [IdentityComponent(name="water basin", kind="fixture")]
+    )
+
+    recent._on_event(
+        FoodEatenEvent(
+            **event_base(
+                event_id="ate",
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+            ),
+            item_id=str(bun.id),
+            satiety=5.0,
+        )
+    )
+    recent._on_event(
+        DrinkConsumedEvent(
+            **event_base(
+                event_id="drank",
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+            ),
+            source_id=str(basin.id),
+            hydration=3.0,
+        )
+    )
+
+    assert recent.recent(scenario.room_a) == (
+        "Juniper ate steamed bun.",
+        "Juniper drank from water basin.",
+    )

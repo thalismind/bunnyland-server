@@ -95,11 +95,12 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
     test.
     → `core/handlers/` + player docs.
 
-12. **[FOLLOW-UP] Hunger feedback after eating.**
-    Eating flipped mood to *content* but the `starving` condition did not clear on that
-    tick. Verify whether hunger is slow-resolving or food value is too low, and make the
-    effect legible to the player.
-    → lifesim hunger/food handling + prompt status lines.
+12. **[DONE] Hunger feedback after eating.**
+    The recent-context projection now logs `FoodEatenEvent`/`DrinkConsumedEvent` ("X ate
+    the steamed bun." / "X drank from the water basin."), so eating/drinking is legible in
+    the prompt's Recent context even when the hunger *band* does not change. (If a food's
+    `satiety` is 0 the meter genuinely will not move -- that is a content value, separate
+    from legibility; `examine`/`perceived_events` expose the numeric change.)
 
 13. **[PARTIAL] Duplicate / co-directional exits are confusing.**
     With `include_entity_ids` the prompt's `move` lines and `character_view.target_groups`
