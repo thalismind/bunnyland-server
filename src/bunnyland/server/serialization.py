@@ -40,6 +40,7 @@ from ..mechanics.toonsim import (
 from ..persistence import WorldMeta
 from ..projections import PerceivedEntity, build_room_facts, perceive
 from .models import (
+    ActionSearchResponse,
     CharacterProjectionResponse,
     CharacterQueuedCommandsResponse,
     ClientActionArgumentView,
@@ -521,6 +522,48 @@ def _action_view(definition: ActionDefinition) -> ClientActionView:
             focus=definition.cost.focus,
         ),
         arguments=arguments,
+    )
+
+
+def serialize_action_search(
+    actor: WorldActor, query: str = "", limit: int = 30
+) -> ActionSearchResponse:
+    """Search the available action catalogue, returning a slim, paged action list.
+
+    Progressive disclosure for clients that cannot render the whole catalogue at once
+    (e.g. MCP agents): the same substring match the TUI/Toon action search box uses --
+    ``query`` against command_type, title, and tool name -- over the actions this world
+    actually accepts. Mirrors the ``actions`` field of the character projection, which the
+    web client filters client-side instead.
+    """
+
+    available = actor.available_command_types()
+    definitions = sorted(
+        (
+            definition
+            for definition in action_definitions(actor.action_definitions())
+            if definition.command_type in available
+        ),
+        key=lambda definition: definition.command_type,
+    )
+    needle = (query or "").strip().lower()
+    if needle:
+        definitions = [
+            definition
+            for definition in definitions
+            if needle in definition.command_type.lower()
+            or needle in (definition.title or "").lower()
+            or needle in definition.name.lower()
+        ]
+    total_available = len(definitions)
+    if limit and limit > 0:
+        definitions = definitions[:limit]
+    return ActionSearchResponse(
+        world_epoch=actor.epoch,
+        query=query or "",
+        total_available=total_available,
+        returned=len(definitions),
+        actions=[_action_view(definition) for definition in definitions],
     )
 
 

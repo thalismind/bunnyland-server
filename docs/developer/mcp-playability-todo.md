@@ -41,7 +41,12 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
 
 5. **[DONE] Structured `available_actions` (highest leverage).**
    Delivered via `character_view` reusing `serialize_character_projection`
-   (`ClientActionView` + `target_groups`). `send_command` is callable straight from it.
+   (`ClientActionView` + `target_groups`). Progressive disclosure: the full ~400-action
+   catalogue is too large to embed per call, so `character_view` omits it (keeps
+   `target_groups` + `action_count`) and the catalogue is reached via `search_actions(query)`
+   (the MCP equivalent of the TUI/Toon action search box -- substring match over
+   command_type/title/tool name) or `list_actions()` (everything). `send_command` is
+   callable straight from a resolved action + `target_groups`.
 
 6. **[FOLLOW-UP] `examine {id}` tool.**
    Not added. `component_schema` explains component *types*, and `character_view`/`room_view`

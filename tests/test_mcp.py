@@ -1072,9 +1072,11 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
 
     view = tools["character_view"](agent_id="a")
     assert view["character_name"] == "Juniper"
-    command_types = {action["command_type"] for action in view["actions"]}
-    assert "move" in command_types
-    # The portable item resolves to a concrete entity id the agent can target.
+    # Progressive disclosure: the full action catalogue is omitted here.
+    assert "actions" not in view
+    assert view["action_count"] >= 1
+    assert "search_actions" in view["actions_hint"]
+    # The portable item still resolves to a concrete entity id the agent can target.
     reachable_ids = {target["id"] for target in view["target_groups"]["reachableItems"]}
     assert str(bun.id) in reachable_ids
     exit_ids = {target["id"] for target in view["target_groups"]["exits"]}
@@ -1082,6 +1084,30 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
 
     with pytest.raises(RuntimeError, match="not controlling"):
         tools["character_view"](agent_id="missing")
+
+
+def test_search_and_list_actions_tools(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+
+    found = tools["search_actions"](query="move")
+    assert found["query"] == "move"
+    assert "move" in {action["command_type"] for action in found["actions"]}
+    assert found["returned"] == len(found["actions"])
+
+    empty = tools["search_actions"](query="zzznotaverb")
+    assert empty["actions"] == []
+    assert empty["total_available"] == 0
+
+    # limit caps the returned page while total_available reflects the full match count.
+    capped = tools["search_actions"](query="", limit=1)
+    assert capped["returned"] == 1
+    assert capped["total_available"] >= 1
+
+    # list_actions returns the whole available catalogue (>= a narrow search).
+    full = tools["list_actions"]()
+    assert "move" in {action["command_type"] for action in full["actions"]}
+    assert full["returned"] >= found["returned"]
+    assert full["returned"] == full["total_available"]
 
 
 def test_world_overview_admin_tool_is_gated_and_returns_room_network(monkeypatch, scenario):

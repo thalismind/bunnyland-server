@@ -196,6 +196,16 @@ class WorldOverviewResponse(BaseModel):
     rooms: list[WorldOverviewRoomView] = Field(default_factory=list)
 
 
+class ActionSearchResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    query: str = ""
+    total_available: int = 0
+    returned: int = 0
+    actions: list[ClientActionView] = Field(default_factory=list)
+
+
 class CharacterProjectionResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1

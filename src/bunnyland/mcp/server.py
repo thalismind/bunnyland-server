@@ -47,6 +47,7 @@ from ..server.models import (
 from ..server.schema import world_schema
 from ..server.serialization import (
     event_message,
+    serialize_action_search,
     serialize_character_projection,
     serialize_character_queued_commands,
     serialize_room_projection,
@@ -636,19 +637,50 @@ def create_bunnyland_mcp_app(
         """Return a structured, play-facing view for the agent's character.
 
         Unlike ``agent_prompt`` (narrative text), this returns machine-readable data: the
-        room and its entities, inventory, action/focus points, and ``actions`` (each with
-        its ``command_type`` and argument schema) plus ``target_groups`` resolving every
-        targetable entity id. To act, pick an action and read the entity id for each
-        argument from ``target_groups[argument.target_group]``, then call ``send_command``.
+        room and its entities, inventory, action/focus points, and ``target_groups``
+        resolving every targetable entity id. The full action catalogue is omitted here to
+        keep the view small (progressive disclosure); use ``search_actions``/``list_actions``
+        to find a verb and its argument schema, then read each argument's entity id from
+        ``target_groups[argument.target_group]`` and call ``send_command``.
         """
 
         try:
             character, _controller, _generation = _controlled_or_requested_character(
                 actor, agent_id, character_id
             )
-            return serialize_character_projection(actor, str(character)).model_dump()
+            data = serialize_character_projection(actor, str(character)).model_dump()
+            actions = data.pop("actions", [])
+            data["action_count"] = len(actions)
+            data["actions_hint"] = (
+                "Action catalogue omitted; call search_actions(query) or list_actions(), "
+                "then resolve ids from target_groups."
+            )
+            return data
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
+
+    @mcp.tool()
+    def search_actions(query: str = "", limit: int = 30) -> dict[str, Any]:
+        """Search the action catalogue -- the MCP equivalent of the clients' action box.
+
+        Substring-matches ``query`` against each action's command_type, title, and tool
+        name, returning a slim, paged list of actions with their argument schema (each
+        argument's ``target_group`` names which ``character_view.target_groups`` entry holds
+        the eligible entity ids). ``total_available`` reports how many matched before the
+        ``limit``. Omit ``query`` to page the whole catalogue.
+        """
+
+        return serialize_action_search(actor, query=query, limit=limit).model_dump()
+
+    @mcp.tool()
+    def list_actions() -> dict[str, Any]:
+        """Return the entire available action catalogue (every verb and its argument schema).
+
+        This is large; prefer ``search_actions(query)`` for normal use. Useful when an agent
+        wants the complete set of verbs at once.
+        """
+
+        return serialize_action_search(actor, query="", limit=0).model_dump()
 
     @mcp.tool()
     def room_view(room_id: str) -> dict[str, Any]:
