@@ -90,8 +90,12 @@ class PromptBuilder:
         recall_limit: int = 3,
         recall_budget_chars: int = 900,
         recall_line_chars: int = 240,
+        include_entity_ids: bool = False,
     ) -> None:
         self.world = world
+        # Annotate perceived entities, exits, and carried items with their entity ids.
+        # Off by default (keeps narrative prompts clean); useful for MCP play/debugging.
+        self.include_entity_ids = include_entity_ids
         # Attach the projection's ECS observers so its cache invalidates as the room
         # changes (idempotent; mutations dirty the room on the next tick).
         self.room_summary = (room_summary or RoomSummaryProjection(world)).attach()
@@ -125,8 +129,12 @@ class PromptBuilder:
             exits = tuple(self._exit_label(e) for e in facts.exits)
 
         perception = perceive(self.world, character)
-        visible_characters = tuple(e.name for e in perception.entities if e.is_character)
-        visible_objects = tuple(e.name for e in perception.entities if not e.is_character)
+        visible_characters = tuple(
+            self._label(e.name, e.id) for e in perception.entities if e.is_character
+        )
+        visible_objects = tuple(
+            self._label(e.name, e.id) for e in perception.entities if not e.is_character
+        )
 
         inventory, held, worn = self._equipment(character)
         feelings = (
@@ -232,9 +240,14 @@ class PromptBuilder:
             f"Your current status is {self._status_line(character)}.",
         ]
 
-    @staticmethod
-    def _exit_label(exit_: RoomExit) -> str:
-        return f"{exit_.direction} (locked)" if exit_.locked else exit_.direction
+    def _label(self, name: str, entity_id: object) -> str:
+        if self.include_entity_ids and entity_id is not None:
+            return f"{name} [{entity_id}]"
+        return name
+
+    def _exit_label(self, exit_: RoomExit) -> str:
+        direction = f"{exit_.direction} (locked)" if exit_.locked else exit_.direction
+        return self._label(direction, exit_.to_room_id)
 
     def _equipment(
         self, character: Entity
@@ -242,13 +255,13 @@ class PromptBuilder:
         inventory: list[str] = []
         for edge, child_id in character.get_relationships(Contains):
             del edge
-            inventory.append(_name(self.world.get_entity(child_id)))
+            inventory.append(self._label(_name(self.world.get_entity(child_id)), child_id))
         held = [
-            _name(self.world.get_entity(item_id))
+            self._label(_name(self.world.get_entity(item_id)), item_id)
             for _edge, item_id in character.get_relationships(Holding)
         ]
         worn = [
-            _name(self.world.get_entity(item_id))
+            self._label(_name(self.world.get_entity(item_id)), item_id)
             for _edge, item_id in character.get_relationships(Wearing)
         ]
         return tuple(sorted(inventory)), tuple(sorted(held)), tuple(sorted(worn))

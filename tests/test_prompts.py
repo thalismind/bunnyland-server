@@ -123,6 +123,27 @@ def test_build_context_has_core_sections():
     assert "take note" in ctx.commands
 
 
+def test_include_entity_ids_annotates_entities_and_commands_when_enabled():
+    scenario = build_scenario()
+    item = add_item(scenario, scenario.room_a, "three berries")
+
+    ctx = PromptBuilder(scenario.actor.world, include_entity_ids=True).build(
+        scenario.character, epoch=scenario.actor.epoch
+    )
+    item_token = f"three berries [{item.id}]"
+    assert item_token in ctx.visible_objects
+    assert f"take {item_token}" in ctx.commands
+    assert f"move north [{scenario.room_b}]" in ctx.commands
+
+    # Default builder stays id-free so existing narrative prompts are unchanged.
+    plain = PromptBuilder(scenario.actor.world).build(
+        scenario.character, epoch=scenario.actor.epoch
+    )
+    assert "three berries" in plain.visible_objects
+    assert "move north" in plain.commands
+    assert f"[{item.id}]" not in " ".join(plain.commands)
+
+
 def test_build_context_has_stable_persona_surface_from_plugins():
     scenario = build_scenario()
     world = scenario.actor.world
