@@ -600,14 +600,16 @@ def create_bunnyland_mcp_app(
         return {"ok": True, "characters": list_mcp_characters(actor)}
 
     @mcp.tool()
-    def world_snapshot() -> dict[str, Any]:
+    def world_snapshot_admin(admin_token: str) -> dict[str, Any]:
         """Return the full raw ECS world snapshot (large; admin/debug and persistence).
 
-        This is the heavy dump of every entity and component. For normal use prefer the
-        scoped projections: ``character_view``/``room_view`` for a play-facing slice and
+        This is the heavy dump of every entity and component, so it is admin-only: seeing
+        the whole world at once would be cheating. For normal use prefer the scoped
+        projections: ``character_view``/``room_view`` for a play-facing slice and
         ``world_overview_admin`` for the room-network map.
         """
 
+        admin(admin_token)
         return serialize_world(actor, meta)
 
     @mcp.tool()

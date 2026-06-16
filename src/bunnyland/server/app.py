@@ -164,7 +164,15 @@ def create_app(
         return {"ok": True, "world_epoch": actor.epoch}
 
     @app.get("/world/snapshot")
-    async def world_snapshot() -> dict:
+    async def world_snapshot(
+        admin_token: str | None = Header(
+            default=None,
+            alias="X-Bunnyland-Admin-Token",
+        ),
+    ) -> dict:
+        # The raw ECS dump reveals the whole world; gate it like the DM/overview
+        # projections so it is not a back door around the per-room player views.
+        _require_projection_admin(admin_token)
         return serialize_world(actor, meta)
 
     @app.get("/world/character/{id}", response_model=CharacterProjectionResponse)
@@ -586,6 +594,14 @@ def create_app(
 
     @app.websocket("/world/updates")
     async def world_updates(websocket: WebSocket) -> None:
+        # This stream pushes the full world snapshot (and snapshot/patch broadcasts), so it
+        # is the same privileged surface as ``/world/snapshot``. Browsers cannot set custom
+        # headers on a websocket handshake, so the admin token is read from the query string.
+        try:
+            _require_projection_admin(websocket.query_params.get("admin_token"))
+        except HTTPException:
+            await websocket.close(code=1008)  # policy violation
+            return
         await websocket.accept()
         subscription = stream.subscribe()
         try:

@@ -147,7 +147,8 @@ release_character
 runtime_status
 send_command
 world_generation_status_admin
-world_snapshot
+world_overview_admin
+world_snapshot_admin
 ```
 
 ## Basic agent loop

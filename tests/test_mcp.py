@@ -688,7 +688,9 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert characters["ok"] is True
     assert [character["name"] for character in characters["characters"]] == ["Juniper"]
 
-    snapshot = registered_tools["world_snapshot"]()
+    with pytest.raises(RuntimeError):  # ToolError is monkeypatched to RuntimeError above
+        registered_tools["world_snapshot_admin"](admin_token="wrong")
+    snapshot = registered_tools["world_snapshot_admin"](admin_token="secret")
     assert snapshot["metadata"]["seed"] == "moss"
     assert any(entity["id"] == str(scenario.character) for entity in snapshot["entities"])
 

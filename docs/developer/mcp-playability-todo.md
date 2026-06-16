@@ -78,9 +78,12 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
    admin-only `world_overview` (the room-network graph: ids, titles, exits, occupant/item
    counts) for the admin and web graph clients — gated on both the HTTP route
    (`GET /world/overview`, `X-Bunnyland-Admin-Token`) and the MCP tool
-   (`world_overview_admin`). `world_snapshot` remains the raw ECS dump for admin/debug.
-   FOLLOW-UP: `world_snapshot` / `GET /world/snapshot` are still ungated — a player using
-   them sees everything, which is also cheating; consider gating them too.
+   (`world_overview_admin`). The raw ECS dump is now admin-only on every surface:
+   `world_snapshot_admin` (MCP tool, admin token), `GET /world/snapshot` and the
+   `/world/updates` websocket (both require the `X-Bunnyland-Admin-Token` / `admin_token`
+   admin token), so a regular player cannot see the whole world through any door. The
+   standard player clients (TUI, REPL) now read the per-room character/room projections
+   instead of the snapshot.
 
 10. **[DONE] Surface turn/tick timing.**
     `runtime_status` reports `tick_seconds` (real time between ticks), `time_scale`, and

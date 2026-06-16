@@ -150,17 +150,20 @@ Send a command through the normal world command queue:
 ```
 
 `send_command` accepts the same command types that the actor currently exposes. Core
-examples include `move`, `look`-style inspection through `world_snapshot`, `take`, `put`,
-`use`, `write`, `sleep`, `wake`, `wait`, `say`, and `tell`; enabled sim plugins add their
-own verbs. Commands still pay action/focus costs, obey policy gates, and can be rejected by
-handlers.
+examples include `move`, scoped inspection through `character_view`/`room_view`, `take`,
+`put`, `use`, `write`, `sleep`, `wake`, `wait`, `say`, and `tell`; enabled sim plugins add
+their own verbs. Commands still pay action/focus costs, obey policy gates, and can be
+rejected by handlers.
 
-Use `world_snapshot` for the latest ECS snapshot:
+Players should inspect the world through the scoped projections — `character_view` (your
+own perceived room) and `room_view` — never the full snapshot. The full ECS dump is
+admin-only, because seeing the whole world at once would be cheating. With the admin token,
+use `world_snapshot_admin`:
 
 ```json
 {
-  "tool": "world_snapshot",
-  "arguments": {}
+  "tool": "world_snapshot_admin",
+  "arguments": {"admin_token": "..."}
 }
 ```
 
@@ -294,7 +297,7 @@ The patch-generation tools return `WorldPatchRequest` payloads. Apply those with
 | Tool | Auth | Purpose |
 |------|------|---------|
 | `list_characters` | none | List characters and controller status. |
-| `world_snapshot` | none | Return the serialized ECS snapshot and metadata. |
+| `world_snapshot_admin` | MCP admin token | Return the full serialized ECS snapshot and metadata. |
 | `runtime_status` | none | Report epoch, paused, and running state. |
 | `agent_prompt` | none | Return the current prompt for an MCP-controlled agent. |
 | `claim_character` | none | Assign an MCP controller to a character. |
