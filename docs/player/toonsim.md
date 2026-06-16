@@ -42,10 +42,11 @@ can query or read that container's `Contains` relationships and draw those conte
 visible through the container without changing core reachability or inventory rules.
 
 **Doors** are pinned to the edge of the room that matches their direction - a north exit
-sits at the top, an east exit on the right. Clicking a door moves the view into that room
-so you can look around. While you are looking at a room your character is not in, the title
-bar shows *spectating* and you cannot move there; press **Follow player** to snap back to
-your own room.
+sits at the top, an east exit on the right. While you are looking at your own room, clicking
+a door **queues a move** through that exit - the same action as the **Move** verb, without
+the target picker. While you are *spectating* a room your character is not in, clicking a
+door instead moves the view one room further so you can look around; press **Follow player**
+to snap back to your own room.
 
 ## Moving around
 
@@ -55,9 +56,10 @@ follows right away - and it costs no action points, because shifting position in
 room is free. Your new position is sent to the server a few times a second, so everyone
 else sees you move too.
 
-Walking *between* rooms is a real action. Use the **Move** action in the menu on the right
-(or walk through the world's normal exits); it spends an action point and only succeeds if
-the exit leads somewhere you can go.
+Walking *between* rooms is a real action. **Click a door** on the edge of your room, or use
+the **Move** action in the menu on the right; either way it spends an action point and only
+succeeds if the exit leads somewhere you can go. If you are short on points, the move is
+queued and runs as soon as your points regenerate.
 
 ## The action menu
 
