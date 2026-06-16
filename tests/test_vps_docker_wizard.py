@@ -6,9 +6,12 @@ import subprocess
 from pathlib import Path
 
 
-def test_vps_docker_wizard_uses_stdin_answers_for_prompted_setup_values(
-    tmp_path: Path,
-) -> None:
+def _build_wizard_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path]:
+    """Set up an isolated wizard run with a stub setup script that logs its env.
+
+    Returns the wizard script path, the scrubbed environment, the setup log path the stub
+    writes its received BUNNYLAND_* values to, and the host data directory used in answers.
+    """
     repo_root = Path(__file__).resolve().parents[1]
     test_repo = tmp_path / "repo"
     fake_bin = tmp_path / "bin"
@@ -31,6 +34,7 @@ def test_vps_docker_wizard_uses_stdin_answers_for_prompted_setup_values(
   printf 'admin_user=%s\\n' "$BUNNYLAND_ADMIN_USER"
   printf 'admin_password=%s\\n' "$BUNNYLAND_ADMIN_PASSWORD"
   printf 'starter_pack=%s\\n' "$BUNNYLAND_STARTER_PACK"
+  printf 'discord_url=%s\\n' "$BUNNYLAND_DISCORD_URL"
   printf 'enable_llm=%s\\n' "$BUNNYLAND_ENABLE_LLM"
   printf 'enable_discord=%s\\n' "$BUNNYLAND_ENABLE_DISCORD"
   printf 'enable_mcp=%s\\n' "$BUNNYLAND_ENABLE_MCP"
@@ -61,10 +65,9 @@ exit 1
     curl_bin.write_text("#!/bin/sh\nexit 1\n")
     curl_bin.chmod(0o755)
 
-    env = os.environ.copy()
     env = {
         key: value
-        for key, value in env.items()
+        for key, value in os.environ.copy().items()
         if not key.startswith("BUNNYLAND_")
         and key
         not in {
@@ -78,11 +81,13 @@ exit 1
     env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
     env["WIZARD_TEST_SETUP_LOG"] = str(setup_log)
     data_dir = tmp_path / "data"
-    stdin_answers = (
-        f"\nlocalhost\n{data_dir}\neditor\nlocal\nlocal\n\n\npeaceful\n\n\nn\nn\ny\n"
-    )
+    return wizard_script, env, setup_log, data_dir
 
-    result = subprocess.run(
+
+def _run_wizard(
+    wizard_script: Path, env: dict[str, str], stdin_answers: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [str(wizard_script)],
         input=stdin_answers,
         check=False,
@@ -91,9 +96,25 @@ exit 1
         capture_output=True,
     )
 
+
+def test_vps_docker_wizard_uses_stdin_answers_for_prompted_setup_values(
+    tmp_path: Path,
+) -> None:
+    wizard_script, env, setup_log, data_dir = _build_wizard_fixture(tmp_path)
+    # Prompt order: runtime, domain, data dir, admin user, admin password (x2), cert email,
+    # world save, starter pack, custom favicon?, Discord invite URL, homepage domain, full
+    # deployment?, MCP?, proceed?.
+    stdin_answers = (
+        f"\nlocalhost\n{data_dir}\neditor\nlocal\nlocal\n\n\npeaceful\n"
+        "\nhttps://discord.gg/example\n\nn\nn\ny\n"
+    )
+
+    result = _run_wizard(wizard_script, env, stdin_answers)
+
     assert result.returncode == 0, result.stderr
     assert "Please enter a value" not in result.stderr
     assert "Starter pack      : peaceful" in result.stdout
+    assert "Discord link      : https://discord.gg/example" in result.stdout
     assert setup_log.read_text().splitlines() == [
         "runtime=docker",
         "domain=localhost",
@@ -101,7 +122,42 @@ exit 1
         "admin_user=editor",
         "admin_password=local",
         "starter_pack=peaceful",
+        "discord_url=https://discord.gg/example",
         "enable_llm=0",
         "enable_discord=0",
         "enable_mcp=0",
     ]
+
+
+def test_vps_docker_wizard_rejects_non_http_discord_url_then_accepts_valid(
+    tmp_path: Path,
+) -> None:
+    wizard_script, env, setup_log, data_dir = _build_wizard_fixture(tmp_path)
+    # An invalid Discord URL must re-prompt rather than be written; the second answer is a
+    # valid https URL that should propagate to the setup script.
+    stdin_answers = (
+        f"\nlocalhost\n{data_dir}\neditor\nlocal\nlocal\n\n\npeaceful\n"
+        "\nftp://nope\nhttps://discord.gg/example\n\nn\nn\ny\n"
+    )
+
+    result = _run_wizard(wizard_script, env, stdin_answers)
+
+    assert result.returncode == 0, result.stderr
+    assert "Please enter an http(s) URL or leave blank." in result.stderr
+    assert "discord_url=https://discord.gg/example" in setup_log.read_text().splitlines()
+
+
+def test_vps_docker_wizard_omits_discord_url_when_blank(tmp_path: Path) -> None:
+    wizard_script, env, setup_log, data_dir = _build_wizard_fixture(tmp_path)
+    # Leaving the Discord prompt blank is valid and writes no value, so the setup script sees
+    # an empty BUNNYLAND_DISCORD_URL. Blank answers in order: custom favicon?, Discord URL,
+    # homepage domain.
+    stdin_answers = (
+        f"\nlocalhost\n{data_dir}\neditor\nlocal\nlocal\n\n\npeaceful\n\n\n\nn\nn\ny\n"
+    )
+
+    result = _run_wizard(wizard_script, env, stdin_answers)
+
+    assert result.returncode == 0, result.stderr
+    assert "Discord link" not in result.stdout
+    assert "discord_url=" in setup_log.read_text().splitlines()
