@@ -84,6 +84,15 @@ exit 1
     return wizard_script, env, setup_log, data_dir
 
 
+def _answers(*lines: str) -> str:
+    """Join wizard prompt answers into stdin text, one answer per line.
+
+    Far easier to keep aligned with the prompts than a single ``\\n``-joined string; each
+    element is one answer in prompt order.
+    """
+    return "".join(f"{line}\n" for line in lines)
+
+
 def _run_wizard(
     wizard_script: Path, env: dict[str, str], stdin_answers: str
 ) -> subprocess.CompletedProcess[str]:
@@ -101,12 +110,22 @@ def test_vps_docker_wizard_uses_stdin_answers_for_prompted_setup_values(
     tmp_path: Path,
 ) -> None:
     wizard_script, env, setup_log, data_dir = _build_wizard_fixture(tmp_path)
-    # Prompt order: runtime, domain, data dir, admin user, admin password (x2), cert email,
-    # world save, starter pack, custom favicon?, Discord invite URL, homepage domain, full
-    # deployment?, MCP?, proceed?.
-    stdin_answers = (
-        f"\nlocalhost\n{data_dir}\neditor\nlocal\nlocal\n\n\npeaceful\n"
-        "\nhttps://discord.gg/example\n\nn\nn\ny\n"
+    stdin_answers = _answers(
+        "",  # container runtime (blank = first available)
+        "localhost",  # sandbox domain
+        str(data_dir),  # host data directory
+        "editor",  # admin username
+        "local",  # admin password
+        "local",  # admin password (confirm)
+        "",  # Let's Encrypt email
+        "",  # existing world save
+        "peaceful",  # starter pack
+        "",  # use a custom favicon? (blank = no)
+        "https://discord.gg/example",  # community Discord invite URL
+        "",  # homepage domain (blank to skip)
+        "n",  # full deployment with LLM + Discord?
+        "n",  # enable HTTP MCP endpoint?
+        "y",  # proceed?
     )
 
     result = _run_wizard(wizard_script, env, stdin_answers)
@@ -133,11 +152,25 @@ def test_vps_docker_wizard_rejects_non_http_discord_url_then_accepts_valid(
     tmp_path: Path,
 ) -> None:
     wizard_script, env, setup_log, data_dir = _build_wizard_fixture(tmp_path)
-    # An invalid Discord URL must re-prompt rather than be written; the second answer is a
-    # valid https URL that should propagate to the setup script.
-    stdin_answers = (
-        f"\nlocalhost\n{data_dir}\neditor\nlocal\nlocal\n\n\npeaceful\n"
-        "\nftp://nope\nhttps://discord.gg/example\n\nn\nn\ny\n"
+    # The invalid Discord URL must re-prompt rather than be written; the following valid
+    # https URL is then accepted and should propagate to the setup script.
+    stdin_answers = _answers(
+        "",  # container runtime
+        "localhost",  # sandbox domain
+        str(data_dir),  # host data directory
+        "editor",  # admin username
+        "local",  # admin password
+        "local",  # admin password (confirm)
+        "",  # Let's Encrypt email
+        "",  # existing world save
+        "peaceful",  # starter pack
+        "",  # use a custom favicon?
+        "ftp://nope",  # Discord invite URL (rejected, re-prompts)
+        "https://discord.gg/example",  # Discord invite URL (accepted)
+        "",  # homepage domain (blank to skip)
+        "n",  # full deployment?
+        "n",  # enable HTTP MCP endpoint?
+        "y",  # proceed?
     )
 
     result = _run_wizard(wizard_script, env, stdin_answers)
@@ -150,10 +183,23 @@ def test_vps_docker_wizard_rejects_non_http_discord_url_then_accepts_valid(
 def test_vps_docker_wizard_omits_discord_url_when_blank(tmp_path: Path) -> None:
     wizard_script, env, setup_log, data_dir = _build_wizard_fixture(tmp_path)
     # Leaving the Discord prompt blank is valid and writes no value, so the setup script sees
-    # an empty BUNNYLAND_DISCORD_URL. Blank answers in order: custom favicon?, Discord URL,
-    # homepage domain.
-    stdin_answers = (
-        f"\nlocalhost\n{data_dir}\neditor\nlocal\nlocal\n\n\npeaceful\n\n\n\nn\nn\ny\n"
+    # an empty BUNNYLAND_DISCORD_URL.
+    stdin_answers = _answers(
+        "",  # container runtime
+        "localhost",  # sandbox domain
+        str(data_dir),  # host data directory
+        "editor",  # admin username
+        "local",  # admin password
+        "local",  # admin password (confirm)
+        "",  # Let's Encrypt email
+        "",  # existing world save
+        "peaceful",  # starter pack
+        "",  # use a custom favicon?
+        "",  # community Discord invite URL (blank)
+        "",  # homepage domain (blank to skip)
+        "n",  # full deployment?
+        "n",  # enable HTTP MCP endpoint?
+        "y",  # proceed?
     )
 
     result = _run_wizard(wizard_script, env, stdin_answers)

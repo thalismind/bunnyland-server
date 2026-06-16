@@ -202,9 +202,27 @@ jobs:
           data_dir="${{ runner.temp }}/bunnyland-vps-data-dry-run"
           favicon_file="${{ runner.temp }}/bunnyland-favicon-dry-run.png"
           printf 'favicon\n' > "$favicon_file"
-          printf '\nlocalhost\n%s\neditor\nlocal\nlocal\n\n\nnone\ny\n%s\n\nn\nn\ny\n' \
-            "$data_dir" "$favicon_file" \
-            | scripts/vps-docker-wizard
+          # One answer per wizard prompt, in order; keep this list aligned with the prompts
+          # in scripts/vps-docker-wizard.
+          answers=(
+            ""                            # container runtime (blank = first available)
+            "localhost"                   # sandbox domain
+            "$data_dir"                   # host data directory
+            "editor"                      # admin username
+            "local"                       # admin password
+            "local"                       # admin password (confirm)
+            ""                            # Let's Encrypt email (blank)
+            ""                            # existing world save (blank)
+            "none"                        # starter pack
+            "y"                           # use a custom favicon?
+            "$favicon_file"               # custom favicon path
+            "https://discord.gg/example"  # community Discord invite URL
+            ""                            # homepage domain (blank to skip)
+            "n"                           # full deployment with LLM + Discord?
+            "n"                           # enable HTTP MCP endpoint?
+            "y"                           # proceed?
+          )
+          printf '%s\n' "${answers[@]}" | scripts/vps-docker-wizard
 
       - name: Run setup script
         env:
