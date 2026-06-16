@@ -50,6 +50,7 @@ from ..server.serialization import (
     serialize_action_search,
     serialize_character_projection,
     serialize_character_queued_commands,
+    serialize_examine,
     serialize_room_projection,
     serialize_world,
     serialize_world_overview,
@@ -609,13 +610,30 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def runtime_status() -> dict[str, Any]:
-        """Return current runtime status for the game loop."""
+        """Return current runtime status and the tick cadence for the game loop.
 
+        ``tick_seconds`` is the real time between ticks -- i.e. roughly how long to wait
+        before polling perceived_events for a queued command's outcome. ``time_scale`` is
+        in-world seconds per real second, so each tick advances the world clock by
+        ``game_seconds_per_tick`` (``world_epoch`` units).
+        """
+
+        tick = getattr(loop, "tick_seconds", None)
+        scale = getattr(loop, "time_scale", None)
+        tick_seconds = float(tick) if tick is not None else None
+        time_scale = float(scale) if scale is not None else None
         return {
             "ok": True,
             "world_epoch": actor.epoch,
             "running": bool(loop.running) if loop is not None else False,
             "paused": bool(loop.paused) if loop is not None else False,
+            "tick_seconds": tick_seconds,
+            "time_scale": time_scale,
+            "game_seconds_per_tick": (
+                tick_seconds * time_scale
+                if tick_seconds is not None and time_scale is not None
+                else None
+            ),
         }
 
     @mcp.tool()
@@ -692,6 +710,30 @@ def create_bunnyland_mcp_app(
         """
 
         return serialize_action_search(actor, query="", limit=0).model_dump()
+
+    @mcp.tool()
+    def examine(agent_id: str, entity_id: str | None = None) -> dict[str, Any]:
+        """Inspect one entity the character can see or carry -- or itself.
+
+        Returns the relevant component values on the entity (e.g. food nutrition/spoiled,
+        a door's locked state, container open state). Omit ``entity_id`` (or pass the
+        character's own id) to inspect yourself, which additionally returns your private
+        needs/affect and human-readable status lines plus action/focus points. Examining
+        another character never reveals their private needs -- only outwardly visible state.
+        """
+
+        try:
+            character, _controller, _generation = _controlled_or_requested_character(
+                actor, agent_id, None
+            )
+            return serialize_examine(
+                actor,
+                str(character),
+                entity_id,
+                fragment_providers=fragment_providers,
+            ).model_dump()
+        except (RuntimeError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
 
     @mcp.tool()
     def room_view(room_id: str) -> dict[str, Any]:
@@ -829,6 +871,11 @@ def create_bunnyland_mcp_app(
             character, controller, generation = _controlled_or_requested_character(
                 actor, agent_id, character_id
             )
+            if command_type not in actor.available_command_types():
+                raise ToolError(
+                    f"unknown command_type {command_type!r}; call search_actions to find "
+                    "valid verbs before sending"
+                )
             command = build_submitted_command(
                 character_id=str(character),
                 controller_id=str(controller),

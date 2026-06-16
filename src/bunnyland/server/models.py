@@ -207,6 +207,20 @@ class ActionSearchResponse(BaseModel):
     actions: list[ClientActionView] = Field(default_factory=list)
 
 
+class ExamineResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    id: str
+    name: str
+    kind: str = "other"
+    is_character: bool = False
+    is_self: bool = False
+    details: dict[str, Any] = Field(default_factory=dict)
+    status: list[str] = Field(default_factory=list)
+    points: ClientPointsView | None = None
+
+
 class CharacterProjectionResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1

@@ -30,6 +30,8 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
 3. **[DONE] Silent rejections look like successes.**
    `send_command` now returns a `note` that resolution is async and may reject;
    `perceived_events` surfaces the `CommandRejectedEvent` (with reason) once it resolves.
+   It also fails fast: an unknown `command_type` is rejected at submit (pointing at
+   `search_actions`) instead of being queued for a tick-later rejection.
 
 4. **[PARTIAL] No discoverable way to consume inventory items.**
    `character_view` now lists every available action and `target_groups.reachableItems`
@@ -50,10 +52,13 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
    punctuation, starts with the query, so `"eat"` no longer pulls in `creature`/`defeat`).
    `send_command` is callable straight from a resolved action + `target_groups`.
 
-6. **[FOLLOW-UP] `examine {id}` tool.**
-   Not added. `component_schema` explains component *types*, and `character_view`/`room_view`
-   list entities, but there is still no per-entity structured detail tool.
-   → `src/bunnyland/mcp/server.py`.
+6. **[DONE] `examine {id}` tool.**
+   `examine(agent_id, entity_id?)` returns curated component *values* for one perceivable
+   entity (e.g. food nutrition/spoiled, door locked, container open). Omitting `entity_id`
+   inspects yourself and additionally returns private needs/affect, status lines, and
+   action/focus points -- examining another character never reveals their private state.
+   → `serialize_examine` in `src/bunnyland/server/serialization.py`, tool in
+   `src/bunnyland/mcp/server.py`.
 
 7. **[FOLLOW-UP] Inventory-aware action surface (NPC-held items).**
    Own-inventory items are surfaced, but items held by *other* characters (the bun in the
@@ -77,11 +82,11 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
    FOLLOW-UP: `world_snapshot` / `GET /world/snapshot` are still ungated — a player using
    them sees everything, which is also cheating; consider gating them too.
 
-10. **[PARTIAL] Surface turn/tick timing.**
-    `send_command` now states resolution is async/turn-based and points at
-    `perceived_events`/`character_commands`. FOLLOW-UP: still no explicit tick cadence,
-    queue position, or "resolves at epoch".
-    → `runtime_status` + `send_command` response.
+10. **[DONE] Surface turn/tick timing.**
+    `runtime_status` reports `tick_seconds` (real time between ticks), `time_scale`, and
+    `game_seconds_per_tick`, so an agent paces its `perceived_events` polling to the loop.
+    `send_command` also states resolution is async and points at the observe tools.
+    FOLLOW-UP (minor): per-command "resolves at epoch"/queue position not exposed.
 
 11. **[FOLLOW-UP] Disambiguate the consume verb.**
     Confirm canonical food verb (`consume` vs `use`) and document it; the test queued both

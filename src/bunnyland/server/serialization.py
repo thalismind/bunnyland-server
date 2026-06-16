@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import is_dataclass
 from enum import Enum
 from typing import Any
@@ -14,18 +14,29 @@ from ..core.actions import ActionDefinition, action_definitions
 from ..core.commands import Lane, SubmittedCommand
 from ..core.components import (
     ActionPointsComponent,
+    AffectComponent,
     CharacterComponent,
+    ContainerComponent,
+    DeadComponent,
+    DescriptionComponent,
+    DoorComponent,
+    DownedComponent,
     EditorDisplayComponent,
     FocusPointsComponent,
     IdentityComponent,
+    LightComponent,
     PortableComponent,
     RoomComponent,
+    SleepingComponent,
     StealthComponent,
+    SuspendedComponent,
 )
 from ..core.ecs import contents, entity_name, parse_entity_id
 from ..core.edges import Contains, ControlledBy, ExitTo, Holding, Wearing
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
+from ..mechanics.consumables import DrinkableComponent, FoodComponent
+from ..mechanics.needs import FatigueComponent, HungerComponent, ThirstComponent
 from ..mechanics.toonsim import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
@@ -58,6 +69,7 @@ from .models import (
     CommandCostRequest,
     DmProjectionResponse,
     DmRoomProjectionView,
+    ExamineResponse,
     RoomProjectionEntityView,
     RoomProjectionResponse,
     RoomProjectionRoomView,
@@ -651,6 +663,97 @@ def serialize_character_projection(
             for definition in action_definitions(actor.action_definitions())
             if definition.command_type in actor.available_command_types()
         ],
+    )
+
+
+# Components surfaced by ``examine``. Public ones are outwardly observable; the self-only
+# set adds the character's private needs/affect (others cannot read your exact hunger).
+_EXAMINE_PUBLIC_COMPONENTS: tuple[tuple[type, str], ...] = (
+    (DescriptionComponent, "description"),
+    (PortableComponent, "portable"),
+    (FoodComponent, "food"),
+    (DrinkableComponent, "drinkable"),
+    (DoorComponent, "door"),
+    (ContainerComponent, "container"),
+    (LightComponent, "light"),
+)
+_EXAMINE_SELF_COMPONENTS: tuple[tuple[type, str], ...] = _EXAMINE_PUBLIC_COMPONENTS + (
+    (HungerComponent, "hunger"),
+    (ThirstComponent, "thirst"),
+    (FatigueComponent, "fatigue"),
+    (AffectComponent, "affect"),
+)
+_EXAMINE_CONDITIONS: tuple[tuple[type, str], ...] = (
+    (DeadComponent, "dead"),
+    (DownedComponent, "downed"),
+    (SleepingComponent, "asleep"),
+    (SuspendedComponent, "suspended"),
+)
+
+
+def _examine_details(entity, *, is_self: bool) -> dict[str, Any]:
+    catalogue = _EXAMINE_SELF_COMPONENTS if is_self else _EXAMINE_PUBLIC_COMPONENTS
+    details: dict[str, Any] = {}
+    for component_type, key in catalogue:
+        if entity.has_component(component_type):
+            details[key] = jsonable(entity.get_component(component_type))
+    conditions = [
+        name for component_type, name in _EXAMINE_CONDITIONS if entity.has_component(component_type)
+    ]
+    if conditions:
+        details["condition"] = conditions
+    return details
+
+
+def _examine_perceivable_ids(actor: WorldActor, character) -> set[str]:
+    perception = perceive(actor.world, character)
+    ids = {str(character.id)}
+    ids.update(entity.id for entity in _flatten_perceived(perception.entities))
+    ids.update(target.id for target in _inventory_targets(actor, character))
+    return ids
+
+
+def serialize_examine(
+    actor: WorldActor,
+    character_id: str,
+    target_id: str | None = None,
+    *,
+    fragment_providers: Sequence[Any] = (),
+) -> ExamineResponse:
+    """Return a curated, play-facing inspection of one perceivable entity (or self).
+
+    Unlike ``component_schema`` (which describes component *types*), this returns the
+    relevant component *values* on a specific entity the character can see or carry -- e.g.
+    whether an item is food/spoiled or a door is locked, or, for the character itself, its
+    own needs/affect plus status lines. The private needs/affect set is only returned when
+    examining yourself, so a player cannot read another character's hidden state.
+    """
+
+    character = _character_entity(actor, character_id)
+    resolved = parse_entity_id(target_id) if target_id is not None else character.id
+    if resolved is None or not actor.world.has_entity(resolved):
+        raise ValueError("entity does not exist")
+    if str(resolved) not in _examine_perceivable_ids(actor, character):
+        raise ValueError("entity is not perceivable")
+
+    entity = actor.world.get_entity(resolved)
+    is_self = resolved == character.id
+    status: list[str] = []
+    points = None
+    if is_self:
+        for provider in fragment_providers:
+            status.extend(provider(actor.world, entity))
+        points = _points_view(entity)
+    return ExamineResponse(
+        world_epoch=actor.epoch,
+        id=str(entity.id),
+        name=entity_name(entity),
+        kind=_entity_kind(entity),
+        is_character=entity.has_component(CharacterComponent),
+        is_self=is_self,
+        details=_examine_details(entity, is_self=is_self),
+        status=status,
+        points=points,
     )
 
 

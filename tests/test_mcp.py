@@ -698,6 +698,9 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         "world_epoch": scenario.actor.epoch,
         "running": True,
         "paused": False,
+        "tick_seconds": None,
+        "time_scale": None,
+        "game_seconds_per_tick": None,
     }
 
     claimed = await registered_tools["claim_character"](
@@ -999,7 +1002,9 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
         await server_task
 
 
-def _capture_mcp_tools(monkeypatch, actor, *, admin_token: str = "secret") -> dict:
+def _capture_mcp_tools(
+    monkeypatch, actor, *, admin_token: str = "secret", loop=None
+) -> dict:
     """Build the MCP app with a fake FastMCP and return its registered tool closures."""
 
     registered_tools: dict = {}
@@ -1051,8 +1056,27 @@ def _capture_mcp_tools(monkeypatch, actor, *, admin_token: str = "secret") -> di
         actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
         mcp_admin_token=admin_token,
+        loop=loop,
     )
     return registered_tools
+
+
+def test_runtime_status_reports_tick_cadence(monkeypatch, scenario):
+    loop = SimpleNamespace(
+        running=True, paused=False, tick_seconds=2.0, time_scale=1800.0
+    )
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor, loop=loop)
+
+    status = tools["runtime_status"]()
+    assert status["running"] is True
+    assert status["tick_seconds"] == 2.0
+    assert status["time_scale"] == 1800.0
+    assert status["game_seconds_per_tick"] == 3600.0
+
+    # No loop -> cadence fields are null rather than missing.
+    no_loop = _capture_mcp_tools(monkeypatch, scenario.actor)["runtime_status"]()
+    assert no_loop["tick_seconds"] is None
+    assert no_loop["game_seconds_per_tick"] is None
 
 
 def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, scenario):
@@ -1084,6 +1108,109 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
 
     with pytest.raises(RuntimeError, match="not controlling"):
         tools["character_view"](agent_id="missing")
+
+
+def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
+    from bunnyland.core import ContainmentMode, Contains
+    from bunnyland.core.components import PortableComponent
+    from bunnyland.mechanics.consumables import FoodComponent
+
+    world = scenario.actor.world
+    bun = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="steamed bun", kind="food"),
+            PortableComponent(),
+            FoodComponent(nutrition=5.0, satiety=10.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
+    )
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+
+    # Examining a perceivable item exposes its component values.
+    item = tools["examine"](agent_id="a", entity_id=str(bun.id))
+    assert item["is_self"] is False
+    assert item["name"] == "steamed bun"
+    assert item["details"]["food"]["satiety"] == 10.0
+    assert "portable" in item["details"]
+    assert item["points"] is None
+
+    # Examining yourself (default target) adds points + the is_self flag.
+    me = tools["examine"](agent_id="a")
+    assert me["is_self"] is True
+    assert me["name"] == "Juniper"
+    assert me["points"]["action"] == 5.0
+
+    # An entity the character cannot perceive (an adjacent room) is rejected.
+    with pytest.raises(RuntimeError, match="not perceivable"):
+        tools["examine"](agent_id="a", entity_id=str(scenario.room_b))
+
+
+def test_serialize_examine_self_needs_and_targets(scenario):
+    from bunnyland.core import (
+        ActionPointsComponent,
+        CharacterComponent,
+        ContainmentMode,
+        Contains,
+        FocusPointsComponent,
+    )
+    from bunnyland.core.components import AffectComponent, DoorComponent, SleepingComponent
+    from bunnyland.mechanics.needs import HungerComponent
+    from bunnyland.server.serialization import serialize_examine
+
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    me = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Mossy", kind="character"),
+            CharacterComponent(species="bunny"),
+            ActionPointsComponent(current=3.0, maximum=5.0, regen_per_hour=1.0),
+            FocusPointsComponent(current=1.0, maximum=3.0, regen_per_hour=0.5),
+            HungerComponent(),
+            AffectComponent(labels=("content",)),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), me.id)
+
+    me_view = serialize_examine(
+        scenario.actor,
+        str(me.id),
+        fragment_providers=[lambda _world, _entity: ["feeling peckish"]],
+    )
+    assert me_view.is_self is True
+    assert "hunger" in me_view.details
+    assert me_view.details["affect"]["labels"] == ["content"]
+    assert me_view.status == ["feeling peckish"]
+    assert me_view.points.action == 3.0
+
+    # A sleeping neighbour: outward condition is visible, private needs are not.
+    sleeper = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Drowsy", kind="character"),
+            CharacterComponent(species="bunny"),
+            HungerComponent(),
+            SleepingComponent(),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), sleeper.id)
+    sleeper_view = serialize_examine(scenario.actor, str(me.id), str(sleeper.id))
+    assert sleeper_view.is_self is False
+    assert "asleep" in sleeper_view.details["condition"]
+    assert "hunger" not in sleeper_view.details  # private state stays hidden
+
+    door = spawn_entity(world, [IdentityComponent(name="hatch", kind="door"), DoorComponent()])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), door.id)
+    door_view = serialize_examine(scenario.actor, str(me.id), str(door.id))
+    assert door_view.is_self is False
+    assert "door" in door_view.details
+
+    with pytest.raises(ValueError, match="does not exist"):
+        serialize_examine(scenario.actor, str(me.id), "entity_999")
 
 
 def test_search_and_list_actions_tools(monkeypatch, scenario):
@@ -1186,11 +1313,32 @@ def test_send_command_returns_outcome_hint(monkeypatch, scenario):
     assert "perceived_events" in queued["note"]
 
 
+def test_send_command_rejects_unknown_command_type(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+
+    # Fail fast on a typo'd verb instead of queuing it for a tick-later rejection.
+    with pytest.raises(RuntimeError, match="unknown command_type"):
+        asyncio.run(tools["send_command"](agent_id="a", command_type="flibber"))
+
+    queued = asyncio.run(
+        tools["send_command"](
+            agent_id="a", command_type="move", payload={"direction": "north"}
+        )
+    )
+    assert queued["queued"] is True
+
+
 def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
     assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
 
-    asyncio.run(tools["send_command"](agent_id="a", command_type="use"))
+    # A valid verb that the handler rejects on resolution (no exit in that direction).
+    asyncio.run(
+        tools["send_command"](
+            agent_id="a", command_type="move", payload={"direction": "west"}
+        )
+    )
     asyncio.run(scenario.actor.tick(0.0))
 
     first = tools["perceived_events"](agent_id="a")
@@ -1200,7 +1348,7 @@ def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
         for message in first["events"]
         if message["data"]["event_type"] == "CommandRejectedEvent"
     ]
-    assert rejected and "use" in rejected[0]["reason"]
+    assert rejected and rejected[0]["command_type"] == "move"
     assert first["next_cursor"] > 0
     # The watermark advances: re-polling from it yields nothing new.
     second = tools["perceived_events"](agent_id="a", since=first["next_cursor"])
