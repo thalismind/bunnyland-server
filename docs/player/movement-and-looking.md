@@ -50,6 +50,25 @@ Inspect a specific reachable object, character, or mechanism for more detail:
 Inspecting is useful when an object may have readable text, a lock, a mechanism state, a
 crafted mark, or other details that do not fit in the room summary.
 
+## Doors and locks
+
+Some exits are connected to doors or other mechanisms. If movement fails because a route
+is closed or locked, inspect the door and use the reachable controls before moving again:
+
+```text
+!inspect brass door
+!open brass door
+!unlock brass door with brass key
+!open brass door
+!go north
+```
+
+A door may need to be unlocked before it can open, and some worlds use package-specific
+mechanisms instead of a normal key. The server checks reachability, lock state, and the
+item used as the tool, so client buttons and target pickers are only shortcuts for the
+same validated commands. See [Inventory and use](inventory-and-use.md) for more examples
+of using items and tools.
+
 ## Move
 
 Move through an exit by direction:
