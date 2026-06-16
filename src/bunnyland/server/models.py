@@ -201,6 +201,7 @@ class ActionSearchResponse(BaseModel):
     schema_version: int = 1
     world_epoch: int
     query: str = ""
+    mode: str = "substring"
     total_available: int = 0
     returned: int = 0
     actions: list[ClientActionView] = Field(default_factory=list)

@@ -1110,6 +1110,26 @@ def test_search_and_list_actions_tools(monkeypatch, scenario):
     assert full["returned"] == full["total_available"]
 
 
+def test_search_actions_substring_vs_word_mode(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+
+    # "ove" is inside "move" -> substring matches, word (boundary) does not.
+    substring = tools["search_actions"](query="ove", mode="substring")
+    assert substring["mode"] == "substring"
+    assert "move" in {action["command_type"] for action in substring["actions"]}
+
+    word = tools["search_actions"](query="ove", mode="word")
+    assert word["mode"] == "word"
+    assert "move" not in {action["command_type"] for action in word["actions"]}
+
+    # A word-start query still finds it under word mode.
+    word_hit = tools["search_actions"](query="mov", mode="word")
+    assert "move" in {action["command_type"] for action in word_hit["actions"]}
+
+    with pytest.raises(RuntimeError, match="mode must be"):
+        tools["search_actions"](query="move", mode="bogus")
+
+
 def test_world_overview_admin_tool_is_gated_and_returns_room_network(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, admin_token="secret")
 

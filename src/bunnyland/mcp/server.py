@@ -660,17 +660,28 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()
-    def search_actions(query: str = "", limit: int = 30) -> dict[str, Any]:
+    def search_actions(
+        query: str = "", limit: int = 30, mode: str = "substring"
+    ) -> dict[str, Any]:
         """Search the action catalogue -- the MCP equivalent of the clients' action box.
 
-        Substring-matches ``query`` against each action's command_type, title, and tool
-        name, returning a slim, paged list of actions with their argument schema (each
-        argument's ``target_group`` names which ``character_view.target_groups`` entry holds
-        the eligible entity ids). ``total_available`` reports how many matched before the
+        Matches ``query`` against each action's command_type, title, and tool name,
+        returning a slim, paged list of actions with their argument schema (each argument's
+        ``target_group`` names which ``character_view.target_groups`` entry holds the
+        eligible entity ids). ``total_available`` reports how many matched before the
         ``limit``. Omit ``query`` to page the whole catalogue.
+
+        ``mode`` is ``"substring"`` (default; matches anywhere) or ``"word"`` (matches only
+        where a word -- split on hyphen, underscore, whitespace, and other punctuation --
+        starts with the query, so ``"eat"`` will not match ``creature`` or ``defeat``).
         """
 
-        return serialize_action_search(actor, query=query, limit=limit).model_dump()
+        try:
+            return serialize_action_search(
+                actor, query=query, limit=limit, mode=mode
+            ).model_dump()
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
 
     @mcp.tool()
     def list_actions() -> dict[str, Any]:

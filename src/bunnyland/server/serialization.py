@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import is_dataclass
 from enum import Enum
@@ -525,17 +526,47 @@ def _action_view(definition: ActionDefinition) -> ClientActionView:
     )
 
 
+ACTION_SEARCH_MODES = ("substring", "word")
+
+# Word boundaries for "word" search: any run of non-alphanumeric characters (hyphen,
+# underscore, whitespace, and other punctuation) separates words.
+_ACTION_WORD_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def _action_search_fields(definition: ActionDefinition) -> tuple[str, str, str]:
+    return (definition.command_type, definition.title or "", definition.name)
+
+
+def _action_matches(definition: ActionDefinition, needle: str, mode: str) -> bool:
+    fields = _action_search_fields(definition)
+    if mode == "word":
+        return any(
+            token.startswith(needle)
+            for field in fields
+            for token in _ACTION_WORD_SPLIT.split(field.lower())
+            if token
+        )
+    return any(needle in field.lower() for field in fields)
+
+
 def serialize_action_search(
-    actor: WorldActor, query: str = "", limit: int = 30
+    actor: WorldActor, query: str = "", limit: int = 30, mode: str = "substring"
 ) -> ActionSearchResponse:
     """Search the available action catalogue, returning a slim, paged action list.
 
     Progressive disclosure for clients that cannot render the whole catalogue at once
-    (e.g. MCP agents): the same substring match the TUI/Toon action search box uses --
-    ``query`` against command_type, title, and tool name -- over the actions this world
-    actually accepts. Mirrors the ``actions`` field of the character projection, which the
-    web client filters client-side instead.
+    (e.g. MCP agents): match ``query`` against each action's command_type, title, and tool
+    name over the actions this world actually accepts. Mirrors the ``actions`` field of the
+    character projection, which the web client filters client-side instead.
+
+    ``mode`` is ``"substring"`` (default; matches anywhere, the TUI/Toon box behaviour) or
+    ``"word"`` (matches only where a word -- split on hyphen, underscore, whitespace, and
+    other punctuation -- starts with the query, so ``"eat"`` no longer matches ``creature``
+    or ``defeat``).
     """
+
+    if mode not in ACTION_SEARCH_MODES:
+        raise ValueError(f"mode must be one of {ACTION_SEARCH_MODES}")
 
     available = actor.available_command_types()
     definitions = sorted(
@@ -551,9 +582,7 @@ def serialize_action_search(
         definitions = [
             definition
             for definition in definitions
-            if needle in definition.command_type.lower()
-            or needle in (definition.title or "").lower()
-            or needle in definition.name.lower()
+            if _action_matches(definition, needle, mode)
         ]
     total_available = len(definitions)
     if limit and limit > 0:
@@ -561,6 +590,7 @@ def serialize_action_search(
     return ActionSearchResponse(
         world_epoch=actor.epoch,
         query=query or "",
+        mode=mode,
         total_available=total_available,
         returned=len(definitions),
         actions=[_action_view(definition) for definition in definitions],
