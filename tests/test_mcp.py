@@ -997,3 +997,203 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
     finally:
         server.should_exit = True
         await server_task
+
+
+def _capture_mcp_tools(monkeypatch, actor, *, admin_token: str = "secret") -> dict:
+    """Build the MCP app with a fake FastMCP and return its registered tool closures."""
+
+    registered_tools: dict = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(
+                resources=SimpleNamespace(subscribe=False, listChanged=False)
+            )
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    class FakeFastMCP:
+        def __init__(self, *args, **kwargs):
+            self._mcp_server = FakeLowServer()
+
+        def tool(self):
+            def decorate(func):
+                registered_tools[func.__name__] = func
+                return func
+
+            return decorate
+
+        def resource(self, uri, **_kwargs):
+            return lambda func: func
+
+        def get_context(self):
+            return SimpleNamespace(session=object())
+
+        def streamable_http_app(self):
+            async def asgi_app(scope, receive, send):
+                del scope, receive, send
+
+            return asgi_app
+
+    fastmcp_module = ModuleType("mcp.server.fastmcp")
+    exceptions_module = ModuleType("mcp.server.fastmcp.exceptions")
+    fastmcp_module.FastMCP = FakeFastMCP
+    exceptions_module.ToolError = RuntimeError
+    monkeypatch.setitem(sys.modules, "mcp", ModuleType("mcp"))
+    monkeypatch.setitem(sys.modules, "mcp.server", ModuleType("mcp.server"))
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
+    create_app(
+        actor,
+        plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
+        mcp_admin_token=admin_token,
+    )
+    return registered_tools
+
+
+def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, scenario):
+    from bunnyland.core import ContainmentMode, Contains
+    from bunnyland.core.components import PortableComponent
+
+    world = scenario.actor.world
+    bun = spawn_entity(
+        world,
+        [IdentityComponent(name="steamed bun", kind="object"), PortableComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
+    )
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+
+    view = tools["character_view"](agent_id="a")
+    assert view["character_name"] == "Juniper"
+    command_types = {action["command_type"] for action in view["actions"]}
+    assert "move" in command_types
+    # The portable item resolves to a concrete entity id the agent can target.
+    reachable_ids = {target["id"] for target in view["target_groups"]["reachableItems"]}
+    assert str(bun.id) in reachable_ids
+    exit_ids = {target["id"] for target in view["target_groups"]["exits"]}
+    assert str(scenario.room_b) in exit_ids
+
+    with pytest.raises(RuntimeError, match="not controlling"):
+        tools["character_view"](agent_id="missing")
+
+
+def test_world_overview_admin_tool_is_gated_and_returns_room_network(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor, admin_token="secret")
+
+    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+        tools["world_overview_admin"](admin_token="wrong")
+
+    overview = tools["world_overview_admin"](admin_token="secret")
+    assert overview["room_count"] == 2
+    assert overview["character_count"] == 1
+    titles = {room["title"] for room in overview["rooms"]}
+    assert titles == {"Mosslit Burrow", "North Tunnel"}
+
+
+def test_room_view_and_component_schema_tools(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+
+    room = tools["room_view"](room_id=str(scenario.room_a))
+    assert room["room"]["title"] == "Mosslit Burrow"
+
+    with pytest.raises(RuntimeError, match="room does not exist"):
+        tools["room_view"](room_id="entity_does_not_exist")
+
+    schema = tools["component_schema"](types=["RoomComponent"])
+    assert set(schema["components"]) == {"RoomComponent"}
+    assert "title" in schema["components"]["RoomComponent"]["json_schema"]["properties"]
+    full = tools["component_schema"]()
+    assert "RoomComponent" in full["components"]
+    assert len(full["components"]) > 1
+
+
+def test_character_commands_reflects_queue(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+
+    asyncio.run(
+        tools["send_command"](
+            agent_id="a", command_type="move", payload={"direction": "north"}
+        )
+    )
+    pending = tools["character_commands"](agent_id="a")
+    assert [command["command_type"] for command in pending["commands"]] == ["move"]
+
+
+def test_send_command_returns_outcome_hint(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+
+    queued = asyncio.run(
+        tools["send_command"](
+            agent_id="a", command_type="move", payload={"direction": "north"}
+        )
+    )
+    assert queued["queued"] is True
+    assert "perceived_events" in queued["note"]
+
+
+def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+
+    asyncio.run(tools["send_command"](agent_id="a", command_type="use"))
+    asyncio.run(scenario.actor.tick(0.0))
+
+    first = tools["perceived_events"](agent_id="a")
+    assert first["ok"] is True
+    rejected = [
+        message["data"]["event"]
+        for message in first["events"]
+        if message["data"]["event_type"] == "CommandRejectedEvent"
+    ]
+    assert rejected and "use" in rejected[0]["reason"]
+    assert first["next_cursor"] > 0
+    # The watermark advances: re-polling from it yields nothing new.
+    second = tools["perceived_events"](agent_id="a", since=first["next_cursor"])
+    assert second["events"] == []
+    assert second["next_cursor"] == first["next_cursor"]
+
+
+async def test_perceived_for_agent_scopes_and_paginates(scenario):
+    from bunnyland.core.events import CommandRejectedEvent
+
+    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    bridge = mcp_server.MCPEventBridge(scenario.actor)
+    character_id = str(scenario.character)
+
+    def rejection(actor_id: str | None, room_id: str | None) -> CommandRejectedEvent:
+        return CommandRejectedEvent(
+            event_id=f"r{actor_id}{room_id}",
+            world_epoch=0,
+            created_at=datetime.now(UTC),
+            actor_id=actor_id,
+            room_id=room_id,
+            command_id="c",
+            command_type="use",
+            reason="no handler",
+        )
+
+    # caused by character, perceived in the character's room, and an unrelated event.
+    await bridge.record(rejection(character_id, None))
+    await bridge.record(rejection("someone-else", str(scenario.room_a)))
+    await bridge.record(rejection("someone-else", str(scenario.room_b)))
+
+    first = bridge.perceived_for_agent("a", limit=1)
+    assert len(first["events"]) == 1  # paginated: more remain
+    assert first["next_cursor"] == 1
+
+    rest = bridge.perceived_for_agent("a", since=first["next_cursor"])
+    actor_ids = {message["data"]["event"]["actor_id"] for message in rest["events"]}
+    assert actor_ids == {"someone-else"}  # only the same-room event, not room_b
+    assert rest["next_cursor"] == 3
+
+    assert bridge.perceived_for_agent("missing")["ok"] is False
+    bridge.close()

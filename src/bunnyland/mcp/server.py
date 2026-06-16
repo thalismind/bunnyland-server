@@ -31,7 +31,7 @@ from ..core import (
     spawn_entity,
 )
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
-from ..core.ecs import parse_entity_id
+from ..core.ecs import container_of, parse_entity_id
 from ..core.events import CharacterClaimedEvent, DomainEvent
 from ..plugins.builtin import MCP
 from ..prompts import PromptBuilder, render_prompt
@@ -44,7 +44,15 @@ from ..server.models import (
     WorldPatchRequest,
     WorldRoomGenerationRequest,
 )
-from ..server.serialization import event_message, serialize_world
+from ..server.schema import world_schema
+from ..server.serialization import (
+    event_message,
+    serialize_character_projection,
+    serialize_character_queued_commands,
+    serialize_room_projection,
+    serialize_world,
+    serialize_world_overview,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import-only typing aliases
     from ..core.world_actor import WorldActor
@@ -130,6 +138,7 @@ class MCPEventBridge:
         self.actor = actor
         self._recent: deque[dict[str, Any]] = deque(maxlen=recent_limit)
         self._subscriptions: dict[str, set[_SubscribedSession]] = {}
+        self._seq = 0
         actor.bus.subscribe(DomainEvent, self.record)
 
     def close(self) -> None:
@@ -151,6 +160,47 @@ class MCPEventBridge:
                 filtered.append(message)
         return filtered
 
+    def perceived_for_agent(
+        self, agent_id: str, *, since: int | None = None, limit: int = 50
+    ) -> dict[str, Any]:
+        """Return recent events the agent's character caused or perceived in its room.
+
+        ``since`` is a watermark cursor: only events recorded after it are returned. The
+        response carries ``next_cursor`` to pass as ``since`` on the next poll so streaming
+        gaps and missed notifications can be reconciled.
+        """
+
+        controlled = mcp_controlled_character(self.actor, agent_id)
+        if controlled is None:
+            return {"ok": False, "agent_id": agent_id, "events": [], "next_cursor": since or 0}
+        character_id = str(controlled[0])
+        room_id = container_of(self.actor.world.get_entity(controlled[0]))
+        room_key = str(room_id) if room_id is not None else None
+
+        def perceived(message: dict[str, Any]) -> bool:
+            event = message.get("data", {}).get("event", {})
+            if event.get("actor_id") == character_id:
+                return True
+            return room_key is not None and event.get("room_id") == room_key
+
+        matches = [
+            message
+            for message in self._recent
+            if (since is None or message.get("seq", 0) > since) and perceived(message)
+        ]
+        matches.sort(key=lambda message: message.get("seq", 0))
+        page = matches[: max(0, limit)] if limit else matches
+        if page and len(page) < len(matches):
+            next_cursor = page[-1].get("seq", self._seq)
+        else:
+            next_cursor = self._seq
+        return {
+            "ok": True,
+            "agent_id": agent_id,
+            "events": page,
+            "next_cursor": next_cursor,
+        }
+
     def subscribe(self, uri: str, session: Any) -> None:
         self._subscriptions.setdefault(uri, set()).add(_SubscribedSession(session))
 
@@ -164,6 +214,8 @@ class MCPEventBridge:
 
     async def record(self, event: DomainEvent) -> None:
         message = event_message(event)
+        self._seq += 1
+        message["seq"] = self._seq
         self._recent.append(message)
         await self._notify_changed_resources(message)
 
@@ -373,6 +425,7 @@ def render_mcp_agent_prompt(
         actor.world,
         fragment_providers=fragment_providers,
         persona_providers=persona_providers,
+        include_entity_ids=True,
     )
     context = builder.build(character_id, epoch=actor.epoch)
     return {
@@ -532,9 +585,26 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def world_snapshot() -> dict[str, Any]:
-        """Return the current serialized world snapshot."""
+        """Return the full raw ECS world snapshot (large; admin/debug and persistence).
+
+        This is the heavy dump of every entity and component. For normal use prefer the
+        scoped projections: ``character_view``/``room_view`` for a play-facing slice and
+        ``world_overview_admin`` for the room-network map.
+        """
 
         return serialize_world(actor, meta)
+
+    @mcp.tool()
+    def world_overview_admin(admin_token: str) -> dict[str, Any]:
+        """Return a slim, admin-only map of the whole room network (admin token required).
+
+        Rooms with ids, titles, exits, and occupant/item counts -- the privileged graph the
+        admin and web graph clients render. Withheld from players: seeing the full map would
+        be cheating. For a player's own view use ``character_view`` (their perceived room).
+        """
+
+        admin(admin_token)
+        return serialize_world_overview(actor).model_dump()
 
     @mcp.tool()
     def runtime_status() -> dict[str, Any]:
@@ -560,6 +630,86 @@ def create_bunnyland_mcp_app(
             )
         except RuntimeError as exc:
             raise ToolError(str(exc)) from exc
+
+    @mcp.tool()
+    def character_view(agent_id: str, character_id: str | None = None) -> dict[str, Any]:
+        """Return a structured, play-facing view for the agent's character.
+
+        Unlike ``agent_prompt`` (narrative text), this returns machine-readable data: the
+        room and its entities, inventory, action/focus points, and ``actions`` (each with
+        its ``command_type`` and argument schema) plus ``target_groups`` resolving every
+        targetable entity id. To act, pick an action and read the entity id for each
+        argument from ``target_groups[argument.target_group]``, then call ``send_command``.
+        """
+
+        try:
+            character, _controller, _generation = _controlled_or_requested_character(
+                actor, agent_id, character_id
+            )
+            return serialize_character_projection(actor, str(character)).model_dump()
+        except (RuntimeError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool()
+    def room_view(room_id: str) -> dict[str, Any]:
+        """Return a structured view of one room: entities, exits, and sprites."""
+
+        try:
+            return serialize_room_projection(actor, room_id).model_dump()
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool()
+    def character_commands(
+        agent_id: str, character_id: str | None = None
+    ) -> dict[str, Any]:
+        """Return the queued (not-yet-resolved) commands for the agent's character.
+
+        Commands resolve on later world ticks, so this reflects what is still pending.
+        """
+
+        try:
+            character, _controller, _generation = _controlled_or_requested_character(
+                actor, agent_id, character_id
+            )
+            return serialize_character_queued_commands(actor, str(character)).model_dump()
+        except (RuntimeError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool()
+    def component_schema(types: list[str] | None = None) -> dict[str, Any]:
+        """Return JSON schemas for ECS component types, so an agent can learn what the
+
+        components on perceived entities mean (e.g. ``FoodComponent``). Pass ``types`` to
+        filter to specific component names; omit it for the full set with live usage counts.
+        """
+
+        schema = world_schema(actor)
+        if types:
+            wanted = set(types)
+            components = {
+                name: item for name, item in schema.components.items() if name in wanted
+            }
+        else:
+            components = dict(schema.components)
+        return {
+            "ok": True,
+            "world_epoch": schema.world_epoch,
+            "components": {name: item.model_dump() for name, item in components.items()},
+        }
+
+    @mcp.tool()
+    def perceived_events(
+        agent_id: str, since: int | None = None, limit: int = 50
+    ) -> dict[str, Any]:
+        """Return recent events the agent's character caused or perceived in its room.
+
+        Use this to observe outcomes of semi-turn-based commands: a queued command's
+        execution or rejection (with reason) shows up here once it resolves. ``since`` is a
+        watermark cursor; pass back the returned ``next_cursor`` to fetch only newer events.
+        """
+
+        return event_bridge.perceived_for_agent(agent_id, since=since, limit=limit)
 
     @mcp.tool()
     async def claim_character(
@@ -657,6 +807,11 @@ def create_bunnyland_mcp_app(
             "command_id": command.command_id,
             "character_id": command.character_id,
             "command_type": command.command_type,
+            "note": (
+                "Queued only. Commands resolve on a later world tick and may still be "
+                "rejected. Observe the outcome via perceived_events (execution or "
+                "CommandRejectedEvent with a reason) or character_commands (still pending)."
+            ),
         }
 
     @mcp.tool()
