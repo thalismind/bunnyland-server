@@ -214,6 +214,10 @@ jobs:
           BUNNYLAND_SERVER_TAG: main
           BUNNYLAND_ENABLE_LLM: "0"
           BUNNYLAND_ENABLE_DISCORD: "0"
+          # Enable MCP with a throwaway token so nginx injects it and the smoke test can
+          # exercise the authenticated snapshot/stream, not just the unauthenticated gates.
+          BUNNYLAND_ENABLE_MCP: "1"
+          BUNNYLAND_ADMIN_TOKEN: ci-smoke-admin-token
           BUNNYLAND_FAVICON_FILE: ${{ runner.temp }}/bunnyland-favicon.png
         run: |
           printf 'favicon\n' > "$BUNNYLAND_FAVICON_FILE"
@@ -232,6 +236,8 @@ jobs:
           BUNNYLAND_DOMAIN: localhost
           BUNNYLAND_ADMIN_USER: editor
           BUNNYLAND_ADMIN_PASSWORD: local
+          # A token was configured above, so assert the authenticated snapshot/stream too.
+          BUNNYLAND_VERIFY_ADMIN_DATA: "1"
         run: |
           for attempt in {1..24}; do
             if curl -fsS -H 'Host: localhost' http://127.0.0.1:18080/api/health >/dev/null; then
