@@ -52,6 +52,7 @@ from .models import (
     WorldItemGenerationRequest,
     WorldItemGenerationResponse,
     WorldLibraryResponse,
+    WorldOverviewResponse,
     WorldPatchRequest,
     WorldPatchResponse,
     WorldRoomGenerationRequest,
@@ -68,6 +69,7 @@ from .serialization import (
     serialize_dm_projection,
     serialize_room_projection,
     serialize_world,
+    serialize_world_overview,
 )
 from .subscriptions import EventStream
 from .worldgen import (
@@ -212,6 +214,16 @@ def create_app(
             return serialize_dm_projection(actor, id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/world/overview", response_model=WorldOverviewResponse)
+    async def world_overview(
+        admin_token: str | None = Header(
+            default=None,
+            alias="X-Bunnyland-Admin-Token",
+        ),
+    ) -> WorldOverviewResponse:
+        _require_projection_admin(admin_token)
+        return serialize_world_overview(actor)
 
     @app.get("/world/schema", response_model=WorldSchemaResponse)
     async def get_world_schema() -> WorldSchemaResponse:

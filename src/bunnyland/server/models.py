@@ -176,6 +176,26 @@ class RoomProjectionResponse(BaseModel):
     room: RoomProjectionRoomView
 
 
+class WorldOverviewRoomView(BaseModel):
+    id: str
+    title: str = ""
+    biome: str = "unknown"
+    indoor: bool = False
+    private: bool = False
+    occupant_count: int = 0
+    item_count: int = 0
+    exits: list[ClientExitView] = Field(default_factory=list)
+
+
+class WorldOverviewResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    room_count: int = 0
+    character_count: int = 0
+    rooms: list[WorldOverviewRoomView] = Field(default_factory=list)
+
+
 class CharacterProjectionResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1

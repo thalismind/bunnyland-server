@@ -850,6 +850,40 @@ def test_fastapi_dm_projection_requires_permission_and_returns_typed_view(scenar
     assert "relationships" not in rendered
 
 
+def test_fastapi_world_overview_requires_permission_and_returns_room_network(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    world = scenario.actor.world
+    berry = spawn_entity(
+        world, [IdentityComponent(name="three berries", kind="item"), PortableComponent()]
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), berry.id
+    )
+    app = create_app(scenario.actor, mcp_admin_token="secret")
+    client = testclient.TestClient(app)
+
+    missing = client.get("/world/overview")
+    wrong = client.get("/world/overview", headers={"X-Bunnyland-Admin-Token": "wrong"})
+    allowed = client.get("/world/overview", headers={"X-Bunnyland-Admin-Token": "secret"})
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
+    assert allowed.status_code == 200
+    view = allowed.json()
+    assert view["room_count"] == 2
+    assert view["character_count"] == 1
+    rooms = {room["title"]: room for room in view["rooms"]}
+    assert set(rooms) == {"Mosslit Burrow", "North Tunnel"}
+    burrow = rooms["Mosslit Burrow"]
+    assert burrow["occupant_count"] == 1  # Juniper
+    assert burrow["item_count"] == 1  # three berries
+    assert {exit["direction"] for exit in burrow["exits"]} == {"north"}
+    # Slim map only -- no raw ECS components or relationships leak through.
+    rendered = json.dumps(view)
+    assert "components" not in rendered
+    assert "relationships" not in rendered
+
+
 def test_fastapi_dm_projection_uses_configured_admin_token_env(monkeypatch, scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     monkeypatch.setenv("BUNNYLAND_MCP_ADMIN_TOKEN", "env-secret")

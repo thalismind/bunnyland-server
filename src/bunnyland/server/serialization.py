@@ -59,6 +59,8 @@ from .models import (
     RoomProjectionEntityView,
     RoomProjectionResponse,
     RoomProjectionRoomView,
+    WorldOverviewResponse,
+    WorldOverviewRoomView,
 )
 
 
@@ -319,6 +321,56 @@ def serialize_room_projection(actor: WorldActor, room_id: str) -> RoomProjection
             ),
             exits=_room_exits(room),
         ),
+    )
+
+
+def _overview_room(actor: WorldActor, room) -> WorldOverviewRoomView:
+    room_component = room.get_component(RoomComponent)
+    occupant_count = 0
+    item_count = 0
+    for edge, child_id in room.get_relationships(Contains):
+        if not edge.visible or not actor.world.has_entity(child_id):
+            continue
+        child = actor.world.get_entity(child_id)
+        if _is_hidden(child):
+            continue
+        if child.has_component(CharacterComponent):
+            occupant_count += 1
+        elif child.has_component(PortableComponent):
+            item_count += 1
+    return WorldOverviewRoomView(
+        id=str(room.id),
+        title=room_component.title,
+        biome=room_component.biome,
+        indoor=room_component.indoor,
+        private=room_component.private,
+        occupant_count=occupant_count,
+        item_count=item_count,
+        exits=_room_exits(room),
+    )
+
+
+def serialize_world_overview(actor: WorldActor) -> WorldOverviewResponse:
+    """Return a slim, admin-only map of the whole world: the full room network.
+
+    Unlike ``serialize_world`` (a raw ECS dump) this exposes only the room graph -- ids,
+    titles, exits, and occupant/item counts -- so admin and graph clients can render the
+    network without the heavy snapshot. It is privileged: a regular player seeing every
+    room would be cheating, so callers must enforce a permission check first.
+    """
+
+    rooms = sorted(
+        actor.world.query().with_all([RoomComponent]).execute_entities(),
+        key=lambda room: room.get_component(RoomComponent).title.lower(),
+    )
+    character_count = len(
+        list(actor.world.query().with_all([CharacterComponent]).execute_entities())
+    )
+    return WorldOverviewResponse(
+        world_epoch=actor.epoch,
+        room_count=len(rooms),
+        character_count=character_count,
+        rooms=[_overview_room(actor, room) for room in rooms],
     )
 
 
