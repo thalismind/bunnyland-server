@@ -135,6 +135,23 @@ prompt_starter_pack() {
   done
 }
 
+prompt_discord_url() {
+  local label="$1"
+  local value
+  while true; do
+    value="$(prompt "$label")"
+    case "$value" in
+      "" | http://* | https://*)
+        printf '%s\n' "$value"
+        return
+        ;;
+      *)
+        printf 'Please enter an http(s) URL or leave blank.\n' >&2
+        ;;
+    esac
+  done
+}
+
 shell_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
@@ -224,6 +241,8 @@ favicon_file=""
 if confirm "Use a custom favicon?" "n"; then
   favicon_file="$(prompt_required "Custom favicon path")"
 fi
+# Community Discord invite shown in the web clients; independent of the Discord bot below.
+discord_url="$(prompt_discord_url "Community Discord invite URL shown in the web clients (blank to skip)")"
 home_domain="$(prompt "Homepage domain served by this frontend container (blank to skip)")"
 home_dir=""
 home_cert_name=""
@@ -307,6 +326,7 @@ fi
 if [[ -n "$cert_email" ]]; then write_env BUNNYLAND_CERT_EMAIL "$cert_email"; fi
 if [[ -n "$world_save" ]]; then write_env BUNNYLAND_WORLD_SAVE "$world_save"; fi
 if [[ -n "$favicon_file" ]]; then write_env BUNNYLAND_FAVICON_FILE "$favicon_file"; fi
+if [[ -n "$discord_url" ]]; then write_env BUNNYLAND_DISCORD_URL "$discord_url"; fi
 if [[ -n "$home_domain" ]]; then
   write_env BUNNYLAND_HOME_DOMAIN "$home_domain"
   write_env BUNNYLAND_HOME_CERT_NAME "$home_cert_name"
@@ -367,6 +387,7 @@ printf '  Let'\''s Encrypt email: %s\n' "${cert_email:-(none, registering withou
 printf '  Starter pack      : %s\n' "${starter_pack:-(none)}"
 if [[ -n "$world_save" ]]; then printf '  Existing world    : %s\n' "$world_save"; fi
 if [[ -n "$favicon_file" ]]; then printf '  Custom favicon    : %s\n' "$favicon_file"; fi
+if [[ -n "$discord_url" ]]; then printf '  Discord link      : %s\n' "$discord_url"; fi
 if [[ -n "$home_domain" ]]; then
   printf '  Homepage domain   : %s\n' "$home_domain"
   printf '  Homepage DNS check: %s\n' "$(dns_line "$home_domain")"

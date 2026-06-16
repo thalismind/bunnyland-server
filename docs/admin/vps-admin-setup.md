@@ -68,7 +68,8 @@ lets you choose Ollama or OpenRouter for world generation and character controll
 containers are present, it asks before removing those containers. It does not delete bind
 mounts or named volumes, and the lower-level setup script backs up the selected world save
 before starting containers. The wizard also prompts for an optional non-default Ollama or
-OpenRouter endpoint.
+OpenRouter endpoint, and for an optional community Discord invite URL to surface in the web
+clients (see `BUNNYLAND_DISCORD_URL` under Optional setup inputs).
 
 ```bash
 sudo apt-get update
