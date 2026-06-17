@@ -100,6 +100,26 @@ all optional extras; the TUI and REPL images inherit from it and change only the
 client entrypoint. The web repo publishes `ghcr.io/thalismind/bunnyland-web` with the same
 tag scheme.
 
+## Observability
+
+Bunnyland can export **OpenTelemetry traces and metrics** so you can watch a live world in
+Grafana/Tempo, Jaeger, or any OTLP backend. Distributed traces span the game tick → command
+dispatch → handler → LLM decision (plus auto-instrumented HTTP requests), alongside world
+metrics: entity/character/room counts, tick cadence, command accept/reject rates, handler and
+LLM-decision latency, and LLM token usage. It is **off by default** — install the `otel`
+extra and set `BUNNYLAND_OTEL_ENABLED`:
+
+```bash
+uv sync --extra otel
+BUNNYLAND_OTEL_ENABLED=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  uv run bunnyland serve --llm --ticks 0
+```
+
+The Compose stack ships an optional single-container [Grafana Tempo](https://grafana.com/oss/tempo/)
+backend (`compose.tempo.yml`). See
+[Observability](docs/admin/running-a-server.md#observability-opentelemetry) for the full
+metric/span reference and the Tempo setup.
+
 ## Documentation
 
 ### Player guides
