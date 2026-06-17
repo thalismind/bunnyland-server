@@ -1376,28 +1376,45 @@ async def test_dispatch_follows_live_world_replacement():
     # pick actable characters, but the builder captured the old world at construction, so
     # building a new-world character's prompt would dereference its id against the stale,
     # replaced world and crash the game loop. The builder must follow the swap.
-    original = build_scenario()
-    builder = PromptBuilder(original.actor.world)
-    dispatch = ControllerDispatch(original.actor, builder, ScriptedAgent([]))
+    from bunnyland.core import WorldActor
 
-    replacement = build_scenario()
-    assert replacement.actor.world is not original.actor.world
-    original.actor.world = replacement.actor.world
-    original.actor.bind_clock()
-    # Test worlds reuse deterministic per-world ids, so the new character's id happens to
-    # collide with one still present in the stale builder world. Remove it so the id is
-    # genuinely absent there, mirroring production where the regenerated world's fresh
-    # time-based ids do not exist in the replaced world.
-    builder.world.remove(replacement.character)
+    new = build_scenario()
+    # The builder holds a different (old) world that does not contain the live character,
+    # exactly as after a regeneration swaps actor.world for a brand-new World.
+    stale_world = WorldActor().world
+    assert not stale_world.has_entity(new.character)
+    builder = PromptBuilder(stale_world)
+    dispatch = ControllerDispatch(new.actor, builder, ScriptedAgent([]))
 
     decisions = await dispatch.run_once()
 
-    # The builder followed the swap and drove the new world's character (waits, here)
-    # instead of crashing on build against the stale world.
-    assert builder.world is replacement.actor.world
+    # The builder followed the swap and drove the live character (waits, here) instead of
+    # crashing on build against the stale world.
+    assert builder.world is new.actor.world
     assert len(decisions) == 1
-    assert decisions[0].character_id == str(replacement.character)
+    assert decisions[0].character_id == str(new.character)
     assert decisions[0].tool is None
+
+
+async def test_dispatch_skips_a_character_removed_during_build():
+    # A character can pass the has_entity guard and then be removed before its prompt is
+    # built (an in-place admin patch or player interaction at an await point). The per-
+    # character EntityNotFoundError guard must skip it instead of crashing the loop.
+    scenario = build_scenario()
+
+    class LosingBuilder(PromptBuilder):
+        def build(self, character_id, *, epoch=0):
+            self.world.remove(character_id)
+            return super().build(character_id, epoch=epoch)
+
+    dispatch = ControllerDispatch(
+        scenario.actor, LosingBuilder(scenario.actor.world), ScriptedAgent([])
+    )
+
+    decisions = await dispatch.run_once()
+
+    assert decisions == []
+    assert not scenario.actor.world.has_entity(scenario.character)
 
 
 async def test_dispatch_uses_controller_model_for_character_decision():
