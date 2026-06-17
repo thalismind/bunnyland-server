@@ -30,9 +30,12 @@ def _add(actor, room_id, components):
 
 
 def _augment(actor, entity_id, *components):
+    # Use replace_component so a demo's curated component overrides any the built-in
+    # enrichment hooks already added to this entity during instantiate() (e.g. a generic
+    # PointOfInterest on a 'ruin' room), rather than raw-adding a duplicate and crashing.
     entity = actor.world.get_entity(entity_id)
     for component in components:
-        entity.add_component(component)
+        replace_component(entity, component)
     return entity
 
 

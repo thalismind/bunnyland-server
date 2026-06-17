@@ -96,6 +96,7 @@ from bunnyland.mechanics.voidsim import (
     ShipComponent,
     ShipSystemComponent,
 )
+from bunnyland.plugins import apply_plugins
 from bunnyland.plugins.builtin import bunnyland_plugins
 from bunnyland.worldgen.examples import (
     BARBARIANSIM_DEMO,
@@ -230,6 +231,32 @@ async def test_demo_world_includes_its_hallmark_mechanic(demo):
     await demo.generate(actor, demo.name, GenOptions())
 
     assert _has(actor, HALLMARKS[demo.name])
+
+
+@pytest.mark.parametrize("demo", PACKAGE_DEMOS, ids=lambda d: d.name)
+async def test_demo_world_generates_with_enrichment_plugins(demo):
+    # On a running server the built-in enrichment hooks are subscribed and add components
+    # (e.g. a PointOfInterest to any 'ruin' room) during instantiate(). A demo's curated
+    # _augment components must override those rather than raw-adding a duplicate and
+    # crashing generation with DuplicateComponentError.
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+
+    await demo.generate(actor, demo.name, GenOptions())
+
+
+async def test_dragonsim_demo_curated_poi_wins_over_enrichment_hook():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+
+    world = await DRAGONSIM_DEMO.generate(actor, DRAGONSIM_DEMO.name, GenOptions())
+
+    # The enrichment hook tags the 'ruin' room as a generic POI during instantiate; the
+    # demo's curated barrow POI must take precedence instead of colliding.
+    ruin = actor.world.get_entity(world.rooms["ruin"])
+    poi = ruin.get_component(PointOfInterestComponent)
+    assert poi.location_type == "barrow"
+    assert poi.region == "Mistmoor"
 
 
 async def test_voidsim_demo_rooms_are_habitat_modules():
