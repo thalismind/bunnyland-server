@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from relics import Entity, EntityId, World
+from relics.errors import EntityNotFoundError
 
 from ..core.components import (
     ActionPointsComponent,
@@ -270,15 +271,23 @@ class ControllerDispatch:
 
     async def run_once(self) -> list[Decision]:
         self._tick += 1
+        # A live world regeneration (admin) swaps actor.world for a brand-new World object.
+        # The builder captured the old world at construction; repoint it at the current one
+        # so prompts are built against the live world rather than the replaced one.
+        self.builder.rebind(self.actor.world)
         decisions: list[Decision] = []
         for character_id in self._actable_characters():
             # The actable list is snapshotted before the per-character awaits below; a
-            # character can be despawned mid-loop (e.g. by another actor's tick during an
-            # agent decision) before we build its prompt. Skip any that have since vanished
-            # instead of dereferencing a missing entity and crashing the game loop.
+            # character can also be removed mid-loop by an in-place edit (admin patch or a
+            # player interaction) at an await point. Skip ones already gone, and guard the
+            # rest so a removal that races the prompt build/submit skips the character
+            # instead of crashing the game loop.
             if not self.actor.world.has_entity(character_id):
                 continue
-            decisions.append(await self._decide_for(character_id))
+            try:
+                decisions.append(await self._decide_for(character_id))
+            except EntityNotFoundError:
+                logger.debug("skipping character %s removed mid-dispatch", character_id)
         return decisions
 
     def _actable_characters(self) -> list[EntityId]:

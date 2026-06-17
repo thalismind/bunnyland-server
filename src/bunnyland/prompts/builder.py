@@ -107,6 +107,16 @@ class PromptBuilder:
         self.recall_budget_chars = max(0, recall_budget_chars)
         self.recall_line_chars = max(40, recall_line_chars)
 
+    def rebind(self, world: World) -> None:
+        """Point the builder at a replacement world (e.g. after a live regeneration that
+        swaps ``actor.world`` wholesale). The room-summary projection's observers are bound
+        to a specific world, so attach a fresh projection to the new one rather than leaving
+        stale observers on the discarded world."""
+        if world is self.world:
+            return
+        self.world = world
+        self.room_summary = RoomSummaryProjection(world).attach()
+
     def build(self, character_id: EntityId, *, epoch: int = 0) -> PromptContext:
         character = self.world.get_entity(character_id)
         identity = (
