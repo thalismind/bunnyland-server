@@ -272,6 +272,12 @@ class ControllerDispatch:
         self._tick += 1
         decisions: list[Decision] = []
         for character_id in self._actable_characters():
+            # The actable list is snapshotted before the per-character awaits below; a
+            # character can be despawned mid-loop (e.g. by another actor's tick during an
+            # agent decision) before we build its prompt. Skip any that have since vanished
+            # instead of dereferencing a missing entity and crashing the game loop.
+            if not self.actor.world.has_entity(character_id):
+                continue
             decisions.append(await self._decide_for(character_id))
         return decisions
 

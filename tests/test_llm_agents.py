@@ -1315,6 +1315,61 @@ async def test_dispatch_records_wait_when_agent_passes():
     assert scenario.actor._inbox.empty()
 
 
+async def test_dispatch_skips_a_character_despawned_mid_run():
+    from bunnyland.core import (
+        ActionPointsComponent,
+        FocusPointsComponent,
+        InitiativeComponent,
+        LLMControllerComponent,
+    )
+
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    # A second LLM-controlled, actable character sharing the room.
+    other = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Bramble", kind="character"),
+            CharacterComponent(species="bunny"),
+            ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=1.0),
+            FocusPointsComponent(current=3.0, maximum=3.0, regen_per_hour=0.5),
+            InitiativeComponent(score=1.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
+    )
+    other_controller = spawn_entity(
+        world, [LLMControllerComponent(profile_name="default", model="claude")]
+    )
+    scenario.actor.assign_controller(other.id, other_controller.id)
+
+    # Deciding for the first actable character despawns the second, mimicking an entity
+    # removed mid-loop (e.g. by another actor's tick) before its prompt is built.
+    class DespawningAgent:
+        def __init__(self) -> None:
+            self.decided: list[str] = []
+
+        def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+            del prompt, context, model, provider, tools
+            self.decided.append(character_id)
+            for cid in (scenario.character, other.id):
+                if str(cid) != character_id and world.has_entity(cid):
+                    world.remove(cid)
+            return None
+
+    agent = DespawningAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(world), agent)
+
+    # The despawned character is skipped rather than crashing the loop.
+    decisions = await dispatch.run_once()
+
+    assert len(agent.decided) == 1
+    assert len(decisions) == 1
+    assert decisions[0].character_id == agent.decided[0]
+
+
 async def test_dispatch_uses_controller_model_for_character_decision():
     scenario = build_scenario()
     agent = _RecordingAgent([])
