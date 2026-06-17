@@ -11,12 +11,13 @@ through the registry below.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 
 from ..prompts.builder import PromptContext
 from .agent import _command_available, _first_unlocked_exit
+from .specs import BehaviorNodeSpec, BehaviorTreeSpec
 from .tools import ToolCall
 
 #: A node yields its run status and, when it chose to act, the proposed tool call.
@@ -146,27 +147,28 @@ def _move_first_exit(context: PromptContext) -> ToolCall | None:
     return None
 
 
-def _greet_first_character(context: PromptContext) -> ToolCall | None:
+def _address_first_character(
+    context: PromptContext, *, text: str, intent: str, approach: str
+) -> ToolCall | None:
     if not context.visible_characters:
         return None
     if not _command_available(context, "say something to the room"):
         return None
     target = context.visible_characters[0]
     return ToolCall(
-        "say",
-        {"text": f"{target}, good to see you.", "intent": "praise", "approach": "friendly"},
+        "say", {"text": f"{target}, {text}", "intent": intent, "approach": approach}
+    )
+
+
+def _greet_first_character(context: PromptContext) -> ToolCall | None:
+    return _address_first_character(
+        context, text="good to see you.", intent="praise", approach="friendly"
     )
 
 
 def _warn_first_character(context: PromptContext) -> ToolCall | None:
-    if not context.visible_characters:
-        return None
-    if not _command_available(context, "say something to the room"):
-        return None
-    target = context.visible_characters[0]
-    return ToolCall(
-        "say",
-        {"text": f"{target}, keep your distance.", "intent": "threat", "approach": "cold"},
+    return _address_first_character(
+        context, text="keep your distance.", intent="threat", approach="cold"
     )
 
 
@@ -176,6 +178,10 @@ def _has_visible_objects(context: PromptContext) -> bool:
 
 def _has_visible_characters(context: PromptContext) -> bool:
     return bool(context.visible_characters)
+
+
+def _has_open_exit(context: PromptContext) -> bool:
+    return _first_unlocked_exit(context) is not None
 
 
 def _builtin_trees() -> dict[str, BehaviorTree]:
@@ -228,18 +234,155 @@ def behavior_tree_names() -> frozenset[str]:
     return frozenset(_REGISTRY)
 
 
+# -- named leaf library -------------------------------------------------------------------
+#
+# Data-driven trees cannot carry Python callables, so their condition/action leaves name an
+# entry in these libraries. Each entry is a factory that takes the leaf's JSON params and
+# returns the predicate/chooser the node will run. Built-in entries reuse the leaf functions
+# above so code-defined and data-defined trees behave identically.
+
+#: name -> factory(params) -> predicate(context) -> bool
+ConditionFactory = Callable[[Mapping[str, object]], Callable[[PromptContext], bool]]
+#: name -> factory(params) -> chooser(context) -> ToolCall | None
+ActionFactory = Callable[[Mapping[str, object]], Callable[[PromptContext], ToolCall | None]]
+
+
+def _str_param(params: Mapping[str, object], key: str, default: str) -> str:
+    value = params.get(key, default)
+    if not isinstance(value, str):
+        raise ValueError(f"parameter {key!r} must be a string")
+    return value
+
+
+def _say_action(params: Mapping[str, object]) -> Callable[[PromptContext], ToolCall | None]:
+    text = params.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("'say' action requires a non-empty 'text' parameter")
+    intent = _str_param(params, "intent", "praise")
+    approach = _str_param(params, "approach", "friendly")
+
+    def chooser(context: PromptContext) -> ToolCall | None:
+        if not _command_available(context, "say something to the room"):
+            return None
+        return ToolCall("say", {"text": text, "intent": intent, "approach": approach})
+
+    return chooser
+
+
+def _address_action(default_text: str, default_intent: str, default_approach: str) -> ActionFactory:
+    def factory(params: Mapping[str, object]) -> Callable[[PromptContext], ToolCall | None]:
+        text = _str_param(params, "text", default_text)
+        intent = _str_param(params, "intent", default_intent)
+        approach = _str_param(params, "approach", default_approach)
+        return lambda context: _address_first_character(
+            context, text=text, intent=intent, approach=approach
+        )
+
+    return factory
+
+
+CONDITION_LIBRARY: dict[str, ConditionFactory] = {
+    "has_visible_objects": lambda _params: _has_visible_objects,
+    "has_visible_characters": lambda _params: _has_visible_characters,
+    "has_open_exit": lambda _params: _has_open_exit,
+}
+
+ACTION_LIBRARY: dict[str, ActionFactory] = {
+    "take_first_item": lambda _params: _take_first_item,
+    "move_first_exit": lambda _params: _move_first_exit,
+    "greet_first_character": _address_action("good to see you.", "praise", "friendly"),
+    "warn_first_character": _address_action("keep your distance.", "threat", "cold"),
+    "say": _say_action,
+}
+
+
+def register_condition(name: str, factory: ConditionFactory) -> None:
+    """Register (or replace) a named condition factory for data-driven behavior trees."""
+    CONDITION_LIBRARY[name] = factory
+
+
+def register_action(name: str, factory: ActionFactory) -> None:
+    """Register (or replace) a named action factory for data-driven behavior trees."""
+    ACTION_LIBRARY[name] = factory
+
+
+def condition_library_names() -> frozenset[str]:
+    """Names of all registered condition factories."""
+    return frozenset(CONDITION_LIBRARY)
+
+
+def action_library_names() -> frozenset[str]:
+    """Names of all registered action factories."""
+    return frozenset(ACTION_LIBRARY)
+
+
+# -- compiling data into trees ------------------------------------------------------------
+
+
+def _compile_node(spec: BehaviorNodeSpec) -> Node:
+    if spec.kind in ("sequence", "selector"):
+        if spec.ref:
+            raise ValueError(f"{spec.kind!r} node must not set 'ref'")
+        children = tuple(_compile_node(child) for child in spec.children)
+        return Sequence(*children) if spec.kind == "sequence" else Selector(*children)
+
+    if spec.children:
+        raise ValueError(f"{spec.kind!r} leaf must not have children")
+    if not spec.ref:
+        raise ValueError(f"{spec.kind!r} leaf requires a 'ref'")
+
+    if spec.kind == "condition":
+        factory = CONDITION_LIBRARY.get(spec.ref)
+        if factory is None:
+            available = ", ".join(sorted(CONDITION_LIBRARY)) or "(none)"
+            raise ValueError(f"unknown condition {spec.ref!r}; available: {available}")
+        return Condition(factory(spec.params))
+
+    factory = ACTION_LIBRARY.get(spec.ref)
+    if factory is None:
+        available = ", ".join(sorted(ACTION_LIBRARY)) or "(none)"
+        raise ValueError(f"unknown action {spec.ref!r}; available: {available}")
+    return Action(factory(spec.params))
+
+
+def compile_behavior_tree(spec: BehaviorTreeSpec) -> BehaviorTree:
+    """Compile a ``BehaviorTreeSpec`` into a runnable ``BehaviorTree``.
+
+    Raises ``ValueError`` for an unknown condition/action ref, a misplaced ``ref``/children,
+    or invalid leaf parameters.
+    """
+    return BehaviorTree(spec.name, _compile_node(spec.root))
+
+
+def register_behavior_spec(spec: BehaviorTreeSpec) -> BehaviorTree:
+    """Compile and register a behavior tree from its spec; returns the compiled tree."""
+    tree = compile_behavior_tree(spec)
+    register_behavior_tree(tree)
+    return tree
+
+
 __all__ = [
+    "ACTION_LIBRARY",
     "BUILTIN_BEHAVIOR_TREES",
+    "CONDITION_LIBRARY",
     "Action",
+    "ActionFactory",
     "BehaviorTree",
     "BehaviorTreeAgent",
     "Condition",
+    "ConditionFactory",
     "Node",
     "Result",
     "Selector",
     "Sequence",
     "Status",
+    "action_library_names",
     "behavior_tree_names",
+    "compile_behavior_tree",
+    "condition_library_names",
+    "register_action",
+    "register_behavior_spec",
     "register_behavior_tree",
+    "register_condition",
     "resolve_behavior_tree",
 ]

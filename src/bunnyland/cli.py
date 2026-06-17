@@ -603,6 +603,7 @@ async def _run_api_runtime(
                 host=args.api_host,
                 port=args.api_port,
                 save_path=args.save,
+                definitions_path=args.controller_definitions,
                 worldgen_options=_worldgen_options(args, credentials, models),
                 plugins=plugins,
                 admin_token=args.admin_token
@@ -746,6 +747,12 @@ def main(argv: list[str] | None = None) -> int:
         help="persistent Chroma directory when --memory-backend=chroma",
     )
     serve.add_argument("--save", default=None, help="save the world to this path on exit")
+    serve.add_argument(
+        "--controller-definitions",
+        default=None,
+        help="JSON file storing editor-loaded scripted/behavioral controller definitions; "
+        "loaded on boot and updated when the script editor registers new ones",
+    )
     serve.add_argument(
         "--autosave-every", type=int, default=0, help="autosave every N ticks (needs --save)"
     )

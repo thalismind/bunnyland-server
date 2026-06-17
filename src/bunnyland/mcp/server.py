@@ -33,6 +33,7 @@ from ..core import (
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
 from ..core.ecs import container_of, parse_entity_id
 from ..core.events import CharacterClaimedEvent, DomainEvent
+from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..plugins.builtin import MCP
 from ..prompts import PromptBuilder, render_prompt
 from ..server.models import (
@@ -62,6 +63,7 @@ if TYPE_CHECKING:  # pragma: no cover - import-only typing aliases
     from ..persistence import WorldMeta
     from ..plugins.model import Plugin
     from ..server.models import (
+        ControllerDefinitionListResponse,
         WorldCharacterGenerationResponse,
         WorldEventGenerationResponse,
         WorldGenerateResponse,
@@ -481,6 +483,11 @@ def create_bunnyland_mcp_app(
     ],
     generate_item: Callable[[WorldItemGenerationRequest], WorldItemGenerationResponse],
     generate_event: Callable[[WorldEventGenerationRequest], WorldEventGenerationResponse],
+    register_script: Callable[[ScriptSpec], Awaitable[ControllerDefinitionListResponse]]
+    | None = None,
+    register_behavior: Callable[[BehaviorTreeSpec], Awaitable[ControllerDefinitionListResponse]]
+    | None = None,
+    list_controller_definitions: Callable[[], ControllerDefinitionListResponse] | None = None,
     fragment_providers: Sequence[Any] = (),
     persona_providers: Sequence[Any] = (),
     worldgen_options: GenOptions | None = None,
@@ -952,6 +959,69 @@ def create_bunnyland_mcp_app(
             response = await patch_world(
                 WorldPatchRequest.model_validate({"operations": operations})
             )
+        except Exception as exc:
+            raise ToolError(str(exc)) from exc
+        return response.model_dump(mode="json")
+
+    @mcp.tool()
+    def list_controller_definitions_admin(admin_token: str | None = None) -> dict[str, Any]:
+        """List registered scripts, behavior trees, and the authorable leaf library.
+
+        Requires the MCP admin token.
+        """
+
+        admin(admin_token)
+        if list_controller_definitions is None:
+            raise ToolError("controller definition editing is not configured")
+        return list_controller_definitions().model_dump(mode="json")
+
+    @mcp.tool()
+    async def register_script_admin(
+        name: str,
+        calls: list[dict[str, Any]],
+        description: str = "",
+        admin_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Register (or replace) a scripted-controller script and persist it.
+
+        ``calls`` is an ordered list of ``{"name": verb, "arguments": {...}}`` tool calls.
+        Requires the MCP admin token.
+        """
+
+        admin(admin_token)
+        if register_script is None:
+            raise ToolError("controller definition editing is not configured")
+        try:
+            spec = ScriptSpec.model_validate(
+                {"name": name, "description": description, "calls": calls}
+            )
+            response = await register_script(spec)
+        except Exception as exc:
+            raise ToolError(str(exc)) from exc
+        return response.model_dump(mode="json")
+
+    @mcp.tool()
+    async def register_behavior_admin(
+        name: str,
+        root: dict[str, Any],
+        description: str = "",
+        admin_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Register (or replace) a behavioral-controller behavior tree and persist it.
+
+        ``root`` is a node: ``{"kind": "sequence"|"selector"|"condition"|"action", ...}``.
+        Composite nodes carry ``children``; ``condition``/``action`` leaves name a library
+        entry via ``ref`` with optional ``params``. Requires the MCP admin token.
+        """
+
+        admin(admin_token)
+        if register_behavior is None:
+            raise ToolError("controller definition editing is not configured")
+        try:
+            spec = BehaviorTreeSpec.model_validate(
+                {"name": name, "description": description, "root": root}
+            )
+            response = await register_behavior(spec)
         except Exception as exc:
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")

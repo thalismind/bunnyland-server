@@ -83,3 +83,54 @@ the character simply waits rather than crashing the game loop.
 
 Like every controller, these can be swapped at runtime with the usual control verbs — control
 changes bump the `ControlledBy` generation so stale commands are rejected.
+
+## Loading definitions at runtime (the script editor)
+
+Scripts and behavior trees can be authored as **data** and loaded into the registries while
+the server runs — no code change or restart. The data models live in
+[`llm_agents/specs.py`](../../src/bunnyland/llm_agents/specs.py):
+
+- `ScriptSpec` — `{name, description, calls: [{name, arguments}]}`.
+- `BehaviorTreeSpec` — `{name, description, root: <node>}`, where a node is
+  `{kind: "sequence"|"selector"|"condition"|"action", ...}`. Composite nodes carry
+  `children`; `condition`/`action` leaves name a **library** entry via `ref` and pass it
+  `params`. Because trees can't carry code, leaves reference the fixed condition/action
+  library rather than arbitrary callables.
+
+Built-in leaf library:
+
+- Conditions: `has_visible_objects`, `has_visible_characters`, `has_open_exit`.
+- Actions: `take_first_item`, `move_first_exit`, `greet_first_character`,
+  `warn_first_character`, `say` (params: `text` (required), `intent`, `approach`).
+
+Extend the library from code with `register_condition(name, factory)` /
+`register_action(name, factory)`, where a factory takes the leaf's JSON params and returns the
+predicate/chooser.
+
+### Server admin API
+
+Start the server with `--controller-definitions <file.json>` to persist editor-loaded
+definitions; they are re-registered on boot. The admin routes (gated like `/admin/world`):
+
+- `GET /admin/controllers/definitions` — registered scripts/behaviors plus the authorable
+  `condition_library`/`action_library` and the persisted `stored` set.
+- `POST /admin/controllers/scripts` — body is a `ScriptSpec`.
+- `POST /admin/controllers/behaviors` — body is a `BehaviorTreeSpec`.
+
+Both POSTs validate (compile) the definition, register it into the live registries, persist it
+to the store file, and return the updated listing. An invalid definition (unknown `ref`,
+misplaced `ref`/`children`, bad params) returns `400`.
+
+### MCP admin tools
+
+The same actions are available over MCP: `list_controller_definitions_admin`,
+`register_script_admin(name, calls, description)`, and
+`register_behavior_admin(name, root, description)`. All require the MCP admin token.
+
+### Persistence
+
+`ControllerDefinitionStore` (a JSON file) holds the editor-loaded definitions. `load()`
+re-registers everything on boot and skips any single entry that fails to compile (logged), so
+one bad definition can't stop the server. Code-defined built-ins are not persisted — they are
+always present in the registries. A store without a path is ephemeral (registers but does not
+persist).

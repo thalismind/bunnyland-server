@@ -516,7 +516,27 @@ class WorldSchemaResponse(BaseModel):
     edges: dict[str, EcsTypeSchema] = Field(default_factory=dict)
 
 
+class StoredControllerDefinitions(BaseModel):
+    """Editor-loaded controller definitions persisted to the definition store."""
+
+    scripts: list[str] = Field(default_factory=list)
+    behaviors: list[str] = Field(default_factory=list)
+
+
+class ControllerDefinitionListResponse(BaseModel):
+    """All registered controller definitions plus the authorable leaf library."""
+
+    ok: bool = True
+    scripts: list[str] = Field(default_factory=list)
+    behaviors: list[str] = Field(default_factory=list)
+    condition_library: list[str] = Field(default_factory=list)
+    action_library: list[str] = Field(default_factory=list)
+    stored: StoredControllerDefinitions = Field(default_factory=StoredControllerDefinitions)
+
+
 __all__ = [
+    "ControllerDefinitionListResponse",
+    "StoredControllerDefinitions",
     "CommandCostRequest",
     "CommandRequest",
     "CommandResponse",

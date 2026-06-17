@@ -23,6 +23,14 @@ from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.controllers import ClaimTimeoutComponent
 from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
 from ..core.world_actor import WorldActor
+from ..llm_agents import (
+    ControllerDefinitionStore,
+    action_library_names,
+    behavior_tree_names,
+    condition_library_names,
+    script_names,
+)
+from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
 from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
@@ -34,10 +42,12 @@ from .models import (
     CharacterQueuedCommandsResponse,
     CommandRequest,
     CommandResponse,
+    ControllerDefinitionListResponse,
     DmProjectionResponse,
     HealthResponse,
     RecentEventsResponse,
     RoomProjectionResponse,
+    StoredControllerDefinitions,
     WebControllerClaimRequest,
     WebControllerClaimResponse,
     WebControllerFallbackRequest,
@@ -122,6 +132,7 @@ def create_app(
     *,
     loop: GameLoop | None = None,
     save_path: str | Path | None = None,
+    definitions_path: str | Path | None = None,
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
     admin_token: str | None = None,
@@ -162,6 +173,10 @@ def create_app(
     meta = meta or WorldMeta()
     generator_registry = collect_generators(plugins or ())
     generation_job = None
+    # Editor-loaded scripted/behavioral controller definitions: register any already on disk
+    # so a restarted server keeps the scripts and behavior trees the editor previously saved.
+    definition_store = ControllerDefinitionStore(definitions_path)
+    definition_store.load()
 
     def _git_hash() -> str:
         hash_value = os.environ.get(GIT_HASH_ENV, "").strip()
@@ -413,6 +428,33 @@ def create_app(
         )
         return response
 
+    def _controller_definitions_response() -> ControllerDefinitionListResponse:
+        return ControllerDefinitionListResponse(
+            scripts=sorted(script_names()),
+            behaviors=sorted(behavior_tree_names()),
+            condition_library=sorted(condition_library_names()),
+            action_library=sorted(action_library_names()),
+            stored=StoredControllerDefinitions(**definition_store.snapshot()),
+        )
+
+    async def _register_script_request(spec: ScriptSpec) -> ControllerDefinitionListResponse:
+        try:
+            async with actor._lock:
+                definition_store.add_script(spec)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _controller_definitions_response()
+
+    async def _register_behavior_request(
+        spec: BehaviorTreeSpec,
+    ) -> ControllerDefinitionListResponse:
+        try:
+            async with actor._lock:
+                definition_store.add_behavior(spec)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _controller_definitions_response()
+
     def _list_world_generators_response() -> WorldGeneratorListResponse:
         return WorldGeneratorListResponse(
             generators=[
@@ -561,6 +603,18 @@ def create_app(
     async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:
         return await _patch_world_request(request)
 
+    @app.get("/admin/controllers/definitions", response_model=ControllerDefinitionListResponse)
+    async def list_controller_definitions() -> ControllerDefinitionListResponse:
+        return _controller_definitions_response()
+
+    @app.post("/admin/controllers/scripts", response_model=ControllerDefinitionListResponse)
+    async def register_script(request: ScriptSpec) -> ControllerDefinitionListResponse:
+        return await _register_script_request(request)
+
+    @app.post("/admin/controllers/behaviors", response_model=ControllerDefinitionListResponse)
+    async def register_behavior(request: BehaviorTreeSpec) -> ControllerDefinitionListResponse:
+        return await _register_behavior_request(request)
+
     @app.get("/admin/world/generators", response_model=WorldGeneratorListResponse)
     async def list_world_generators() -> WorldGeneratorListResponse:
         return _list_world_generators_response()
@@ -641,6 +695,9 @@ def create_app(
             generate_character=_generate_character_request,
             generate_item=_generate_item_request,
             generate_event=_generate_event_request,
+            register_script=_register_script_request,
+            register_behavior=_register_behavior_request,
+            list_controller_definitions=_controller_definitions_response,
             fragment_providers=collect_prompt_fragments(plugins or ()),
             persona_providers=collect_persona_fragments(plugins or ()),
             worldgen_options=worldgen_options,

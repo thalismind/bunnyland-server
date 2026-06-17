@@ -16,10 +16,17 @@ from .agent import (
 from .behavior_tree import (
     BehaviorTree,
     BehaviorTreeAgent,
+    action_library_names,
     behavior_tree_names,
+    compile_behavior_tree,
+    condition_library_names,
+    register_action,
+    register_behavior_spec,
     register_behavior_tree,
+    register_condition,
     resolve_behavior_tree,
 )
+from .definition_store import ControllerDefinitionStore
 from .dispatch import (
     ControllerDispatch,
     Decision,
@@ -31,7 +38,14 @@ from .dispatch import (
     suggest_names,
 )
 from .natural_language import parse_natural_command
-from .scripts import register_script, resolve_script, script_names
+from .scripts import (
+    compile_script,
+    register_script,
+    register_script_spec,
+    resolve_script,
+    script_names,
+)
+from .specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
 from .tools import REFERENCE_ARG_KEYS, ToolCall, command_from_tool_call, tool_names, tool_schemas
 
 __all__ = [
@@ -40,26 +54,39 @@ __all__ = [
     "Agent",
     "BACKGROUND_PROFILES",
     "BackgroundProfile",
+    "BehaviorNodeSpec",
     "BehaviorProfileAgent",
     "BehaviorTree",
     "BehaviorTreeAgent",
+    "BehaviorTreeSpec",
     "CharacterAgent",
+    "ControllerDefinitionStore",
     "ControllerDispatch",
     "Decision",
     "GoalDirectedAgent",
     "OllamaAgent",
     "OpenRouterAgent",
     "ProviderRouterAgent",
+    "ScriptSpec",
     "ScriptedAgent",
     "ToolCall",
+    "ToolCallSpec",
+    "action_library_names",
     "behavior_tree_names",
     "command_from_tool_call",
+    "compile_behavior_tree",
+    "compile_script",
+    "condition_library_names",
     "did_you_mean",
     "name_candidates",
     "parse_natural_command",
     "persona_contradictions",
+    "register_action",
+    "register_behavior_spec",
     "register_behavior_tree",
+    "register_condition",
     "register_script",
+    "register_script_spec",
     "resolve_behavior_tree",
     "resolve_reference",
     "resolve_reference_args",

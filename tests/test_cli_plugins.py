@@ -53,6 +53,7 @@ def _serve_args(**overrides):
         "character_model": None,
         "claim_timeout_controller": None,
         "claim_timeout_seconds": 0,
+        "controller_definitions": None,
         "discord": False,
         "discord_allowed_channel_id": [],
         "discord_allowed_dm_user_id": [],

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from .specs import ScriptSpec
 from .tools import ToolCall
 
 BUILTIN_SCRIPTS: dict[str, tuple[ToolCall, ...]] = {
@@ -51,9 +52,23 @@ def script_names() -> frozenset[str]:
     return frozenset(_REGISTRY)
 
 
+def compile_script(spec: ScriptSpec) -> tuple[ToolCall, ...]:
+    """Compile a ``ScriptSpec`` into the tuple of tool calls a scripted controller replays."""
+    return tuple(call.to_tool_call() for call in spec.calls)
+
+
+def register_script_spec(spec: ScriptSpec) -> tuple[ToolCall, ...]:
+    """Compile and register a script from its spec; returns the compiled calls."""
+    calls = compile_script(spec)
+    register_script(spec.name, calls)
+    return calls
+
+
 __all__ = [
     "BUILTIN_SCRIPTS",
+    "compile_script",
     "register_script",
+    "register_script_spec",
     "resolve_script",
     "script_names",
 ]
