@@ -22,6 +22,7 @@ from dataclasses import dataclass, replace
 
 from relics import EntityId, World
 
+from .. import telemetry
 from .actions import ActionDefinition
 from .claim_timeout import record_claim_activity
 from .commands import Lane, OnInsufficientPoints, SubmittedCommand
@@ -187,15 +188,18 @@ class WorldActor:
 
     async def tick(self, game_delta_seconds: float) -> None:
         """Run one deterministic world tick (spec 5.6)."""
-        async with self._lock:
-            await self._ingest()
-            # Phases 2-4: advance clock, regen Action/Focus, run passive systems.
-            self.world.tick(game_delta_seconds)
-            # Phase 5: process queued commands in initiative order.
-            await self._process_commands()
-            # Phase 6: consequence systems (downed/death transitions, etc.).
-            await self._run_consequences()
-            await self._run_after_tick()
+        with telemetry.record_duration(telemetry.record_tick), telemetry.span(
+            "game.tick", {"tick.game_delta_seconds": game_delta_seconds}
+        ):
+            async with self._lock:
+                await self._ingest()
+                # Phases 2-4: advance clock, regen Action/Focus, run passive systems.
+                self.world.tick(game_delta_seconds)
+                # Phase 5: process queued commands in initiative order.
+                await self._process_commands()
+                # Phase 6: consequence systems (downed/death transitions, etc.).
+                await self._run_consequences()
+                await self._run_after_tick()
 
     async def _run_consequences(self) -> None:
         for consequence in self._consequences:
@@ -213,6 +217,7 @@ class WorldActor:
             command = self._inbox.get_nowait()
             self._record_controller_activity(command)
             self.queues.enqueue(command)
+            telemetry.record_command_submitted(command.command_type)
             await self._publish(
                 CommandSubmittedEvent(
                     **self._event_base(
@@ -277,7 +282,11 @@ class WorldActor:
             command = self.queues.peek(character_id, lane)
             if command is None:
                 return
-            outcome = await self._attempt(character_id, lane, command)
+            with telemetry.span(
+                "command.attempt",
+                {"command.type": command.command_type, "command.lane": lane.value},
+            ):
+                outcome = await self._attempt(character_id, lane, command)
             if outcome.stop_lane:
                 return
             if outcome.executed:
@@ -328,6 +337,7 @@ class WorldActor:
                     )
                 )
             )
+            telemetry.record_command_accepted(command.command_type)
             return _LaneOutcome(executed=True, stop_lane=False)
 
         # Stale controller generation (spec 7.3).
@@ -388,7 +398,11 @@ class WorldActor:
             self.queues.pop(character_id, lane)
             await self._reject(command, f"no handler accepted {command.command_type}")
             return _LaneOutcome(executed=False, stop_lane=False)
-        result = handler.execute(ctx, command)
+        with telemetry.record_duration(
+            telemetry.record_handler, {"command_type": command.command_type}
+        ), telemetry.span("handler.execute", {"command.type": command.command_type}) as hspan:
+            result = handler.execute(ctx, command)
+            hspan.set_attribute("handler.ok", result.ok)
         self.queues.pop(character_id, lane)
         if not result.ok:
             await self._reject(command, result.reason or "rejected by handler")
@@ -410,6 +424,7 @@ class WorldActor:
                 )
             )
         )
+        telemetry.record_command_accepted(command.command_type)
         for event in result.events:
             await self._publish(event)
         return _LaneOutcome(executed=True, stop_lane=False)
@@ -590,6 +605,7 @@ class WorldActor:
         await self.bus.publish(event)
 
     async def _reject(self, command: SubmittedCommand, reason: str) -> None:
+        telemetry.record_command_rejected(command.command_type, reason)
         await self._publish(
             CommandRejectedEvent(
                 **self._event_base(

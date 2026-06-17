@@ -14,6 +14,12 @@ chroma = ["chromadb>=0.5"]
 discord = ["discord.py>=2.4"]
 llm = ["ollama>=0.3", "openrouter>=0.9.1"]
 mcp = ["mcp>=1.10"]
+otel = [
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+]
 server = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 tui = ["textual>=0.60", "httpx>=0.27"]
 repl = ["textual>=0.60", "httpx>=0.27"]
@@ -47,6 +53,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "live_llm: optional live LLM integration tests; skipped unless BUNNYLAND_LIVE_LLM=1 and provider credentials are set",
+    "otel: telemetry tests; skipped unless the 'otel' extra (opentelemetry-sdk) is installed",
 ]
 
 [tool.coverage.run]

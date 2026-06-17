@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .. import telemetry
 from ..core.world_actor import WorldActor
 from ..engine import GameLoop
 from ..persistence import WorldMeta
@@ -49,6 +50,7 @@ async def run_loop_with_api(
         plugins=plugins,
         admin_token=admin_token,
     )
+    telemetry.instrument_fastapi(app)
     server = uvicorn.Server(
         uvicorn.Config(app, host=host, port=port, log_level="info")
     )

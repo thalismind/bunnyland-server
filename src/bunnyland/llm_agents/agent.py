@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Iterable
 from collections.abc import Mapping as MappingABC
 from typing import Literal, Protocol
 
+from .. import telemetry
 from ..prompts.builder import PromptContext
 from .tools import ToolCall, tool_schemas
 
@@ -29,6 +30,25 @@ DEFAULT_RETRY_DELAY_SECONDS = 1.0
 TRANSIENT_STATUS_CODES = frozenset({408, 409, 425, 429})
 
 logger = logging.getLogger("bunnyland.llm")
+
+
+def _ollama_token_usage(response: object) -> tuple[int, int]:
+    """Pull (prompt, completion) token counts from an Ollama chat response, defensively."""
+    if not isinstance(response, MappingABC):
+        return 0, 0
+    return int(response.get("prompt_eval_count", 0) or 0), int(
+        response.get("eval_count", 0) or 0
+    )
+
+
+def _openrouter_token_usage(response: object) -> tuple[int, int]:
+    """Pull (prompt, completion) token counts from an OpenRouter response, defensively."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0, 0
+    return int(getattr(usage, "prompt_tokens", 0) or 0), int(
+        getattr(usage, "completion_tokens", 0) or 0
+    )
 
 
 def normalize_model(model: str | None) -> str:
@@ -530,6 +550,10 @@ class OllamaAgent:
         )
         if response is None:
             return None
+        prompt_tokens, completion_tokens = _ollama_token_usage(response)
+        telemetry.record_llm_tokens(
+            "ollama", normalize_model(model or self._model), prompt_tokens, completion_tokens
+        )
         message = response["message"]
         tool_calls = message.get("tool_calls") or []
         history.append(user_message)
@@ -610,6 +634,10 @@ class OpenRouterAgent:
         )
         if response is None:
             return None
+        prompt_tokens, completion_tokens = _openrouter_token_usage(response)
+        telemetry.record_llm_tokens(
+            "openrouter", normalize_model(model or self._model), prompt_tokens, completion_tokens
+        )
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
         history.append(user_message)

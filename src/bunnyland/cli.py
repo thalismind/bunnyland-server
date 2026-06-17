@@ -18,6 +18,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import telemetry
 from .core.claim_timeout import CLAIM_TIMEOUT_DEFAULT_SECONDS, normalize_claim_timeout
 from .core.systems import ClaimTimeoutSystem
 from .core.world_actor import WorldActor
@@ -346,7 +347,11 @@ async def _load_or_generate_world(
             f"{models.worldgen_model!r}."
         )
     options = _worldgen_options(args, credentials, models)
-    result = await generator.generate(actor, args.seed, options)
+    worldgen_attrs = {"generator": generator.name, "llm": bool(args.llm)}
+    with telemetry.record_duration(
+        telemetry.record_worldgen, worldgen_attrs
+    ), telemetry.span("world.generate", worldgen_attrs):
+        result = await generator.generate(actor, args.seed, options)
     meta = WorldMeta(
         seed=args.seed,
         generator=generator.name,
@@ -621,6 +626,7 @@ async def _serve(args) -> None:
     _validate_serve_args(args)
     plugins, ordered_plugins = _load_serve_plugins(args)
     load_dotenv()
+    telemetry.init_telemetry()
     lifesim_natural_aging = _lifesim_natural_aging_setting(args)
     models = _serve_models(args)
     credentials = _serve_credentials(args)
@@ -632,6 +638,7 @@ async def _serve(args) -> None:
         credentials,
         models,
     )
+    telemetry.register_world_gauges(actor)
     _configure_actor_backends(actor, args, lifesim_natural_aging)
     agent = _build_serve_agent(args, credentials, models)
     autosave = _make_autosave(actor, args, meta)

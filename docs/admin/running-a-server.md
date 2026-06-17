@@ -209,3 +209,65 @@ bunnyland.dispatch character entity_..09 chose say {'text': 'Hello Juniper!', 'i
 
 Note that the logged tool calls show *resolved* entity ids — names the controller used
 (`"the marsh journal"`) have already been mapped to the entities they refer to.
+
+## Observability (OpenTelemetry)
+
+The engine can export **metrics about the world** and **traces about the actions agents
+run** over OpenTelemetry. It is **off by default** and a no-op unless you install the
+optional `otel` extra *and* set `BUNNYLAND_OTEL_ENABLED`:
+
+```bash
+uv sync --extra otel   # or: pip install 'bunnyland[otel]'
+
+BUNNYLAND_OTEL_ENABLED=1 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+uv run bunnyland serve --llm --ticks 0
+```
+
+The standard OTLP environment variables are honoured by the SDK directly:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` — collector address (e.g. an OpenTelemetry Collector,
+  Grafana Alloy, Tempo, or Jaeger OTLP endpoint).
+- `OTEL_EXPORTER_OTLP_PROTOCOL` — `grpc` (default) or `http/protobuf`.
+- `OTEL_EXPORTER_OTLP_HEADERS` — auth headers for a hosted collector.
+- `OTEL_SERVICE_NAME` — service name (defaults to `bunnyland`).
+
+When disabled, the per-tick and per-command hot paths cost a single boolean check, so it
+is safe to leave the instrumentation in place in production and flip the gate on as needed.
+
+**Metrics emitted** (attributes kept low-cardinality — no raw ids or free-text reasons):
+
+| Metric | Type | Attributes |
+|--------|------|------------|
+| `bunnyland.tick.duration` | histogram (s) | — |
+| `bunnyland.commands.submitted` / `.accepted` | counter | `command_type` |
+| `bunnyland.commands.rejected` | counter | `command_type`, `reject_reason` (bucketed) |
+| `bunnyland.command.handler.duration` | histogram (s) | `command_type` |
+| `bunnyland.llm.decision.duration` | histogram (s) | `provider`, `model` |
+| `bunnyland.llm.tokens.prompt` / `.completion` | counter | `provider`, `model` |
+| `bunnyland.world.entities` / `.characters` / `.rooms` | observable gauge | — |
+| `bunnyland.worldgen.duration` | histogram (s) | `generator`, `llm` |
+
+**Spans emitted:** `game.tick` → `command.attempt` → `handler.execute` for the world
+pipeline; `controller.run_once` → `agent.decide` (with `provider`, `model`, `agent.kind`,
+`decision.tool`) for controller decisions; `world.generate` at startup. With the server
+API running, incoming HTTP requests are also auto-instrumented as their own server spans.
+
+### Bundled Tempo backend (compose)
+
+For Docker/Compose deployments, [`compose.tempo.yml`](../../compose.tempo.yml) is an
+optional, off-by-default fragment that runs a single monolithic Grafana Tempo container,
+wires the server to export **traces** to it over OTLP (metrics stay off — Tempo is
+traces-only), and persists trace blocks to a small `tempo-data` volume:
+
+```bash
+docker compose -f compose.yml -f compose.tls.yml -f compose.tempo.yml up -d
+```
+
+Tempo publishes no host ports; it is reachable only on the compose network. Its query API
+is exposed for a remote Grafana through the **same** frontend nginx, behind the same
+`Bunnyland admin` Basic-auth realm as every other admin surface — so it requires the same
+admin password. Point a Grafana Tempo datasource at `https://<your-host>/tempo/` with those
+credentials. Trace retention defaults to 72h (tune `compactor.block_retention` in
+[`deploy/tempo/tempo.yaml`](../../deploy/tempo/tempo.yaml) to grow or shrink the volume).
+The published server image already includes the `otel` extra, so no rebuild is needed.

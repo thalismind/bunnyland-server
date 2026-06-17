@@ -320,3 +320,4 @@ observe it.
 | `chroma`   | ChromaDB vector memory store             | `uv sync --extra chroma`     |
 | `tui`      | the Textual terminal client (`bunnyland-tui`) | `uv sync --extra tui`   |
 | `repl`     | the Textual REPL client (`bunnyland-repl`), local or over HTTP | `uv sync --extra repl` |
+| `otel`     | OpenTelemetry metrics/traces export (off by default; set `BUNNYLAND_OTEL_ENABLED`) | `uv sync --extra otel` |

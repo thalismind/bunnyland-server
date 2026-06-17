@@ -19,6 +19,7 @@ from dataclasses import dataclass, replace
 from relics import Entity, EntityId, World
 from relics.errors import EntityNotFoundError
 
+from .. import telemetry
 from ..core.components import (
     ActionPointsComponent,
     CharacterComponent,
@@ -314,18 +315,19 @@ class ControllerDispatch:
         # so prompts are built against the live world rather than the replaced one.
         self.builder.rebind(self.actor.world)
         decisions: list[Decision] = []
-        for character_id in self._actable_characters():
-            # The actable list is snapshotted before the per-character awaits below; a
-            # character can also be removed mid-loop by an in-place edit (admin patch or a
-            # player interaction) at an await point. Skip ones already gone, and guard the
-            # rest so a removal that races the prompt build/submit skips the character
-            # instead of crashing the game loop.
-            if not self.actor.world.has_entity(character_id):
-                continue
-            try:
-                decisions.append(await self._decide_for(character_id))
-            except EntityNotFoundError:
-                logger.debug("skipping character %s removed mid-dispatch", character_id)
+        with telemetry.span("controller.run_once", {"dispatch.tick": self._tick}):
+            for character_id in self._actable_characters():
+                # The actable list is snapshotted before the per-character awaits below; a
+                # character can also be removed mid-loop by an in-place edit (admin patch or a
+                # player interaction) at an await point. Skip ones already gone, and guard the
+                # rest so a removal that races the prompt build/submit skips the character
+                # instead of crashing the game loop.
+                if not self.actor.world.has_entity(character_id):
+                    continue
+                try:
+                    decisions.append(await self._decide_for(character_id))
+                except EntityNotFoundError:
+                    logger.debug("skipping character %s removed mid-dispatch", character_id)
         return decisions
 
     def _actable_characters(self) -> list[EntityId]:
@@ -411,15 +413,25 @@ class ControllerDispatch:
         if pending is not None:
             context = replace(context, warnings=(*context.warnings, pending))
         prompt = render_prompt(context)
-        decision = agent.decide(
-            prompt,
-            context,
-            character_id=cid,
-            model=model,
-            provider=provider,
-            tools=tool_schemas(self.actor.action_definitions()),
-        )
-        call = await decision if inspect.isawaitable(decision) else decision
+        decision_attrs = {
+            "provider": provider or "local",
+            "model": model or "unknown",
+            "agent.kind": type(agent).__name__,
+        }
+        with telemetry.record_duration(
+            telemetry.record_llm_decision, decision_attrs
+        ), telemetry.span("agent.decide", decision_attrs) as dspan:
+            decision = agent.decide(
+                prompt,
+                context,
+                character_id=cid,
+                model=model,
+                provider=provider,
+                tools=tool_schemas(self.actor.action_definitions()),
+            )
+            call = await decision if inspect.isawaitable(decision) else decision
+            if call is not None:
+                dspan.set_attribute("decision.tool", call.name)
 
         if call is None:
             logger.info("character %s decided to wait", character_id)

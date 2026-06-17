@@ -1,0 +1,40 @@
+# Monolithic (single-binary) Grafana Tempo, used by compose.tempo.yml.
+#
+# Tempo is a traces-only backend: the bunnyland server exports spans here over OTLP and
+# leaves metrics off (OTEL_METRICS_EXPORTER=none). Storage is the local filesystem, backed
+# by the small `tempo-data` Docker volume. The compactor keeps a short retention so the
+# volume stays small; raise block_retention if you need a longer trace history.
+
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    # Short retention keeps the volume small for a sandbox/sidecar deployment.
+    block_retention: 72h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+usage_report:
+  reporting_enabled: false

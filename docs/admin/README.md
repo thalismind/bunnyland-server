@@ -241,3 +241,9 @@ ECS state continue through the normal command/event pipeline.
 `evaluate_narration_quality(scene, text)` provides a deterministic audit pass for rendered
 prose. It reports hidden-state leakage, contradictions of visible scene facts, omitted
 high-salience events, and voice drift before any human or model-based quality review.
+
+For external dashboards, the engine can also export OpenTelemetry metrics (world counts,
+tick cadence, command accept/reject rates, LLM token usage) and traces (tick → command →
+handler, controller → agent decision). It is off by default; see the
+[OpenTelemetry section](running-a-server.md#observability-opentelemetry) of the
+running-a-server guide for the `otel` extra and the `BUNNYLAND_OTEL_ENABLED` gate.
