@@ -304,8 +304,8 @@ observe it.
 | Web toon †                        | Playable  | | ✓ | | ✓ (sprites)     | | ✓ |
 | Discord bot                       | Playable  | ✓ ‡ | | | | ✓ | |
 | MCP endpoint                      | Playable  | | ✓ | ✓ | | | |
-| Terminal TUI (`bunnyland-tui`)    | Playable  | ✓ | ✓ | | | ✓ | ✓ |
-| Terminal REPL (`bunnyland-repl`)  | Playable  | ✓ | ✓ | | | ✓ | ✓ |
+| Terminal TUI (`uv run --all-extras bunnyland-tui`)   | Playable  | ✓ | ✓ | | | ✓ | ✓ |
+| Terminal REPL (`uv run --all-extras bunnyland-repl`) | Playable  | ✓ | ✓ | | | ✓ | ✓ |
 
 † Implemented in the frontend/web repo; capabilities summarized here.
 ‡ The Discord bot hosts the world in its own process.

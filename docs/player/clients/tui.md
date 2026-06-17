@@ -8,22 +8,22 @@ or connect to a running server over HTTP.
 
 ## Launch
 
-The TUI needs the `tui` extra (`uv sync --extra tui`). Host a local world:
+Host a local world:
 
 ```bash
-uv run -m bunnyland.tui            # or: bunnyland-tui
+uv run --all-extras bunnyland-tui
 ```
 
 Connect to a running server:
 
 ```bash
-bunnyland-tui --server http://localhost:8765
+uv run --all-extras bunnyland-tui --server http://localhost:8765
 ```
 
 List available demo worlds and generators:
 
 ```bash
-bunnyland-tui --list-generators
+uv run --all-extras bunnyland-tui --list-generators
 ```
 
 Useful local options include `--seed`, `--generator`, `--claim-fallback`, and
@@ -87,7 +87,7 @@ character's queue.
 ## Example session
 
 ```text
-$ bunnyland-tui --generator apartment-demo
+$ uv run --all-extras bunnyland-tui --generator apartment-demo
 ```
 
 1. Pick a character from the player menu.
