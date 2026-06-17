@@ -1298,6 +1298,79 @@ def test_search_actions_substring_vs_word_mode(monkeypatch, scenario):
         tools["search_actions"](query="move", mode="bogus")
 
 
+def test_search_actions_smart_mode_uses_chroma(monkeypatch, scenario):
+    import bunnyland.server.action_search as action_search
+
+    class _Handler:
+        def __init__(self, command_type: str) -> None:
+            self.command_type = command_type
+
+    for command_type in ("inspect", "say", "take"):
+        scenario.actor.register_handler(_Handler(command_type))
+
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.ids: list[str] = []
+            self.documents: list[str] = []
+            self.metadatas: list[dict] = []
+
+        def upsert(self, *, ids, documents, metadatas):
+            self.ids = list(ids)
+            self.documents = list(documents)
+            self.metadatas = list(metadatas)
+
+        def query(self, *, query_texts, n_results):
+            query_tokens = set(query_texts[0].lower().split())
+
+            def score(row):
+                id_, document = row
+                doc_tokens = set(document.lower().split())
+                return (len(query_tokens & doc_tokens), id_ == "move", id_)
+
+            ranked = sorted(
+                zip(self.ids, self.documents, strict=False), key=score, reverse=True
+            )
+            return {"ids": [[id_ for id_, _document in ranked[:n_results]]]}
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.collection = FakeCollection()
+
+        def get_or_create_collection(self, *, name, **kwargs):
+            assert name.startswith("bunnyland-action-verbs-")
+            assert kwargs["embedding_function"].name() == "bunnyland-action-search"
+            return self.collection
+
+    fake_client = FakeClient()
+    fake_chromadb = ModuleType("chromadb")
+    fake_chromadb.EphemeralClient = lambda: fake_client
+    monkeypatch.setitem(sys.modules, "chromadb", fake_chromadb)
+    monkeypatch.setattr(action_search, "_SMART_ACTION_INDEX", None)
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+
+    result = tools["search_actions"](query="walk north", mode="smart", limit=3)
+
+    assert result["query"] == "walk north"
+    assert result["mode"] == "smart"
+    assert result["returned"] == 3
+    assert result["actions"][0]["command_type"] == "move"
+    assert {"inspect", "move", "say", "take"}.issubset(set(fake_client.collection.ids))
+    assert len(fake_client.collection.documents) == result["total_available"]
+    action_search._SMART_ACTION_INDEX = None
+
+
+def test_search_actions_smart_mode_reports_missing_chroma(monkeypatch, scenario):
+    import bunnyland.server.action_search as action_search
+
+    monkeypatch.setitem(sys.modules, "chromadb", None)
+    monkeypatch.setattr(action_search, "_SMART_ACTION_INDEX", None)
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+
+    with pytest.raises(RuntimeError, match="smart action search requires"):
+        tools["search_actions"](query="walk north", mode="smart")
+    action_search._SMART_ACTION_INDEX = None
+
+
 def test_world_overview_admin_tool_is_gated_and_returns_room_network(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, admin_token="secret")
 

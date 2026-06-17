@@ -51,6 +51,7 @@ from ..mechanics.toonsim import (
 )
 from ..persistence import WorldMeta
 from ..projections import PerceivedEntity, build_room_facts, perceive
+from .action_search import smart_action_search
 from .models import (
     ActionSearchResponse,
     CharacterListResponse,
@@ -563,7 +564,7 @@ def _action_view(definition: ActionDefinition) -> ClientActionView:
     )
 
 
-ACTION_SEARCH_MODES = ("substring", "word")
+ACTION_SEARCH_MODES = ("substring", "word", "smart")
 
 # Word boundaries for "word" search: any run of non-alphanumeric characters (hyphen,
 # underscore, whitespace, and other punctuation) separates words.
@@ -596,10 +597,11 @@ def serialize_action_search(
     name over the actions this world actually accepts. Mirrors the ``actions`` field of the
     character projection, which the web client filters client-side instead.
 
-    ``mode`` is ``"substring"`` (default; matches anywhere, the TUI/Toon box behaviour) or
+    ``mode`` is ``"substring"`` (default; matches anywhere, the TUI/Toon box behaviour),
     ``"word"`` (matches only where a word -- split on hyphen, underscore, whitespace, and
-    other punctuation -- starts with the query, so ``"eat"`` no longer matches ``creature``
-    or ``defeat``).
+    other punctuation -- starts with the query, so ``"eat"`` no longer matches
+    ``creature`` or ``defeat``), or ``"smart"`` (uses a Chroma collection with the action
+    verbs and descriptions to rank the most relevant actions).
     """
 
     if mode not in ACTION_SEARCH_MODES:
@@ -615,7 +617,9 @@ def serialize_action_search(
         key=lambda definition: definition.command_type,
     )
     needle = (query or "").strip().lower()
-    if needle:
+    if needle and mode == "smart":
+        definitions = smart_action_search(definitions, query=query.strip())
+    elif needle:
         definitions = [
             definition
             for definition in definitions

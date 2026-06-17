@@ -719,16 +719,17 @@ def create_bunnyland_mcp_app(
         eligible entity ids). ``total_available`` reports how many matched before the
         ``limit``. Omit ``query`` to page the whole catalogue.
 
-        ``mode`` is ``"substring"`` (default; matches anywhere) or ``"word"`` (matches only
+        ``mode`` is ``"substring"`` (default; matches anywhere), ``"word"`` (matches only
         where a word -- split on hyphen, underscore, whitespace, and other punctuation --
-        starts with the query, so ``"eat"`` will not match ``creature`` or ``defeat``).
+        starts with the query, so ``"eat"`` will not match ``creature`` or ``defeat``), or
+        ``"smart"`` (uses a Chroma collection to rank the most relevant verbs).
         """
 
         try:
             return serialize_action_search(
                 actor, query=query, limit=limit, mode=mode
             ).model_dump()
-        except ValueError as exc:
+        except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()
