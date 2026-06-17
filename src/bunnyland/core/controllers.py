@@ -60,6 +60,38 @@ class LLMControllerComponent(Component):
 
 
 @dataclass(frozen=True)
+class BehaviorControllerComponent(Component):
+    """A deterministic behavior-tree controller (spec 7).
+
+    The engine proposes this character's actions by ticking a named behavior tree against
+    its prompt context every turn; no LLM call is made. ``behavior_name`` selects a tree
+    from the behavior-tree registry, so the component persists as just a string.
+    """
+
+    behavior_name: str = "idle"
+    #: Only let this controller act once every N dispatch ticks (>=1). Higher values make
+    #: the character take fewer turns, letting environmental systems run faster than it.
+    act_every_ticks: int = 1
+
+
+@dataclass(frozen=True)
+class ScriptedControllerComponent(Component):
+    """A scripted controller (spec 7).
+
+    The engine proposes this character's actions by replaying a named, fixed sequence of
+    tool calls turn by turn; no LLM call is made. ``script_name`` selects the sequence from
+    the script registry. When ``loop`` is set the sequence repeats; otherwise the character
+    waits once the script is exhausted.
+    """
+
+    script_name: str = ""
+    loop: bool = False
+    #: Only let this controller act once every N dispatch ticks (>=1). Higher values make
+    #: the character take fewer turns, letting environmental systems run faster than it.
+    act_every_ticks: int = 1
+
+
+@dataclass(frozen=True)
 class WebControllerComponent(Component):
     """A human at an interactive client (web room client, TUI). Submits commands directly;
     the engine never proposes actions for it the way it does for an LLM controller."""
@@ -76,10 +108,12 @@ class SuspendedControllerComponent(Component):
 
 
 __all__ = [
+    "BehaviorControllerComponent",
     "ClaimTimeoutComponent",
     "DiscordControllerComponent",
     "LLMControllerComponent",
     "MCPControllerComponent",
+    "ScriptedControllerComponent",
     "SuspendedControllerComponent",
     "WebControllerComponent",
 ]

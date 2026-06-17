@@ -13,7 +13,7 @@ import difflib
 import inspect
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from relics import Entity, EntityId, World
@@ -29,17 +29,34 @@ from ..core.components import (
     SleepingComponent,
     SuspendedComponent,
 )
-from ..core.controllers import LLMControllerComponent
+from ..core.controllers import (
+    BehaviorControllerComponent,
+    LLMControllerComponent,
+    ScriptedControllerComponent,
+)
 from ..core.ecs import container_of, contents, parse_entity_id, reachable_ids
 from ..core.edges import ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
 from ..prompts.builder import PromptBuilder, render_prompt
-from .agent import CharacterAgent
+from .agent import CharacterAgent, ScriptedAgent
+from .behavior_tree import BehaviorTree, BehaviorTreeAgent, resolve_behavior_tree
+from .scripts import resolve_script
 from .tools import (
     ToolCall,
     command_from_tool_call,
     reference_arg_keys,
     tool_schemas,
+)
+
+#: Controller components whose actions the engine proposes (as opposed to human/external
+#: controllers like Discord/web/MCP, or the suspended no-op controller).
+_AUTONOMOUS_COMPONENTS = (
+    LLMControllerComponent,
+    BehaviorControllerComponent,
+    ScriptedControllerComponent,
+)
+AutonomousController = (
+    LLMControllerComponent | BehaviorControllerComponent | ScriptedControllerComponent
 )
 
 logger = logging.getLogger("bunnyland.dispatch")
@@ -256,18 +273,39 @@ def persona_contradictions(context, call: ToolCall) -> tuple[str, ...]:
 
 
 class ControllerDispatch:
-    """Turns agent tool calls into submitted commands for LLM-controlled characters."""
+    """Turns agent tool calls into submitted commands for engine-driven characters.
 
-    def __init__(self, actor: WorldActor, builder: PromptBuilder, agent: CharacterAgent) -> None:
+    Drives every autonomous controller kind: ``llm`` (the injected ``agent``), ``behavioral``
+    (a behavior tree resolved by name), and ``scripted`` (a named tool-call sequence). Human
+    and external controllers (Discord/web/MCP) and the suspended no-op controller are left
+    alone — the engine never proposes actions for them.
+    """
+
+    def __init__(
+        self,
+        actor: WorldActor,
+        builder: PromptBuilder,
+        agent: CharacterAgent,
+        *,
+        behavior_resolver: Callable[[str], BehaviorTree] = resolve_behavior_tree,
+        script_resolver: Callable[[str], tuple[ToolCall, ...]] = resolve_script,
+    ) -> None:
         self.actor = actor
         self.builder = builder
         self.agent = agent
+        self._behavior_resolver = behavior_resolver
+        self._script_resolver = script_resolver
         # character_id -> a "did you mean..." note to surface on its next prompt, so an
         # agent that named something unreachable gets the same guidance a human does.
         self._feedback: dict[str, str] = {}
         # Counts dispatch turns so a controller can act only every N ticks (the world still
         # ticks every iteration; only the agent's decisions are throttled).
         self._tick = 0
+        # Behavior trees are stateless per tick, so cache one agent per tree name.
+        self._behavior_agents: dict[str, BehaviorTreeAgent] = {}
+        # Scripts advance across turns, so cache a replaying agent per character; rebuild it
+        # if the controller's script or loop setting changes. Keyed by character id.
+        self._scripted_agents: dict[str, tuple[str, bool, ScriptedAgent]] = {}
 
     async def run_once(self) -> list[Decision]:
         self._tick += 1
@@ -300,16 +338,13 @@ class ControllerDispatch:
         for entity in query.execute_entities():
             if not self._has_action_point(entity):
                 continue
-            controller = self._llm_controller(entity.id)
-            if controller is not None and self._acts_this_tick(controller[0]):
+            controller = self._autonomous_controller(entity.id)
+            if controller is None:
+                continue
+            interval = max(1, controller[2].act_every_ticks)
+            if self._tick % interval == 0:
                 actable.append(entity.id)
         return actable
-
-    def _acts_this_tick(self, controller_id: EntityId) -> bool:
-        """Whether the controller's act-every-N-ticks cadence lands on the current tick."""
-        controller = self.actor.world.get_entity(controller_id)
-        interval = max(1, controller.get_component(LLMControllerComponent).act_every_ticks)
-        return self._tick % interval == 0
 
     @staticmethod
     def _has_action_point(entity) -> bool:
@@ -317,37 +352,71 @@ class ControllerDispatch:
             return False
         return entity.get_component(ActionPointsComponent).current >= 1.0
 
-    def _llm_controller(
+    def _autonomous_controller(
         self, character_id: EntityId
-    ) -> tuple[EntityId, int, LLMControllerComponent] | None:
+    ) -> tuple[EntityId, int, AutonomousController] | None:
+        """The character's engine-driven controller: ``(id, generation, component)``."""
         character = self.actor.world.get_entity(character_id)
         for edge, controller_id in character.get_relationships(ControlledBy):
             controller = self.actor.world.get_entity(controller_id)
-            if controller.has_component(LLMControllerComponent):
-                return (
-                    controller_id,
-                    edge.generation,
-                    controller.get_component(LLMControllerComponent),
-                )
+            for component_type in _AUTONOMOUS_COMPONENTS:
+                if controller.has_component(component_type):
+                    component = controller.get_component(component_type)
+                    return (controller_id, edge.generation, component)
         return None
 
+    def _agent_for(
+        self, character_id: str, component: AutonomousController
+    ) -> tuple[CharacterAgent, str | None, str | None]:
+        """Resolve the agent (and model/provider) for a controller component.
+
+        Raises ``ValueError`` if a behavior/script name is not registered, so the caller can
+        skip the character for this turn rather than crash the dispatch loop.
+        """
+        if isinstance(component, LLMControllerComponent):
+            return self.agent, component.model, component.provider
+        if isinstance(component, BehaviorControllerComponent):
+            return self._behavior_agent(component.behavior_name), None, None
+        return self._scripted_agent(character_id, component.script_name, component.loop), None, None
+
+    def _behavior_agent(self, behavior_name: str) -> BehaviorTreeAgent:
+        agent = self._behavior_agents.get(behavior_name)
+        if agent is None:
+            agent = BehaviorTreeAgent(self._behavior_resolver(behavior_name))
+            self._behavior_agents[behavior_name] = agent
+        return agent
+
+    def _scripted_agent(self, character_id: str, script_name: str, loop: bool) -> ScriptedAgent:
+        cached = self._scripted_agents.get(character_id)
+        if cached is not None and cached[0] == script_name and cached[1] == loop:
+            return cached[2]
+        agent = ScriptedAgent(self._script_resolver(script_name), loop=loop)
+        self._scripted_agents[character_id] = (script_name, loop, agent)
+        return agent
+
     async def _decide_for(self, character_id: EntityId) -> Decision:
-        controller = self._llm_controller(character_id)
+        controller = self._autonomous_controller(character_id)
         assert controller is not None  # filtered in _actable_characters
         controller_id, generation, controller_component = controller
         cid = str(character_id)
+
+        try:
+            agent, model, provider = self._agent_for(cid, controller_component)
+        except ValueError as exc:
+            logger.warning("character %s has an unresolvable controller: %s", character_id, exc)
+            return Decision(cid, None, f"wait: {exc}")
 
         context = self.builder.build(character_id, epoch=self.actor.epoch)
         pending = self._feedback.pop(cid, None)
         if pending is not None:
             context = replace(context, warnings=(*context.warnings, pending))
         prompt = render_prompt(context)
-        decision = self.agent.decide(
+        decision = agent.decide(
             prompt,
             context,
             character_id=cid,
-            model=controller_component.model,
-            provider=controller_component.provider,
+            model=model,
+            provider=provider,
             tools=tool_schemas(self.actor.action_definitions()),
         )
         call = await decision if inspect.isawaitable(decision) else decision

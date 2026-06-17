@@ -493,9 +493,18 @@ Supported controller types:
 
 ```text
 Discord player controller
+Web player controller
+MCP agent controller
 LLM agent controller
+Behavioral (behavior-tree) controller
+Scripted controller
 Suspended/no-op controller
 ```
+
+Behavioral and scripted controllers are engine-driven like the LLM controller — the engine
+proposes their actions and validates them on the next tick — but they are deterministic and
+make no model call. A behavioral controller ticks a named behavior tree (resolved from a
+registry); a scripted controller replays a named sequence of tool calls, optionally looping.
 
 LLM controllers may vary by:
 

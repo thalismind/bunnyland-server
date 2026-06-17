@@ -83,10 +83,12 @@ from .components import (
     WritableComponent,
 )
 from .controllers import (
+    BehaviorControllerComponent,
     ClaimTimeoutComponent,
     DiscordControllerComponent,
     LLMControllerComponent,
     MCPControllerComponent,
+    ScriptedControllerComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
 )
@@ -189,6 +191,7 @@ __all__ = [
     "AffectDelta",
     "AffectVector",
     "AttentionComponent",
+    "BehaviorControllerComponent",
     "BleedingComponent",
     "BodyPlanComponent",
     "ButtonComponent",
@@ -283,6 +286,7 @@ __all__ = [
     "RoomSummaryComponent",
     "SayCommand",
     "SayHandler",
+    "ScriptedControllerComponent",
     "SleepHandler",
     "SleepingComponent",
     "StartConversationHandler",

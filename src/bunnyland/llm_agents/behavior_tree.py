@@ -1,0 +1,245 @@
+"""Compact behavior-tree controller (spec 7 / spec 25).
+
+A behavior tree is ticked once per dispatch turn against the character's ``PromptContext``
+and yields a single ``ToolCall`` (or ``None`` to wait). Nodes return ``SUCCESS`` or
+``FAILURE``; an ``Action`` node "succeeds" only when it produces a tool call. This stays
+deterministic and model-free, like ``GoalDirectedAgent`` and ``BehaviorProfileAgent``, but
+composes conditions and actions explicitly so background behaviour is easy to read and
+extend. Trees are referenced by name from a ``BehaviorControllerComponent`` and resolved
+through the registry below.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from enum import Enum
+
+from ..prompts.builder import PromptContext
+from .agent import _command_available, _first_unlocked_exit
+from .tools import ToolCall
+
+#: A node yields its run status and, when it chose to act, the proposed tool call.
+Result = tuple["Status", ToolCall | None]
+
+
+class Status(Enum):
+    """The outcome of ticking a behavior-tree node."""
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+
+class Node:
+    """Base class: tick the node against the current context and report a ``Result``."""
+
+    def tick(self, context: PromptContext) -> Result:  # pragma: no cover - abstract
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class Condition(Node):
+    """Succeeds (without acting) when its predicate holds, fails otherwise."""
+
+    predicate: Callable[[PromptContext], bool]
+
+    def tick(self, context: PromptContext) -> Result:
+        return (Status.SUCCESS, None) if self.predicate(context) else (Status.FAILURE, None)
+
+
+@dataclass(frozen=True)
+class Action(Node):
+    """Succeeds with a tool call when its chooser produces one; fails when it returns None."""
+
+    chooser: Callable[[PromptContext], ToolCall | None]
+
+    def tick(self, context: PromptContext) -> Result:
+        call = self.chooser(context)
+        return (Status.SUCCESS, call) if call is not None else (Status.FAILURE, None)
+
+
+class Sequence(Node):
+    """Runs children in order; fails if any child fails. Returns the first call produced.
+
+    Because a character takes at most one action per turn, the sequence stops at the first
+    child that yields a tool call. A sequence with no acting child fails so a parent
+    ``Selector`` can try the next branch.
+    """
+
+    def __init__(self, *children: Node) -> None:
+        self.children = children
+
+    def tick(self, context: PromptContext) -> Result:
+        for child in self.children:
+            status, call = child.tick(context)
+            if status is Status.FAILURE:
+                return (Status.FAILURE, None)
+            if call is not None:
+                return (Status.SUCCESS, call)
+        return (Status.FAILURE, None)
+
+
+class Selector(Node):
+    """Runs children in order; returns the first that succeeds. Fails if all fail."""
+
+    def __init__(self, *children: Node) -> None:
+        self.children = children
+
+    def tick(self, context: PromptContext) -> Result:
+        for child in self.children:
+            status, call = child.tick(context)
+            if status is Status.SUCCESS:
+                return (Status.SUCCESS, call)
+        return (Status.FAILURE, None)
+
+
+@dataclass(frozen=True)
+class BehaviorTree:
+    """A named behavior tree. ``decide`` ticks the root and returns its chosen call."""
+
+    name: str
+    root: Node
+
+    def decide(self, context: PromptContext) -> ToolCall | None:
+        _status, call = self.root.tick(context)
+        return call
+
+
+class BehaviorTreeAgent:
+    """Adapts a ``BehaviorTree`` to the ``CharacterAgent`` protocol."""
+
+    def __init__(self, tree: BehaviorTree) -> None:
+        self._tree = tree
+
+    @property
+    def tree(self) -> BehaviorTree:
+        return self._tree
+
+    def decide(
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> ToolCall | None | Awaitable[ToolCall | None]:
+        del prompt, character_id, model, provider, tools
+        return self._tree.decide(context)
+
+
+# -- leaf choosers ------------------------------------------------------------------------
+
+
+def _take_first_item(context: PromptContext) -> ToolCall | None:
+    for item in context.visible_objects:
+        if _command_available(context, f"take {item}"):
+            return ToolCall("take", {"item_id": item})
+    return None
+
+
+def _move_first_exit(context: PromptContext) -> ToolCall | None:
+    direction = _first_unlocked_exit(context)
+    if direction is not None and _command_available(context, f"move {direction}"):
+        return ToolCall("move", {"direction": direction})
+    return None
+
+
+def _greet_first_character(context: PromptContext) -> ToolCall | None:
+    if not context.visible_characters:
+        return None
+    if not _command_available(context, "say something to the room"):
+        return None
+    target = context.visible_characters[0]
+    return ToolCall(
+        "say",
+        {"text": f"{target}, good to see you.", "intent": "praise", "approach": "friendly"},
+    )
+
+
+def _warn_first_character(context: PromptContext) -> ToolCall | None:
+    if not context.visible_characters:
+        return None
+    if not _command_available(context, "say something to the room"):
+        return None
+    target = context.visible_characters[0]
+    return ToolCall(
+        "say",
+        {"text": f"{target}, keep your distance.", "intent": "threat", "approach": "cold"},
+    )
+
+
+def _has_visible_objects(context: PromptContext) -> bool:
+    return bool(context.visible_objects)
+
+
+def _has_visible_characters(context: PromptContext) -> bool:
+    return bool(context.visible_characters)
+
+
+def _builtin_trees() -> dict[str, BehaviorTree]:
+    return {
+        # Always waits: the no-op behaviour, useful as a safe default.
+        "idle": BehaviorTree("idle", Selector()),
+        # Grab anything carryable, otherwise drift through the first open exit.
+        "forager": BehaviorTree(
+            "forager",
+            Selector(
+                Sequence(Condition(_has_visible_objects), Action(_take_first_item)),
+                Action(_move_first_exit),
+            ),
+        ),
+        # Roam: take the first open exit each turn, otherwise wait.
+        "wanderer": BehaviorTree("wanderer", Selector(Action(_move_first_exit))),
+        # Greet visitors, otherwise hold position.
+        "greeter": BehaviorTree(
+            "greeter",
+            Selector(Sequence(Condition(_has_visible_characters), Action(_greet_first_character))),
+        ),
+        # Warn off visitors, otherwise hold position.
+        "guard": BehaviorTree(
+            "guard",
+            Selector(Sequence(Condition(_has_visible_characters), Action(_warn_first_character))),
+        ),
+    }
+
+
+BUILTIN_BEHAVIOR_TREES: dict[str, BehaviorTree] = _builtin_trees()
+_REGISTRY: dict[str, BehaviorTree] = dict(BUILTIN_BEHAVIOR_TREES)
+
+
+def register_behavior_tree(tree: BehaviorTree) -> None:
+    """Register (or replace) a named behavior tree so controllers can reference it."""
+    _REGISTRY[tree.name] = tree
+
+
+def resolve_behavior_tree(name: str) -> BehaviorTree:
+    """Return the named behavior tree, or raise ``ValueError`` if it is not registered."""
+    tree = _REGISTRY.get(name)
+    if tree is None:
+        available = ", ".join(sorted(_REGISTRY)) or "(none)"
+        raise ValueError(f"unknown behavior tree {name!r}; available: {available}")
+    return tree
+
+
+def behavior_tree_names() -> frozenset[str]:
+    """Names of all registered behavior trees."""
+    return frozenset(_REGISTRY)
+
+
+__all__ = [
+    "BUILTIN_BEHAVIOR_TREES",
+    "Action",
+    "BehaviorTree",
+    "BehaviorTreeAgent",
+    "Condition",
+    "Node",
+    "Result",
+    "Selector",
+    "Sequence",
+    "Status",
+    "behavior_tree_names",
+    "register_behavior_tree",
+    "resolve_behavior_tree",
+]

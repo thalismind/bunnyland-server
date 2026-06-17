@@ -13,8 +13,10 @@ from relics import Component, Entity, EntityId
 from ..core.commands import CommandCost, SubmittedCommand
 from ..core.components import IdentityComponent, RoomComponent
 from ..core.controllers import (
+    BehaviorControllerComponent,
     DiscordControllerComponent,
     LLMControllerComponent,
+    ScriptedControllerComponent,
     SuspendedControllerComponent,
 )
 from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_entity
@@ -349,6 +351,10 @@ class ScriptRuntime:
             return "discord"
         if controller.has_component(LLMControllerComponent):
             return "llm"
+        if controller.has_component(BehaviorControllerComponent):
+            return "behavioral"
+        if controller.has_component(ScriptedControllerComponent):
+            return "scripted"
         if controller.has_component(SuspendedControllerComponent):
             return "suspended"
         return "unknown"

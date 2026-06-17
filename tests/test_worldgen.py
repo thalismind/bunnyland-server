@@ -108,6 +108,73 @@ def test_validate_accepts_stub_proposal():
     assert validate_proposal(proposal) == []
 
 
+def _single_character_proposal(**character_kwargs) -> WorldProposal:
+    return WorldProposal(
+        seed="ctrl",
+        rooms=[RoomSpec(key="room", title="Room")],
+        characters=[CharacterSpec(key="c", name="C", room_key="room", **character_kwargs)],
+    )
+
+
+def test_validate_accepts_behavioral_and_scripted_controllers():
+    behavioral = _single_character_proposal(controller="behavioral", behavior_name="forager")
+    scripted = _single_character_proposal(controller="scripted", script_name="wait")
+    assert validate_proposal(behavioral) == []
+    assert validate_proposal(scripted) == []
+
+
+def test_validate_rejects_unknown_behavior_and_script_names():
+    behavioral = _single_character_proposal(controller="behavioral", behavior_name="nope")
+    scripted = _single_character_proposal(controller="scripted", script_name="nope")
+    assert "character 'c' has unknown behavior 'nope'" in validate_proposal(behavioral)
+    assert "character 'c' has unknown script 'nope'" in validate_proposal(scripted)
+
+
+async def test_instantiate_wires_behavioral_and_scripted_controllers():
+    from bunnyland.core.controllers import (
+        BehaviorControllerComponent,
+        ScriptedControllerComponent,
+    )
+
+    actor = WorldActor()
+    proposal = WorldProposal(
+        seed="ctrl",
+        rooms=[RoomSpec(key="room", title="Room")],
+        characters=[
+            CharacterSpec(
+                key="forager",
+                name="Forager",
+                room_key="room",
+                controller="behavioral",
+                behavior_name="forager",
+            ),
+            CharacterSpec(
+                key="patroller",
+                name="Patroller",
+                room_key="room",
+                controller="scripted",
+                script_name="patrol",
+                script_loop=True,
+            ),
+        ],
+    )
+
+    result = await instantiate(actor, proposal)
+    world = actor.world
+
+    forager = world.get_entity(result.characters["forager"])
+    patroller = world.get_entity(result.characters["patroller"])
+    assert not forager.has_component(SuspendedComponent)
+    assert not patroller.has_component(SuspendedComponent)
+
+    forager_controller = world.get_entity(list(forager.get_relationships(ControlledBy))[0][1])
+    patrol_controller = world.get_entity(list(patroller.get_relationships(ControlledBy))[0][1])
+    assert forager_controller.get_component(BehaviorControllerComponent).behavior_name == "forager"
+    scripted = patrol_controller.get_component(ScriptedControllerComponent)
+    assert scripted.script_name == "patrol"
+    assert scripted.loop is True
+
+
 def test_character_proposal_defaults_null_llm_fields():
     proposal = CharacterProposal.model_validate(
         {"name": "Moss", "controller": "llm", "llm_profile": None, "llm_model": None}

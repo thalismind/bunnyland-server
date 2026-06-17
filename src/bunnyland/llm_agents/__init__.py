@@ -13,6 +13,13 @@ from .agent import (
     ProviderRouterAgent,
     ScriptedAgent,
 )
+from .behavior_tree import (
+    BehaviorTree,
+    BehaviorTreeAgent,
+    behavior_tree_names,
+    register_behavior_tree,
+    resolve_behavior_tree,
+)
 from .dispatch import (
     ControllerDispatch,
     Decision,
@@ -24,6 +31,7 @@ from .dispatch import (
     suggest_names,
 )
 from .natural_language import parse_natural_command
+from .scripts import register_script, resolve_script, script_names
 from .tools import REFERENCE_ARG_KEYS, ToolCall, command_from_tool_call, tool_names, tool_schemas
 
 __all__ = [
@@ -33,6 +41,8 @@ __all__ = [
     "BACKGROUND_PROFILES",
     "BackgroundProfile",
     "BehaviorProfileAgent",
+    "BehaviorTree",
+    "BehaviorTreeAgent",
     "CharacterAgent",
     "ControllerDispatch",
     "Decision",
@@ -42,13 +52,19 @@ __all__ = [
     "ProviderRouterAgent",
     "ScriptedAgent",
     "ToolCall",
+    "behavior_tree_names",
     "command_from_tool_call",
     "did_you_mean",
     "name_candidates",
     "parse_natural_command",
     "persona_contradictions",
+    "register_behavior_tree",
+    "register_script",
+    "resolve_behavior_tree",
     "resolve_reference",
     "resolve_reference_args",
+    "resolve_script",
+    "script_names",
     "suggest_names",
     "tool_names",
     "tool_schemas",

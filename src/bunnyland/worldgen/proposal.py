@@ -156,10 +156,13 @@ class CharacterSpec(_GenerationIntentModel):
     name: str
     room_key: str
     species: str = "bunny"
-    controller: str = "suspended"  # llm | suspended
+    controller: str = "suspended"  # llm | suspended | behavioral | scripted
     llm_profile: str = "default"
     llm_model: str = DEFAULT_MODEL
     llm_provider: str = "ollama"
+    behavior_name: str = "idle"  # behavior-tree name when controller == "behavioral"
+    script_name: str = ""  # script name when controller == "scripted"
+    script_loop: bool = False  # replay the script in a loop when controller == "scripted"
     with_needs: bool = True
     with_memory: bool = True
     traits: tuple[str, ...] = ()
@@ -249,10 +252,13 @@ class CharacterProposal(_GenerationIntentModel):
 
     name: str
     species: str = "bunny"
-    controller: str = "suspended"  # llm | suspended
+    controller: str = "suspended"  # llm | suspended | behavioral | scripted
     llm_profile: str = "default"
     llm_model: str = DEFAULT_MODEL
     llm_provider: str = "ollama"
+    behavior_name: str = "idle"  # behavior-tree name when controller == "behavioral"
+    script_name: str = ""  # script name when controller == "scripted"
+    script_loop: bool = False  # replay the script in a loop when controller == "scripted"
     with_needs: bool = True
     with_memory: bool = True
     traits: tuple[str, ...] = ()

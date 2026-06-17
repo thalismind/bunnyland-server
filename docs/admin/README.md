@@ -11,6 +11,13 @@ A **character** is a persistent entity. Who acts for it is a separate, swappable
 - **MCP** (`MCPControllerComponent`) — an agentic MCP client drives it through the
   [MCP server](mcp-server.md). For workstation clients, see the
   [local coding-agent setup](mcp-local-agent.md).
+- **Behavioral** (`BehaviorControllerComponent`) — a deterministic, model-free controller
+  that ticks a named behavior tree (e.g. `forager`, `wanderer`, `guard`) against the
+  character's prompt context each turn. No LLM call is made. See the
+  [behavior & scripted controllers](../developer/controllers.md) developer guide.
+- **Scripted** (`ScriptedControllerComponent`) — replays a named, fixed sequence of tool
+  calls turn by turn, optionally looping. No LLM call is made. See the
+  [behavior & scripted controllers](../developer/controllers.md) developer guide.
 - **Suspended** (`SuspendedControllerComponent`) — a no-op. The character still regenerates
   and is affected by the world, but takes no actions. A freshly generated "claimable"
   character starts suspended.

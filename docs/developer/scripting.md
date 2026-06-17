@@ -161,8 +161,8 @@ Actions target entities with `EntityQuery`:
 ```
 
 Component names are Python class names. `controller_kind` matches the current controller
-behind the character's `ControlledBy` edge and can be `discord`, `llm`, `suspended`, or
-`unknown`.
+behind the character's `ControlledBy` edge and can be `discord`, `llm`, `behavioral`,
+`scripted`, `suspended`, or `unknown`.
 
 Fanout is explicit through `TargetSelector.mode`:
 

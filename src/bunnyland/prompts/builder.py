@@ -223,9 +223,11 @@ class PromptBuilder:
             del edge
             controller = self.world.get_entity(controller_id)
             from ..core.controllers import (
+                BehaviorControllerComponent,
                 DiscordControllerComponent,
                 LLMControllerComponent,
                 MCPControllerComponent,
+                ScriptedControllerComponent,
             )
 
             if controller.has_component(DiscordControllerComponent):
@@ -234,6 +236,10 @@ class PromptBuilder:
                 kind = "controlled by an agent"
             elif controller.has_component(MCPControllerComponent):
                 kind = "controlled by an MCP agent"
+            elif controller.has_component(BehaviorControllerComponent):
+                kind = "controlled by a behavior routine"
+            elif controller.has_component(ScriptedControllerComponent):
+                kind = "controlled by a scripted routine"
             else:
                 kind = "suspended"
             break

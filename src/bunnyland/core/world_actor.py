@@ -45,10 +45,12 @@ from .consequences import (
     PerceptionConsequence,
 )
 from .controllers import (
+    BehaviorControllerComponent,
     ClaimTimeoutComponent,
     DiscordControllerComponent,
     LLMControllerComponent,
     MCPControllerComponent,
+    ScriptedControllerComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
 )
@@ -527,6 +529,10 @@ class WorldActor:
             return "llm"
         if controller.has_component(MCPControllerComponent):
             return "mcp"
+        if controller.has_component(BehaviorControllerComponent):
+            return "behavioral"
+        if controller.has_component(ScriptedControllerComponent):
+            return "scripted"
         if controller.has_component(WebControllerComponent):
             return "web"
         if controller.has_component(SuspendedControllerComponent):

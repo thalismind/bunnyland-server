@@ -27,10 +27,12 @@ from .components import (
     WorldClockComponent,
 )
 from .controllers import (
+    BehaviorControllerComponent,
     ClaimTimeoutComponent,
     DiscordControllerComponent,
     LLMControllerComponent,
     MCPControllerComponent,
+    ScriptedControllerComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
 )
@@ -206,6 +208,10 @@ class ClaimTimeoutSystem:
             return "mcp"
         if controller.has_component(LLMControllerComponent):
             return "llm"
+        if controller.has_component(BehaviorControllerComponent):
+            return "behavioral"
+        if controller.has_component(ScriptedControllerComponent):
+            return "scripted"
         if controller.has_component(SuspendedControllerComponent):
             return "suspended"
         return "unknown"

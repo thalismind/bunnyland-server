@@ -59,10 +59,15 @@ class CharacterAgent(Protocol):
 
 
 class ScriptedAgent:
-    """Replays a fixed sequence of tool calls; yields ``None`` (wait) once exhausted."""
+    """Replays a fixed sequence of tool calls.
 
-    def __init__(self, calls: Iterable[ToolCall]) -> None:
+    Yields ``None`` (wait) once the sequence is exhausted, unless ``loop`` is set, in which
+    case it restarts from the beginning. An empty sequence always waits.
+    """
+
+    def __init__(self, calls: Iterable[ToolCall], *, loop: bool = False) -> None:
         self._calls = list(calls)
+        self._loop = loop
         self._index = 0
 
     def decide(
@@ -76,8 +81,12 @@ class ScriptedAgent:
         tools: list[dict] | None = None,
     ) -> ToolCall | None:
         del prompt, context, character_id, model, provider, tools
-        if self._index >= len(self._calls):
+        if not self._calls:
             return None
+        if self._index >= len(self._calls):
+            if not self._loop:
+                return None
+            self._index = 0
         call = self._calls[self._index]
         self._index += 1
         return call

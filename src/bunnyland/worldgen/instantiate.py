@@ -32,7 +32,11 @@ from ..core.components import (
     TemperatureComponent,
     WritableComponent,
 )
-from ..core.controllers import LLMControllerComponent
+from ..core.controllers import (
+    BehaviorControllerComponent,
+    LLMControllerComponent,
+    ScriptedControllerComponent,
+)
 from ..core.ecs import replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import (
@@ -41,6 +45,8 @@ from ..core.events import (
     RoomGeneratedEvent,
     WorldGeneratedEvent,
 )
+from ..llm_agents.behavior_tree import behavior_tree_names
+from ..llm_agents.scripts import script_names
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.meter import Meter
 from ..mechanics.needs import HungerComponent, ThirstComponent
@@ -84,8 +90,18 @@ def validate_proposal(proposal: WorldProposal) -> list[str]:
     for character in proposal.characters:
         if character.room_key not in room_keys:
             errors.append(f"character {character.key!r} in unknown room {character.room_key!r}")
-        if character.controller not in ("llm", "suspended"):
+        if character.controller not in ("llm", "suspended", "behavioral", "scripted"):
             errors.append(f"character {character.key!r} has invalid controller")
+        elif character.controller == "behavioral" and (
+            character.behavior_name not in behavior_tree_names()
+        ):
+            errors.append(
+                f"character {character.key!r} has unknown behavior {character.behavior_name!r}"
+            )
+        elif character.controller == "scripted" and character.script_name not in script_names():
+            errors.append(
+                f"character {character.key!r} has unknown script {character.script_name!r}"
+            )
     return errors
 
 
@@ -303,6 +319,17 @@ def _wire_controller(actor: WorldActor, character_id: EntityId, spec: CharacterS
                     provider=spec.llm_provider,
                 )
             ],
+        )
+        actor.assign_controller(character_id, controller.id)
+    elif spec.controller == "behavioral":
+        controller = spawn_entity(
+            actor.world, [BehaviorControllerComponent(behavior_name=spec.behavior_name)]
+        )
+        actor.assign_controller(character_id, controller.id)
+    elif spec.controller == "scripted":
+        controller = spawn_entity(
+            actor.world,
+            [ScriptedControllerComponent(script_name=spec.script_name, loop=spec.script_loop)],
         )
         actor.assign_controller(character_id, controller.id)
     else:  # suspended / claimable
