@@ -107,27 +107,12 @@ location /api/mcp/ {
     proxy_read_timeout 3600s;
 }
 
-# Grafana Tempo query API (optional; only reachable when compose.tempo.yml is running).
-# Shares the "Bunnyland admin" realm so a remote Grafana authenticates with the same admin
-# password as every other admin surface. The upstream is resolved at request time via
-# Docker's embedded DNS, so this block is harmless (502 on use) when the Tempo container is
-# not deployed. Point a Grafana Tempo datasource at https://<host>/tempo/ with the admin
-# Basic-auth credentials.
-location /tempo/ {
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-    resolver 127.0.0.11 valid=30s;
-    set $tempo_upstream tempo;
-    rewrite ^/tempo/(.*)$ /$1 break;
-    proxy_pass http://$tempo_upstream:3200;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 3600s;
-}
+# Optional Grafana Tempo query API. The /tempo/ location lives in tempo-location.inc, which
+# the compose.tempo.yml fragment mounts into the frontend only when Tempo is deployed; this
+# wildcard include is a harmless no-op otherwise (so nginx never tries to resolve the tempo
+# upstream when it is absent). It shares the "Bunnyland admin" Basic-auth realm, so a remote
+# Grafana authenticates with the same admin password.
+include /etc/nginx/conf.d/tempo-location.inc*;
 
 location /api/ {
     proxy_pass ${BUNNYLAND_API_UPSTREAM}/;

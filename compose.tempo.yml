@@ -6,10 +6,11 @@
 # It runs a single monolithic Grafana Tempo container, wires the server to export traces to
 # it over OTLP (metrics stay off -- Tempo is traces-only), and persists blocks to the small
 # `tempo-data` volume. Tempo publishes no host ports; it is reachable only on the compose
-# network. Its query API is exposed for a remote Grafana through the SAME frontend nginx,
-# behind the same "Bunnyland admin" Basic-auth realm (see deploy/nginx/api-locations.inc),
-# so it requires the same admin password as every other admin surface -- point a Grafana
-# Tempo datasource at https://<your-host>/tempo/ with those credentials.
+# network. Its query API is exposed for a remote Grafana through the SAME frontend nginx: this
+# fragment mounts deploy/nginx/tempo-location.inc, which adds a /tempo/ route behind the same
+# "Bunnyland admin" Basic-auth realm as every other admin surface, so it requires the same
+# admin password -- point a Grafana Tempo datasource at https://<your-host>/tempo/ with those
+# credentials. (Restart the frontend after recreating tempo so nginx picks up its new IP.)
 services:
   server:
     environment:
@@ -21,6 +22,12 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
     depends_on:
       - tempo
+
+  frontend:
+    depends_on:
+      - tempo
+    volumes:
+      - ./deploy/nginx/tempo-location.inc:/etc/nginx/templates/tempo-location.inc.template:ro
 
   tempo:
     image: grafana/tempo:${BUNNYLAND_TEMPO_TAG:-2.7.1}

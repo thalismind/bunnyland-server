@@ -265,9 +265,12 @@ docker compose -f compose.yml -f compose.tls.yml -f compose.tempo.yml up -d
 ```
 
 Tempo publishes no host ports; it is reachable only on the compose network. Its query API
-is exposed for a remote Grafana through the **same** frontend nginx, behind the same
-`Bunnyland admin` Basic-auth realm as every other admin surface — so it requires the same
+is exposed for a remote Grafana through the **same** frontend nginx (the fragment mounts
+`deploy/nginx/tempo-location.inc`, which adds a `/tempo/` route behind the same
+`Bunnyland admin` Basic-auth realm as every other admin surface) — so it requires the same
 admin password. Point a Grafana Tempo datasource at `https://<your-host>/tempo/` with those
-credentials. Trace retention defaults to 72h (tune `compactor.block_retention` in
+credentials. nginx resolves the `tempo` upstream by its compose DNS name and caches the IP
+at config load, so restart the `frontend` after recreating the `tempo` container. Trace
+retention defaults to 72h (tune `compactor.block_retention` in
 [`deploy/tempo/tempo.yaml`](../../deploy/tempo/tempo.yaml) to grow or shrink the volume).
 The published server image already includes the `otel` extra, so no rebuild is needed.
