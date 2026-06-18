@@ -185,7 +185,7 @@ artifact:
 !recover-magic amount=5
 !brew-potion recipe_id="blue tonic recipe"
 !identify target_id="star mirror"
-!use-artifact artifact_id="star mirror"
+!use item_id="star mirror"
 ```
 
 Spells can have cooldowns, and magic recovery respects the character's magic state.

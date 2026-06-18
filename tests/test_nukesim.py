@@ -313,7 +313,7 @@ def test_nukesim_parity_handlers_mutate_state_directly():
         ),
         (
             HarvestSampleHandler(),
-            "harvest-sample",
+            "harvest",
             {"sample_type": "glowing moss"},
             SampleHarvestedEvent,
         ),
@@ -518,7 +518,7 @@ def test_nukesim_parity_handlers_reject_invalid_targets_directly():
 
     result = HarvestSampleHandler().execute(
         ctx,
-        _handler_cmd(scenario, "harvest-sample", character_id="not-an-id"),
+        _handler_cmd(scenario, "harvest", character_id="not-an-id"),
     )
     assert result.ok is False
     assert result.reason == "invalid character id"

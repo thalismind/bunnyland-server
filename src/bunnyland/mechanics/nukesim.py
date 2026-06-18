@@ -1462,13 +1462,26 @@ class UseSuppressantHandler:
 
 
 class HarvestSampleHandler:
-    command_type = "harvest-sample"
+    command_type = "harvest"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        del ctx
+        if "sample_type" in command.payload:
+            return True
+        target_keys = {"creature_id", "soil_id", "target_id"}
+        if target_keys.intersection(command.payload):
+            return False
+        return "product_type" in command.payload or not command.payload
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        sample_type = str(command.payload.get("sample_type", "irradiated tissue")).strip()
+        sample_type = str(
+            command.payload.get("sample_type")
+            or command.payload.get("product_type")
+            or "irradiated tissue"
+        ).strip()
         from ..core.ecs import spawn_entity
 
         sample = spawn_entity(

@@ -582,9 +582,9 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     _definition(
         "harvest",
-        ("target_id", "product_type", "quantity"),
+        ("target_id", "product_type", "sample_type", "quantity"),
         tool_name="harvest",
-        patterns=("harvest {target_id}",),
+        patterns=("harvest {target_id}", "harvest sample {sample_type}"),
     ),
     _definition(
         "identify",
@@ -1191,7 +1191,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("learn-spell", ("spell_id",), tool_name="learn_spell"),
     _definition("cast-dragon-spell", ("spell_id",), tool_name="cast_dragon_spell"),
     _definition("brew-potion", ("recipe_id",), tool_name="brew_potion"),
-    _definition("use-artifact", ("artifact_id",), tool_name="use_artifact"),
     _definition("track-quest", ("quest_id",), tool_name="track_quest"),
     _definition("decline-quest", ("quest_id",), tool_name="decline_quest"),
     _definition(
@@ -1532,7 +1531,6 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="mark_hotspot",
     ),
     _definition("use-suppressant", ("item_id",), tool_name="use_suppressant"),
-    _definition("harvest-sample", ("sample_type",), tool_name="harvest_sample"),
     _definition("study-sample", ("sample_id",), tool_name="study_sample"),
     _definition(
         "study-wasteland-artifact",

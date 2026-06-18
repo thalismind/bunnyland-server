@@ -108,7 +108,7 @@ Mark a hotspot, use a suppressant, harvest a sample, and study it:
 ```text
 !mark-hotspot source_id="cracked isotope case" label="hot hallway"
 !use-suppressant item_id="rad foam"
-!harvest-sample sample_type="glowing moss"
+!harvest sample_type="glowing moss"
 !study-sample sample_id="glowing moss sample"
 ```
 
@@ -190,7 +190,7 @@ Brew chems and activate wasteland infrastructure:
 !scavenge site_id="pharmacy backroom cache"
 !scrap-item item_id="bent pressure cooker"
 !mark-hotspot source_id="cracked isotope case" label="hot hallway"
-!harvest-sample sample_type="glowing moss"
+!harvest sample_type="glowing moss"
 !decontaminate target_id="Mara" station_id="decon arch"
 !craft recipe_id=pipe-filter
 ```

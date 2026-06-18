@@ -2058,11 +2058,19 @@ class BrewPotionHandler:
 
 
 class UseArtifactHandler:
-    command_type = "use-artifact"
+    command_type = "use"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        if "artifact_id" in command.payload:
+            return True
+        artifact_id = _payload_entity_id(command, "artifact_id", "item_id", "target_id")
+        return artifact_id is not None and ctx.world.has_entity(artifact_id) and ctx.entity(
+            artifact_id
+        ).has_component(ArtifactComponent)
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        artifact_id = parse_entity_id(command.payload.get("artifact_id"))
+        artifact_id = _payload_entity_id(command, "artifact_id", "item_id", "target_id")
         if character_id is None or artifact_id is None:
             return rejected("invalid character or artifact id")
         if not ctx.world.has_entity(artifact_id):

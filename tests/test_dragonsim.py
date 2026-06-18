@@ -685,12 +685,12 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
         ),
         (
             UseArtifactHandler(),
-            _handler_cmd(scenario, "use-artifact", artifact_id=str(wrong_kind.id)),
+            _handler_cmd(scenario, "use", item_id=str(wrong_kind.id)),
             "target is not an artifact",
         ),
         (
             UseArtifactHandler(),
-            _handler_cmd(scenario, "use-artifact", artifact_id=str(empty_artifact.id)),
+            _handler_cmd(scenario, "use", item_id=str(empty_artifact.id)),
             "artifact has no charges",
         ),
         (
@@ -2115,7 +2115,7 @@ async def test_learn_cast_brew_and_use_fixed_adventure_magic():
     assert container_of(potion) == scenario.character
     assert container_of(herb) is None
 
-    await scenario.actor.submit(_cmd(scenario, "use-artifact", artifact_id=str(artifact.id)))
+    await scenario.actor.submit(_cmd(scenario, "use", item_id=str(artifact.id)))
     await scenario.actor.tick(HOUR)
     assert artifact.get_component(ArtifactComponent).charges == 1
     assert used[0].artifact_name == "Star Mirror"
