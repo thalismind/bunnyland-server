@@ -94,7 +94,7 @@ def test_persona_component_fragments_are_self_view_only():
 async def test_generated_characters_carry_their_persona():
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    result = await instantiate(actor, StubWorldBuilder().propose("a quiet marsh"))
+    result = await instantiate(actor, await StubWorldBuilder().propose("a quiet marsh"))
 
     hazel = actor.world.get_entity(result.characters["hazel"])
     assert hazel.has_component(TraitSetComponent)

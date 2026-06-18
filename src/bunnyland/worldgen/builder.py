@@ -13,7 +13,7 @@ from .proposal import CharacterSpec, ExitSpec, ObjectSpec, RoomSpec, WorldPropos
 
 
 class WorldBuilder(Protocol):
-    def propose(self, seed: str) -> WorldProposal: ...
+    async def propose(self, seed: str) -> WorldProposal: ...
 
 
 class StubWorldBuilder:
@@ -21,7 +21,7 @@ class StubWorldBuilder:
 
     system_prompt = ""  # deterministic; no LLM prompt
 
-    def propose(self, seed: str) -> WorldProposal:
+    async def propose(self, seed: str) -> WorldProposal:
         return WorldProposal(
             seed=seed,
             rooms=[

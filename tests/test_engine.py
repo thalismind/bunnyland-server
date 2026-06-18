@@ -15,7 +15,7 @@ from bunnyland.worldgen import StubWorldBuilder, instantiate
 async def test_game_loop_drives_an_llm_character_through_a_move():
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    result = await instantiate(actor, StubWorldBuilder().propose("seed"))
+    result = await instantiate(actor, await StubWorldBuilder().propose("seed"))
 
     builder = PromptBuilder(actor.world)
     agent = ScriptedAgent([ToolCall("move", {"direction": "north"})])
@@ -36,7 +36,7 @@ async def test_game_loop_drives_an_llm_character_through_a_move():
 async def test_game_loop_stops_when_asked():
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    await instantiate(actor, StubWorldBuilder().propose("seed"))
+    await instantiate(actor, await StubWorldBuilder().propose("seed"))
 
     builder = PromptBuilder(actor.world)
     loop = GameLoop(actor, None)  # dispatch set below so the agent can stop the loop

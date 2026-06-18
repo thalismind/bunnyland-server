@@ -1802,11 +1802,11 @@ def test_content_library_fragments_are_valid_world_patches(scenario):
         assert response.changed_entities
 
 
-def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, monkeypatch):
+async def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, monkeypatch):
     captured = {}
 
     class CapturingBuilder:
-        def propose_room(
+        async def propose_room(
             self,
             seed,
             *,
@@ -1818,22 +1818,22 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
             captured["room"] = schema_context
             return RoomNodeProposal(title="Schema Room")
 
-        def propose_contents(self, room, *, known_rooms, schema_context=""):
+        async def propose_contents(self, room, *, known_rooms, schema_context=""):
             del room, known_rooms
             captured["contents"] = schema_context
             return RoomContentsProposal()
 
-        def propose_doors(self, room, *, schema_context=""):
+        async def propose_doors(self, room, *, schema_context=""):
             del room
             captured["doors"] = schema_context
             return [DoorProposal(direction="north")]
 
-        def propose_character(self, room, *, prompt, known_rooms, schema_context=""):
+        async def propose_character(self, room, *, prompt, known_rooms, schema_context=""):
             del room, prompt, known_rooms
             captured["character"] = schema_context
             return CharacterProposal(name="Schema Bun")
 
-        def propose_item(
+        async def propose_item(
             self,
             *,
             container_name,
@@ -1846,7 +1846,7 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
             captured["item"] = schema_context
             return ItemProposal(name="schema bell")
 
-        def propose_event(self, room, *, prompt, known_rooms, schema_context=""):
+        async def propose_event(self, room, *, prompt, known_rooms, schema_context=""):
             del room, prompt, known_rooms
             captured["event"] = schema_context
             return StoryEventProposal(title="Schema Event")
@@ -1864,22 +1864,22 @@ def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scenario, m
         Contains(mode=ContainmentMode.ROOM_CONTENT), door.id
     )
 
-    generate_room_patch(
+    await generate_room_patch(
         scenario.actor,
         WorldRoomGenerationRequest(door_entity_id=str(door.id), direction="east"),
         options=GenOptions(llm=True),
     )
-    generate_character_patch(
+    await generate_character_patch(
         scenario.actor,
         WorldCharacterGenerationRequest(room_entity_id=str(scenario.room_a), prompt="bun"),
         options=GenOptions(llm=True),
     )
-    generate_item_patch(
+    await generate_item_patch(
         scenario.actor,
         WorldItemGenerationRequest(container_entity_id=str(scenario.room_a), prompt="bell"),
         options=GenOptions(llm=True),
     )
-    generate_event_patch(
+    await generate_event_patch(
         scenario.actor,
         WorldEventGenerationRequest(room_entity_id=str(scenario.room_a), prompt="rustle"),
         options=GenOptions(llm=True),
@@ -2371,7 +2371,7 @@ def test_world_patch_preflight_allows_pending_component_add_then_remove(scenario
     )
 
 
-def test_worldgen_room_patch_expands_selected_door(scenario):
+async def test_worldgen_room_patch_expands_selected_door(scenario):
     door = spawn_entity(
         scenario.actor.world,
         [
@@ -2383,7 +2383,7 @@ def test_worldgen_room_patch_expands_selected_door(scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), door.id
     )
 
-    generated = generate_room_patch(
+    generated = await generate_room_patch(
         scenario.actor,
         WorldRoomGenerationRequest(
             door_entity_id=str(door.id),
@@ -2476,8 +2476,8 @@ def test_worldgen_room_selection_rejects_non_room_entity(scenario):
         )
 
 
-def test_worldgen_character_patch_places_character_in_selected_room(scenario):
-    generated = generate_character_patch(
+async def test_worldgen_character_patch_places_character_in_selected_room(scenario):
+    generated = await generate_character_patch(
         scenario.actor,
         WorldCharacterGenerationRequest(
             room_entity_id=str(scenario.room_a),
@@ -2521,7 +2521,7 @@ def test_worldgen_character_response_can_assign_llm_controller(scenario):
     assert controller_op.components[0].fields["model"] == "local-model"
 
 
-def test_worldgen_item_patch_accepts_room_character_and_container_destinations(scenario):
+async def test_worldgen_item_patch_accepts_room_character_and_container_destinations(scenario):
     chest = spawn_entity(
         scenario.actor.world,
         [
@@ -2538,7 +2538,7 @@ def test_worldgen_item_patch_accepts_room_character_and_container_destinations(s
         (scenario.character, "a pocket map", ContainmentMode.INVENTORY),
         (chest.id, "a brass key", ContainmentMode.CONTAINER),
     ]:
-        generated = generate_item_patch(
+        generated = await generate_item_patch(
             scenario.actor,
             WorldItemGenerationRequest(
                 container_entity_id=str(container_id),
@@ -2605,8 +2605,8 @@ def test_worldgen_room_response_can_generate_locked_hidden_doors(scenario):
     assert exit_edge["locked"] is True
 
 
-def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
-    generated = generate_event_patch(
+async def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
+    generated = await generate_event_patch(
         scenario.actor,
         WorldEventGenerationRequest(
             room_entity_id=str(scenario.room_a),

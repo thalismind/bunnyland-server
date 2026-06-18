@@ -50,11 +50,12 @@ class OllamaWorldBuilder:
                 "OllamaWorldBuilder requires the 'llm' extra: pip install bunnyland[llm]"
             ) from exc
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
-        self._client = ollama.Client(host=host, headers=headers) if host else ollama.Client()
+        client_cls = ollama.AsyncClient
+        self._client = client_cls(host=host, headers=headers) if host else client_cls()
         self._model = model
 
-    def propose(self, seed: str) -> WorldProposal:  # pragma: no cover - needs network + extra
-        response = self._client.chat(
+    async def propose(self, seed: str) -> WorldProposal:  # pragma: no cover - needs network + extra
+        response = await self._client.chat(
             model=self._model,
             format="json",
             messages=[

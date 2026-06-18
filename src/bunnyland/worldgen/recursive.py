@@ -117,18 +117,18 @@ class RecursiveWorldGenerator:
     # -- phase 1-3: rooms -------------------------------------------------------------
 
     async def _build_rooms(self, seed: str) -> None:
-        root = self.builder.propose_room(seed, behind=None, known_rooms={})
+        root = await self.builder.propose_room(seed, behind=None, known_rooms={})
         async with self.actor._lock:
             root_key = self._spawn_room("room_0", root)
             await self._publish_room_generated(root_key, root)
         frontier: deque[tuple[str, DoorProposal]] = deque(
-            (root_key, door) for door in self.builder.propose_doors(root)
+            (root_key, door) for door in await self.builder.propose_doors(root)
         )
 
         counter = 1
         while frontier and len(self.result.rooms) < self.max_rooms:
             source_key, door = frontier.popleft()
-            spec = self.builder.propose_room(
+            spec = await self.builder.propose_room(
                 seed,
                 behind=door,
                 known_rooms=dict(self._room_titles),
@@ -138,7 +138,7 @@ class RecursiveWorldGenerator:
                 await self._publish_room_generated(new_key, spec)
                 counter += 1
                 self._connect(source_key, new_key, door)
-            doors = self.builder.propose_doors(spec)
+            doors = await self.builder.propose_doors(spec)
             frontier.extend((new_key, d) for d in doors)
 
         # Budget spent: close every remaining door.
@@ -149,7 +149,7 @@ class RecursiveWorldGenerator:
                 for key in self.result.rooms
                 if key != source_key and not self._connected(source_key, key)
             }
-            resolution = self.builder.resolve_dangling_door(
+            resolution = await self.builder.resolve_dangling_door(
                 door,
                 room=self._room_specs[source_key],
                 candidates=candidates,
@@ -270,7 +270,7 @@ class RecursiveWorldGenerator:
     async def _populate_rooms(self) -> None:
         char_counter = 0
         for room_key, room_id in list(self.result.rooms.items()):
-            contents = self.builder.propose_contents(
+            contents = await self.builder.propose_contents(
                 self._room_specs[room_key],
                 known_rooms=dict(self._room_titles),
             )
@@ -338,7 +338,7 @@ class RecursiveWorldGenerator:
                 character = entity.get_component(CharacterComponent)
                 name = identity.name
                 species = character.species
-            items = self.builder.propose_inventory(name=name, species=species)
+            items = await self.builder.propose_inventory(name=name, species=species)
             async with self.actor._lock:
                 for index, item in enumerate(items):
                     object_key = f"{key}_inv{index}"
@@ -358,7 +358,7 @@ class RecursiveWorldGenerator:
                 if not entity.has_component(ContainerComponent):
                     continue
                 name = entity.get_component(IdentityComponent).name
-            items = self.builder.propose_container_contents(name=name)
+            items = await self.builder.propose_container_contents(name=name)
             async with self.actor._lock:
                 for index, item in enumerate(items):
                     object_key = f"{key}_contains{index}"

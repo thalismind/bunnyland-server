@@ -59,7 +59,7 @@ async def _build_and_play():
     """A fully wired stub world after a couple of in-place actions (no movement)."""
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    result = await instantiate(actor, StubWorldBuilder().propose("a quiet marsh"))
+    result = await instantiate(actor, await StubWorldBuilder().propose("a quiet marsh"))
     # Hazel eats and takes the paper but stays in the burrow.
     agent = ScriptedAgent(
         [
@@ -133,7 +133,7 @@ async def test_reloaded_world_keeps_playing(tmp_path):
 async def test_offline_life_advances_reloaded_world_and_persists_changes(tmp_path):
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    result = await instantiate(actor, StubWorldBuilder().propose("a quiet marsh"))
+    result = await instantiate(actor, await StubWorldBuilder().propose("a quiet marsh"))
     hazel = result.characters["hazel"]
     path = tmp_path / "world.json"
     save_world(actor, path, meta=WorldMeta(seed="offline"))
@@ -151,7 +151,7 @@ async def test_offline_life_advances_reloaded_world_and_persists_changes(tmp_pat
 async def test_offline_life_is_bounded_by_max_ticks(tmp_path):
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    await instantiate(actor, StubWorldBuilder().propose("a quiet marsh"))
+    await instantiate(actor, await StubWorldBuilder().propose("a quiet marsh"))
 
     ticks = await advance_offline_life(actor, 24 * 3600.0, step_seconds=3600.0, max_ticks=3)
 
@@ -530,7 +530,7 @@ async def test_reload_starts_with_empty_command_queues(tmp_path):
 async def test_game_loop_autosaves_every_n_ticks(tmp_path):
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    await instantiate(actor, StubWorldBuilder().propose("seed"))
+    await instantiate(actor, await StubWorldBuilder().propose("seed"))
     path = tmp_path / "auto.json"
 
     saved_at: list[int] = []

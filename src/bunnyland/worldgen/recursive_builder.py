@@ -4,10 +4,15 @@ A ``WorldAgent`` proposes one piece at a time so the generator can grow the room
 breadth-first and then populate it. ``StubWorldAgent`` is deterministic (tests, offline
 dev); ``OllamaWorldAgent`` prompts the DM node-by-node and keeps a running conversation so
 earlier rooms are "remembered" when later pieces are generated.
+
+Every proposal method is a coroutine: LLM calls must not block the asyncio event loop the
+server runs on, so they go through async clients (or, where no async client exists, a
+worker thread).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from typing import Protocol
@@ -29,10 +34,11 @@ class WorldAgent(Protocol):
 
     The core proposal methods are room, doors, contents, character, and item proposals.
     The additional methods below cover the current recursive generator's graph-closing and
-    containment recursion phases.
+    containment recursion phases. Every method is async so implementations can issue LLM
+    calls without blocking the event loop.
     """
 
-    def propose_room(
+    async def propose_room(
         self,
         seed: str,
         *,
@@ -41,15 +47,15 @@ class WorldAgent(Protocol):
         schema_context: str = "",
     ) -> RoomNodeProposal: ...
 
-    def propose_doors(
+    async def propose_doors(
         self, room: RoomNodeProposal, *, schema_context: str = ""
     ) -> list[DoorProposal]: ...
 
-    def resolve_dangling_door(
+    async def resolve_dangling_door(
         self, door: DoorProposal, *, room: RoomNodeProposal, candidates: Mapping[str, str]
     ) -> DanglingResolution: ...
 
-    def propose_contents(
+    async def propose_contents(
         self,
         room: RoomNodeProposal,
         *,
@@ -57,7 +63,7 @@ class WorldAgent(Protocol):
         schema_context: str = "",
     ) -> RoomContentsProposal: ...
 
-    def propose_character(
+    async def propose_character(
         self,
         room: RoomNodeProposal,
         *,
@@ -66,7 +72,7 @@ class WorldAgent(Protocol):
         schema_context: str = "",
     ) -> CharacterProposal: ...
 
-    def propose_item(
+    async def propose_item(
         self,
         *,
         container_name: str,
@@ -76,7 +82,7 @@ class WorldAgent(Protocol):
         schema_context: str = "",
     ) -> ItemProposal: ...
 
-    def propose_event(
+    async def propose_event(
         self,
         room: RoomNodeProposal,
         *,
@@ -85,9 +91,9 @@ class WorldAgent(Protocol):
         schema_context: str = "",
     ) -> StoryEventProposal: ...
 
-    def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]: ...
+    async def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]: ...
 
-    def propose_container_contents(self, *, name: str) -> list[ItemProposal]: ...
+    async def propose_container_contents(self, *, name: str) -> list[ItemProposal]: ...
 
 
 class StubWorldAgent:
@@ -100,7 +106,7 @@ class StubWorldAgent:
     ROOT_TITLE = "Mosslit Burrow"
     system_prompt = ""  # deterministic; no LLM prompt
 
-    def propose_room(
+    async def propose_room(
         self,
         seed: str,
         *,
@@ -128,7 +134,7 @@ class StubWorldAgent:
             description=f"a {title.lower()}",
         )
 
-    def propose_doors(
+    async def propose_doors(
         self, room: RoomNodeProposal, *, schema_context: str = ""
     ) -> list[DoorProposal]:
         del schema_context
@@ -143,7 +149,7 @@ class StubWorldAgent:
             return [DoorProposal(direction="side", beyond_hint="Side Cave")]
         return []  # other rooms are dead-ends
 
-    def resolve_dangling_door(
+    async def resolve_dangling_door(
         self, door: DoorProposal, *, room: RoomNodeProposal, candidates: Mapping[str, str]
     ) -> DanglingResolution:
         del room
@@ -156,7 +162,7 @@ class StubWorldAgent:
             return DanglingResolution(action="drop")
         return DanglingResolution(action="link", target_room_key=target)
 
-    def propose_contents(
+    async def propose_contents(
         self,
         room: RoomNodeProposal,
         *,
@@ -185,7 +191,7 @@ class StubWorldAgent:
             )
         return RoomContentsProposal(objects=[ItemProposal(name="a smooth pebble")])
 
-    def propose_character(
+    async def propose_character(
         self,
         room: RoomNodeProposal,
         *,
@@ -196,7 +202,7 @@ class StubWorldAgent:
         del room, known_rooms, schema_context
         return CharacterProposal(name=prompt or "Mossy Visitor", controller="suspended")
 
-    def propose_item(
+    async def propose_item(
         self,
         *,
         container_name: str,
@@ -208,7 +214,7 @@ class StubWorldAgent:
         del container_name, container_kind, known_rooms, schema_context
         return ItemProposal(name=prompt or "a smooth pebble")
 
-    def propose_event(
+    async def propose_event(
         self,
         room: RoomNodeProposal,
         *,
@@ -229,13 +235,13 @@ class StubWorldAgent:
             objects=[ItemProposal(name="a dropped clue", kind="item")],
         )
 
-    def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]:
+    async def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]:
         del species
         if name == "Hazel":
             return [ItemProposal(name="a hazel twig")]
         return []
 
-    def propose_container_contents(self, *, name: str) -> list[ItemProposal]:
+    async def propose_container_contents(self, *, name: str) -> list[ItemProposal]:
         if "chest" in name:
             return [ItemProposal(name="a shiny ruby")]
         return []
@@ -251,7 +257,8 @@ _SYSTEM_PROMPT = (
 class OllamaWorldAgent:
     """Prompts Ollama node-by-node, keeping the conversation so earlier rooms are remembered.
 
-    ``ollama`` is imported lazily; requires the ``llm`` extra.
+    ``ollama`` is imported lazily; requires the ``llm`` extra. Uses ``ollama.AsyncClient`` so
+    the per-node ``chat`` calls await on the event loop instead of blocking it.
     """
 
     #: The literal DM system prompt this builder seeds the conversation with.
@@ -271,13 +278,14 @@ class OllamaWorldAgent:
                 "OllamaWorldAgent requires the 'llm' extra: pip install bunnyland[llm]"
             ) from exc
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
-        self._client = ollama.Client(host=host, headers=headers) if host else ollama.Client()
+        client_cls = ollama.AsyncClient
+        self._client = client_cls(host=host, headers=headers) if host else client_cls()
         self._model = model
         self._history: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
 
-    def _ask(self, instruction: str) -> dict:
+    async def _ask(self, instruction: str) -> dict:
         self._history.append({"role": "user", "content": instruction})
-        response = self._client.chat(
+        response = await self._client.chat(
             model=self._model, format="json", messages=self._history
         )
         message = response["message"]
@@ -294,7 +302,7 @@ class OllamaWorldAgent:
             "details, but still reply ONLY with the requested JSON shape."
         )
 
-    def propose_room(
+    async def propose_room(
         self,
         seed: str,
         *,
@@ -315,10 +323,10 @@ class OllamaWorldAgent:
                 "Describe it as JSON with keys title, biome, indoor, light, celsius, description."
             )
         return RoomNodeProposal.model_validate(
-            self._ask(self._with_schema_context(instruction, schema_context))
+            await self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_doors(
+    async def propose_doors(
         self, room: RoomNodeProposal, *, schema_context: str = ""
     ) -> list[DoorProposal]:
         instruction = (
@@ -327,10 +335,10 @@ class OllamaWorldAgent:
             '"hidden","beyond_hint"}]}. Most doors are bidirectional; mark slides, '
             "cliffs, and one-way portals bidirectional=false."
         )
-        data = self._ask(self._with_schema_context(instruction, schema_context))
+        data = await self._ask(self._with_schema_context(instruction, schema_context))
         return [DoorProposal.model_validate(d) for d in data.get("doors", [])]
 
-    def resolve_dangling_door(
+    async def resolve_dangling_door(
         self, door: DoorProposal, *, room: RoomNodeProposal, candidates: Mapping[str, str]
     ) -> DanglingResolution:
         listing = "; ".join(f"{key}={title}" for key, title in candidates.items()) or "(none)"
@@ -340,9 +348,9 @@ class OllamaWorldAgent:
             '"target_room_key": <key or null>}. Prefer seal, then drop, then link to one of '
             f"these existing rooms: {listing}."
         )
-        return DanglingResolution.model_validate(self._ask(instruction))
+        return DanglingResolution.model_validate(await self._ask(instruction))
 
-    def propose_contents(
+    async def propose_contents(
         self,
         room: RoomNodeProposal,
         *,
@@ -357,10 +365,10 @@ class OllamaWorldAgent:
             '"characters":[{"name","species","controller":"llm|suspended","llm_profile"}]}.'
         )
         return RoomContentsProposal.model_validate(
-            self._ask(self._with_schema_context(instruction, schema_context))
+            await self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_character(
+    async def propose_character(
         self,
         room: RoomNodeProposal,
         *,
@@ -376,10 +384,10 @@ class OllamaWorldAgent:
             "Use controller=suspended unless the request explicitly asks for an LLM character."
         )
         return CharacterProposal.model_validate(
-            self._ask(self._with_schema_context(instruction, schema_context))
+            await self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_item(
+    async def propose_item(
         self,
         *,
         container_name: str,
@@ -396,10 +404,10 @@ class OllamaWorldAgent:
             '"open","writable","key_name","locked"}.'
         )
         return ItemProposal.model_validate(
-            self._ask(self._with_schema_context(instruction, schema_context))
+            await self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_event(
+    async def propose_event(
         self,
         room: RoomNodeProposal,
         *,
@@ -421,30 +429,36 @@ class OllamaWorldAgent:
             "asks for an LLM character."
         )
         return StoryEventProposal.model_validate(
-            self._ask(self._with_schema_context(instruction, schema_context))
+            await self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    def propose_inventory(
+    async def propose_inventory(
         self, *, name: str, species: str
     ) -> list[ItemProposal]:
         instruction = (
             f"What is {name} (a {species}) carrying? Reply JSON "
             '{"objects":[{"name","kind","portable"}]} (may be empty).'
         )
-        return [ItemProposal.model_validate(o) for o in self._ask(instruction).get("objects", [])]
+        data = await self._ask(instruction)
+        return [ItemProposal.model_validate(o) for o in data.get("objects", [])]
 
-    def propose_container_contents(
+    async def propose_container_contents(
         self, *, name: str
     ) -> list[ItemProposal]:
         instruction = (
             f"What is inside {name}? Reply JSON "
             '{"objects":[{"name","kind","portable"}]} (may be empty).'
         )
-        return [ItemProposal.model_validate(o) for o in self._ask(instruction).get("objects", [])]
+        data = await self._ask(instruction)
+        return [ItemProposal.model_validate(o) for o in data.get("objects", [])]
 
 
 class OpenRouterWorldAgent(OllamaWorldAgent):
-    """Prompts OpenRouter node-by-node on the same ``WorldAgent`` proposal surface."""
+    """Prompts OpenRouter node-by-node on the same ``WorldAgent`` proposal surface.
+
+    The ``openrouter`` client is synchronous, so its ``chat.send`` call runs in a worker
+    thread to keep the event loop unblocked.
+    """
 
     def __init__(
         self,
@@ -466,9 +480,10 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
         self._model = model
         self._history: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
 
-    def _ask(self, instruction: str) -> dict:
+    async def _ask(self, instruction: str) -> dict:
         self._history.append({"role": "user", "content": instruction})
-        response = self._client.chat.send(
+        response = await asyncio.to_thread(
+            self._client.chat.send,
             model=self._model,
             messages=self._history,
             response_format={"type": "json_object"},

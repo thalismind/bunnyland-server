@@ -103,8 +103,8 @@ def test_validate_reports_duplicate_and_invalid_generation_references():
     assert "character 'helper' has invalid controller" in errors
 
 
-def test_validate_accepts_stub_proposal():
-    proposal = StubWorldBuilder().propose("a quiet marsh")
+async def test_validate_accepts_stub_proposal():
+    proposal = await StubWorldBuilder().propose("a quiet marsh")
     assert validate_proposal(proposal) == []
 
 
@@ -225,11 +225,11 @@ def test_character_spec_defaults_to_flash_controller_model():
 def test_ollama_world_builder_initializes_client_with_host_and_auth(monkeypatch):
     captured = {}
 
-    class Client:
+    class AsyncClient:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(Client=Client))
+    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(AsyncClient=AsyncClient))
 
     builder = OllamaWorldBuilder(model="world-model", host="https://ollama.example", api_key="k")
 
@@ -578,7 +578,7 @@ async def test_instantiate_builds_the_mvp_checklist():
     events = []
     actor.bus.subscribe(WorldGeneratedEvent, events.append)
 
-    proposal = StubWorldBuilder().propose("a quiet marsh")
+    proposal = await StubWorldBuilder().propose("a quiet marsh")
     result = await instantiate(actor, proposal)
     world = actor.world
 
@@ -2594,7 +2594,7 @@ async def test_generated_world_is_playable_via_plugins():
     # Apply the core verbs, then drive a generated character through a move.
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    result = await instantiate(actor, StubWorldBuilder().propose("seed"))
+    result = await instantiate(actor, await StubWorldBuilder().propose("seed"))
 
     # Resume Juniper under a fresh controller so it can act.
     from bunnyland.core import spawn_entity

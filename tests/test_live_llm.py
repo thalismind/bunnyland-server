@@ -182,10 +182,11 @@ async def test_live_ollama_character_agent_can_call_wait_tool():
     assert call.name == "wait"
 
 
-def test_live_ollama_world_agent_can_propose_room():
+@pytest.mark.asyncio
+async def test_live_ollama_world_agent_can_propose_room():
     agent = _world_agent("ollama")
 
-    room = agent.propose_room("a tiny live-test moss room", behind=None, known_rooms={})
+    room = await agent.propose_room("a tiny live-test moss room", behind=None, known_rooms={})
 
     assert room.title
     assert room.description
@@ -205,10 +206,11 @@ async def test_live_openrouter_character_agent_can_call_wait_tool():
     assert call.name == "wait"
 
 
-def test_live_openrouter_world_agent_can_propose_room():
+@pytest.mark.asyncio
+async def test_live_openrouter_world_agent_can_propose_room():
     agent = _world_agent("openrouter")
 
-    room = agent.propose_room("a tiny live-test moss room", behind=None, known_rooms={})
+    room = await agent.propose_room("a tiny live-test moss room", behind=None, known_rooms={})
 
     assert room.title
     assert room.description
@@ -261,8 +263,9 @@ async def test_live_ollama_oneshot_generator_instantiates_playable_world():
     )
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_live_world_agent_generates_applicable_server_patches(provider):
+async def test_live_world_agent_generates_applicable_server_patches(provider):
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
 
@@ -280,7 +283,7 @@ def test_live_world_agent_generates_applicable_server_patches(provider):
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), door.id)
     options = _world_options(provider, max_rooms=1)
 
-    item_response = generate_item_patch(
+    item_response = await generate_item_patch(
         actor,
         WorldItemGenerationRequest(
             container_entity_id=str(room.id),
@@ -291,7 +294,7 @@ def test_live_world_agent_generates_applicable_server_patches(provider):
     assert item_response.generated_name
     assert apply_world_patch(actor, item_response.patch).changed_entities
 
-    character_response = generate_character_patch(
+    character_response = await generate_character_patch(
         actor,
         WorldCharacterGenerationRequest(
             room_entity_id=str(room.id),
@@ -302,7 +305,7 @@ def test_live_world_agent_generates_applicable_server_patches(provider):
     assert character_response.generated_name
     assert apply_world_patch(actor, character_response.patch).changed_entities
 
-    event_response = generate_event_patch(
+    event_response = await generate_event_patch(
         actor,
         WorldEventGenerationRequest(
             room_entity_id=str(room.id),
@@ -313,7 +316,7 @@ def test_live_world_agent_generates_applicable_server_patches(provider):
     assert event_response.generated_title
     assert apply_world_patch(actor, event_response.patch).changed_entities
 
-    room_response = generate_room_patch(
+    room_response = await generate_room_patch(
         actor,
         WorldRoomGenerationRequest(
             door_entity_id=str(door.id),

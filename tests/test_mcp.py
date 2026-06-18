@@ -636,7 +636,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     async def generation_status():
         return WorldGenerationStatusResponse(world_epoch=scenario.actor.epoch)
 
-    def generate_room(request):
+    async def generate_room(request):
         calls["generate_room"] = request
         return WorldRoomGenerationResponse(
             source_room_id=str(scenario.room_a),
@@ -645,7 +645,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
             patch=WorldPatchRequest(),
         )
 
-    def generate_character(request):
+    async def generate_character(request):
         calls["generate_character"] = request
         return WorldCharacterGenerationResponse(
             room_entity_id=request.room_entity_id,
@@ -653,7 +653,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
             patch=WorldPatchRequest(),
         )
 
-    def generate_item(request):
+    async def generate_item(request):
         calls["generate_item"] = request
         return WorldItemGenerationResponse(
             container_entity_id=request.container_entity_id,
@@ -661,7 +661,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
             patch=WorldPatchRequest(),
         )
 
-    def generate_event(request):
+    async def generate_event(request):
         calls["generate_event"] = request
         return WorldEventGenerationResponse(
             room_entity_id=request.room_entity_id,
@@ -740,7 +740,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     )
     assert generation["world_epoch"] == scenario.actor.epoch
 
-    room = registered_tools["generate_room_patch_admin"](
+    room = await registered_tools["generate_room_patch_admin"](
         admin_token="secret",
         door_entity_id="door-1",
         direction="north",
@@ -749,7 +749,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert room["generated_title"] == "Generated Room"
     assert calls["generate_room"].direction == "north"
 
-    character = registered_tools["generate_character_patch_admin"](
+    character = await registered_tools["generate_character_patch_admin"](
         admin_token="secret",
         room_entity_id=str(scenario.room_a),
         prompt="character prompt",
@@ -757,7 +757,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert character["generated_name"] == "Generated Character"
     assert calls["generate_character"].prompt == "character prompt"
 
-    item = registered_tools["generate_item_patch_admin"](
+    item = await registered_tools["generate_item_patch_admin"](
         admin_token="secret",
         container_entity_id=str(scenario.room_a),
         prompt="item prompt",
@@ -765,7 +765,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert item["generated_name"] == "Generated Item"
     assert calls["generate_item"].container_entity_id == str(scenario.room_a)
 
-    event = registered_tools["generate_event_patch_admin"](
+    event = await registered_tools["generate_event_patch_admin"](
         admin_token="secret",
         room_entity_id=str(scenario.room_a),
         prompt="event prompt",
@@ -838,7 +838,7 @@ async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
     async def generation_status():
         raise AssertionError("generation_status should not be called")
 
-    def generate_room(_request):
+    async def generate_room(_request):
         raise AssertionError("generate_room should not be called")
 
     create_bunnyland_mcp_app(

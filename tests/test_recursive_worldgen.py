@@ -113,7 +113,7 @@ class _DuplicateRoomTitleAgent(StubWorldAgent):
     def __init__(self) -> None:
         self._door_calls = 0
 
-    def propose_room(self, *args, **kwargs) -> RoomNodeProposal:
+    async def propose_room(self, *args, **kwargs) -> RoomNodeProposal:
         return RoomNodeProposal(
             title="Neon Platform, Midnight Rain",
             biome="city",
@@ -121,7 +121,7 @@ class _DuplicateRoomTitleAgent(StubWorldAgent):
             description="a rain-slick platform under neon billboards",
         )
 
-    def propose_doors(self, *args, **kwargs):
+    async def propose_doors(self, *args, **kwargs):
         self._door_calls += 1
         if self._door_calls == 1:
             return [
@@ -242,8 +242,8 @@ async def test_oneshot_generator_rejects_openrouter_and_uses_ollama_builder(monk
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-        def propose(self, seed):
-            return StubWorldBuilder().propose(seed)
+        async def propose(self, seed):
+            return await StubWorldBuilder().propose(seed)
 
     monkeypatch.setattr(ollama_builder, "OllamaWorldBuilder", FakeOllamaWorldBuilder)
 
@@ -345,7 +345,7 @@ class _FakeOllamaClient:
         self.kwargs = kwargs
         self.calls: list[dict] = []
 
-    def chat(self, *, model, format, messages):
+    async def chat(self, *, model, format, messages):
         self.calls.append(
             {
                 "model": model,
@@ -362,13 +362,13 @@ class _FakeOllamaClient:
         }
 
 
-def test_ollama_world_agent_parses_json_response(monkeypatch):
+async def test_ollama_world_agent_parses_json_response(monkeypatch):
     fake_module = types.ModuleType("ollama")
-    fake_module.Client = _FakeOllamaClient
+    fake_module.AsyncClient = _FakeOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
     agent = OllamaWorldAgent(model="deepseek-v4-pro", host="https://ollama.example", api_key="key")
-    room = agent.propose_room("seed", behind=None, known_rooms={})
+    room = await agent.propose_room("seed", behind=None, known_rooms={})
 
     assert room.title == "Sky Atrium"
     assert agent._client.kwargs == {
@@ -379,14 +379,14 @@ def test_ollama_world_agent_parses_json_response(monkeypatch):
     assert agent._client.calls[0]["format"] == "json"
 
 
-def test_ollama_world_agent_preserves_history(monkeypatch):
+async def test_ollama_world_agent_preserves_history(monkeypatch):
     fake_module = types.ModuleType("ollama")
-    fake_module.Client = _FakeOllamaClient
+    fake_module.AsyncClient = _FakeOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
     agent = OllamaWorldAgent(model="deepseek-v4-pro")
-    agent.propose_room("seed", behind=None, known_rooms={})
-    agent.propose_room("seed", behind=None, known_rooms={})
+    await agent.propose_room("seed", behind=None, known_rooms={})
+    await agent.propose_room("seed", behind=None, known_rooms={})
 
     second = agent._client.calls[1]["messages"]
     assert second[0]["role"] == "system"
@@ -425,13 +425,13 @@ class _FakeOpenRouterClient:
         self.chat = _FakeOpenRouterChat()
 
 
-def test_openrouter_world_agent_parses_json_response(monkeypatch):
+async def test_openrouter_world_agent_parses_json_response(monkeypatch):
     fake_module = types.ModuleType("openrouter")
     fake_module.OpenRouter = _FakeOpenRouterClient
     monkeypatch.setitem(sys.modules, "openrouter", fake_module)
 
     agent = OpenRouterWorldAgent(model="openai/gpt-4.1", api_key="key")
-    room = agent.propose_room("seed", behind=None, known_rooms={})
+    room = await agent.propose_room("seed", behind=None, known_rooms={})
 
     assert room.title == "Sky Atrium"
     assert agent._client.kwargs == {"api_key": "key"}
@@ -439,14 +439,14 @@ def test_openrouter_world_agent_parses_json_response(monkeypatch):
     assert agent._client.chat.calls[0]["response_format"] == {"type": "json_object"}
 
 
-def test_openrouter_world_agent_preserves_history(monkeypatch):
+async def test_openrouter_world_agent_preserves_history(monkeypatch):
     fake_module = types.ModuleType("openrouter")
     fake_module.OpenRouter = _FakeOpenRouterClient
     monkeypatch.setitem(sys.modules, "openrouter", fake_module)
 
     agent = OpenRouterWorldAgent(model="openai/gpt-4.1", api_key="key")
-    agent.propose_room("seed", behind=None, known_rooms={})
-    agent.propose_room("seed", behind=None, known_rooms={})
+    await agent.propose_room("seed", behind=None, known_rooms={})
+    await agent.propose_room("seed", behind=None, known_rooms={})
 
     second = agent._client.chat.calls[1]["messages"]
     assert second[0]["role"] == "system"
@@ -455,7 +455,7 @@ def test_openrouter_world_agent_preserves_history(monkeypatch):
     assert second[3]["role"] == "user"
 
 
-def test_ollama_world_agent_builds_each_proposal_from_json(monkeypatch):
+async def test_ollama_world_agent_builds_each_proposal_from_json(monkeypatch):
     from bunnyland.worldgen.proposal import CharacterProposal, ItemProposal, StoryEventProposal
 
     calls: list[str] = []
@@ -504,54 +504,54 @@ def test_ollama_world_agent_builds_each_proposal_from_json(monkeypatch):
 
     agent = object.__new__(OllamaWorldAgent)
 
-    def fake_ask(self, instruction):
+    async def fake_ask(self, instruction):
         del self
         calls.append(instruction)
         return responses.pop(0)
 
     monkeypatch.setattr(agent, "_ask", fake_ask.__get__(agent, OllamaWorldAgent))
 
-    root = agent.propose_room(
+    root = await agent.propose_room(
         "seed",
         behind=None,
         known_rooms={},
         schema_context="RoomComponent",
     )
     behind = DoorProposal(direction="north", beyond_hint="Blue Hall")
-    room = agent.propose_room(
+    room = await agent.propose_room(
         "seed",
         behind=behind,
         known_rooms={"room_0": "Root"},
     )
-    doors = agent.propose_doors(room)
-    resolution = agent.resolve_dangling_door(
+    doors = await agent.propose_doors(room)
+    resolution = await agent.resolve_dangling_door(
         doors[0],
         room=room,
         candidates={"room_0": "Root"},
     )
-    contents = agent.propose_contents(
+    contents = await agent.propose_contents(
         room,
         known_rooms={"room_0": "Root", "room_1": "Blue Hall"},
     )
-    character = agent.propose_character(
+    character = await agent.propose_character(
         room,
         prompt="a guide",
         known_rooms={"room_0": "Root"},
         schema_context="CharacterComponent",
     )
-    item = agent.propose_item(
+    item = await agent.propose_item(
         container_name="chest",
         container_kind="container",
         prompt="a key",
         known_rooms={"room_0": "Root"},
     )
-    event = agent.propose_event(
+    event = await agent.propose_event(
         room,
         prompt="a bell",
         known_rooms={"room_0": "Root"},
     )
-    inventory = agent.propose_inventory(name="Guide", species="fox")
-    container_contents = agent.propose_container_contents(name="chest")
+    inventory = await agent.propose_inventory(name="Guide", species="fox")
+    container_contents = await agent.propose_container_contents(name="chest")
 
     assert isinstance(root, RoomNodeProposal)
     assert root.title == "Root"

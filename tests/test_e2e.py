@@ -215,7 +215,7 @@ async def _new_world():
     """A fully wired actor (all builtin plugins) with the stub marsh world generated."""
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
-    proposal = StubWorldBuilder().propose("a quiet marsh")
+    proposal = await StubWorldBuilder().propose("a quiet marsh")
     result = await instantiate(actor, proposal)
     return actor, proposal, result
 

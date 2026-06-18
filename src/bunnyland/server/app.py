@@ -521,41 +521,41 @@ def create_app(
         stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
         return generation_job.response(actor)
 
-    def _generate_room_request(
+    async def _generate_room_request(
         request: WorldRoomGenerationRequest,
     ) -> WorldRoomGenerationResponse:
         try:
-            return generate_room_patch(actor, request, options=worldgen_options)
+            return await generate_room_patch(actor, request, options=worldgen_options)
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    def _generate_character_request(
+    async def _generate_character_request(
         request: WorldCharacterGenerationRequest,
     ) -> WorldCharacterGenerationResponse:
         try:
-            return generate_character_patch(actor, request, options=worldgen_options)
+            return await generate_character_patch(actor, request, options=worldgen_options)
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    def _generate_item_request(
+    async def _generate_item_request(
         request: WorldItemGenerationRequest,
     ) -> WorldItemGenerationResponse:
         try:
-            return generate_item_patch(actor, request, options=worldgen_options)
+            return await generate_item_patch(actor, request, options=worldgen_options)
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    def _generate_event_request(
+    async def _generate_event_request(
         request: WorldEventGenerationRequest,
     ) -> WorldEventGenerationResponse:
         try:
-            return generate_event_patch(actor, request, options=worldgen_options)
+            return await generate_event_patch(actor, request, options=worldgen_options)
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
@@ -629,7 +629,7 @@ def create_app(
 
     @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)
     async def generate_room(request: WorldRoomGenerationRequest) -> WorldRoomGenerationResponse:
-        return _generate_room_request(request)
+        return await _generate_room_request(request)
 
     @app.post(
         "/admin/world/generate-character",
@@ -638,17 +638,17 @@ def create_app(
     async def generate_character(
         request: WorldCharacterGenerationRequest,
     ) -> WorldCharacterGenerationResponse:
-        return _generate_character_request(request)
+        return await _generate_character_request(request)
 
     @app.post("/admin/world/generate-item", response_model=WorldItemGenerationResponse)
     async def generate_item(request: WorldItemGenerationRequest) -> WorldItemGenerationResponse:
-        return _generate_item_request(request)
+        return await _generate_item_request(request)
 
     @app.post("/admin/world/generate-event", response_model=WorldEventGenerationResponse)
     async def generate_event(
         request: WorldEventGenerationRequest,
     ) -> WorldEventGenerationResponse:
-        return _generate_event_request(request)
+        return await _generate_event_request(request)
 
     @app.post("/admin/world/save", response_model=WorldSaveResponse)
     async def save_world_now() -> WorldSaveResponse:

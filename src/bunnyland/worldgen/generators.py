@@ -441,7 +441,7 @@ async def oneshot_generator(actor: WorldActor, seed: str, options: GenOptions) -
         )
     else:
         builder = StubWorldBuilder()
-    proposal = builder.propose(seed)
+    proposal = await builder.propose(seed)
     result = await instantiate(actor, proposal)
     result.prompt = builder.system_prompt  # literal DM system prompt, for provenance
     return result

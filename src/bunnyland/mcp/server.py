@@ -477,12 +477,18 @@ def create_bunnyland_mcp_app(
     patch_world: Callable[[WorldPatchRequest], Awaitable[WorldPatchResponse]],
     generate_world: Callable[[WorldGenerateRequest], Awaitable[WorldGenerateResponse]],
     generation_status: Callable[[], Awaitable[WorldGenerationStatusResponse]],
-    generate_room: Callable[[WorldRoomGenerationRequest], WorldRoomGenerationResponse],
-    generate_character: Callable[
-        [WorldCharacterGenerationRequest], WorldCharacterGenerationResponse
+    generate_room: Callable[
+        [WorldRoomGenerationRequest], Awaitable[WorldRoomGenerationResponse]
     ],
-    generate_item: Callable[[WorldItemGenerationRequest], WorldItemGenerationResponse],
-    generate_event: Callable[[WorldEventGenerationRequest], WorldEventGenerationResponse],
+    generate_character: Callable[
+        [WorldCharacterGenerationRequest], Awaitable[WorldCharacterGenerationResponse]
+    ],
+    generate_item: Callable[
+        [WorldItemGenerationRequest], Awaitable[WorldItemGenerationResponse]
+    ],
+    generate_event: Callable[
+        [WorldEventGenerationRequest], Awaitable[WorldEventGenerationResponse]
+    ],
     register_script: Callable[[ScriptSpec], Awaitable[ControllerDefinitionListResponse]]
     | None = None,
     register_behavior: Callable[[BehaviorTreeSpec], Awaitable[ControllerDefinitionListResponse]]
@@ -1060,7 +1066,7 @@ def create_bunnyland_mcp_app(
         return (await generation_status()).model_dump(mode="json")
 
     @mcp.tool()
-    def generate_room_patch_admin(
+    async def generate_room_patch_admin(
         door_entity_id: str,
         direction: str | None = None,
         prompt: str = "",
@@ -1070,7 +1076,7 @@ def create_bunnyland_mcp_app(
 
         admin(admin_token)
         try:
-            response = generate_room(
+            response = await generate_room(
                 WorldRoomGenerationRequest(
                     door_entity_id=door_entity_id,
                     direction=direction,
@@ -1082,7 +1088,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @mcp.tool()
-    def generate_character_patch_admin(
+    async def generate_character_patch_admin(
         room_entity_id: str,
         prompt: str = "",
         admin_token: str | None = None,
@@ -1091,7 +1097,7 @@ def create_bunnyland_mcp_app(
 
         admin(admin_token)
         try:
-            response = generate_character(
+            response = await generate_character(
                 WorldCharacterGenerationRequest(room_entity_id=room_entity_id, prompt=prompt)
             )
         except Exception as exc:
@@ -1099,7 +1105,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @mcp.tool()
-    def generate_item_patch_admin(
+    async def generate_item_patch_admin(
         container_entity_id: str,
         prompt: str = "",
         admin_token: str | None = None,
@@ -1108,7 +1114,7 @@ def create_bunnyland_mcp_app(
 
         admin(admin_token)
         try:
-            response = generate_item(
+            response = await generate_item(
                 WorldItemGenerationRequest(
                     container_entity_id=container_entity_id,
                     prompt=prompt,
@@ -1119,7 +1125,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @mcp.tool()
-    def generate_event_patch_admin(
+    async def generate_event_patch_admin(
         room_entity_id: str,
         prompt: str = "",
         admin_token: str | None = None,
@@ -1128,7 +1134,7 @@ def create_bunnyland_mcp_app(
 
         admin(admin_token)
         try:
-            response = generate_event(
+            response = await generate_event(
                 WorldEventGenerationRequest(room_entity_id=room_entity_id, prompt=prompt)
             )
         except Exception as exc:

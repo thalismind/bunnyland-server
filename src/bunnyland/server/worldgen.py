@@ -565,7 +565,7 @@ def build_event_generation_response(
     )
 
 
-def generate_room_patch(
+async def generate_room_patch(
     actor: WorldActor,
     request: WorldRoomGenerationRequest,
     *,
@@ -581,17 +581,17 @@ def generate_room_patch(
         hidden=context.hidden,
         beyond_hint=context.prompt or context.door_name,
     )
-    room = builder.propose_room(
+    room = await builder.propose_room(
         context.prompt or context.door_name,
         behind=door,
         known_rooms=context.known_rooms,
         schema_context=schema_context,
     )
     known_rooms = {**context.known_rooms, "$generated_room": room.description or room.title}
-    contents = builder.propose_contents(
+    contents = await builder.propose_contents(
         room, known_rooms=known_rooms, schema_context=schema_context
     )
-    doors = builder.propose_doors(room, schema_context=schema_context)
+    doors = await builder.propose_doors(room, schema_context=schema_context)
     return build_room_generation_response(
         context,
         room=room,
@@ -601,7 +601,7 @@ def generate_room_patch(
     )
 
 
-def generate_character_patch(
+async def generate_character_patch(
     actor: WorldActor,
     request: WorldCharacterGenerationRequest,
     *,
@@ -610,7 +610,7 @@ def generate_character_patch(
     context = collect_room_selection_context(actor, request)
     options = options or GenOptions()
     builder = _builder(options)
-    character = builder.propose_character(
+    character = await builder.propose_character(
         context.room,
         prompt=context.prompt,
         known_rooms=context.known_rooms,
@@ -619,7 +619,7 @@ def generate_character_patch(
     return build_character_generation_response(context, character, epoch=actor.epoch)
 
 
-def generate_item_patch(
+async def generate_item_patch(
     actor: WorldActor,
     request: WorldItemGenerationRequest,
     *,
@@ -628,7 +628,7 @@ def generate_item_patch(
     context = collect_container_selection_context(actor, request)
     options = options or GenOptions()
     builder = _builder(options)
-    item = builder.propose_item(
+    item = await builder.propose_item(
         container_name=context.container_name,
         container_kind=context.container_kind,
         prompt=context.prompt,
@@ -638,7 +638,7 @@ def generate_item_patch(
     return build_item_generation_response(context, item)
 
 
-def generate_event_patch(
+async def generate_event_patch(
     actor: WorldActor,
     request: WorldEventGenerationRequest,
     *,
@@ -647,7 +647,7 @@ def generate_event_patch(
     context = collect_room_selection_context(actor, request)
     options = options or GenOptions()
     builder = _builder(options)
-    event = builder.propose_event(
+    event = await builder.propose_event(
         context.room,
         prompt=context.prompt,
         known_rooms=context.known_rooms,
