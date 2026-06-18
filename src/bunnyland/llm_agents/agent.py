@@ -554,6 +554,12 @@ class OllamaAgent:
         telemetry.record_llm_tokens(
             "ollama", normalize_model(model or self._model), prompt_tokens, completion_tokens
         )
+        telemetry.set_span_attributes(
+            {
+                "llm.tokens.prompt": prompt_tokens,
+                "llm.tokens.completion": completion_tokens,
+            }
+        )
         message = response["message"]
         tool_calls = message.get("tool_calls") or []
         history.append(user_message)
@@ -637,6 +643,12 @@ class OpenRouterAgent:
         prompt_tokens, completion_tokens = _openrouter_token_usage(response)
         telemetry.record_llm_tokens(
             "openrouter", normalize_model(model or self._model), prompt_tokens, completion_tokens
+        )
+        telemetry.set_span_attributes(
+            {
+                "llm.tokens.prompt": prompt_tokens,
+                "llm.tokens.completion": completion_tokens,
+            }
         )
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []

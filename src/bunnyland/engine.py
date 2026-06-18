@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from . import telemetry
 from .core.events import WorldPauseStatusChangedEvent
 from .llm_agents.dispatch import ControllerDispatch
 
@@ -95,8 +96,18 @@ class GameLoop:
             if self._paused:
                 await asyncio.sleep(self.tick_seconds)
                 continue
-            await self.actor.tick(self.tick_seconds * self.time_scale)
-            await self.dispatch.run_once()
+            game_delta_seconds = self.tick_seconds * self.time_scale
+            # One iteration root span ties the world tick and the dispatch turn together so a
+            # trace shows the full chain above controller.run_once (loop -> tick + dispatch).
+            with telemetry.span(
+                "game.loop.iteration",
+                {
+                    "loop.tick_index": ticks,
+                    "loop.game_delta_seconds": game_delta_seconds,
+                },
+            ):
+                await self.actor.tick(game_delta_seconds)
+                await self.dispatch.run_once()
             ticks += 1
             if self.autosave and self.autosave_every > 0 and ticks % self.autosave_every == 0:
                 self.autosave(ticks)

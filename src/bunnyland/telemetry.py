@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -284,6 +284,32 @@ def span(name: str, attributes: dict[str, Any] | None = None) -> Any:
     return _tracer.start_as_current_span(name, attributes=attributes or {})
 
 
+#: Upper bound on a single string span attribute (e.g. a rendered prompt). Keeps individual
+#: spans from ballooning while still capturing enough to debug a decision.
+MAX_ATTRIBUTE_CHARS = 8192
+
+
+def attr_text(value: Any, *, limit: int = MAX_ATTRIBUTE_CHARS) -> str:
+    """Coerce a value to a span-safe string, truncating very long text with a length hint."""
+    text = value if isinstance(value, str) else str(value)
+    if len(text) > limit:
+        return f"{text[:limit]}... ({len(text)} chars total)"
+    return text
+
+
+def set_span_attributes(attributes: Mapping[str, Any]) -> None:
+    """Set attributes on the currently active span. A no-op when telemetry is disabled.
+
+    Lets nested code (e.g. command rejection deep inside ``_attempt``) annotate the enclosing
+    span without threading the span object through every call.
+    """
+    if not _ENABLED:
+        return
+    current = _otel_trace.get_current_span()
+    for key, value in attributes.items():
+        current.set_attribute(key, value)
+
+
 @contextmanager
 def record_duration(record: Any, attributes: dict[str, Any] | None = None) -> Iterator[None]:
     """Time the wrapped block and feed the elapsed seconds to ``record`` (a histogram).
@@ -379,6 +405,8 @@ def reset_for_tests() -> None:
 
 
 __all__ = [
+    "MAX_ATTRIBUTE_CHARS",
+    "attr_text",
     "enabled",
     "init_telemetry",
     "instrument_fastapi",
@@ -393,5 +421,6 @@ __all__ = [
     "record_worldgen",
     "register_world_gauges",
     "reset_for_tests",
+    "set_span_attributes",
     "span",
 ]

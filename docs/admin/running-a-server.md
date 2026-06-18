@@ -248,10 +248,31 @@ is safe to leave the instrumentation in place in production and flip the gate on
 | `bunnyland.world.entities` / `.characters` / `.rooms` | observable gauge | — |
 | `bunnyland.worldgen.duration` | histogram (s) | `generator`, `llm` |
 
-**Spans emitted:** `game.tick` → `command.attempt` → `handler.execute` for the world
-pipeline; `controller.run_once` → `agent.decide` (with `provider`, `model`, `agent.kind`,
-`decision.tool`) for controller decisions; `world.generate` at startup. With the server
-API running, incoming HTTP requests are also auto-instrumented as their own server spans.
+**Spans emitted** — a server loop iteration is the trace root, with the world tick and the
+controller turn hanging off it:
+
+- `game.loop.iteration` (root) → `game.tick` + `controller.run_once`.
+- `game.tick` (also a root when ticked outside the loop) carries `tick.epoch` and breaks
+  into phase children: `tick.ingest`, `tick.systems`, `tick.commands`,
+  `tick.consequences`, `tick.after_tick`.
+- `tick.commands` → `command.attempt` (with `command.type`, `command.lane`, `command.id`,
+  `character.id`, `command.executed`/`command.queued`, and on failure `command.outcome`
+  plus `command.reject_reason` (bucketed) and `command.reject_reason_text`) →
+  `handler.execute` (with `handler.kind`, `handler.ok`, `handler.reason`,
+  `handler.event_count`).
+- `controller.run_once` (with `dispatch.actable_count`, `dispatch.decision_count`) →
+  `agent.prompt.build` and `agent.decide` (with `provider`, `model`, `agent.kind`,
+  `character.id`, `decision.tool`, `decision.arguments`, and — for LLM-controlled
+  characters — `decision.prompted`, `decision.prompt`, `decision.prompt_chars`; live LLM
+  calls also add `llm.tokens.prompt`/`.completion`).
+- `command.submit` at the single submission chokepoint, so every queued command (API,
+  MCP, Discord, or autonomous dispatch) is tied back to its originating trace.
+- `world.generate` at startup.
+
+Unlike metric attributes, span attributes carry richer, higher-cardinality context (entity
+ids, the rendered prompt, the chosen arguments) since each span is a discrete event. Long
+text such as the prompt is truncated to `MAX_ATTRIBUTE_CHARS`. With the server API running,
+incoming HTTP requests are also auto-instrumented as their own server spans.
 
 ### Bundled Tempo backend (compose)
 

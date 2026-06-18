@@ -13,6 +13,7 @@ from conftest import build_scenario
 
 from bunnyland import telemetry
 from bunnyland.core import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
+from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.llm_agents.agent import _ollama_token_usage, _openrouter_token_usage
 from bunnyland.prompts.builder import PromptBuilder
@@ -61,6 +62,11 @@ def test_span_and_record_helpers_are_no_ops_when_disabled(monkeypatch):
         span.set_attribute("b", 2)
         span.record_exception(ValueError("x"))
         span.set_status("ok")
+    telemetry.set_span_attributes({"k": "v"})  # no current span; still a no-op
+    assert telemetry.attr_text("short") == "short"
+    long = "x" * (telemetry.MAX_ATTRIBUTE_CHARS + 10)
+    assert telemetry.attr_text(long).endswith("chars total)")
+    assert telemetry.attr_text(123) == "123"
     with telemetry.record_duration(telemetry.record_tick, {"x": 1}):
         pass
     telemetry.record_command_submitted("move")
@@ -172,12 +178,38 @@ async def test_tick_emits_spans_and_command_metrics(otel_capture):
     await scenario.actor.tick(0.0)
 
     spans = _spans_by_name(span_exporter)
-    assert {"game.tick", "command.attempt", "handler.execute"} <= set(spans)
-    # handler.execute is nested under a command.attempt, which is nested under game.tick.
+    assert {
+        "game.tick",
+        "tick.ingest",
+        "tick.systems",
+        "tick.commands",
+        "tick.consequences",
+        "tick.after_tick",
+        "command.attempt",
+        "handler.execute",
+    } <= set(spans)
+    # handler.execute is nested under a command.attempt, which is nested under game.tick,
+    # and the tick phases are direct children of game.tick.
     by_id = {span.context.span_id: span.name for span in span_exporter.get_finished_spans()}
     assert by_id[spans["handler.execute"].parent.span_id] == "command.attempt"
-    assert by_id[spans["command.attempt"].parent.span_id] == "game.tick"
+    assert by_id[spans["command.attempt"].parent.span_id] == "tick.commands"
+    assert by_id[spans["tick.commands"].parent.span_id] == "game.tick"
+    assert spans["game.tick"].parent is None  # tick is a root when run outside the loop
+    assert spans["game.tick"].attributes["tick.epoch"] == 0
     assert spans["handler.execute"].attributes["handler.ok"] is True
+    assert spans["handler.execute"].attributes["handler.kind"] == "MoveHandler"
+
+    # The accepted move and the rejected frobnicate both annotate their attempt spans.
+    attempts = {
+        s.attributes["command.type"]: s.attributes
+        for s in span_exporter.get_finished_spans()
+        if s.name == "command.attempt"
+    }
+    assert attempts["move"]["command.executed"] is True
+    assert "command.id" in attempts["move"]
+    assert attempts["frobnicate"]["command.executed"] is False
+    assert attempts["frobnicate"]["command.outcome"] == "rejected"
+    assert attempts["frobnicate"]["command.reject_reason"] == "no_handler"
 
     points = _metric_points(reader)
     assert "bunnyland.tick.duration" in points
@@ -206,12 +238,52 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
     assert [d.tool for d in decisions] == ["move"]
 
     spans = _spans_by_name(span_exporter)
-    assert {"controller.run_once", "agent.decide"} <= set(spans)
-    assert spans["agent.decide"].attributes["agent.kind"] == "ScriptedAgent"
-    assert spans["agent.decide"].attributes["decision.tool"] == "move"
+    assert {"controller.run_once", "agent.prompt.build", "agent.decide"} <= set(spans)
+    decide = spans["agent.decide"]
+    assert decide.attributes["agent.kind"] == "ScriptedAgent"
+    assert decide.attributes["decision.tool"] == "move"
+    assert decide.attributes["character.id"] == str(scenario.character)
+    # The scenario character is LLM-controlled, so the rendered prompt is captured.
+    assert decide.attributes["decision.prompted"] is True
+    assert "decision.prompt" in decide.attributes
+    assert '"direction"' in decide.attributes["decision.arguments"]
+
+    run_once = spans["controller.run_once"]
+    assert run_once.attributes["dispatch.actable_count"] == 1
+    assert run_once.attributes["dispatch.decision_count"] == 1
+    by_id = {s.context.span_id: s.name for s in span_exporter.get_finished_spans()}
+    assert by_id[spans["agent.decide"].parent.span_id] == "controller.run_once"
+    assert by_id[spans["agent.prompt.build"].parent.span_id] == "controller.run_once"
+    # The chosen command is submitted through the single chokepoint, tied to the same trace.
+    assert "command.submit" in spans
+    assert spans["command.submit"].attributes["command.type"] == "move"
+    assert by_id[spans["command.submit"].parent.span_id] == "controller.run_once"
 
     points = _metric_points(reader)
     assert "bunnyland.llm.decision.duration" in points
+
+
+@pytestmark_otel
+async def test_game_loop_iteration_is_the_trace_root(otel_capture):
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([ToolCall("move", {"direction": "north"})]),
+    )
+    loop = GameLoop(scenario.actor, dispatch, time_scale=1.0)
+    await loop.run(max_ticks=1)
+
+    spans = _spans_by_name(span_exporter)
+    assert "game.loop.iteration" in spans
+    iteration = spans["game.loop.iteration"]
+    assert iteration.parent is None  # the loop iteration is the trace root
+    assert iteration.attributes["loop.tick_index"] == 0
+    by_id = {s.context.span_id: s.name for s in span_exporter.get_finished_spans()}
+    # Both the world tick and the dispatch turn hang off the one iteration root.
+    assert by_id[spans["game.tick"].parent.span_id] == "game.loop.iteration"
+    assert by_id[spans["controller.run_once"].parent.span_id] == "game.loop.iteration"
 
 
 @pytestmark_otel

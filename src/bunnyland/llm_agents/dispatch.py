@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import difflib
 import inspect
+import json
 import logging
 import re
 from collections.abc import Callable, Mapping
@@ -315,8 +316,10 @@ class ControllerDispatch:
         # so prompts are built against the live world rather than the replaced one.
         self.builder.rebind(self.actor.world)
         decisions: list[Decision] = []
-        with telemetry.span("controller.run_once", {"dispatch.tick": self._tick}):
-            for character_id in self._actable_characters():
+        with telemetry.span("controller.run_once", {"dispatch.tick": self._tick}) as run_span:
+            actable = self._actable_characters()
+            run_span.set_attribute("dispatch.actable_count", len(actable))
+            for character_id in actable:
                 # The actable list is snapshotted before the per-character awaits below; a
                 # character can also be removed mid-loop by an in-place edit (admin patch or a
                 # player interaction) at an await point. Skip ones already gone, and guard the
@@ -328,6 +331,7 @@ class ControllerDispatch:
                     decisions.append(await self._decide_for(character_id))
                 except EntityNotFoundError:
                     logger.debug("skipping character %s removed mid-dispatch", character_id)
+            run_span.set_attribute("dispatch.decision_count", len(decisions))
         return decisions
 
     def _actable_characters(self) -> list[EntityId]:
@@ -408,19 +412,28 @@ class ControllerDispatch:
             logger.warning("character %s has an unresolvable controller: %s", character_id, exc)
             return Decision(cid, None, f"wait: {exc}")
 
-        context = self.builder.build(character_id, epoch=self.actor.epoch)
-        pending = self._feedback.pop(cid, None)
-        if pending is not None:
-            context = replace(context, warnings=(*context.warnings, pending))
-        prompt = render_prompt(context)
-        decision_attrs = {
+        prompted = isinstance(controller_component, LLMControllerComponent)
+        with telemetry.span("agent.prompt.build", {"character.id": cid}):
+            context = self.builder.build(character_id, epoch=self.actor.epoch)
+            pending = self._feedback.pop(cid, None)
+            if pending is not None:
+                context = replace(context, warnings=(*context.warnings, pending))
+            prompt = render_prompt(context)
+
+        # Low-cardinality attributes for the decision-latency metric; spans can carry the
+        # richer, higher-cardinality context (which character, what prompt, what it chose).
+        metric_attrs = {
             "provider": provider or "local",
             "model": model or "unknown",
             "agent.kind": type(agent).__name__,
         }
+        span_attrs = {**metric_attrs, "character.id": cid, "decision.prompted": prompted}
+        if prompted and telemetry.enabled():
+            span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
+            span_attrs["decision.prompt_chars"] = len(prompt)
         with telemetry.record_duration(
-            telemetry.record_llm_decision, decision_attrs
-        ), telemetry.span("agent.decide", decision_attrs) as dspan:
+            telemetry.record_llm_decision, metric_attrs
+        ), telemetry.span("agent.decide", span_attrs) as dspan:
             decision = agent.decide(
                 prompt,
                 context,
@@ -432,6 +445,11 @@ class ControllerDispatch:
             call = await decision if inspect.isawaitable(decision) else decision
             if call is not None:
                 dspan.set_attribute("decision.tool", call.name)
+                if telemetry.enabled():
+                    encoded = json.dumps(call.arguments, sort_keys=True, default=str)
+                    dspan.set_attribute("decision.arguments", telemetry.attr_text(encoded))
+            else:
+                dspan.set_attribute("decision.tool", "wait")
 
         if call is None:
             logger.info("character %s decided to wait", character_id)

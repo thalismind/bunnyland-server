@@ -173,8 +173,23 @@ class WorldActor:
     # -- submission ---------------------------------------------------------------------
 
     async def submit(self, command: SubmittedCommand) -> None:
-        """Queue a command for ingestion on the next tick. Never mutates the world."""
-        await self._inbox.put(command)
+        """Queue a command for ingestion on the next tick. Never mutates the world.
+
+        This is the single submission chokepoint for every source (API, MCP, Discord, and
+        the autonomous dispatch), so the ``command.submit`` span here ties a queued command
+        back to whatever trace originated it (an HTTP request span, ``controller.run_once``,
+        etc.).
+        """
+        with telemetry.span(
+            "command.submit",
+            {
+                "command.type": command.command_type,
+                "command.id": command.command_id,
+                "character.id": command.character_id,
+                "command.lane": command.lane.value,
+            },
+        ):
+            await self._inbox.put(command)
 
     def submit_nowait(self, command: SubmittedCommand) -> None:
         self._inbox.put_nowait(command)
@@ -190,16 +205,23 @@ class WorldActor:
         """Run one deterministic world tick (spec 5.6)."""
         with telemetry.record_duration(telemetry.record_tick), telemetry.span(
             "game.tick", {"tick.game_delta_seconds": game_delta_seconds}
-        ):
+        ) as tick_span:
             async with self._lock:
-                await self._ingest()
+                # Phase 1: drain the inbox into the per-character lanes.
+                with telemetry.span("tick.ingest"):
+                    await self._ingest()
                 # Phases 2-4: advance clock, regen Action/Focus, run passive systems.
-                self.world.tick(game_delta_seconds)
+                with telemetry.span("tick.systems"):
+                    self.world.tick(game_delta_seconds)
+                tick_span.set_attribute("tick.epoch", self.epoch)
                 # Phase 5: process queued commands in initiative order.
-                await self._process_commands()
+                with telemetry.span("tick.commands"):
+                    await self._process_commands()
                 # Phase 6: consequence systems (downed/death transitions, etc.).
-                await self._run_consequences()
-                await self._run_after_tick()
+                with telemetry.span("tick.consequences"):
+                    await self._run_consequences()
+                with telemetry.span("tick.after_tick"):
+                    await self._run_after_tick()
 
     async def _run_consequences(self) -> None:
         for consequence in self._consequences:
@@ -284,9 +306,16 @@ class WorldActor:
                 return
             with telemetry.span(
                 "command.attempt",
-                {"command.type": command.command_type, "command.lane": lane.value},
-            ):
+                {
+                    "command.type": command.command_type,
+                    "command.lane": lane.value,
+                    "command.id": command.command_id,
+                    "character.id": character_id,
+                },
+            ) as attempt_span:
                 outcome = await self._attempt(character_id, lane, command)
+                attempt_span.set_attribute("command.executed", outcome.executed)
+                attempt_span.set_attribute("command.queued", outcome.stop_lane)
             if outcome.stop_lane:
                 return
             if outcome.executed:
@@ -305,6 +334,7 @@ class WorldActor:
         # Expiry.
         if command.expires_at_epoch is not None and self.epoch > command.expires_at_epoch:
             self.queues.pop(character_id, lane)
+            telemetry.set_span_attributes({"command.outcome": "expired"})
             await self._publish(
                 CommandExpiredEvent(
                     **self._event_base(
@@ -400,9 +430,20 @@ class WorldActor:
             return _LaneOutcome(executed=False, stop_lane=False)
         with telemetry.record_duration(
             telemetry.record_handler, {"command_type": command.command_type}
-        ), telemetry.span("handler.execute", {"command.type": command.command_type}) as hspan:
+        ), telemetry.span(
+            "handler.execute",
+            {
+                "command.type": command.command_type,
+                "command.id": command.command_id,
+                "character.id": character_id,
+                "handler.kind": type(handler).__name__,
+            },
+        ) as hspan:
             result = handler.execute(ctx, command)
             hspan.set_attribute("handler.ok", result.ok)
+            if not result.ok and result.reason:
+                hspan.set_attribute("handler.reason", telemetry.attr_text(result.reason))
+            hspan.set_attribute("handler.event_count", len(result.events))
         self.queues.pop(character_id, lane)
         if not result.ok:
             await self._reject(command, result.reason or "rejected by handler")
@@ -606,6 +647,14 @@ class WorldActor:
 
     async def _reject(self, command: SubmittedCommand, reason: str) -> None:
         telemetry.record_command_rejected(command.command_type, reason)
+        # Annotate the enclosing command.attempt span with why the command failed.
+        telemetry.set_span_attributes(
+            {
+                "command.outcome": "rejected",
+                "command.reject_reason": telemetry._reject_category(reason),
+                "command.reject_reason_text": telemetry.attr_text(reason),
+            }
+        )
         await self._publish(
             CommandRejectedEvent(
                 **self._event_base(
