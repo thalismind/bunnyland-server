@@ -4,7 +4,7 @@ Bunnyland clients all drive the same server-side verbs and validation. Pick the 
 that fits how you want to play:
 
 - **[Terminal TUI](tui.md)** - a panel-based terminal client with room lists, an action
-  menu, action search, target pickers, and a queued-action panel.
+  menu, action search, an action form for arguments, and a queued-action panel.
 - **[Terminal REPL](repl.md)** - a compact terminal command line with clickable targets,
   command history, and tab completion.
 - **[The Toon client](../toonsim.md)** - the sprite-based web client from the web repo.
@@ -17,7 +17,7 @@ shortcut around reachability, permissions, points, or command validation.
 
 | Client | Best for | How you act |
 |--------|----------|-------------|
-| Terminal TUI | browsing a room and picking actions without memorizing command syntax | choose a player, search or select an action, then pick a target or enter text |
+| Terminal TUI | browsing a room and picking actions without memorizing command syntax | choose a player, search or select an action, then fill its argument form |
 | Terminal REPL | keyboard-first play, scripts, and fast command entry | type canonical or natural commands, with tab completion and clickable names |
 | Bunnyland Toon | visual room play with sprites and mouse movement | click in the room or use the web action menu |
 

@@ -427,6 +427,14 @@ def test_speech_action_metadata_exposes_intent_and_approach_arguments():
     assert definitions["tell"].arguments["intent"].kind == "string"
     assert definitions["tell"].arguments["approach"].kind == "string"
 
+    # The message body is required so clients (TUI, toon) prompt for it before
+    # submitting; optional flavor arguments stay optional.
+    assert definitions["say"].arguments["text"].required is True
+    assert definitions["say"].arguments["intent"].required is False
+    assert definitions["tell"].arguments["target_id"].required is True
+    assert definitions["tell"].arguments["text"].required is True
+    assert definitions["tell"].arguments["audible"].required is False
+
 
 def test_imported_plugin_ids_are_namespaced_and_selectable_by_short_id(monkeypatch):
     install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])

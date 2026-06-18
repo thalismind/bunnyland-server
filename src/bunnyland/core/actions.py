@@ -329,6 +329,7 @@ def _definition(
     description: str | None = None,
     lane: Lane = Lane.WORLD,
     cost: CommandCost = _ACTION,
+    required: tuple[str, ...] = (),
     patterns: tuple[str | ActionPattern, ...] = (),
     examples: tuple[str, ...] = (),
 ) -> ActionDefinition:
@@ -340,7 +341,7 @@ def _definition(
         description=description or f"Character action: {command_type.replace('-', ' ')}",
         lane=lane,
         cost=cost,
-        arguments={key: _argument_for_key(key) for key in args},
+        arguments={key: _argument_for_key(key, required=key in required) for key in args},
         natural_patterns=tuple(
             pattern if isinstance(pattern, ActionPattern) else ActionPattern(pattern)
             for pattern in patterns
@@ -494,6 +495,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("text", "intent", "approach"),
         tool_name="say",
         cost=_SPEECH,
+        required=("text",),
         patterns=("say {text}",),
     ),
     _definition(
@@ -501,6 +503,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("target_id", "text", "intent", "approach", "audible"),
         tool_name="tell",
         cost=_SPEECH,
+        required=("target_id", "text"),
         patterns=("tell {target_id:word} {text}",),
     ),
     _definition(

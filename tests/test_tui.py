@@ -24,7 +24,7 @@ from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
 from bunnyland.tui import app as tui_app
-from bunnyland.tui.app import BunnylandTUI, TargetPicker, TextPrompt
+from bunnyland.tui.app import ActionForm, BunnylandTUI, FormField
 from bunnyland.tui.backend import Backend, LocalBackend, RemoteBackend, persistent_client_id
 from bunnyland.tui.events import EventNarrator
 from bunnyland.tui.model import World, entity_icon, entity_name, entity_type
@@ -867,59 +867,75 @@ async def _select_player(app, pilot):
     await pilot.pause()
 
 
-async def test_target_picker_selects_and_cancels():
-    from textual.widgets import OptionList
+async def test_action_form_dropdown_selects_and_cancels():
+    from textual.widgets import Select
 
-    move = next(v for v in ACTION_VERBS if v.tool == "move")
     candidates = World.parse(_snapshot()).target_candidates(PLAYER, "exits")
+    field = FormField(
+        key="exit_id", label="exit", kind="entity", required=True,
+        candidates=tuple(candidates),
+    )
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     results = []
 
     async with app.run_test() as pilot:
-        screen = TargetPicker(move, candidates)
+        screen = ActionForm("Move", [field])
         app.push_screen(screen, callback=results.append)
         await pilot.pause()
-        screen.query_one("#picker-list", OptionList).highlighted = 0
-        await pilot.press("enter")
+        screen.query_one("#field-exit_id", Select).value = HALL
+        screen.query_one("#form-submit").press()
         await pilot.pause()
-        assert results[-1] == HALL
+        assert results[-1] == {"exit_id": HALL}
 
-        empty_screen = TargetPicker(move, [])
-        app.push_screen(empty_screen, callback=results.append)
-        await pilot.pause()
-        await pilot.press("escape")
-        await pilot.pause()
-        assert results[-1] is None
-
-
-async def test_text_prompt_submits_text_and_cancel():
-    from textual.widgets import Input
-
-    app = BunnylandTUI(RecordingBackend(_snapshot()))
-    results = []
-
-    async with app.run_test() as pilot:
-        prompt = TextPrompt("Say — text")
-        app.push_screen(prompt, callback=results.append)
-        await pilot.pause()
-        prompt.query_one("#prompt-input", Input).value = "hello"
-        await pilot.press("enter")
-        await pilot.pause()
-        assert results[-1] == "hello"
-
-        blank_prompt = TextPrompt("Say — text")
-        app.push_screen(blank_prompt, callback=results.append)
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-        assert results[-1] is None
-
-        cancelled = TextPrompt("Say — text")
+        cancelled = ActionForm("Move", [field])
         app.push_screen(cancelled, callback=results.append)
         await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
         assert results[-1] is None
+
+
+async def test_action_form_text_field_submits_and_blocks_when_required():
+    from textual.widgets import Input, Label
+
+    field = FormField(key="text", label="text", kind="string", required=True)
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+
+    async with app.run_test() as pilot:
+        screen = ActionForm("Say", [field])
+        app.push_screen(screen, callback=results.append)
+        await pilot.pause()
+        screen.query_one("#field-text", Input).value = "hello"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert results[-1] == {"text": "hello"}
+
+        # A blank required field reports an error and does not submit (no new result).
+        blocked = ActionForm("Say", [field])
+        app.push_screen(blocked, callback=results.append)
+        await pilot.pause()
+        blocked.query_one("#form-submit").press()
+        await pilot.pause()
+        assert "required" in str(blocked.query_one("#form-error", Label).render())
+        assert len(results) == 1
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert results[-1] is None
+
+
+async def test_action_form_renders_numeric_input_for_number_fields():
+    from textual.widgets import Input
+
+    field = FormField(key="amount", label="amount", kind="number", required=True)
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+
+    async with app.run_test() as pilot:
+        screen = ActionForm("Trade", [field])
+        app.push_screen(screen)
+        await pilot.pause()
+        assert screen.query_one("#field-amount", Input).type == "number"
 
 
 async def test_intro_splash_fades_and_dismisses():
@@ -1013,11 +1029,12 @@ async def test_app_uses_projected_actions_and_target_groups(monkeypatch):
         assert "Custom Inspect" in str(verbs.get_option_at_index(0).prompt)
         assert "1 FP" in str(verbs.get_option_at_index(0).prompt)
 
-        async def fake_pick(screen):
-            assert isinstance(screen, TargetPicker)
-            return APPLE
+        async def fake_form(screen):
+            assert isinstance(screen, ActionForm)
+            assert [field.key for field in screen.fields] == ["target_id"]
+            return {"target_id": APPLE}
 
-        monkeypatch.setattr(app, "push_screen_wait", fake_pick)
+        monkeypatch.setattr(app, "push_screen_wait", fake_form)
         app._verb_selected(SimpleNamespace(option=SimpleNamespace(id=verbs.get_option_at_index(0).id)))
         await pilot.pause()
 
@@ -1026,6 +1043,23 @@ async def test_app_uses_projected_actions_and_target_groups(monkeypatch):
         assert command["payload"] == {"target_id": APPLE}
         assert command["cost"] == {"action": 0, "focus": 1}
         assert command["lane"] == "focus"
+
+
+async def test_app_ignores_second_action_form_while_one_is_open():
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        field = FormField(key="text", label="text", kind="string", required=True)
+        app.push_screen(ActionForm("Say", [field]))
+        await pilot.pause()
+        assert sum(isinstance(s, ActionForm) for s in app.screen_stack) == 1
+
+        # Selecting another action while a form is open is a no-op: no second form, no submit.
+        say = next(v for v in ACTION_VERBS if v.tool == "say")
+        await app._do_verb(say)
+        await pilot.pause()
+        assert sum(isinstance(s, ActionForm) for s in app.screen_stack) == 1
+        assert app.backend.commands == []
 
 
 async def test_app_refresh_preserves_stable_action_list_position():
@@ -1233,19 +1267,19 @@ async def test_app_member_and_verb_selection_handlers():
         assert app.backend.commands[-1]["command_type"] == "wait"
 
 
-async def test_app_target_picker_action_selection_runs_in_worker(monkeypatch):
+async def test_app_action_form_selection_runs_in_worker(monkeypatch):
     from textual.worker import get_current_worker
 
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
 
-        async def fake_pick(screen):
-            assert isinstance(screen, TargetPicker)
+        async def fake_form(screen):
+            assert isinstance(screen, ActionForm)
             get_current_worker()
-            return HALL
+            return {"exit_id": HALL}
 
-        monkeypatch.setattr(app, "push_screen_wait", fake_pick)
+        monkeypatch.setattr(app, "push_screen_wait", fake_form)
 
         app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="move")))
         await pilot.pause()
@@ -1296,16 +1330,19 @@ async def test_app_syncs_picker_and_noops_reselecting_same_player():
         assert app.selected_id == APPLE
 
 
-async def test_app_move_uses_target_picker(monkeypatch):
+async def test_app_move_uses_action_form_dropdown(monkeypatch):
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
 
-        async def fake_pick(screen):
-            assert isinstance(screen, TargetPicker)
-            return HALL  # choose the north exit
+        async def fake_form(screen):
+            assert isinstance(screen, ActionForm)
+            # the exit argument is offered as a dropdown of nearby candidates
+            (exit_field,) = screen.fields
+            assert exit_field.candidates is not None
+            return {"exit_id": HALL}  # choose the north exit
 
-        monkeypatch.setattr(app, "push_screen_wait", fake_pick)
+        monkeypatch.setattr(app, "push_screen_wait", fake_form)
         move = next(v for v in ACTION_VERBS if v.tool == "move")
         await app._do_verb(move)
         cmd = app.backend.commands[-1]
@@ -1313,16 +1350,17 @@ async def test_app_move_uses_target_picker(monkeypatch):
         assert cmd["payload"] == {"exit_id": HALL}
 
 
-async def test_app_target_and_prompt_cancellations_submit_nothing(monkeypatch):
+async def test_app_action_form_cancellation_submits_nothing(monkeypatch):
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
-        choices = iter([MARLOW, None])
 
-        async def fake_pick(screen):
-            return next(choices)
+        async def fake_form(screen):
+            # tell collects both its target dropdown and message in one form
+            assert {field.key for field in screen.fields} == {"target_id", "text"}
+            return None  # user cancelled the form
 
-        monkeypatch.setattr(app, "push_screen_wait", fake_pick)
+        monkeypatch.setattr(app, "push_screen_wait", fake_form)
         tell = next(v for v in ACTION_VERBS if v.tool == "tell")
         await app._do_verb(tell)
         assert app.backend.commands == []
@@ -1346,25 +1384,26 @@ async def test_app_say_collects_text(monkeypatch):
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
 
-        async def fake_prompt(screen):
-            assert isinstance(screen, TextPrompt)
-            return "hello terminal"
+        async def fake_form(screen):
+            assert isinstance(screen, ActionForm)
+            assert [field.key for field in screen.fields] == ["text"]
+            return {"text": "hello terminal"}
 
-        monkeypatch.setattr(app, "push_screen_wait", fake_prompt)
+        monkeypatch.setattr(app, "push_screen_wait", fake_form)
         say = next(v for v in ACTION_VERBS if v.tool == "say")
         await app._do_verb(say)
         assert app.backend.commands[-1]["payload"] == {"text": "hello terminal"}
 
 
-async def test_app_cancelled_target_submits_nothing(monkeypatch):
+async def test_app_cancelled_form_submits_nothing(monkeypatch):
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
 
-        async def fake_pick(screen):
+        async def fake_form(screen):
             return None  # user pressed escape
 
-        monkeypatch.setattr(app, "push_screen_wait", fake_pick)
+        monkeypatch.setattr(app, "push_screen_wait", fake_form)
         await app._do_verb(next(v for v in ACTION_VERBS if v.tool == "move"))
         assert app.backend.commands == []
 

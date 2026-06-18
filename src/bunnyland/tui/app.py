@@ -5,6 +5,7 @@ right, click to select, pick a target after the action — the toon client in a 
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 
 from rich.text import Text
 from textual import on
@@ -20,7 +21,7 @@ from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, LocalBackend, RemoteBackend
 from .events import EventNarrator
-from .model import World, entity_icon, entity_name, fmt_points, has
+from .model import Target, World, entity_icon, entity_name, fmt_points, has
 from .splash import IntroSplash
 from .verbs import ACTION_VERBS, Verb
 
@@ -133,62 +134,99 @@ def _action_arguments(action: dict) -> list[dict]:
     return list(action.get("arguments") or [])
 
 
-class TargetPicker(ModalScreen[str]):
-    """Modal list of candidate targets for a verb; dismisses with the chosen id or None."""
+@dataclass(frozen=True)
+class FormField:
+    """One prompted action argument and the widget that should collect it."""
+
+    key: str
+    label: str
+    kind: str
+    required: bool
+    candidates: tuple[Target, ...] | None = None
+
+
+class ActionForm(ModalScreen[dict | None]):
+    """Modal form that collects an action's arguments in one screen: a dropdown for
+    target and boolean fields, a numeric input for numbers, and a text input otherwise.
+    Dismisses with the payload dict, or ``None`` when cancelled.
+    """
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, verb: Verb | str, candidates) -> None:
-        super().__init__()
-        self.title_text = verb.label if isinstance(verb, Verb) else verb
-        self.candidates = candidates
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="picker"):
-            yield Label(f"{self.title_text} — choose a target", id="picker-title")
-            if self.candidates:
-                yield OptionList(
-                    *[Option(f"{c.icon} {c.label}", id=c.value) for c in self.candidates],
-                    id="picker-list",
-                )
-            else:
-                yield Label("No valid targets nearby.", id="picker-empty")
-
-    def on_mount(self) -> None:
-        if self.candidates:
-            self.query_one("#picker-list", OptionList).focus()
-
-    @on(OptionList.OptionSelected, "#picker-list")
-    def _chosen(self, event: OptionList.OptionSelected) -> None:
-        self.dismiss(event.option.id)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class TextPrompt(ModalScreen[str]):
-    """Modal single-line input; dismisses with the text or None."""
-
-    BINDINGS = [("escape", "cancel", "Cancel")]
-
-    def __init__(self, title: str) -> None:
+    def __init__(self, title: str, fields: list[FormField]) -> None:
         super().__init__()
         self.title_text = title
+        self.fields = fields
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="prompt"):
-            yield Label(self.title_text, id="prompt-title")
-            yield Input(id="prompt-input")
+        with Vertical(id="form"):
+            yield Label(self.title_text, id="form-title")
+            for field in self.fields:
+                label = f"{field.label} *" if field.required else field.label
+                yield Label(label, classes="form-label")
+                yield self._field_widget(field)
+            yield Label("", id="form-error")
+            with Horizontal(id="form-buttons"):
+                yield Button("Submit", id="form-submit", variant="primary")
+                yield Button("Cancel", id="form-cancel")
+
+    def _field_widget(self, field: FormField):
+        widget_id = f"field-{field.key}"
+        if field.candidates is not None:
+            return Select(
+                [(f"{c.icon} {c.label}", c.value) for c in field.candidates],
+                id=widget_id,
+                prompt=f"— choose {field.label} —",
+                allow_blank=True,
+            )
+        if field.kind == "boolean":
+            return Select(
+                [("yes", "true"), ("no", "false")],
+                id=widget_id,
+                prompt="— choose —",
+                allow_blank=True,
+            )
+        return Input(id=widget_id, type="number" if field.kind == "number" else "text")
 
     def on_mount(self) -> None:
-        self.query_one("#prompt-input", Input).focus()
+        for field in self.fields:
+            try:
+                self.query_one(f"#field-{field.key}").focus()
+            except NoMatches:
+                continue
+            break
 
-    @on(Input.Submitted, "#prompt-input")
-    def _submitted(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value or None)
+    @on(Input.Submitted)
+    def _input_submitted(self, _event: Input.Submitted) -> None:
+        self._try_submit()
+
+    @on(Button.Pressed, "#form-submit")
+    def _submit_pressed(self, _event: Button.Pressed) -> None:
+        self._try_submit()
+
+    @on(Button.Pressed, "#form-cancel")
+    def _cancel_pressed(self, _event: Button.Pressed) -> None:
+        self.dismiss(None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def _value_for(self, field: FormField) -> str | None:
+        widget = self.query_one(f"#field-{field.key}")
+        if isinstance(widget, Select):
+            return None if widget.value is Select.BLANK else str(widget.value)
+        return widget.value.strip() or None
+
+    def _try_submit(self) -> None:
+        payload: dict = {}
+        for field in self.fields:
+            value = self._value_for(field)
+            if field.required and value is None:
+                self.query_one("#form-error", Label).update(f"{field.label} is required.")
+                return
+            if value is not None:
+                payload[field.key] = value
+        self.dismiss(payload)
 
 
 class BunnylandTUI(App[None]):
@@ -208,13 +246,16 @@ class BunnylandTUI(App[None]):
     #action-filter-row { height: 3; }
     #action-filter { width: 1fr; }
     #action-filter-clear { width: 9; min-width: 9; }
-    #picker, #prompt {
+    #form {
         width: 60; height: auto; max-height: 80%;
         border: thick $accent; background: $surface; padding: 1 2;
     }
-    TargetPicker, TextPrompt { align: center middle; }
-    #picker-title, #prompt-title { text-style: bold; padding-bottom: 1; }
-    #picker-empty { color: $text-muted; }
+    ActionForm { align: center middle; }
+    #form-title { text-style: bold; padding-bottom: 1; }
+    .form-label { color: $text-muted; padding-top: 1; }
+    #form-error { color: $error; }
+    #form-buttons { height: auto; padding-top: 1; }
+    #form-submit { margin-right: 1; }
     """
 
     BINDINGS = [
@@ -558,32 +599,48 @@ class BunnylandTUI(App[None]):
     async def _do_verb(self, verb: Verb) -> None:
         await self._do_action(_legacy_action_view(verb))
 
-    async def _do_action(self, action: dict) -> None:
-        if not self.player_id or not self.control:
-            return
-        payload: dict = {}
+    def _action_fields(self, action: dict) -> list[FormField]:
+        # Prompt for every required argument plus any entity argument that has a target
+        # group, so the form can offer a dropdown of nearby candidates.
+        fields: list[FormField] = []
         for argument in _action_arguments(action):
             key = argument.get("key")
             if not key:
                 continue
+            required = bool(argument.get("required"))
             target_group = argument.get("target_group")
-            if target_group:
-                candidates = self.world.target_candidates(self.player_id, target_group)
-                choice = await self.push_screen_wait(
-                    TargetPicker(_action_title(action), candidates)
-                )
-                if not choice:
-                    return
-                payload[key] = choice
+            if not required and not target_group:
                 continue
-            if argument.get("required"):
-                label = argument.get("title") or key
-                value = await self.push_screen_wait(
-                    TextPrompt(f"{_action_title(action)} — {label}")
+            candidates = (
+                tuple(self.world.target_candidates(self.player_id, target_group))
+                if target_group
+                else None
+            )
+            fields.append(
+                FormField(
+                    key=key,
+                    label=str(argument.get("title") or key),
+                    kind=str(argument.get("kind") or "string"),
+                    required=required,
+                    candidates=candidates,
                 )
-                if not value:
-                    return
-                payload[key] = value
+            )
+        return fields
+
+    async def _do_action(self, action: dict) -> None:
+        if not self.player_id or not self.control:
+            return
+        # Only one action form may be open at a time; ignore a second selection while one
+        # is still on the screen stack.
+        if any(isinstance(screen, ActionForm) for screen in self.screen_stack):
+            return
+        payload: dict = {}
+        fields = self._action_fields(action)
+        if fields:
+            result = await self.push_screen_wait(ActionForm(_action_title(action), fields))
+            if result is None:
+                return
+            payload = result
 
         cost = _action_cost(action)
         await self.backend.submit({

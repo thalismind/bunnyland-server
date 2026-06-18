@@ -57,13 +57,17 @@ queued actions.
 Type in **Search actions** to filter the action list by title, tool name, or command type.
 Use **Clear** to reset the filter.
 
-Choose an action from the list:
+Choose an action from the list. Actions with arguments open a single form that collects
+every required field at once:
 
-- targeted actions open a picker with valid nearby targets;
-- text actions open a prompt for the message or note;
+- target fields show a dropdown of valid nearby candidates;
+- number fields show a numeric input;
+- other fields (such as a message or note) show a text input;
+- the form will not submit while a required field is blank;
 - actions you cannot afford are disabled until points recover.
 
-The server still validates every submitted command. If the room changes, a target becomes
+Only one action form is open at a time. The server still validates every submitted
+command. If the room changes, a target becomes
 unreachable, or a command is no longer valid, the server rejects it even if the TUI had
 shown the option.
 
@@ -82,7 +86,7 @@ character's queue.
 |-----|--------|
 | `r` | refresh your view now |
 | `q` | quit |
-| `Esc` | close a target or text prompt |
+| `Esc` | close the action form |
 
 ## Example session
 
