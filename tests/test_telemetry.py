@@ -8,6 +8,8 @@ needed.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from conftest import build_scenario
 
@@ -169,6 +171,28 @@ def _metric_points(reader):
             for metric in scope_metric.metrics:
                 points.setdefault(metric.name, []).extend(metric.data.data_points)
     return points
+
+
+@pytestmark_otel
+def test_trace_file_exporter_writes_jsonl(monkeypatch, tmp_path):
+    trace_path = tmp_path / "release.trace.jsonl"
+    monkeypatch.setenv("BUNNYLAND_OTEL_ENABLED", "1")
+    monkeypatch.setenv("BUNNYLAND_OTEL_TRACE_FILE", str(trace_path))
+    monkeypatch.setenv("OTEL_METRICS_EXPORTER", "none")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "bunnyland-release-test")
+
+    telemetry.reset_for_tests()
+    assert telemetry.init_telemetry() is True
+    with telemetry.span("release.multiclient", {"client.count": 3}):
+        pass
+    telemetry.reset_for_tests()
+
+    rows = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert rows[0]["name"] == "release.multiclient"
+    assert rows[0]["trace_id"]
+    assert rows[0]["span_id"]
+    assert rows[0]["attributes"]["client.count"] == 3
+    assert rows[0]["resource"]["service.name"] == "bunnyland-release-test"
 
 
 @pytestmark_otel

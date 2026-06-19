@@ -17,10 +17,12 @@ operator has not set ``OTEL_SERVICE_NAME``.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 try:  # pragma: no cover - import outcome depends on whether the extra is installed
@@ -219,22 +221,87 @@ def _build_otlp_providers() -> tuple[Any, Any]:  # pragma: no cover - real expor
     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
     resource = Resource.create(
         {"service.name": os.environ.get("OTEL_SERVICE_NAME", "bunnyland")}
     )
     tracer_provider = TracerProvider(resource=resource)
-    tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace_file = (os.environ.get("BUNNYLAND_OTEL_TRACE_FILE") or "").strip()
+    if trace_file:
+        tracer_provider.add_span_processor(SimpleSpanProcessor(_JsonlSpanExporter(trace_file)))
+    else:
+        tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
 
     # Honour the standard OTEL_METRICS_EXPORTER=none so a traces-only backend (e.g. Tempo)
     # is not flooded with metric exports it cannot store. Instruments still no-op safely.
-    if (os.environ.get("OTEL_METRICS_EXPORTER") or "").strip().lower() == "none":
+    metrics_exporter = (os.environ.get("OTEL_METRICS_EXPORTER") or "").strip().lower()
+    if metrics_exporter == "none" or (trace_file and not metrics_exporter):
         readers = []
     else:
         readers = [PeriodicExportingMetricReader(OTLPMetricExporter())]
     meter_provider = MeterProvider(resource=resource, metric_readers=readers)
     return tracer_provider, meter_provider
+
+
+class _JsonlSpanExporter:
+    """Write finished spans as newline-delimited JSON for release-test artifacts."""
+
+    def __init__(self, path: str | Path) -> None:
+        from opentelemetry.sdk.trace.export import SpanExportResult
+
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._result_success = SpanExportResult.SUCCESS
+        self._result_failure = SpanExportResult.FAILURE
+
+    def export(self, spans: Any) -> Any:
+        try:
+            with self.path.open("a", encoding="utf-8") as handle:
+                for span in spans:
+                    handle.write(json.dumps(_span_to_json(span), default=str, sort_keys=True))
+                    handle.write("\n")
+            return self._result_success
+        except OSError:
+            return self._result_failure
+
+    def shutdown(self) -> None:
+        return None
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
+def _hex_id(value: int, width: int) -> str:
+    return f"{value:0{width}x}"
+
+
+def _span_to_json(span: Any) -> dict[str, Any]:
+    parent = getattr(span, "parent", None)
+    context = span.context
+    status = getattr(span, "status", None)
+    return {
+        "name": span.name,
+        "trace_id": _hex_id(context.trace_id, 32),
+        "span_id": _hex_id(context.span_id, 16),
+        "parent_span_id": _hex_id(parent.span_id, 16) if parent else None,
+        "start_time_unix_nano": span.start_time,
+        "end_time_unix_nano": span.end_time,
+        "attributes": dict(span.attributes or {}),
+        "events": [
+            {
+                "name": event.name,
+                "timestamp_unix_nano": event.timestamp,
+                "attributes": dict(event.attributes or {}),
+            }
+            for event in span.events
+        ],
+        "status": {
+            "code": str(getattr(status, "status_code", "")),
+            "description": getattr(status, "description", None),
+        },
+        "resource": dict(getattr(span.resource, "attributes", {}) or {}),
+    }
 
 
 def register_world_gauges(actor: Any) -> None:
