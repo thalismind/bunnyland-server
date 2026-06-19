@@ -550,3 +550,28 @@ async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
         assert response.status_code == 200
 
     assert "world.snapshot" in _spans_by_name(span_exporter)
+
+
+@pytestmark_otel
+async def test_controller_assign_endpoint_is_traced(otel_capture):
+    pytest.importorskip("fastapi")
+    from bunnyland.server.app import create_app
+    from bunnyland.server.models import ControllerAssignmentRequest
+
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    app = create_app(scenario.actor)
+    route = next(
+        route for route in app.routes
+        if getattr(route, "path", None) == "/admin/controllers/assign"
+    )
+    await route.endpoint(
+        ControllerAssignmentRequest(
+            character_id=str(scenario.character),
+            controller_id=str(scenario.controller),
+        )
+    )
+
+    span = _spans_by_name(span_exporter)["controller.assign"]
+    assert span.attributes["character.id"] == str(scenario.character)
+    assert span.attributes["controller.id"] == str(scenario.controller)

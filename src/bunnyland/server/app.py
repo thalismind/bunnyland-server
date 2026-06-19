@@ -442,54 +442,58 @@ def create_app(
     async def _assign_controller_request(
         request: ControllerAssignmentRequest,
     ) -> WorldPatchResponse:
-        character_id = parse_entity_id(request.character_id)
-        if character_id is None or not actor.world.has_entity(character_id):
-            raise HTTPException(status_code=404, detail="character does not exist")
-        controller_id = parse_entity_id(request.controller_id)
-        if controller_id is None or not actor.world.has_entity(controller_id):
-            raise HTTPException(status_code=404, detail="controller does not exist")
+        with telemetry.span(
+            "controller.assign",
+            {"character.id": request.character_id, "controller.id": request.controller_id},
+        ):
+            character_id = parse_entity_id(request.character_id)
+            if character_id is None or not actor.world.has_entity(character_id):
+                raise HTTPException(status_code=404, detail="character does not exist")
+            controller_id = parse_entity_id(request.controller_id)
+            if controller_id is None or not actor.world.has_entity(controller_id):
+                raise HTTPException(status_code=404, detail="controller does not exist")
 
-        async with actor._lock:
-            character = actor.world.get_entity(character_id)
-            if not character.has_component(CharacterComponent):
-                raise HTTPException(status_code=400, detail="entity is not a character")
-            controller = actor.world.get_entity(controller_id)
-            kind = actor._controller_kind(controller_id)
-            if kind == "unknown":
-                raise HTTPException(status_code=400, detail="entity is not a controller")
-            if kind == "suspended":
-                reason = controller.get_component(SuspendedControllerComponent).reason
-                generation = actor.suspend(character_id, controller_id, reason=reason)
-            else:
-                generation = actor.assign_controller(character_id, controller_id)
-                if character.has_component(SuspendedComponent):
-                    character.remove_component(SuspendedComponent)
+            async with actor._lock:
+                character = actor.world.get_entity(character_id)
+                if not character.has_component(CharacterComponent):
+                    raise HTTPException(status_code=400, detail="entity is not a character")
+                controller = actor.world.get_entity(controller_id)
+                kind = actor._controller_kind(controller_id)
+                if kind == "unknown":
+                    raise HTTPException(status_code=400, detail="entity is not a controller")
+                if kind == "suspended":
+                    reason = controller.get_component(SuspendedControllerComponent).reason
+                    generation = actor.suspend(character_id, controller_id, reason=reason)
+                else:
+                    generation = actor.assign_controller(character_id, controller_id)
+                    if character.has_component(SuspendedComponent):
+                        character.remove_component(SuspendedComponent)
 
-            response = WorldPatchResponse(
-                world_epoch=actor.epoch,
-                changed_entities=[serialize_entity(actor, character)],
-            )
+                response = WorldPatchResponse(
+                    world_epoch=actor.epoch,
+                    changed_entities=[serialize_entity(actor, character)],
+                )
 
-        await actor.bus.publish(
-            ControllerChangedEvent(
-                **actor._event_base(
-                    actor_id=str(character_id),
-                    generation=generation,
-                    controller_kind=kind,
+            await actor.bus.publish(
+                ControllerChangedEvent(
+                    **actor._event_base(
+                        actor_id=str(character_id),
+                        generation=generation,
+                        controller_kind=kind,
+                    )
                 )
             )
-        )
-        stream.broadcast(
-            {
-                "type": "patch",
-                "data": {
-                    "world_epoch": response.world_epoch,
-                    "changed_entities": [str(character_id)],
-                    "deleted_entities": [],
-                },
-            }
-        )
-        return response
+            stream.broadcast(
+                {
+                    "type": "patch",
+                    "data": {
+                        "world_epoch": response.world_epoch,
+                        "changed_entities": [str(character_id)],
+                        "deleted_entities": [],
+                    },
+                }
+            )
+            return response
 
     def _controller_definitions_response() -> ControllerDefinitionListResponse:
         return ControllerDefinitionListResponse(
