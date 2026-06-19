@@ -57,6 +57,28 @@ class ActionPattern:
 
 
 @dataclass(frozen=True)
+class ActionRequirement:
+    """Coarse, declarative capability gate for an action.
+
+    Each tuple is an *any-of* set of names resolved at runtime against the world's
+    component/edge registries. A character meets the requirement when any one of the
+    sub-checks passes (component present, edge present, or a reachable entity carries a
+    component). This is intentionally a cheap, argument-agnostic hint -- the handler stays
+    the source of truth for fine-grained, argument-specific gates (e.g. skill thresholds).
+    """
+
+    character_components: tuple[str, ...] = ()
+    character_edges: tuple[str, ...] = ()
+    reachable_components: tuple[str, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.character_components or self.character_edges or self.reachable_components
+        )
+
+
+@dataclass(frozen=True)
 class ActionDefinition:
     """Shared metadata for one character action."""
 
@@ -69,6 +91,7 @@ class ActionDefinition:
     arguments: dict[str, ActionArgument] | None = None
     examples: tuple[ActionExample, ...] = ()
     natural_patterns: tuple[ActionPattern, ...] = ()
+    requirement: ActionRequirement = field(default_factory=ActionRequirement)
 
     @property
     def name(self) -> str:
@@ -113,6 +136,7 @@ _ACTION = CommandCost(action=1)
 _SPEECH = CommandCost(action=1, focus=1)
 _FOCUS = CommandCost(focus=1)
 _FREE = CommandCost()
+_NO_REQUIREMENT = ActionRequirement()
 
 REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
     {
@@ -332,6 +356,7 @@ def _definition(
     required: tuple[str, ...] = (),
     patterns: tuple[str | ActionPattern, ...] = (),
     examples: tuple[str, ...] = (),
+    requirement: ActionRequirement = _NO_REQUIREMENT,
 ) -> ActionDefinition:
     title = command_type.replace("-", " ").title()
     return ActionDefinition(
@@ -347,6 +372,7 @@ def _definition(
             for pattern in patterns
         ),
         examples=tuple(ActionExample(example, natural=True) for example in examples),
+        requirement=requirement,
     )
 
 
@@ -1184,16 +1210,36 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="change_faction_rank",
     ),
     _definition("serve-jail-time", tool_name="serve_jail_time"),
-    _definition("pick-lock", ("lock_id",), tool_name="pick_lock"),
+    _definition(
+        "pick-lock",
+        ("lock_id",),
+        tool_name="pick_lock",
+        requirement=ActionRequirement(character_components=("SkillSetComponent",)),
+    ),
     _definition(
         "read-lore-book",
         ("book_id",),
         tool_name="read_lore_book",
         patterns=("read {book_id}",),
     ),
-    _definition("learn-spell", ("spell_id",), tool_name="learn_spell"),
-    _definition("cast-dragon-spell", ("spell_id",), tool_name="cast_dragon_spell"),
-    _definition("brew-potion", ("recipe_id",), tool_name="brew_potion"),
+    _definition(
+        "learn-spell",
+        ("spell_id",),
+        tool_name="learn_spell",
+        requirement=ActionRequirement(character_components=("SkillSetComponent",)),
+    ),
+    _definition(
+        "cast-dragon-spell",
+        ("spell_id",),
+        tool_name="cast_dragon_spell",
+        requirement=ActionRequirement(character_edges=("KnowsSpell",)),
+    ),
+    _definition(
+        "brew-potion",
+        ("recipe_id",),
+        tool_name="brew_potion",
+        requirement=ActionRequirement(character_components=("SkillSetComponent",)),
+    ),
     _definition("track-quest", ("quest_id",), tool_name="track_quest"),
     _definition("decline-quest", ("quest_id",), tool_name="decline_quest"),
     _definition(
@@ -1853,6 +1899,7 @@ __all__ = [
     "ActionDefinition",
     "ActionExample",
     "ActionPattern",
+    "ActionRequirement",
     "ArgumentKind",
     "DEFAULT_ACTION_DEFINITIONS",
     "REFERENCE_ARG_KEYS",

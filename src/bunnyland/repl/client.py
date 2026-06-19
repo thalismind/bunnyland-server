@@ -240,7 +240,7 @@ class BunnylandRepl:
             else:
                 payload[key] = value
 
-        await self.backend.submit({
+        result = await self.backend.submit({
             "character_id": self.player_id,
             "controller_id": self.control[0],
             "controller_generation": self.control[1],
@@ -251,6 +251,9 @@ class BunnylandRepl:
             "on_insufficient_points": "queue",
         })
         detail = " ".join(f"{k}={v}" for k, v in payload.items())
+        if not result.accepted:
+            reason = result.reason or "command rejected"
+            return Text(f"✗ {definition.command_type} — {reason}".rstrip(), style="dark_orange")
         return Text(f"» {definition.command_type} {detail}".rstrip(), style="green")
 
     # ── rendering ─────────────────────────────────────────────────────────────
@@ -334,22 +337,48 @@ class BunnylandRepl:
             f"FP {fmt_points(pts['fp'])}/{fmt_points(pts['fp_max'])}"
         )
 
+    def _availability(self) -> dict[str, dict]:
+        """Per-command availability from the current projection, keyed by command type."""
+        return {
+            str(action.get("command_type")): action
+            for action in (self.world.actions or [])
+            if action.get("command_type")
+        }
+
     def render_help(self, topic: str) -> Text:
+        availability = self._availability()
         if topic and topic in self._defs:
             definition = self._defs[topic]
             keys = ", ".join(definition.arg_keys) or "(none)"
-            return Text(
+            out = Text(
                 f"{topic} — {definition.title or definition.command_type}\n  parameters: {keys}"
             )
-        commands = ", ".join(sorted(self._defs))
+            info = availability.get(definition.command_type)
+            if info is not None and not info.get("available", True):
+                reason = info.get("unavailable_reason") or "unavailable"
+                out.append(f"\n  unavailable: {reason}", style="dim")
+            return out
+
+        def is_available(tool: str) -> bool:
+            info = availability.get(self._defs[tool].command_type)
+            return True if info is None else bool(info.get("available", True))
+
+        tools = sorted(self._defs)
+        # Available commands first and prominent; unavailable ones still listed but dimmed,
+        # since a player may still choose to queue them.
+        available = [tool for tool in tools if is_available(tool)]
+        unavailable = [tool for tool in tools if not is_available(tool)]
         meta = ", ".join(m for m in META_COMMANDS if m != "exit")
-        return Text(
-            "Commands (try 'help <command>' for parameters):\n"
-            f"  {commands}\n"
-            f"Meta: {meta}\n"
+        out = Text("Commands (try 'help <command>' for parameters):\n")
+        out.append(f"  {', '.join(available)}\n")
+        if unavailable:
+            out.append(f"  unavailable: {', '.join(unavailable)}\n", style="dim")
+        out.append(f"Meta: {meta}\n")
+        out.append(
             "Forms: 'move direction=north' (named) or 'go north' (natural). "
             "Click a highlighted target to drop its name into the input."
         )
+        return out
 
     # ── completion ────────────────────────────────────────────────────────────
     def complete(self, line: str) -> list[str]:

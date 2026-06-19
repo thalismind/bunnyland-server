@@ -22,6 +22,7 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     PortableComponent,
+    SayHandler,
     TakeHandler,
     container_of,
     spawn_entity,
@@ -853,6 +854,7 @@ def test_behavior_profile_agent_prefers_goal_over_profile_fallback():
 
 async def test_dispatch_submits_behavior_profile_agent_command():
     scenario = build_scenario()
+    scenario.actor.register_handler(TakeHandler())
     _add_item(scenario, "work crate")
     builder = PromptBuilder(scenario.actor.world)
     dispatch = ControllerDispatch(scenario.actor, builder, BehaviorProfileAgent("worker"))
@@ -866,6 +868,7 @@ async def test_dispatch_submits_behavior_profile_agent_command():
 
 async def test_dispatch_submits_goal_directed_agent_command():
     scenario = build_scenario()
+    scenario.actor.register_handler(TakeHandler())
     world = scenario.actor.world
     world.get_entity(scenario.character).add_component(
         GoalComponent(active_goals=("find the silver key",))
@@ -1516,6 +1519,7 @@ def test_persona_contradiction_guard_covers_relationship_line_shapes():
 
 async def test_dispatch_flags_persona_contradiction_without_blocking_valid_action():
     scenario = build_scenario()
+    scenario.actor.register_handler(SayHandler())
     hazel = spawn_entity(
         scenario.actor.world,
         [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],

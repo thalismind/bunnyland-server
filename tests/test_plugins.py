@@ -409,6 +409,36 @@ def test_builtin_handler_command_types_are_in_the_shared_action_catalog():
     assert handler_types - catalog == set()
 
 
+def _all_subclass_names(base) -> set[str]:
+    names: set[str] = set()
+    for subclass in base.__subclasses__():
+        names.add(subclass.__name__)
+        names |= _all_subclass_names(subclass)
+    return names
+
+
+def test_action_requirement_names_resolve_to_real_components_and_edges():
+    # A typo'd requirement name fails closed (the action looks perpetually unavailable
+    # and is early-rejected), so guard the catalogue against drift. Importing the plugins
+    # loads every mechanic module, registering its Component/Edge subclasses.
+    from relics import Component, Edge
+
+    bunnyland_plugins()
+    component_names = _all_subclass_names(Component)
+    edge_names = _all_subclass_names(Edge)
+
+    for definition in DEFAULT_ACTION_DEFINITIONS:
+        requirement = definition.requirement
+        for name in (*requirement.character_components, *requirement.reachable_components):
+            assert name in component_names, (
+                f"{definition.command_type}: unknown component requirement {name!r}"
+            )
+        for name in requirement.character_edges:
+            assert name in edge_names, (
+                f"{definition.command_type}: unknown edge requirement {name!r}"
+            )
+
+
 def test_speech_action_metadata_exposes_intent_and_approach_arguments():
     definitions = {
         definition.command_type: definition for definition in DEFAULT_ACTION_DEFINITIONS

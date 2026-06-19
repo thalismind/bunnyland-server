@@ -20,7 +20,7 @@ from bunnyland.repl.client import (
     resolve_name,
 )
 from bunnyland.repl.completion import complete_line, reference_candidates, value_candidates
-from bunnyland.tui.backend import Backend
+from bunnyland.tui.backend import Backend, SubmitResult
 from bunnyland.tui.model import World, entity_name
 from bunnyland.tui.splash import IntroSplash
 
@@ -239,9 +239,9 @@ class RecordingBackend(Backend):
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return _client_view_from_snapshot(await self.fetch_snapshot(), character_id)
 
-    async def submit(self, command: dict) -> bool:
+    async def submit(self, command: dict) -> SubmitResult:
         self.commands.append(command)
-        return True
+        return SubmitResult(accepted=True)
 
     async def claim(self, player_id, world):
         return World.parse(self.snapshot).control(player_id) or ("controller:new", 0)
@@ -410,6 +410,60 @@ async def test_dispatch_action_with_string_argument_passes_through():
     repl = _repl()
     await repl.dispatch("say text=hello there")
     assert repl.backend.commands[-1]["payload"] == {"text": "hello there"}
+
+
+async def test_dispatch_action_surfaces_submit_rejection_reason():
+    class RejectingBackend(RecordingBackend):
+        async def submit(self, command: dict) -> SubmitResult:
+            self.commands.append(command)
+            return SubmitResult(accepted=False, reason="character is asleep")
+
+    repl = BunnylandRepl(RejectingBackend(_snapshot()))
+    repl.world = World.parse(_snapshot())
+    repl.character_list = _character_list_from_snapshot(_snapshot())
+    repl.player_id = PLAYER
+    repl.control = ("controller:1", 2)
+
+    message = await repl.dispatch("wait")
+    assert message.plain.startswith("✗ wait")
+    assert "character is asleep" in message.plain
+
+
+def test_render_help_orders_available_first_and_dims_unavailable():
+    repl = _repl()
+    repl.world.actions = [
+        {"command_type": "wait", "available": True, "unavailable_reason": ""},
+        {
+            "command_type": "pick-lock",
+            "available": False,
+            "unavailable_reason": "missing a required skill or item",
+        },
+    ]
+
+    listing = repl.render_help("").plain
+    lines = listing.splitlines()
+    # The gated verb is listed only on the dimmed "unavailable:" line; available verbs
+    # (everything else, e.g. "wait") stay on the main command line.
+    unavailable_line = next(line for line in lines if "unavailable:" in line)
+    available_line = next(
+        line for line in lines if "wait" in line and "unavailable:" not in line
+    )
+    assert "pick_lock" in unavailable_line
+    assert "pick_lock" not in available_line
+
+
+def test_render_help_topic_shows_unavailable_reason():
+    repl = _repl()
+    repl.world.actions = [
+        {
+            "command_type": "pick-lock",
+            "available": False,
+            "unavailable_reason": "missing a required skill or item",
+        },
+    ]
+
+    topic = repl.render_help("pick_lock").plain
+    assert "unavailable: missing a required skill or item" in topic
 
 
 async def test_dispatch_unresolved_reference_does_not_submit():

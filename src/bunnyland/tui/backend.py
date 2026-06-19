@@ -11,6 +11,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -60,6 +61,21 @@ def persistent_client_id(path: Path = CLIENT_ID_PATH) -> str:
     return client_id
 
 
+@dataclass(frozen=True)
+class SubmitResult:
+    """Outcome of submitting a command: accepted for queuing, or rejected at submit.
+
+    Mirrors the server's ``SubmissionOutcome`` / ``CommandResponse`` so both the local and
+    remote backends report the synchronous rejection ``reason`` to the client UI.
+    """
+
+    accepted: bool
+    reason: str = ""
+
+    def __bool__(self) -> bool:
+        return self.accepted
+
+
 class Backend(ABC):
     """A source of world snapshots that also accepts player commands."""
 
@@ -97,7 +113,7 @@ class Backend(ABC):
         }
 
     @abstractmethod
-    async def submit(self, command: dict) -> bool: ...
+    async def submit(self, command: dict) -> SubmitResult: ...
 
     @abstractmethod
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
@@ -203,9 +219,9 @@ class LocalBackend(Backend):
     async def fetch_queued_commands(self, character_id: str) -> dict:
         return serialize_character_queued_commands(self.actor, character_id).model_dump(mode="json")
 
-    async def submit(self, command: dict) -> bool:
+    async def submit(self, command: dict) -> SubmitResult:
         cost = command.get("cost") or {}
-        await self.actor.submit(
+        outcome = await self.actor.submit(
             build_submitted_command(
                 character_id=command["character_id"],
                 controller_id=command["controller_id"],
@@ -220,7 +236,7 @@ class LocalBackend(Backend):
                 submitted_at_epoch=self.actor.epoch,
             )
         )
-        return True
+        return SubmitResult(accepted=outcome.accepted, reason=outcome.reason)
 
     async def recent_events(self) -> list[dict]:
         return self._events.recent_messages() if self._events is not None else []
@@ -304,9 +320,21 @@ class RemoteBackend(Backend):
         res.raise_for_status()
         return res.json()
 
-    async def submit(self, command: dict) -> bool:
+    async def submit(self, command: dict) -> SubmitResult:
         res = await self._client.post(f"{self.base}/world/commands", json=command)
-        return res.is_success
+        try:
+            body = res.json()
+        except Exception:
+            body = {}
+        if not res.is_success:
+            reason = str(
+                body.get("reason")
+                or f"request failed ({getattr(res, 'status_code', '?')})"
+            )
+            return SubmitResult(accepted=False, reason=reason)
+        return SubmitResult(
+            accepted=bool(body.get("queued", True)), reason=str(body.get("reason", ""))
+        )
 
     async def recent_events(self) -> list[dict]:
         res = await self._client.get(f"{self.base}/world/events/recent")

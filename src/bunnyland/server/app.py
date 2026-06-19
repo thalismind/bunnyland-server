@@ -295,8 +295,12 @@ def create_app(
 
     async def _submit_command_request(request: CommandRequest) -> CommandResponse:
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
-        await actor.submit(command)
-        return CommandResponse(queued=True, command_id=command.command_id)
+        outcome = await actor.submit(command)
+        return CommandResponse(
+            queued=outcome.accepted,
+            command_id=outcome.command_id,
+            reason=outcome.reason,
+        )
 
     def _web_claim_response(
         request: WebControllerFallbackRequest,

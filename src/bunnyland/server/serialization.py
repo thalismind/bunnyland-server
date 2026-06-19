@@ -11,6 +11,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from ..core.actions import ActionDefinition, action_definitions
+from ..core.availability import (
+    AvailabilityResult,
+    evaluate_availability,
+    target_group_for_argument,
+)
 from ..core.commands import Lane, SubmittedCommand
 from ..core.components import (
     ActionPointsComponent,
@@ -522,35 +527,20 @@ def _target_groups(
     }
 
 
-def _target_group_for_argument(definition: ActionDefinition, key: str) -> str | None:
-    if key == "exit_id":
-        return "exits"
-    if key == "target_id" and definition.command_type == "tell":
-        return "characters"
-    if key == "item_id":
-        return "inventory" if definition.command_type in {"drop", "put"} else "reachableItems"
-    if key == "source_id":
-        return "reachableItems"
-    if key == "target_container_id":
-        return "reachableItems"
-    argument = (definition.arguments or {}).get(key)
-    if argument is not None and argument.kind == "entity":
-        return "reachable"
-    return None
-
-
-def _action_view(definition: ActionDefinition) -> ClientActionView:
+def _action_view(
+    definition: ActionDefinition, availability: AvailabilityResult | None = None
+) -> ClientActionView:
     arguments = [
         ClientActionArgumentView(
             key=key,
             title=argument.title,
             kind=argument.kind,
             required=argument.required,
-            target_group=_target_group_for_argument(definition, key),
+            target_group=target_group_for_argument(definition, key),
         )
         for key, argument in (definition.arguments or {}).items()
     ]
-    return ClientActionView(
+    view = ClientActionView(
         command_type=definition.command_type,
         tool_name=definition.name,
         title=definition.title or definition.command_type.replace("-", " ").title(),
@@ -562,6 +552,14 @@ def _action_view(definition: ActionDefinition) -> ClientActionView:
         ),
         arguments=arguments,
     )
+    if availability is not None:
+        view.available = availability.available
+        view.enough_action_points = availability.enough_action_points
+        view.enough_focus_points = availability.enough_focus_points
+        view.has_required_target = availability.has_required_target
+        view.meets_requirements = availability.meets_requirements
+        view.unavailable_reason = availability.reason
+    return view
 
 
 ACTION_SEARCH_MODES = ("substring", "word", "smart")
@@ -677,6 +675,7 @@ def serialize_character_projection(
         )
 
     groups = _target_groups(actor, character, perception.entities, exits)
+    available_command_types = actor.available_command_types()
     return CharacterProjectionResponse(
         world_epoch=actor.epoch,
         character_id=str(character.id),
@@ -688,9 +687,12 @@ def serialize_character_projection(
         controller=_controller_view(character),
         target_groups=groups,
         actions=[
-            _action_view(definition)
+            _action_view(
+                definition,
+                evaluate_availability(actor, character, definition, target_groups=groups),
+            )
             for definition in action_definitions(actor.action_definitions())
-            if definition.command_type in actor.available_command_types()
+            if definition.command_type in available_command_types
         ],
     )
 

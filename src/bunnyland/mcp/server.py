@@ -972,7 +972,21 @@ def create_bunnyland_mcp_app(
             )
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
-        await actor.submit(command)
+        outcome = await actor.submit(command)
+        if not outcome.accepted:
+            return {
+                "ok": False,
+                "queued": False,
+                "command_id": outcome.command_id,
+                "character_id": command.character_id,
+                "command_type": command.command_type,
+                "reason": outcome.reason,
+                "note": (
+                    "Rejected at submission (invalid command). Fix the issue -- e.g. a "
+                    "missing or unreachable target, a missing required argument, or a "
+                    "missing skill/item -- and resend."
+                ),
+            }
         return {
             "ok": True,
             "queued": True,

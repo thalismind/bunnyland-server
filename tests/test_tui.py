@@ -25,7 +25,13 @@ from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
 from bunnyland.tui import app as tui_app
 from bunnyland.tui.app import ActionForm, BunnylandTUI, FormField
-from bunnyland.tui.backend import Backend, LocalBackend, RemoteBackend, persistent_client_id
+from bunnyland.tui.backend import (
+    Backend,
+    LocalBackend,
+    RemoteBackend,
+    SubmitResult,
+    persistent_client_id,
+)
 from bunnyland.tui.events import EventNarrator
 from bunnyland.tui.model import World, entity_icon, entity_name, entity_type
 from bunnyland.tui.splash import IntroSplash
@@ -171,6 +177,12 @@ def _projected_action(**overrides) -> dict:
                 "target_group": "reachableItems",
             }
         ],
+        "available": True,
+        "enough_action_points": True,
+        "enough_focus_points": True,
+        "has_required_target": True,
+        "meets_requirements": True,
+        "unavailable_reason": "",
     }
     action.update(overrides)
     return action
@@ -723,7 +735,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     assert character == {"world_epoch": 7}
     assert room == {"world_epoch": 7}
     assert queued == {"world_epoch": 7}
-    assert submitted is False
+    assert submitted.accepted is False
     assert clients[0].closed is True
     assert clients[0].requests == [
         ("GET", "http://server.example/world/snapshot", None),
@@ -743,6 +755,47 @@ async def test_remote_backend_close_without_client_is_noop():
     assert backend._client is None
 
 
+async def test_remote_backend_submit_reports_rejection_reason():
+    class Response:
+        def __init__(self, *, is_success=True, payload=None, raises=False):
+            self.is_success = is_success
+            self.status_code = 200 if is_success else 422
+            self._payload = payload or {}
+            self._raises = raises
+
+        def json(self):
+            if self._raises:
+                raise ValueError("no body")
+            return self._payload
+
+    class Client:
+        def __init__(self, response):
+            self.response = response
+
+        async def post(self, url, json):
+            return self.response
+
+    accepted = RemoteBackend("http://server.example")
+    accepted._client = Client(Response(payload={"queued": True, "reason": ""}))
+    result = await accepted.submit({"command_type": "wait"})
+    assert result.accepted is True and result.reason == ""
+
+    rejected = RemoteBackend("http://server.example")
+    rejected._client = Client(
+        Response(payload={"queued": False, "reason": "missing required argument: text"})
+    )
+    result = await rejected.submit({"command_type": "say"})
+    assert result.accepted is False
+    assert result.reason == "missing required argument: text"
+
+    # A non-2xx response with an unparseable body still yields a usable reason.
+    errored = RemoteBackend("http://server.example")
+    errored._client = Client(Response(is_success=False, raises=True))
+    result = await errored.submit({"command_type": "say"})
+    assert result.accepted is False
+    assert "422" in result.reason
+
+
 async def test_backend_default_queued_commands_response():
     class MinimalBackend(Backend):
         label = "minimal"
@@ -752,8 +805,8 @@ async def test_backend_default_queued_commands_response():
         async def fetch_snapshot(self) -> dict:
             return {}
 
-        async def submit(self, command: dict) -> bool:
-            return True
+        async def submit(self, command: dict) -> SubmitResult:
+            return SubmitResult(accepted=True)
 
         async def claim(self, player_id: str, world: World):
             return None
@@ -832,9 +885,9 @@ class RecordingBackend(Backend):
             return None
         return copy.deepcopy(self.character_projection)
 
-    async def submit(self, command: dict) -> bool:
+    async def submit(self, command: dict) -> SubmitResult:
         self.commands.append(command)
-        return True
+        return SubmitResult(accepted=True)
 
     async def recent_events(self) -> list[dict]:
         return copy.deepcopy(self.events)
@@ -1408,34 +1461,76 @@ async def test_app_cancelled_form_submits_nothing(monkeypatch):
         assert app.backend.commands == []
 
 
-async def test_app_disables_unaffordable_verbs():
+async def test_app_deemphasizes_unavailable_verbs_but_keeps_them_selectable():
     from textual.widgets import OptionList
 
-    # Drain the projected points so only free verbs are affordable.
+    # An available "wait", and two unavailable actions the projection flagged. They are not
+    # removed or disabled -- only de-emphasized and sorted after the available ones.
     projection = _client_view()
-    projection["points"] = {"action": 0, "action_max": 5, "focus": 0, "focus_max": 3}
     projection["actions"] = [
         _projected_action(
             command_type="move", tool_name="move", title="Move",
             cost={"action": 1, "focus": 0}, arguments=[],
-        ),
-        _projected_action(
-            command_type="say", tool_name="say", title="Say",
-            cost={"action": 1, "focus": 1}, arguments=[],
+            available=False, enough_action_points=False,
+            unavailable_reason="not enough action points",
         ),
         _projected_action(
             command_type="wait", tool_name="wait", title="Wait",
             cost={"action": 0, "focus": 0}, arguments=[],
+        ),
+        _projected_action(
+            command_type="pick-lock", tool_name="pick_lock", title="Pick Lock",
+            cost={"action": 1, "focus": 0}, arguments=[],
+            available=False, meets_requirements=False,
+            unavailable_reason="missing a required skill or item",
         ),
     ]
 
     app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
-        verbs = {o.id: o for o in app.query_one("#verbs", OptionList).options}
-        assert verbs["move"].disabled  # costs 1 AP
-        assert verbs["say"].disabled   # costs 1 AP + 1 FP
-        assert not verbs["wait"].disabled  # free
+        options = list(app.query_one("#verbs", OptionList).options)
+        by_id = {option.id: option for option in options}
+
+        # Nothing is disabled: an unavailable action can still be selected/queued.
+        assert all(not option.disabled for option in options)
+
+        # The available action sorts first; unavailable ones follow.
+        assert options[0].id == "wait"
+        assert {options[1].id, options[2].id} == {"move", "pick_lock"}
+
+        # Unavailable actions are dimmed and show their reason; available ones are not.
+        move_label = by_id["move"].prompt
+        assert move_label.style == "dim"
+        assert "not enough action points" in move_label.plain
+        assert "missing a required skill or item" in by_id["pick_lock"].prompt.plain
+        assert by_id["wait"].prompt.style != "dim"
+
+
+async def test_app_surfaces_submit_rejection_reason():
+
+    projection = _client_view()
+    projection["actions"] = [
+        _projected_action(
+            command_type="wait", tool_name="wait", title="Wait",
+            cost={"action": 0, "focus": 0}, arguments=[],
+        ),
+    ]
+
+    class RejectingBackend(RecordingBackend):
+        async def submit(self, command: dict) -> SubmitResult:
+            self.commands.append(command)
+            return SubmitResult(accepted=False, reason="character is asleep")
+
+    app = BunnylandTUI(RejectingBackend(_snapshot(), character_projection=projection))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app._do_action(
+            next(a for a in app.action_views if a["command_type"] == "wait")
+        )
+        assert any(
+            "character is asleep" in line.plain for line in app.activity_lines
+        )
 
 
 async def test_app_clears_missing_player_after_refresh():

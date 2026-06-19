@@ -17,13 +17,23 @@ import asyncio
 import inspect
 import random
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
+from typing import Any
 
 from relics import EntityId, World
 
 from .. import telemetry
-from .actions import ActionDefinition
+from .actions import (
+    ActionDefinition,
+    action_definitions,
+    inferred_action_definition,
+)
+from .availability import (
+    affordable,
+    lifecycle_block_reason,
+    meets_requirement,
+)
 from .claim_timeout import record_claim_activity
 from .commands import Lane, OnInsufficientPoints, SubmittedCommand
 from .components import (
@@ -86,6 +96,15 @@ AfterTickHook = Callable[["WorldActor"], None | Awaitable[None]]
 
 
 @dataclass(frozen=True)
+class SubmissionOutcome:
+    """Result of submitting a command: accepted for ingestion or rejected outright."""
+
+    accepted: bool
+    command_id: str
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class _LaneOutcome:
     """Result of attempting the command at the front of a lane."""
 
@@ -115,6 +134,8 @@ class WorldActor:
         #: command before it costs anything (spec 20). Plugins register these.
         self._gates: list[CommandGate] = []
         self._after_tick: list[AfterTickHook] = []
+        #: Lazily-built ``command_type -> merged definition`` map for submit validation.
+        self._definition_cache: dict[str, ActionDefinition] | None = None
         self._inbox: asyncio.Queue[SubmittedCommand] = asyncio.Queue()
         self._rng = rng or random.Random()
         self._lock = asyncio.Lock()
@@ -132,6 +153,7 @@ class WorldActor:
 
     def register_action_definition(self, definition: ActionDefinition) -> None:
         self._action_definitions[definition.command_type] = definition
+        self._definition_cache = None
 
     def action_definitions(self) -> tuple[ActionDefinition, ...]:
         return tuple(self._action_definitions.values())
@@ -172,13 +194,18 @@ class WorldActor:
 
     # -- submission ---------------------------------------------------------------------
 
-    async def submit(self, command: SubmittedCommand) -> None:
+    async def submit(self, command: SubmittedCommand) -> SubmissionOutcome:
         """Queue a command for ingestion on the next tick. Never mutates the world.
 
         This is the single submission chokepoint for every source (API, MCP, Discord, and
         the autonomous dispatch), so the ``command.submit`` span here ties a queued command
         back to whatever trace originated it (an HTTP request span, ``controller.run_once``,
         etc.).
+
+        Obviously-invalid commands (no handler, can't act, missing required arguments,
+        invalid/unreachable target, unmet capability, or unaffordable under DENY) are
+        rejected synchronously here instead of being queued to fail at the next tick. The
+        handler at ``_attempt`` remains the final arbiter for everything else.
         """
         with telemetry.span(
             "command.submit",
@@ -189,7 +216,82 @@ class WorldActor:
                 "command.lane": command.lane.value,
             },
         ):
+            reason = self._validate_submission(command)
+            if reason is not None:
+                await self._reject(command, reason)
+                return SubmissionOutcome(
+                    accepted=False, command_id=command.command_id, reason=reason
+                )
             await self._inbox.put(command)
+            return SubmissionOutcome(accepted=True, command_id=command.command_id)
+
+    def _definition_for(self, command_type: str) -> ActionDefinition:
+        if self._definition_cache is None:
+            self._definition_cache = {
+                definition.command_type: definition
+                for definition in action_definitions(self.action_definitions())
+            }
+        return self._definition_cache.get(command_type) or inferred_action_definition(
+            command_type
+        )
+
+    def _validate_submission(self, command: SubmittedCommand) -> str | None:
+        """Return a rejection reason for an obviously-invalid command, else ``None``.
+
+        Conservative on purpose: it never rejects for transient reasons that the tick
+        pipeline legitimately defers (affordability under QUEUE waits for regen; stale
+        generation and fine-grained handler gates resolve at tick).
+        """
+
+        entity_id = parse_entity_id(command.character_id)
+        if entity_id is None or not self.world.has_entity(entity_id):
+            return "character does not exist"
+        # Control verbs change the controller itself and bypass the action gates.
+        if command.command_type in CONTROL_COMMANDS:
+            return None
+        if command.command_type not in self._handlers:
+            return f"no handler for {command.command_type}"
+
+        character = self.world.get_entity(entity_id)
+        block = lifecycle_block_reason(character, command.command_type)
+        if block is not None:
+            return block
+        for gate in self._gates:
+            allowed, reason = gate(self.world, command)
+            if not allowed:
+                return reason or "not allowed by policy"
+
+        definition = self._definition_for(command.command_type)
+        if not meets_requirement(self.world, character, definition.requirement):
+            return "missing a required skill or item"
+        argument_reason = self._validate_arguments(definition, command.payload)
+        if argument_reason is not None:
+            return argument_reason
+
+        enough_action, enough_focus = affordable(character, command.cost)
+        if not (enough_action and enough_focus):
+            if command.on_insufficient_points is OnInsufficientPoints.DENY:
+                return "insufficient points"
+        return None
+
+    def _validate_arguments(
+        self, definition: ActionDefinition, payload: Mapping[str, Any]
+    ) -> str | None:
+        """Reject only *structural* argument problems (a missing required argument).
+
+        Target existence and reachability are intentionally left to the handler at tick:
+        they are state-dependent (a queued command's target can become reachable before
+        the tick that runs it) and some handlers define a broader reachability than the
+        generic room+inventory set (e.g. buying an item out of a shop's stock).
+        """
+
+        for key, argument in (definition.arguments or {}).items():
+            value = payload.get(key)
+            if argument.required and (
+                value is None or (isinstance(value, str) and not value.strip())
+            ):
+                return f"missing required argument: {key}"
+        return None
 
     def submit_nowait(self, command: SubmittedCommand) -> None:
         self._inbox.put_nowait(command)
@@ -504,17 +606,8 @@ class WorldActor:
         return False
 
     def _affordable(self, character, command: SubmittedCommand) -> bool:
-        action_have = (
-            character.get_component(ActionPointsComponent).current
-            if character.has_component(ActionPointsComponent)
-            else 0.0
-        )
-        focus_have = (
-            character.get_component(FocusPointsComponent).current
-            if character.has_component(FocusPointsComponent)
-            else 0.0
-        )
-        return action_have >= command.cost.action and focus_have >= command.cost.focus
+        enough_action, enough_focus = affordable(character, command.cost)
+        return enough_action and enough_focus
 
     async def _spend(self, character, command: SubmittedCommand) -> None:
         if command.cost.action and character.has_component(ActionPointsComponent):

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from conftest import build_scenario
 
 import bunnyland.server.worldgen as server_worldgen
 from bunnyland.content import load_content_library
@@ -49,8 +50,10 @@ from bunnyland.core.events import (
     WorldGenerationFailedEvent,
     WorldGenerationStartedEvent,
 )
+from bunnyland.core.handlers import ok
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
+from bunnyland.mechanics.lifesim import SkillSetComponent
 from bunnyland.mechanics.storyteller import IncidentComponent
 from bunnyland.mechanics.toonsim import (
     SpriteBounds,
@@ -292,6 +295,60 @@ def test_client_view_scopes_visible_state_points_controller_and_actions(scenario
         argument["key"] == "exit_id" and argument["target_group"] == "exits"
         for argument in move["arguments"]
     )
+
+
+def test_character_projection_action_availability_reflects_points():
+    affordable = build_scenario(action_current=5.0)
+    rich = serialize_character_projection(
+        affordable.actor, str(affordable.character)
+    ).model_dump(mode="json")
+    move = next(action for action in rich["actions"] if action["command_type"] == "move")
+    assert move["available"] is True
+    assert move["enough_action_points"] is True
+    assert move["unavailable_reason"] == ""
+
+    broke = build_scenario(action_current=0.0)
+    poor = serialize_character_projection(broke.actor, str(broke.character)).model_dump(
+        mode="json"
+    )
+    move_poor = next(
+        action for action in poor["actions"] if action["command_type"] == "move"
+    )
+    assert move_poor["available"] is False
+    assert move_poor["enough_action_points"] is False
+    assert move_poor["unavailable_reason"] == "not enough action points"
+
+
+def test_character_projection_action_availability_reflects_requirements(scenario):
+    class _PickLockHandler:
+        command_type = "pick-lock"
+
+        def execute(self, ctx, command):  # pragma: no cover - not executed here
+            return ok()
+
+    scenario.actor.register_handler(_PickLockHandler())
+
+    without_skill = serialize_character_projection(
+        scenario.actor, str(scenario.character)
+    ).model_dump(mode="json")
+    pick = next(
+        action for action in without_skill["actions"] if action["command_type"] == "pick-lock"
+    )
+    assert pick["meets_requirements"] is False
+    assert pick["available"] is False
+    assert pick["unavailable_reason"] == "missing a required skill or item"
+
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        SkillSetComponent(levels={"lockpicking": 1})
+    )
+    with_skill = serialize_character_projection(
+        scenario.actor, str(scenario.character)
+    ).model_dump(mode="json")
+    pick_ready = next(
+        action for action in with_skill["actions"] if action["command_type"] == "pick-lock"
+    )
+    assert pick_ready["meets_requirements"] is True
+    assert pick_ready["available"] is True
 
 
 def test_room_projection_scopes_visible_state_and_sprite_facts(scenario):
@@ -1020,7 +1077,7 @@ def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
     )
 
     assert response.status_code == 202
-    assert response.json() == {"queued": True, "command_id": "cmd-http-move"}
+    assert response.json() == {"queued": True, "command_id": "cmd-http-move", "reason": ""}
 
     asyncio.run(scenario.actor.tick(0.0))
 

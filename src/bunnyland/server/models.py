@@ -48,6 +48,7 @@ class CommandRequest(BaseModel):
 class CommandResponse(BaseModel):
     queued: bool
     command_id: str
+    reason: str = ""
 
 
 class RecentEventsResponse(BaseModel):
@@ -149,6 +150,14 @@ class ClientActionView(BaseModel):
     lane: Lane = Lane.WORLD
     cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
     arguments: list[ClientActionArgumentView] = Field(default_factory=list)
+    # Per-character availability (character projection only; defaults keep the
+    # character-agnostic action search backward compatible).
+    available: bool = True
+    enough_action_points: bool = True
+    enough_focus_points: bool = True
+    has_required_target: bool = True
+    meets_requirements: bool = True
+    unavailable_reason: str = ""
 
 
 class ClientRoomView(BaseModel):

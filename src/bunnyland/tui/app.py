@@ -134,6 +134,20 @@ def _action_arguments(action: dict) -> list[dict]:
     return list(action.get("arguments") or [])
 
 
+def _action_available(action: dict, *, fallback: bool = True) -> bool:
+    """Whether the projection marked this action available for the character.
+
+    Legacy/offline action views have no ``available`` field, so callers pass a sensible
+    ``fallback`` (e.g. point affordability) for those.
+    """
+    available = action.get("available")
+    return fallback if available is None else bool(available)
+
+
+def _action_unavailable_reason(action: dict) -> str:
+    return str(action.get("unavailable_reason") or "")
+
+
 @dataclass(frozen=True)
 class FormField:
     """One prompted action argument and the widget that should collect it."""
@@ -448,7 +462,7 @@ class BunnylandTUI(App[None]):
 
         actions = self._filtered_actions()
         action_options: dict[str, dict] = {}
-        verb_entries: list[tuple[str, str, bool]] = []
+        verb_entries: list[tuple[str, Text, str]] = []
         for index, action in enumerate(actions):
             cost_view = _action_cost(action)
             affordable = (
@@ -456,6 +470,7 @@ class BunnylandTUI(App[None]):
                 and pts["ap"] >= cost_view["action"]
                 and pts["fp"] >= cost_view["focus"]
             )
+            available = _action_available(action, fallback=bool(affordable))
             cost = (" · ".join(
                 [f"{cost_view['action']} AP"] * bool(cost_view["action"])
                 + [f"{cost_view['focus']} FP"] * bool(cost_view["focus"])
@@ -464,12 +479,19 @@ class BunnylandTUI(App[None]):
             option_id = _action_tool(action)
             if option_id in action_options:
                 option_id = f"{option_id}:{index}"
-            label = f"{_action_title(action)}{tgt}  ({cost})"
+            # Never disable: an unavailable action is only de-emphasized (dimmed, with the
+            # reason appended) so the player can still queue it if they want to.
+            if available:
+                label = Text(f"{_action_title(action)}{tgt}  ({cost})")
+            else:
+                reason = _action_unavailable_reason(action)
+                suffix = f" — {reason}" if reason else ""
+                label = Text(f"{_action_title(action)}{tgt}  ({cost}){suffix}", style="dim")
             action_options[option_id] = action
-            verb_entries.append((option_id, label, not affordable))
+            verb_entries.append((option_id, label, label.plain))
         self._action_options = action_options
 
-        verbs_signature = tuple(verb_entries)
+        verbs_signature = tuple((oid, plain) for oid, _label, plain in verb_entries)
         if verbs_signature != self._verbs_signature:
             verbs = self.query_one("#verbs", OptionList)
             highlighted_id = None
@@ -483,8 +505,8 @@ class BunnylandTUI(App[None]):
             except Exception:
                 highlighted_id = None
             verbs.clear_options()
-            for option_id, label, disabled in verb_entries:
-                verbs.add_option(Option(label, id=option_id, disabled=disabled))
+            for option_id, label, _plain in verb_entries:
+                verbs.add_option(Option(label, id=option_id))
             if highlighted_id is not None:
                 try:
                     verbs.highlighted = verbs.get_option_index(highlighted_id)
@@ -513,14 +535,17 @@ class BunnylandTUI(App[None]):
     def _filtered_actions(self) -> list[dict]:
         actions = self._available_actions()
         query = self.action_filter.strip().lower()
-        if not query:
-            return actions
-        return [
-            action for action in actions
-            if query in _action_title(action).lower()
-            or query in _action_tool(action).lower()
-            or query in str(action.get("command_type", "")).lower()
-        ]
+        if query:
+            actions = [
+                action for action in actions
+                if query in _action_title(action).lower()
+                or query in _action_tool(action).lower()
+                or query in str(action.get("command_type", "")).lower()
+            ]
+        # Available actions come first; the sort is stable so each group keeps its order.
+        # Unavailable actions stay in the list (de-emphasized, not removed) so a player can
+        # still queue a not-yet-valid action.
+        return sorted(actions, key=lambda action: not _action_available(action))
 
     def _drain_activity(self, events: list[dict], *, prime: bool = False) -> None:
         lines = self._events.drain_events(
@@ -643,7 +668,7 @@ class BunnylandTUI(App[None]):
             payload = result
 
         cost = _action_cost(action)
-        await self.backend.submit({
+        result = await self.backend.submit({
             "character_id": self.player_id,
             "controller_id": self.control[0],
             "controller_generation": self.control[1],
@@ -653,6 +678,11 @@ class BunnylandTUI(App[None]):
             "lane": _action_lane(action),
             "on_insufficient_points": "queue",
         })
+        if not result.accepted:
+            reason = result.reason or "command rejected"
+            self._append_activity(
+                Text(f"✗ {_action_title(action)} — {reason}", style="dark_orange")
+            )
         await self.refresh_world()
 
     async def action_refresh(self) -> None:
