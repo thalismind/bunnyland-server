@@ -421,7 +421,8 @@ async def test_live_character_agent_can_play_basic_gameplay_loops(provider):
         ),
     )
     move_dispatch = ControllerDispatch(actor, move_builder, agent)
-    move_decisions = await move_dispatch.run_once()
+    await move_dispatch.run_once()
+    move_decisions = await move_dispatch.await_pending()
     await actor.tick(1.0)
 
     assert move_decisions and move_decisions[0].tool == "move"
@@ -435,7 +436,8 @@ async def test_live_character_agent_can_play_basic_gameplay_loops(provider):
         ),
     )
     take_dispatch = ControllerDispatch(actor, take_builder, agent)
-    take_decisions = await take_dispatch.run_once()
+    await take_dispatch.run_once()
+    take_decisions = await take_dispatch.await_pending()
     await actor.tick(1.0)
 
     assert take_decisions and take_decisions[0].tool == "take"
@@ -450,7 +452,8 @@ async def test_live_character_agent_can_play_basic_gameplay_loops(provider):
         ),
     )
     say_dispatch = ControllerDispatch(actor, say_builder, agent)
-    say_decisions = await say_dispatch.run_once()
+    await say_dispatch.run_once()
+    say_decisions = await say_dispatch.await_pending()
     await actor.tick(1.0)
 
     assert say_decisions and say_decisions[0].tool == "say"

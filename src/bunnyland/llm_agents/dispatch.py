@@ -9,6 +9,7 @@ tick — dispatch only proposes.
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import inspect
 import json
@@ -308,6 +309,16 @@ class ControllerDispatch:
         # Scripts advance across turns, so cache a replaying agent per character; rebuild it
         # if the controller's script or loop setting changes. Keyed by character id.
         self._scripted_agents: dict[str, tuple[str, bool, ScriptedAgent]] = {}
+        # Async (LLM) decisions run as background tasks so a slow prompt never blocks the
+        # game loop's world ticks. Keyed by character id: a character with a task still
+        # running is never re-prompted, so each character has at most one decision pending.
+        self._inflight: dict[str, asyncio.Task[Decision]] = {}
+        # Decisions completed by background tasks since the last ``run_once``, surfaced (and
+        # cleared) on the next pass so observers still see what autonomous agents chose.
+        self._completed: list[Decision] = []
+        # Serializes the actual provider call so there is never more than one in-flight
+        # request to Ollama/OpenRouter at a time, even with many actable characters.
+        self._llm_lock = asyncio.Lock()
 
     async def run_once(self) -> list[Decision]:
         self._tick += 1
@@ -317,9 +328,20 @@ class ControllerDispatch:
         self.builder.rebind(self.actor.world)
         decisions: list[Decision] = []
         with telemetry.span("controller.run_once", {"dispatch.tick": self._tick}) as run_span:
+            # Surface decisions finished by background (LLM) tasks since the last pass.
+            decisions.extend(self._drain_completed())
             actable = self._actable_characters()
             run_span.set_attribute("dispatch.actable_count", len(actable))
             for character_id in actable:
+                cid = str(character_id)
+                # A character whose previous decision is still being computed is never
+                # re-prompted: a 60s prompt on a 30s loop yields a single pending decision,
+                # not a new one every pass. The intervening passes are coalesced away rather
+                # than queued — once the character is free again, the next pass rebuilds its
+                # prompt from the latest world state via ``_decide_for``, so the prompt that
+                # is finally delivered reflects the most recent state, never a stale one.
+                if self._has_pending(cid):
+                    continue
                 # The actable list is snapshotted before the per-character awaits below; a
                 # character can also be removed mid-loop by an in-place edit (admin patch or a
                 # player interaction) at an await point. Skip ones already gone, and guard the
@@ -328,11 +350,45 @@ class ControllerDispatch:
                 if not self.actor.world.has_entity(character_id):
                     continue
                 try:
-                    decisions.append(await self._decide_for(character_id))
+                    decision = await self._decide_for(character_id)
                 except EntityNotFoundError:
                     logger.debug("skipping character %s removed mid-dispatch", character_id)
+                    continue
+                # ``None`` means the decision was handed to a background task and will be
+                # surfaced on a later pass once it finishes.
+                if decision is not None:
+                    decisions.append(decision)
             run_span.set_attribute("dispatch.decision_count", len(decisions))
         return decisions
+
+    def _has_pending(self, cid: str) -> bool:
+        task = self._inflight.get(cid)
+        return task is not None and not task.done()
+
+    def _drain_completed(self) -> list[Decision]:
+        if not self._completed:
+            return []
+        drained = self._completed
+        self._completed = []
+        return drained
+
+    async def await_pending(self) -> list[Decision]:
+        """Await every in-flight decision and return the decisions that completed.
+
+        The game loop never waits like this — it lets the world keep ticking — but callers
+        that need a decision applied within a bounded run (offline advancement, live tests)
+        use this to block until background tasks finish.
+        """
+        tasks = list(self._inflight.values())
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        return self._drain_completed()
+
+    def cancel_pending(self) -> None:
+        """Cancel any in-flight decision tasks (used when the game loop stops)."""
+        for task in list(self._inflight.values()):
+            task.cancel()
+        self._inflight.clear()
 
     def _actable_characters(self) -> list[EntityId]:
         query = (
@@ -400,7 +456,14 @@ class ControllerDispatch:
         self._scripted_agents[character_id] = (script_name, loop, agent)
         return agent
 
-    async def _decide_for(self, character_id: EntityId) -> Decision:
+    async def _decide_for(self, character_id: EntityId) -> Decision | None:
+        """Prompt one character's agent.
+
+        Synchronous agents (scripted/behavioral/goal-directed) resolve inline and their
+        ``Decision`` is returned. An async agent's prompt is handed to a background task so a
+        slow provider never blocks the world tick; ``None`` is returned and the eventual
+        ``Decision`` is surfaced by a later ``run_once`` once the task finishes.
+        """
         controller = self._autonomous_controller(character_id)
         assert controller is not None  # filtered in _actable_characters
         controller_id, generation, controller_component = controller
@@ -431,26 +494,101 @@ class ControllerDispatch:
         if prompted and telemetry.enabled():
             span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
             span_attrs["decision.prompt_chars"] = len(prompt)
+
+        decision = agent.decide(
+            prompt,
+            context,
+            character_id=cid,
+            model=model,
+            provider=provider,
+            tools=tool_schemas(self.actor.action_definitions()),
+        )
+        if inspect.isawaitable(decision):
+            # Run the provider call (and its follow-up submit) off the dispatch path so the
+            # game loop is free to keep ticking the world while the model thinks.
+            task = asyncio.ensure_future(
+                self._await_decision(
+                    character_id,
+                    controller_id,
+                    generation,
+                    context,
+                    decision,
+                    span_attrs,
+                    metric_attrs,
+                )
+            )
+            self._inflight[cid] = task
+            task.add_done_callback(lambda finished, key=cid: self._forget(key, finished))
+            return None
+
         with telemetry.record_duration(
             telemetry.record_llm_decision, metric_attrs
         ), telemetry.span("agent.decide", span_attrs) as dspan:
-            decision = agent.decide(
-                prompt,
-                context,
-                character_id=cid,
-                model=model,
-                provider=provider,
-                tools=tool_schemas(self.actor.action_definitions()),
-            )
-            call = await decision if inspect.isawaitable(decision) else decision
-            if call is not None:
-                dspan.set_attribute("decision.tool", call.name)
-                if telemetry.enabled():
-                    encoded = json.dumps(call.arguments, sort_keys=True, default=str)
-                    dspan.set_attribute("decision.arguments", telemetry.attr_text(encoded))
-            else:
-                dspan.set_attribute("decision.tool", "wait")
+            call = decision
+            self._annotate_decision_span(dspan, call)
+        return await self._finalize_decision(
+            character_id, controller_id, generation, context, call
+        )
 
+    async def _await_decision(
+        self,
+        character_id: EntityId,
+        controller_id: EntityId,
+        generation: int,
+        context,
+        pending,
+        span_attrs: dict,
+        metric_attrs: dict,
+    ) -> Decision:
+        """Await an async agent's decision under the provider lock, then finalize it.
+
+        The lock guarantees only one provider request runs at a time; everything after the
+        request (name resolution, submission) happens outside it so the next character's
+        prompt can start as soon as this one's reply lands.
+        """
+        cid = str(character_id)
+        try:
+            async with self._llm_lock:
+                with telemetry.record_duration(
+                    telemetry.record_llm_decision, metric_attrs
+                ), telemetry.span("agent.decide", span_attrs) as dspan:
+                    call = await pending
+                    self._annotate_decision_span(dspan, call)
+            decision = await self._finalize_decision(
+                character_id, controller_id, generation, context, call
+            )
+        except EntityNotFoundError:
+            logger.debug("character %s removed before its decision applied", character_id)
+            decision = Decision(cid, None, "skipped: removed before decision applied")
+        except Exception:  # noqa: BLE001 - a background task must not crash the game loop
+            logger.exception("character %s decision task failed", character_id)
+            decision = Decision(cid, None, "error")
+        self._completed.append(decision)
+        return decision
+
+    def _forget(self, cid: str, task: asyncio.Task[Decision]) -> None:
+        if self._inflight.get(cid) is task:
+            del self._inflight[cid]
+
+    @staticmethod
+    def _annotate_decision_span(dspan, call: ToolCall | None) -> None:
+        if call is not None:
+            dspan.set_attribute("decision.tool", call.name)
+            if telemetry.enabled():
+                encoded = json.dumps(call.arguments, sort_keys=True, default=str)
+                dspan.set_attribute("decision.arguments", telemetry.attr_text(encoded))
+        else:
+            dspan.set_attribute("decision.tool", "wait")
+
+    async def _finalize_decision(
+        self,
+        character_id: EntityId,
+        controller_id: EntityId,
+        generation: int,
+        context,
+        call: ToolCall | None,
+    ) -> Decision:
+        cid = str(character_id)
         if call is None:
             logger.info("character %s decided to wait", character_id)
             return Decision(cid, None, "wait")
