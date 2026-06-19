@@ -7763,6 +7763,8 @@ Even though this is an exhaustive catalogue, the implementation order should be 
 
 ## Phase 1 — foundation
 
+Status: implemented for the current parity pass.
+
 ```text
 Relics ECS world
 plugin loader
@@ -7783,6 +7785,8 @@ basic LLM/Discord handoff
 
 ## Phase 2 — life sim
 
+Status: implemented for the current parity pass.
+
 ```text
 affect/thoughts
 traits/preferences
@@ -7796,6 +7800,8 @@ pregnancy gates
 ```
 
 ## Phase 3 — colony sim
+
+Status: implemented for the current parity pass.
 
 ```text
 jobs
@@ -7811,6 +7817,8 @@ medicine
 ```
 
 ## Phase 4 — garden sim
+
+Status: implemented for the current parity pass.
 
 ```text
 seasons
