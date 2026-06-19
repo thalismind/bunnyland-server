@@ -50,6 +50,9 @@ you play in one is the same world in any other:
 - **Bunnyland Toon** — the web client. A room-at-a-time view with sprites, doors pinned to
   the walls, and click-to-move, in the spirit of a Flash-era browser game. Open it from the
   welcome page and connect, or pass `?server=`. See [the Toon client](toonsim.md).
+- **Web REPL** — a browser command line for typed play without installing the terminal
+  client. It claims a character through the same web controller path as Toon. See
+  [the Web REPL](clients/web-repl.md).
 - **Terminal TUI** — a full-screen panel client with a room list, action menu, action
   search, and queued actions, like a modern terminal MUD client. See
   [the TUI](clients/tui.md).

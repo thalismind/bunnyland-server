@@ -127,7 +127,7 @@ metric/span reference and the Tempo setup.
 - **[Getting started](docs/player/getting-started.md)** — the first few turns and where
   to go next.
 - **[Client guides](docs/player/clients/README.md)** — choosing and using the terminal
-  TUI, terminal REPL, and Bunnyland Toon clients.
+  TUI, terminal REPL, Web REPL, and Bunnyland Toon clients.
 - **[Running your own game](docs/player/running-your-own-game.md)** — running a private,
   semi-single-player server, saving it, and generating a fresh world.
 - **[Movement and looking](docs/player/movement-and-looking.md)** — room summaries,
