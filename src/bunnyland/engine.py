@@ -92,28 +92,34 @@ class GameLoop:
         """
         self._running = True
         ticks = 0
-        while self._running and (max_ticks is None or ticks < max_ticks):
-            if self._paused:
-                await asyncio.sleep(self.tick_seconds)
-                continue
-            game_delta_seconds = self.tick_seconds * self.time_scale
-            # One iteration root span ties the world tick and the dispatch turn together so a
-            # trace shows the full chain above controller.run_once (loop -> tick + dispatch).
-            with telemetry.span(
-                "game.loop.iteration",
-                {
-                    "loop.tick_index": ticks,
-                    "loop.game_delta_seconds": game_delta_seconds,
-                },
-            ):
-                await self.actor.tick(game_delta_seconds)
-                await self.dispatch.run_once()
-            ticks += 1
-            if self.autosave and self.autosave_every > 0 and ticks % self.autosave_every == 0:
-                self.autosave(ticks)
-            if max_ticks is None and self._running:
-                await asyncio.sleep(self.tick_seconds)
-        self._running = False
+        try:
+            while self._running and (max_ticks is None or ticks < max_ticks):
+                if self._paused:
+                    await asyncio.sleep(self.tick_seconds)
+                    continue
+                game_delta_seconds = self.tick_seconds * self.time_scale
+                # One iteration root span ties the world tick and the dispatch turn together
+                # so a trace shows the full chain above controller.run_once (loop -> tick +
+                # dispatch). ``run_once`` hands slow LLM prompts to background tasks and
+                # returns promptly, so the world keeps ticking on cadence while agents think.
+                with telemetry.span(
+                    "game.loop.iteration",
+                    {
+                        "loop.tick_index": ticks,
+                        "loop.game_delta_seconds": game_delta_seconds,
+                    },
+                ):
+                    await self.actor.tick(game_delta_seconds)
+                    await self.dispatch.run_once()
+                ticks += 1
+                if self.autosave and self.autosave_every > 0 and ticks % self.autosave_every == 0:
+                    self.autosave(ticks)
+                if max_ticks is None and self._running:
+                    await asyncio.sleep(self.tick_seconds)
+        finally:
+            self._running = False
+            # Drop any in-flight agent decisions rather than leaking their tasks past the loop.
+            self.dispatch.cancel_pending()
         return ticks
 
     def stop(self) -> None:

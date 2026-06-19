@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from dataclasses import replace
@@ -1674,3 +1675,232 @@ async def test_dispatch_rejects_unknown_agent_tools_without_crashing():
 
     await dispatch.run_once()
     assert "Choose one of the available tools exactly as named" in agent.prompts[1]
+
+
+class _GatedAsyncAgent:
+    """Async agent whose decision blocks on an event until released.
+
+    Records the character ids and contexts it was asked about so tests can prove a
+    character is not re-prompted while pending and that a later prompt is rebuilt fresh.
+    """
+
+    def __init__(self, call: ToolCall | None = None) -> None:
+        self.gate = asyncio.Event()
+        self.prompts: list[str] = []
+        self.contexts: list[object] = []
+        self._call = call if call is not None else ToolCall("move", {"direction": "north"})
+
+    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+        del prompt, model, provider, tools
+        self.prompts.append(character_id)
+        self.contexts.append(context)
+
+        async def _decide():
+            await self.gate.wait()
+            return self._call
+
+        return _decide()
+
+
+class _ConcurrencyProbeAgent:
+    """Async agent that records how many of its decisions run provider work at once."""
+
+    def __init__(self) -> None:
+        self.gate = asyncio.Event()
+        self.active = 0
+        self.max_active = 0
+
+    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+        del prompt, context, character_id, model, provider, tools
+
+        async def _decide():
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            await self.gate.wait()
+            self.active -= 1
+            return None
+
+        return _decide()
+
+
+class _FailingAsyncAgent:
+    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+        del prompt, context, character_id, model, provider, tools
+
+        async def _decide():
+            raise RuntimeError("provider exploded")
+
+        return _decide()
+
+
+def _add_second_llm_character(scenario, name: str = "Bramble"):
+    from bunnyland.core import (
+        ActionPointsComponent,
+        FocusPointsComponent,
+        InitiativeComponent,
+        LLMControllerComponent,
+    )
+
+    world = scenario.actor.world
+    other = spawn_entity(
+        world,
+        [
+            IdentityComponent(name=name, kind="character"),
+            CharacterComponent(species="bunny"),
+            ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=1.0),
+            FocusPointsComponent(current=3.0, maximum=3.0, regen_per_hour=0.5),
+            InitiativeComponent(score=1.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
+    )
+    other_controller = spawn_entity(
+        world, [LLMControllerComponent(profile_name="default", model="claude")]
+    )
+    scenario.actor.assign_controller(other.id, other_controller.id)
+    return other.id
+
+
+async def test_dispatch_runs_async_decision_in_background_without_blocking():
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    # The slow prompt is handed to a background task: run_once returns immediately with no
+    # decision yet, and nothing is submitted while the agent is still thinking.
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)  # let the background task start and block on the gate
+    assert agent.prompts == [str(scenario.character)]
+    assert scenario.actor._inbox.empty()
+
+    # Once the provider responds, the decision is finalized and surfaced.
+    agent.gate.set()
+    decisions = await dispatch.await_pending()
+    assert [decision.tool for decision in decisions] == ["move"]
+    assert not scenario.actor._inbox.empty()
+
+
+async def test_dispatch_does_not_reprompt_a_character_with_a_pending_decision():
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)
+    assert agent.prompts == [str(scenario.character)]
+
+    # Several more passes while the first decision is still pending must not re-prompt it.
+    assert await dispatch.run_once() == []
+    assert await dispatch.run_once() == []
+    assert agent.prompts == [str(scenario.character)]
+
+    dispatch.cancel_pending()
+    assert scenario.actor._inbox.empty()
+
+
+async def test_dispatch_rebuilds_prompt_from_latest_state_after_a_response():
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    # First prompt is built from the starting room, then re-prompts are coalesced away.
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)
+    assert await dispatch.run_once() == []  # suppressed while pending
+    assert len(agent.prompts) == 1
+    assert agent.contexts[0].location_title == "Mosslit Burrow"
+
+    # Let the decision land and execute, moving the character to the north tunnel.
+    agent.gate.set()
+    await dispatch.await_pending()
+    agent.gate.clear()
+    await scenario.actor.tick(1.0)  # executes the queued move
+    assert scenario.character_room() == scenario.room_b
+
+    # The next pass delivers exactly one fresh prompt reflecting the most recent state.
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)
+    assert len(agent.prompts) == 2
+    assert agent.contexts[1].location_title == "North Tunnel"
+
+    dispatch.cancel_pending()
+
+
+async def test_dispatch_serializes_concurrent_llm_calls():
+    scenario = build_scenario()
+    _add_second_llm_character(scenario)
+    agent = _ConcurrencyProbeAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    # Both characters are prompted, but the provider lock keeps only one request in flight.
+    assert await dispatch.run_once() == []
+    for _ in range(8):
+        await asyncio.sleep(0)
+    assert agent.active == 1
+    assert agent.max_active == 1
+
+    agent.gate.set()
+    await dispatch.await_pending()
+    assert agent.max_active == 1
+
+
+async def test_dispatch_surfaces_background_decision_on_a_later_pass():
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    assert await dispatch.run_once() == []
+    agent.gate.set()
+    await asyncio.gather(*list(dispatch._inflight.values()))
+
+    # The finished decision is reported by the next run_once, not lost.
+    decisions = await dispatch.run_once()
+    assert any(decision.tool == "move" for decision in decisions)
+    await dispatch.await_pending()  # let the follow-up prompt this pass scheduled finish
+
+
+async def test_dispatch_records_error_when_an_async_decision_raises():
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor, PromptBuilder(scenario.actor.world), _FailingAsyncAgent()
+    )
+
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
+    assert len(decisions) == 1
+    assert decisions[0].tool is None
+    assert decisions[0].summary == "error"
+    assert scenario.actor._inbox.empty()
+
+
+async def test_dispatch_skips_async_decision_when_character_removed_midflight():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    agent = _GatedAsyncAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(world), agent)
+
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)
+    world.remove(scenario.character)  # removed while the agent is still responding
+    agent.gate.set()
+
+    decisions = await dispatch.await_pending()
+    assert len(decisions) == 1
+    assert "removed" in decisions[0].summary
+    assert scenario.actor._inbox.empty()
+
+
+async def test_dispatch_cancel_pending_drops_inflight_decisions():
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent()  # never released
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)
+    assert dispatch._has_pending(str(scenario.character))
+
+    dispatch.cancel_pending()
+    await asyncio.sleep(0)  # let the cancellation propagate
+    assert not dispatch._has_pending(str(scenario.character))
+    assert scenario.actor._inbox.empty()

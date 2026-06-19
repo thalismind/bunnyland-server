@@ -33,6 +33,47 @@ async def test_game_loop_drives_an_llm_character_through_a_move():
     assert container_of(hazel) == result.rooms["tunnel"]
 
 
+async def test_game_loop_keeps_ticking_while_a_decision_is_pending():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    await instantiate(actor, await StubWorldBuilder().propose("seed"))
+    builder = PromptBuilder(actor.world)
+
+    class SlowAgent:
+        def __init__(self) -> None:
+            self.gate = asyncio.Event()
+            self.prompts = 0
+
+        def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+            del prompt, context, character_id, model, provider, tools
+            self.prompts += 1
+
+            async def _decide():
+                await self.gate.wait()
+                return None
+
+            return _decide()
+
+    agent = SlowAgent()
+    loop = GameLoop(
+        actor, ControllerDispatch(actor, builder, agent), tick_seconds=0.001, time_scale=1000.0
+    )
+    task = asyncio.create_task(loop.run())
+    try:
+        for _ in range(500):
+            if actor.epoch >= 3:
+                break
+            await asyncio.sleep(0.002)
+        # The world advanced several ticks even though the agent's prompt never returned, and
+        # the character with a pending decision was prompted exactly once (never re-prompted).
+        assert actor.epoch >= 3
+        assert agent.prompts == 1
+    finally:
+        loop.stop()
+        agent.gate.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+
 async def test_game_loop_stops_when_asked():
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
