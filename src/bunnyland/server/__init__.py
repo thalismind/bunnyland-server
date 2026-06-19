@@ -9,6 +9,7 @@ from .models import (
     CharacterQueuedCommandsResponse,
     CommandRequest,
     CommandResponse,
+    ControllerAssignmentRequest,
     DmProjectionResponse,
     DmRoomProjectionView,
     RecentEventsResponse,
@@ -49,6 +50,7 @@ from .subscriptions import EventStream, EventSubscription
 __all__ = [
     "CommandRequest",
     "CommandResponse",
+    "ControllerAssignmentRequest",
     "DmProjectionResponse",
     "DmRoomProjectionView",
     "CharacterProjectionResponse",

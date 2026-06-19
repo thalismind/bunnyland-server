@@ -31,6 +31,7 @@ from bunnyland.core import (
     RoomComponent,
     StealthComponent,
     SuspendedComponent,
+    SuspendedControllerComponent,
     TakeHandler,
     TellHandler,
     Wearing,
@@ -82,6 +83,7 @@ from bunnyland.server.admin import (
 from bunnyland.server.app import create_app, next_websocket_update
 from bunnyland.server.models import (
     ClientTargetView,
+    ControllerAssignmentRequest,
     WebControllerClaimRequest,
     WebControllerFallbackRequest,
     WorldCharacterGenerationRequest,
@@ -1718,6 +1720,115 @@ async def test_admin_patch_endpoint_translates_patch_errors_to_http_400(scenario
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "entity 'entity_999' does not exist"
+
+
+async def test_admin_controller_assign_endpoint_uses_controller_handoff(scenario):
+    controller = spawn_entity(
+        scenario.actor.world,
+        [WebControllerComponent(client_id="operator", label="graph")],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        SuspendedComponent(reason="old")
+    )
+    command = CommandRequest(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="say",
+        payload={"text": "stale"},
+        command_id="cmd-stale",
+    ).to_submitted(submitted_at_epoch=42)
+    scenario.actor.queues.enqueue(command)
+
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
+    response = await route.endpoint(
+        ControllerAssignmentRequest(
+            character_id=str(scenario.character),
+            controller_id=str(controller.id),
+        )
+    )
+
+    assert response.ok is True
+    assert response.changed_entities[0]["id"] == str(scenario.character)
+    character = scenario.actor.world.get_entity(scenario.character)
+    controlled = character.get_relationships(ControlledBy)
+    assert len(controlled) == 1
+    edge, target = controlled[0]
+    assert target == controller.id
+    assert edge.generation == scenario.generation + 1
+    assert scenario.actor.queues.pending(str(scenario.character)) == []
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_admin_controller_assign_endpoint_suspends_character(scenario):
+    controller = spawn_entity(
+        scenario.actor.world,
+        [SuspendedControllerComponent(reason="admin pause")],
+    )
+
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
+    response = await route.endpoint(
+        ControllerAssignmentRequest(
+            character_id=str(scenario.character),
+            controller_id=str(controller.id),
+        )
+    )
+
+    assert response.ok is True
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(SuspendedComponent).reason == "admin pause"
+    edge, target = character.get_relationships(ControlledBy)[0]
+    assert target == controller.id
+    assert edge.generation == scenario.generation + 1
+
+
+@pytest.mark.parametrize(
+    ("payload", "status", "message"),
+    [
+        (
+            {"character_id": "entity_999", "controller_id": "$controller"},
+            404,
+            "character does not exist",
+        ),
+        (
+            {"character_id": "$character", "controller_id": "entity_999"},
+            404,
+            "controller does not exist",
+        ),
+        (
+            {"character_id": "$room", "controller_id": "$controller"},
+            400,
+            "entity is not a character",
+        ),
+        (
+            {"character_id": "$character", "controller_id": "$room"},
+            400,
+            "entity is not a controller",
+        ),
+    ],
+)
+async def test_admin_controller_assign_endpoint_rejects_invalid_targets(
+    scenario,
+    payload,
+    status,
+    message,
+):
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
+    rendered = {
+        key: value.replace("$character", str(scenario.character))
+        .replace("$controller", str(scenario.controller))
+        .replace("$room", str(scenario.room_a))
+        for key, value in payload.items()
+    }
+
+    with pytest.raises(Exception) as exc:
+        await route.endpoint(ControllerAssignmentRequest(**rendered))
+
+    assert exc.value.status_code == status
+    assert exc.value.detail == message
 
 
 @pytest.mark.parametrize(

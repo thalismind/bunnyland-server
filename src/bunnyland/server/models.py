@@ -54,6 +54,11 @@ class RecentEventsResponse(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ControllerAssignmentRequest(BaseModel):
+    character_id: str
+    controller_id: str
+
+
 class HealthResponse(BaseModel):
     ok: bool = True
     world_epoch: int
@@ -540,6 +545,7 @@ __all__ = [
     "CommandCostRequest",
     "CommandRequest",
     "CommandResponse",
+    "ControllerAssignmentRequest",
     "ClientActionArgumentView",
     "ClientActionView",
     "CharacterProjectionResponse",
