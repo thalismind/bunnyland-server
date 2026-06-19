@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import json
 import os
 from collections import deque
@@ -13,6 +15,7 @@ from urllib.parse import quote, unquote
 from pydantic import AnyUrl
 from relics import EntityId
 
+from .. import telemetry
 from ..claims import (
     claimable_characters,
     controlled_character,
@@ -80,6 +83,30 @@ EVENTS_RESOURCE_URI = "bunnyland://events/recent"
 
 def mcp_enabled(plugins: Sequence[Plugin] | None) -> bool:
     return any(plugin.id == MCP or plugin.id.endswith(".mcp") for plugin in plugins or ())
+
+
+def _traced_tool(fn):
+    """Wrap an MCP tool handler in an ``mcp.<tool>`` span.
+
+    ``functools.wraps`` keeps the original signature (via ``__wrapped__``) so FastMCP still
+    introspects the tool's parameters for its JSON schema. No-op when telemetry is disabled.
+    """
+    name = f"mcp.{fn.__name__}"
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args, **kwargs):
+            with telemetry.span(name):
+                return await fn(*args, **kwargs)
+
+        return async_wrapper
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with telemetry.span(name):
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _agent_events_uri(agent_id: str) -> str:
@@ -627,6 +654,7 @@ def create_bunnyland_mcp_app(
         return {"ok": True, "characters": list_mcp_characters(actor)}
 
     @mcp.tool()
+    @_traced_tool
     def world_snapshot_admin(admin_token: str | None = None) -> dict[str, Any]:
         """Return the full raw ECS world snapshot (large; admin/debug and persistence).
 
@@ -640,6 +668,7 @@ def create_bunnyland_mcp_app(
         return serialize_world(actor, meta)
 
     @mcp.tool()
+    @_traced_tool
     def world_overview_admin(admin_token: str | None = None) -> dict[str, Any]:
         """Return a slim, admin-only map of the whole room network (admin token required).
 
@@ -680,6 +709,7 @@ def create_bunnyland_mcp_app(
         }
 
     @mcp.tool()
+    @_traced_tool
     def agent_prompt(agent_id: str) -> dict[str, Any]:
         """Return the current Bunnyland prompt for an MCP-controlled agent."""
 
@@ -694,6 +724,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()
+    @_traced_tool
     def character_view(agent_id: str, character_id: str | None = None) -> dict[str, Any]:
         """Return a structured, play-facing view for the agent's character.
 
@@ -756,6 +787,7 @@ def create_bunnyland_mcp_app(
         return serialize_action_search(actor, query="", limit=0).model_dump()
 
     @mcp.tool()
+    @_traced_tool
     def examine(agent_id: str, entity_id: str | None = None) -> dict[str, Any]:
         """Inspect one entity the character can see or carry -- or itself.
 
@@ -780,6 +812,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()
+    @_traced_tool
     def room_view(room_id: str) -> dict[str, Any]:
         """Return a structured view of one room: entities, exits, and sprites."""
 
@@ -902,6 +935,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()
+    @_traced_tool
     async def send_command(
         agent_id: str,
         command_type: str,
@@ -954,6 +988,7 @@ def create_bunnyland_mcp_app(
         }
 
     @mcp.tool()
+    @_traced_tool
     async def patch_world_admin(
         operations: list[dict[str, Any]],
         admin_token: str | None = None,
@@ -1033,6 +1068,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @mcp.tool()
+    @_traced_tool
     async def generate_world_admin(
         seed: str | None = None,
         generator: str | None = None,
@@ -1066,6 +1102,7 @@ def create_bunnyland_mcp_app(
         return (await generation_status()).model_dump(mode="json")
 
     @mcp.tool()
+    @_traced_tool
     async def generate_room_patch_admin(
         door_entity_id: str,
         direction: str | None = None,
@@ -1088,6 +1125,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @mcp.tool()
+    @_traced_tool
     async def generate_character_patch_admin(
         room_entity_id: str,
         prompt: str = "",
@@ -1105,6 +1143,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @mcp.tool()
+    @_traced_tool
     async def generate_item_patch_admin(
         container_entity_id: str,
         prompt: str = "",
@@ -1125,6 +1164,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @mcp.tool()
+    @_traced_tool
     async def generate_event_patch_admin(
         room_entity_id: str,
         prompt: str = "",

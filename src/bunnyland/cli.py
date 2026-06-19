@@ -51,7 +51,12 @@ from .plugins.builtin import (
     WORLDGEN,
 )
 from .prompts.builder import PromptBuilder
-from .worldgen import DEFAULT_WORLDGEN_MODEL, GenOptions, collect_generators
+from .worldgen import (
+    DEFAULT_WORLDGEN_MODEL,
+    GenOptions,
+    collect_generators,
+    traced_generate,
+)
 
 BUILTIN_MODULE = "bunnyland.plugins.builtin"
 #: Ollama Cloud endpoint; the API key authenticates against it.
@@ -347,11 +352,7 @@ async def _load_or_generate_world(
             f"{models.worldgen_model!r}."
         )
     options = _worldgen_options(args, credentials, models)
-    worldgen_attrs = {"generator": generator.name, "llm": bool(args.llm)}
-    with telemetry.record_duration(
-        telemetry.record_worldgen, worldgen_attrs
-    ), telemetry.span("world.generate", worldgen_attrs):
-        result = await generator.generate(actor, args.seed, options)
+    result = await traced_generate(generator, actor, args.seed, options)
     meta = WorldMeta(
         seed=args.seed,
         generator=generator.name,

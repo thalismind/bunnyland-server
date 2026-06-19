@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .. import telemetry
 from .builder import StubWorldBuilder
 from .defaults import DEFAULT_WORLDGEN_MODEL
 from .instantiate import InstantiatedWorld, instantiate
@@ -41,6 +42,26 @@ class GenOptions:
 
 
 GenerateFn = Callable[["WorldActor", str, GenOptions], Awaitable[InstantiatedWorld]]
+
+
+async def traced_generate(
+    generator: WorldGenerator, actor: WorldActor, seed: str, options: GenOptions
+) -> InstantiatedWorld:
+    """Run a whole-world generation under a ``world.generate`` span + ``record_worldgen``.
+
+    The single tracing chokepoint for every generation entry point (CLI, server, replacement)
+    so generation is timed and traced regardless of who triggered it.
+    """
+    attrs = {
+        "generator": generator.name,
+        "llm": options.llm,
+        "provider": options.provider,
+        "model": options.model,
+    }
+    with telemetry.record_duration(
+        telemetry.record_worldgen, attrs
+    ), telemetry.span("world.generate", {**attrs, "worldgen.seed": seed}):
+        return await generator.generate(actor, seed, options)
 
 
 @dataclass(frozen=True)

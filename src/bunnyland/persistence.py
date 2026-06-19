@@ -29,6 +29,7 @@ import relics
 from pydantic import BaseModel
 from relics import Component, Edge
 
+from . import telemetry
 from .core.world_actor import WorldActor
 from .persistence_yaml import YAMLPersistenceDriver
 from .plugins import PluginError, apply_plugins
@@ -165,17 +166,26 @@ def save_world(
     format: PersistenceFormat | None = None,
 ) -> WorldMeta:
     """Write the world (ECS + provenance) to ``path``. Returns the stamped meta."""
-    stamped = meta.model_copy(
-        update={"saved_at_epoch": actor.epoch, "saved_at": datetime.now(UTC)}
-    )
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    snapshot = _snapshot(actor, stamped)
-    if _format_for_path(path, format) == "yaml":
-        YAMLPersistenceDriver().save_snapshot(snapshot, path)
-    else:
-        path.write_text(json.dumps(snapshot, indent=2, default=str))
-    return stamped
+    resolved_format = _format_for_path(path, format)
+    attrs = {"operation": "save", "format": resolved_format}
+    with telemetry.record_duration(
+        telemetry.record_persist, attrs
+    ), telemetry.span("world.save", {**attrs, "path": str(path)}) as save_span:
+        stamped = meta.model_copy(
+            update={"saved_at_epoch": actor.epoch, "saved_at": datetime.now(UTC)}
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot = _snapshot(actor, stamped)
+        if resolved_format == "yaml":
+            YAMLPersistenceDriver().save_snapshot(snapshot, path)
+        else:
+            path.write_text(json.dumps(snapshot, indent=2, default=str))
+        if telemetry.enabled():
+            save_span.set_attribute(
+                "entity.count", len(list(actor.world.query().execute_entities()))
+            )
+        return stamped
 
 
 def load_world(
@@ -187,35 +197,43 @@ def load_world(
     """Reload a world from ``path``. Applies ``plugins`` (handlers/systems) before loading."""
     path = Path(path)
     selected_format = _format_for_path(path, format)
-    yaml_driver = YAMLPersistenceDriver() if selected_format == "yaml" else None
-    data = (
-        yaml_driver.read_snapshot(path)
-        if yaml_driver is not None
-        else json.loads(path.read_text())
-    )
-    meta = WorldMeta.model_validate(data.get("bunnyland", {}))
-
-    actor = WorldActor()
-    if plugins is not None:
-        available = {plugin.id for plugin in plugins}
-        missing = tuple(plugin_id for plugin_id in meta.plugins if plugin_id not in available)
-        if missing:
-            names = ", ".join(repr(plugin_id) for plugin_id in missing)
-            raise PluginError(f"saved world depends on missing plugin(s): {names}")
-        apply_plugins(plugins, actor)
-
-    component_registry, edge_registry = type_registries(plugins)
-    if yaml_driver is not None:
-        yaml_driver.load_snapshot(actor.world, data, component_registry, edge_registry)
-    else:
-        relics.load(
-            actor.world,
-            path,
-            component_registry=component_registry,
-            edge_registry=edge_registry,
+    attrs = {"operation": "load", "format": selected_format}
+    with telemetry.record_duration(
+        telemetry.record_persist, attrs
+    ), telemetry.span("world.load", {**attrs, "path": str(path)}) as load_span:
+        yaml_driver = YAMLPersistenceDriver() if selected_format == "yaml" else None
+        data = (
+            yaml_driver.read_snapshot(path)
+            if yaml_driver is not None
+            else json.loads(path.read_text())
         )
-    actor.bind_clock()  # the __init__ clock was cleared by the load; rebind to the saved one
-    return actor, meta
+        meta = WorldMeta.model_validate(data.get("bunnyland", {}))
+
+        actor = WorldActor()
+        if plugins is not None:
+            available = {plugin.id for plugin in plugins}
+            missing = tuple(plugin_id for plugin_id in meta.plugins if plugin_id not in available)
+            if missing:
+                names = ", ".join(repr(plugin_id) for plugin_id in missing)
+                raise PluginError(f"saved world depends on missing plugin(s): {names}")
+            apply_plugins(plugins, actor)
+
+        component_registry, edge_registry = type_registries(plugins)
+        if yaml_driver is not None:
+            yaml_driver.load_snapshot(actor.world, data, component_registry, edge_registry)
+        else:
+            relics.load(
+                actor.world,
+                path,
+                component_registry=component_registry,
+                edge_registry=edge_registry,
+            )
+        actor.bind_clock()  # the __init__ clock was cleared by load; rebind to the saved one
+        if telemetry.enabled():
+            load_span.set_attribute(
+                "entity.count", len(list(actor.world.query().execute_entities()))
+            )
+        return actor, meta
 
 
 __all__ = [

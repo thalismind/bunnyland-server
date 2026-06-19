@@ -17,6 +17,8 @@ import json
 from collections.abc import Mapping
 from typing import Protocol
 
+from .. import telemetry
+from ..llm_agents.agent import _ollama_token_usage, _openrouter_token_usage
 from .defaults import DEFAULT_WORLDGEN_MODEL
 from .proposal import (
     CharacterProposal,
@@ -285,9 +287,19 @@ class OllamaWorldAgent:
 
     async def _ask(self, instruction: str) -> dict:
         self._history.append({"role": "user", "content": instruction})
-        response = await self._client.chat(
-            model=self._model, format="json", messages=self._history
-        )
+        attrs = {"provider": "ollama", "model": self._model}
+        with telemetry.record_duration(
+            telemetry.record_worldgen_request, attrs
+        ), telemetry.span(
+            "worldgen.llm.request", {**attrs, "instruction.chars": len(instruction)}
+        ) as request_span:
+            response = await self._client.chat(
+                model=self._model, format="json", messages=self._history
+            )
+            prompt_tokens, completion_tokens = _ollama_token_usage(response)
+            _annotate_worldgen_tokens(
+                request_span, "ollama", self._model, prompt_tokens, completion_tokens
+            )
         message = response["message"]
         self._history.append(dict(message))
         return json.loads(message["content"])
@@ -482,16 +494,35 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
 
     async def _ask(self, instruction: str) -> dict:
         self._history.append({"role": "user", "content": instruction})
-        response = await asyncio.to_thread(
-            self._client.chat.send,
-            model=self._model,
-            messages=self._history,
-            response_format={"type": "json_object"},
-        )
+        attrs = {"provider": "openrouter", "model": self._model}
+        with telemetry.record_duration(
+            telemetry.record_worldgen_request, attrs
+        ), telemetry.span(
+            "worldgen.llm.request", {**attrs, "instruction.chars": len(instruction)}
+        ) as request_span:
+            response = await asyncio.to_thread(
+                self._client.chat.send,
+                model=self._model,
+                messages=self._history,
+                response_format={"type": "json_object"},
+            )
+            prompt_tokens, completion_tokens = _openrouter_token_usage(response)
+            _annotate_worldgen_tokens(
+                request_span, "openrouter", self._model, prompt_tokens, completion_tokens
+            )
         message = response.choices[0].message
         self._history.append(_message_to_history(message))
         content = getattr(message, "content", None) or "{}"
         return json.loads(content)
+
+
+def _annotate_worldgen_tokens(
+    request_span, provider: str, model: str, prompt_tokens: int, completion_tokens: int
+) -> None:
+    """Record a worldgen LLM call's token counts to both the metric and the active span."""
+    telemetry.record_llm_tokens(provider, model, prompt_tokens, completion_tokens)
+    request_span.set_attribute("llm.tokens.prompt", prompt_tokens)
+    request_span.set_attribute("llm.tokens.completion", completion_tokens)
 
 
 def _message_to_history(message) -> dict:

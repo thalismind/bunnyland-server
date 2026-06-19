@@ -77,6 +77,8 @@ def test_span_and_record_helpers_are_no_ops_when_disabled(monkeypatch):
     telemetry.record_llm_decision(0.2, {"provider": "local"})
     telemetry.record_llm_tokens("ollama", "m", 10, 5)
     telemetry.record_worldgen(0.3, {"generator": "empty"})
+    telemetry.record_worldgen_request(0.1, {"provider": "ollama", "model": "m"})
+    telemetry.record_persist(0.4, {"operation": "save", "format": "json"})
     telemetry.register_world_gauges(build_scenario().actor)  # no-op when disabled
     telemetry.instrument_fastapi(object())  # no-op when disabled
 
@@ -263,6 +265,137 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
     assert "bunnyland.llm.decision.duration" in points
 
 
+class _AsyncMoveAgent:
+    """Async agent whose decision is optionally gated, for background-path telemetry tests."""
+
+    def __init__(self, gate=None) -> None:
+        self._gate = gate
+
+    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+        del prompt, context, character_id, model, provider, tools
+        gate = self._gate
+
+        async def _decide():
+            if gate is not None:
+                await gate.wait()
+            return ToolCall("move", {"direction": "north"})
+
+        return _decide()
+
+
+@pytestmark_otel
+async def test_background_llm_decision_stays_in_the_run_once_trace(otel_capture):
+    """A decision that runs in a background task still emits a parented, traced span.
+
+    Regression: when async (LLM) decisions moved off the dispatch path into background
+    tasks, the ``agent.decide`` span and the decision-latency metric must still be produced,
+    and the span must remain in the trace of the ``run_once`` that scheduled it (asyncio
+    copies the OTel context into the task), even though it finishes after run_once returns.
+    """
+    span_exporter, reader = otel_capture
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor, PromptBuilder(scenario.actor.world), _AsyncMoveAgent()
+    )
+
+    # First pass schedules the background task; the decision is not finished yet.
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
+    assert [d.tool for d in decisions] == ["move"]
+
+    spans = _spans_by_name(span_exporter)
+    assert {
+        "controller.run_once",
+        "agent.prompt.build",
+        "agent.decide",
+        "command.submit",
+    } <= set(spans)
+
+    decide = spans["agent.decide"]
+    assert decide.attributes["agent.kind"] == "_AsyncMoveAgent"
+    assert decide.attributes["decision.tool"] == "move"
+    assert decide.attributes["character.id"] == str(scenario.character)
+
+    run_once = spans["controller.run_once"]
+    by_id = {s.context.span_id: s.name for s in span_exporter.get_finished_spans()}
+    # The background decide and the inline build both hang off the scheduling run_once span,
+    # and everything shares one trace id.
+    assert by_id[decide.parent.span_id] == "controller.run_once"
+    assert by_id[spans["agent.prompt.build"].parent.span_id] == "controller.run_once"
+    assert decide.context.trace_id == run_once.context.trace_id
+    assert spans["command.submit"].context.trace_id == run_once.context.trace_id
+    assert by_id[spans["command.submit"].parent.span_id] == "controller.run_once"
+
+    # The decision-latency histogram is still recorded from inside the background task.
+    points = _metric_points(reader)
+    assert "bunnyland.llm.decision.duration" in points
+
+
+@pytestmark_otel
+async def test_serialized_background_decisions_each_emit_a_non_overlapping_span(otel_capture):
+    """Two characters' background decisions are serialized but each is fully traced.
+
+    Regression for decision locking/sync: with the provider lock, the two ``agent.decide``
+    spans must not overlap in time, yet both must still be emitted with their own correct
+    attributes and decision metrics.
+    """
+    import asyncio
+
+    from bunnyland.core import (
+        ActionPointsComponent,
+        CharacterComponent,
+        ContainmentMode,
+        Contains,
+        FocusPointsComponent,
+        IdentityComponent,
+        InitiativeComponent,
+        LLMControllerComponent,
+        spawn_entity,
+    )
+
+    span_exporter, reader = otel_capture
+    scenario = build_scenario()
+    world = scenario.actor.world
+    other = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Bramble", kind="character"),
+            CharacterComponent(species="bunny"),
+            ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=1.0),
+            FocusPointsComponent(current=3.0, maximum=3.0, regen_per_hour=0.5),
+            InitiativeComponent(score=1.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
+    )
+    controller = spawn_entity(
+        world, [LLMControllerComponent(profile_name="default", model="claude")]
+    )
+    scenario.actor.assign_controller(other.id, controller.id)
+
+    dispatch = ControllerDispatch(
+        scenario.actor, PromptBuilder(world), _AsyncMoveAgent(asyncio.Event())
+    )
+    assert await dispatch.run_once() == []
+    dispatch.agent._gate.set()  # release both gated provider calls
+    decisions = await dispatch.await_pending()
+    assert sorted(d.tool for d in decisions) == ["move", "move"]
+
+    decide_spans = [
+        s for s in span_exporter.get_finished_spans() if s.name == "agent.decide"
+    ]
+    assert len(decide_spans) == 2
+    # The provider lock serializes the calls: the two decide spans do not overlap in time.
+    decide_spans.sort(key=lambda s: s.start_time)
+    assert decide_spans[0].end_time <= decide_spans[1].start_time
+    assert {s.attributes["decision.tool"] for s in decide_spans} == {"move"}
+
+    points = _metric_points(reader)
+    decision_points = points["bunnyland.llm.decision.duration"]
+    assert sum(p.count for p in decision_points) == 2
+
+
 @pytestmark_otel
 async def test_game_loop_iteration_is_the_trace_root(otel_capture):
     span_exporter, _reader = otel_capture
@@ -311,3 +444,109 @@ def test_record_llm_tokens_emits_counters(otel_capture):
     assert prompt.value == 40
     assert prompt.attributes == {"provider": "ollama", "model": "deepseek"}
     assert completion.value == 12
+
+
+@pytestmark_otel
+async def test_traced_generate_emits_world_generate_span_and_metric(otel_capture):
+    span_exporter, reader = otel_capture
+    from bunnyland.core import WorldActor
+    from bunnyland.worldgen import GenOptions, WorldGenerator, traced_generate
+    from bunnyland.worldgen.generators import empty_generator
+
+    generator = WorldGenerator(name="empty", generate=empty_generator)
+    await traced_generate(generator, WorldActor(), "a quiet marsh", GenOptions())
+
+    spans = _spans_by_name(span_exporter)
+    assert "world.generate" in spans
+    generate = spans["world.generate"]
+    assert generate.attributes["generator"] == "empty"
+    assert generate.attributes["llm"] is False
+    assert generate.attributes["worldgen.seed"] == "a quiet marsh"
+
+    points = _metric_points(reader)
+    assert "bunnyland.worldgen.duration" in points
+    assert points["bunnyland.worldgen.duration"][0].attributes["generator"] == "empty"
+
+
+@pytestmark_otel
+async def test_worldgen_llm_request_is_traced(otel_capture):
+    pytest.importorskip("ollama")
+    span_exporter, reader = otel_capture
+    from bunnyland.worldgen.recursive_builder import OllamaWorldAgent
+
+    class _FakeOllamaClient:
+        async def chat(self, **kwargs):
+            del kwargs
+            return {
+                "message": {"role": "assistant", "content": "{}"},
+                "prompt_eval_count": 11,
+                "eval_count": 7,
+            }
+
+    agent = OllamaWorldAgent(model="deepseek-test")
+    agent._client = _FakeOllamaClient()
+    assert await agent._ask("describe the starting room") == {}
+
+    spans = _spans_by_name(span_exporter)
+    assert "worldgen.llm.request" in spans
+    request = spans["worldgen.llm.request"]
+    assert request.attributes["provider"] == "ollama"
+    assert request.attributes["model"] == "deepseek-test"
+    assert request.attributes["instruction.chars"] > 0
+    assert request.attributes["llm.tokens.prompt"] == 11
+    assert request.attributes["llm.tokens.completion"] == 7
+
+    points = _metric_points(reader)
+    assert "bunnyland.worldgen.request.duration" in points
+    tokens = points["bunnyland.llm.tokens.prompt"][0]
+    assert tokens.value == 11
+    assert tokens.attributes == {"provider": "ollama", "model": "deepseek-test"}
+
+
+@pytestmark_otel
+async def test_save_and_load_emit_persistence_spans_and_metrics(otel_capture, tmp_path):
+    from bunnyland.core import WorldActor
+    from bunnyland.persistence import WorldMeta, load_world, save_world
+    from bunnyland.plugins import apply_plugins, bunnyland_plugins
+    from bunnyland.worldgen import StubWorldBuilder, instantiate
+
+    span_exporter, reader = otel_capture
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    await instantiate(actor, await StubWorldBuilder().propose("a quiet marsh"))
+
+    path = tmp_path / "world.json"
+    save_world(actor, path, meta=WorldMeta(seed="a quiet marsh", generator="stub"))
+    load_world(path, plugins=bunnyland_plugins())
+
+    spans = _spans_by_name(span_exporter)
+    assert spans["world.save"].attributes["operation"] == "save"
+    assert spans["world.save"].attributes["format"] == "json"
+    assert spans["world.save"].attributes["entity.count"] > 0
+    assert spans["world.load"].attributes["operation"] == "load"
+    assert spans["world.load"].attributes["entity.count"] > 0
+
+    points = _metric_points(reader)
+    operations = {p.attributes["operation"] for p in points["bunnyland.world.persist.duration"]}
+    assert operations == {"save", "load"}
+
+
+@pytestmark_otel
+async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from bunnyland.core import WorldActor
+    from bunnyland.persistence import WorldMeta
+    from bunnyland.server.app import create_app
+
+    span_exporter, _reader = otel_capture
+    actor = WorldActor()
+    app = create_app(actor, meta=WorldMeta(seed="s", generator="stub"), admin_token="secret")
+    with TestClient(app) as client:
+        response = client.get(
+            "/world/snapshot", headers={"X-Bunnyland-Admin-Token": "secret"}
+        )
+        assert response.status_code == 200
+
+    assert "world.snapshot" in _spans_by_name(span_exporter)

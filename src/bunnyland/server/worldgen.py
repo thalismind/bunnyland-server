@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from .. import telemetry
 from ..content import content_library_context
 from ..core.components import (
     CharacterComponent,
@@ -571,34 +572,35 @@ async def generate_room_patch(
     *,
     options: GenOptions | None = None,
 ) -> WorldRoomGenerationResponse:
-    context = collect_room_expansion_context(actor, request)
-    options = options or GenOptions()
-    builder = _builder(options)
-    schema_context = _dm_schema_context(actor, options)
-    door = DoorProposal(
-        direction=context.direction,
-        locked=context.locked,
-        hidden=context.hidden,
-        beyond_hint=context.prompt or context.door_name,
-    )
-    room = await builder.propose_room(
-        context.prompt or context.door_name,
-        behind=door,
-        known_rooms=context.known_rooms,
-        schema_context=schema_context,
-    )
-    known_rooms = {**context.known_rooms, "$generated_room": room.description or room.title}
-    contents = await builder.propose_contents(
-        room, known_rooms=known_rooms, schema_context=schema_context
-    )
-    doors = await builder.propose_doors(room, schema_context=schema_context)
-    return build_room_generation_response(
-        context,
-        room=room,
-        contents=contents,
-        doors=doors,
-        epoch=actor.epoch,
-    )
+    with telemetry.span("world.generate.room", {"door.id": request.door_entity_id}):
+        context = collect_room_expansion_context(actor, request)
+        options = options or GenOptions()
+        builder = _builder(options)
+        schema_context = _dm_schema_context(actor, options)
+        door = DoorProposal(
+            direction=context.direction,
+            locked=context.locked,
+            hidden=context.hidden,
+            beyond_hint=context.prompt or context.door_name,
+        )
+        room = await builder.propose_room(
+            context.prompt or context.door_name,
+            behind=door,
+            known_rooms=context.known_rooms,
+            schema_context=schema_context,
+        )
+        known_rooms = {**context.known_rooms, "$generated_room": room.description or room.title}
+        contents = await builder.propose_contents(
+            room, known_rooms=known_rooms, schema_context=schema_context
+        )
+        doors = await builder.propose_doors(room, schema_context=schema_context)
+        return build_room_generation_response(
+            context,
+            room=room,
+            contents=contents,
+            doors=doors,
+            epoch=actor.epoch,
+        )
 
 
 async def generate_character_patch(
@@ -607,16 +609,17 @@ async def generate_character_patch(
     *,
     options: GenOptions | None = None,
 ) -> WorldCharacterGenerationResponse:
-    context = collect_room_selection_context(actor, request)
-    options = options or GenOptions()
-    builder = _builder(options)
-    character = await builder.propose_character(
-        context.room,
-        prompt=context.prompt,
-        known_rooms=context.known_rooms,
-        schema_context=_dm_schema_context(actor, options),
-    )
-    return build_character_generation_response(context, character, epoch=actor.epoch)
+    with telemetry.span("world.generate.character", {"room.id": request.room_entity_id}):
+        context = collect_room_selection_context(actor, request)
+        options = options or GenOptions()
+        builder = _builder(options)
+        character = await builder.propose_character(
+            context.room,
+            prompt=context.prompt,
+            known_rooms=context.known_rooms,
+            schema_context=_dm_schema_context(actor, options),
+        )
+        return build_character_generation_response(context, character, epoch=actor.epoch)
 
 
 async def generate_item_patch(
@@ -625,17 +628,18 @@ async def generate_item_patch(
     *,
     options: GenOptions | None = None,
 ) -> WorldItemGenerationResponse:
-    context = collect_container_selection_context(actor, request)
-    options = options or GenOptions()
-    builder = _builder(options)
-    item = await builder.propose_item(
-        container_name=context.container_name,
-        container_kind=context.container_kind,
-        prompt=context.prompt,
-        known_rooms=context.known_rooms,
-        schema_context=_dm_schema_context(actor, options),
-    )
-    return build_item_generation_response(context, item)
+    with telemetry.span("world.generate.item", {"container.id": request.container_entity_id}):
+        context = collect_container_selection_context(actor, request)
+        options = options or GenOptions()
+        builder = _builder(options)
+        item = await builder.propose_item(
+            container_name=context.container_name,
+            container_kind=context.container_kind,
+            prompt=context.prompt,
+            known_rooms=context.known_rooms,
+            schema_context=_dm_schema_context(actor, options),
+        )
+        return build_item_generation_response(context, item)
 
 
 async def generate_event_patch(
@@ -644,16 +648,17 @@ async def generate_event_patch(
     *,
     options: GenOptions | None = None,
 ) -> WorldEventGenerationResponse:
-    context = collect_room_selection_context(actor, request)
-    options = options or GenOptions()
-    builder = _builder(options)
-    event = await builder.propose_event(
-        context.room,
-        prompt=context.prompt,
-        known_rooms=context.known_rooms,
-        schema_context=_dm_schema_context(actor, options),
-    )
-    return build_event_generation_response(context, event, epoch=actor.epoch)
+    with telemetry.span("world.generate.event", {"room.id": request.room_entity_id}):
+        context = collect_room_selection_context(actor, request)
+        options = options or GenOptions()
+        builder = _builder(options)
+        event = await builder.propose_event(
+            context.room,
+            prompt=context.prompt,
+            known_rooms=context.known_rooms,
+            schema_context=_dm_schema_context(actor, options),
+        )
+        return build_event_generation_response(context, event, epoch=actor.epoch)
 
 
 __all__ = [
