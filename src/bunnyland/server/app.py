@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .. import telemetry
 from ..claims import matching_controller
 from ..content import load_content_library
 from ..core import (
@@ -196,7 +197,8 @@ def create_app(
         # The raw ECS dump reveals the whole world; gate it like the DM/overview
         # projections so it is not a back door around the per-room player views.
         _require_projection_admin(admin_token)
-        return serialize_world(actor, meta)
+        with telemetry.span("world.snapshot"):
+            return serialize_world(actor, meta)
 
     @app.get("/world/characters", response_model=CharacterListResponse)
     async def world_character_list() -> CharacterListResponse:
@@ -207,7 +209,8 @@ def create_app(
     @app.get("/world/character/{id}", response_model=CharacterProjectionResponse)
     async def world_character_projection(id: str) -> CharacterProjectionResponse:
         try:
-            return serialize_character_projection(actor, id)
+            with telemetry.span("character.projection", {"character.id": id}):
+                return serialize_character_projection(actor, id)
         except ValueError as exc:
             detail = str(exc)
             status = 400 if detail == "entity is not a character" else 404
@@ -216,7 +219,8 @@ def create_app(
     @app.get("/world/character/{id}/commands", response_model=CharacterQueuedCommandsResponse)
     async def world_character_queued_commands(id: str) -> CharacterQueuedCommandsResponse:
         try:
-            return serialize_character_queued_commands(actor, id)
+            with telemetry.span("character.queued_commands", {"character.id": id}):
+                return serialize_character_queued_commands(actor, id)
         except ValueError as exc:
             detail = str(exc)
             status = 400 if detail == "entity is not a character" else 404
@@ -225,7 +229,8 @@ def create_app(
     @app.get("/world/room/{id}", response_model=RoomProjectionResponse)
     async def world_room_projection(id: str) -> RoomProjectionResponse:
         try:
-            return serialize_room_projection(actor, id)
+            with telemetry.span("room.projection", {"room.id": id}):
+                return serialize_room_projection(actor, id)
         except ValueError as exc:
             detail = str(exc)
             status = 400 if detail == "entity is not a room" else 404
@@ -248,7 +253,8 @@ def create_app(
     ) -> DmProjectionResponse:
         _require_projection_admin(admin_token)
         try:
-            return serialize_dm_projection(actor, id)
+            with telemetry.span("dm.projection", {"dm.id": id}):
+                return serialize_dm_projection(actor, id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -260,7 +266,8 @@ def create_app(
         ),
     ) -> WorldOverviewResponse:
         _require_projection_admin(admin_token)
-        return serialize_world_overview(actor)
+        with telemetry.span("world.overview"):
+            return serialize_world_overview(actor)
 
     @app.get("/world/schema", response_model=WorldSchemaResponse)
     async def get_world_schema() -> WorldSchemaResponse:
@@ -410,8 +417,9 @@ def create_app(
 
     async def _patch_world_request(request: WorldPatchRequest) -> WorldPatchResponse:
         try:
-            async with actor._lock:
-                response = apply_world_patch(actor, request)
+            with telemetry.span("world.patch", {"operation.count": len(request.operations)}):
+                async with actor._lock:
+                    response = apply_world_patch(actor, request)
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
@@ -674,7 +682,9 @@ def create_app(
         await websocket.accept()
         subscription = stream.subscribe()
         try:
-            await websocket.send_json({"type": "snapshot", "data": serialize_world(actor, meta)})
+            with telemetry.span("websocket.snapshot"):
+                snapshot = serialize_world(actor, meta)
+            await websocket.send_json({"type": "snapshot", "data": snapshot})
             while True:
                 await websocket.send_json(await next_websocket_update(actor, subscription))
         except WebSocketDisconnect:

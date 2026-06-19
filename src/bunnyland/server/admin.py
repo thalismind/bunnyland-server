@@ -19,7 +19,7 @@ from ..core.queue import CommandQueues
 from ..core.world_actor import WorldActor
 from ..persistence import WorldMeta, save_world
 from ..plugins import apply_plugins
-from ..worldgen import GenOptions, WorldGenerator
+from ..worldgen import GenOptions, WorldGenerator, traced_generate
 from .models import (
     WorldGenerateResponse,
     WorldGenerationStatusResponse,
@@ -169,7 +169,7 @@ async def start_world_generation(
 
     async def run() -> None:
         try:
-            result = await generator.generate(actor, seed, options)
+            result = await traced_generate(generator, actor, seed, options)
             async with actor._lock:
                 job.rooms, job.characters = _count_world(actor)
                 meta.prompt = result.prompt
@@ -201,7 +201,7 @@ async def generate_replacement_world(
 
     replacement = WorldActor()
     applied_plugins = apply_plugins(plugins, replacement)
-    result = await generator.generate(replacement, seed, options)
+    result = await traced_generate(generator, replacement, seed, options)
 
     async with actor._lock:
         actor.world = replacement.world

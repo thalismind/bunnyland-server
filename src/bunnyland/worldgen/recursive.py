@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from .. import telemetry
 from ..core.components import (
     CharacterComponent,
     ContainerComponent,
@@ -98,9 +99,12 @@ class RecursiveWorldGenerator:
 
     async def generate(self, seed: str) -> InstantiatedWorld:
         self._seed = seed
-        await self._build_rooms(seed)
-        await self._populate_rooms()
-        await self._fill_containment()
+        with telemetry.span("worldgen.build_rooms", {"worldgen.seed": seed}):
+            await self._build_rooms(seed)
+        with telemetry.span("worldgen.populate_rooms"):
+            await self._populate_rooms()
+        with telemetry.span("worldgen.fill_containment"):
+            await self._fill_containment()
         await self.actor.bus.publish(
             WorldGeneratedEvent(
                 event_id=uuid4().hex,

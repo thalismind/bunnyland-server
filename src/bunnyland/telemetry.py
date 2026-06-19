@@ -157,6 +157,16 @@ class _Instruments:
             unit="s",
             description="World generation wall-clock duration.",
         )
+        self.worldgen_request_duration = meter.create_histogram(
+            "bunnyland.worldgen.request.duration",
+            unit="s",
+            description="Single worldgen LLM request wall-clock duration.",
+        )
+        self.persist_duration = meter.create_histogram(
+            "bunnyland.world.persist.duration",
+            unit="s",
+            description="World save/load wall-clock duration.",
+        )
 
 
 # -- public surface ----------------------------------------------------------------------
@@ -382,6 +392,18 @@ def record_worldgen(duration: float, attributes: dict[str, Any] | None = None) -
     _instruments.worldgen_duration.record(duration, attributes or {})
 
 
+def record_worldgen_request(duration: float, attributes: dict[str, Any] | None = None) -> None:
+    if not _ENABLED:
+        return
+    _instruments.worldgen_request_duration.record(duration, attributes or {})
+
+
+def record_persist(duration: float, attributes: dict[str, Any] | None = None) -> None:
+    if not _ENABLED:
+        return
+    _instruments.persist_duration.record(duration, attributes or {})
+
+
 def instrument_fastapi(app: Any) -> None:
     """Attach FastAPI request auto-instrumentation when telemetry is enabled."""
     if not _ENABLED:
@@ -417,8 +439,10 @@ __all__ = [
     "record_handler",
     "record_llm_decision",
     "record_llm_tokens",
+    "record_persist",
     "record_tick",
     "record_worldgen",
+    "record_worldgen_request",
     "register_world_gauges",
     "reset_for_tests",
     "set_span_attributes",

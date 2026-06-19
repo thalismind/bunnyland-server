@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from math import ceil
 
+from . import telemetry
 from .llm_agents import BehaviorProfileAgent, ControllerDispatch
 from .plugins import bunnyland_plugins, collect_persona_fragments
 from .prompts.builder import PromptBuilder
@@ -40,12 +41,16 @@ async def advance_offline_life(
         ),
         BehaviorProfileAgent("worker"),
     )
-    for _index in range(ticks):
-        delta = min(step_seconds, remaining)
-        await actor.tick(delta)
-        await runner.run_once()
-        remaining -= delta
-    await actor.tick(0.0)
+    with telemetry.span(
+        "offline.advance_life",
+        {"offline.elapsed_seconds": elapsed_seconds, "offline.ticks": ticks},
+    ):
+        for _index in range(ticks):
+            delta = min(step_seconds, remaining)
+            await actor.tick(delta)
+            await runner.run_once()
+            remaining -= delta
+        await actor.tick(0.0)
     return ticks
 
 

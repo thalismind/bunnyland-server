@@ -747,7 +747,10 @@ async def _call_provider_with_retries(
 ):
     for attempt in range(max_retries + 1):
         try:
-            return await request()
+            with telemetry.span(
+                "llm.provider.attempt", {"provider": provider, "llm.attempt": attempt}
+            ):
+                return await request()
         except Exception as exc:
             if not _is_transient_provider_error(exc):
                 raise
