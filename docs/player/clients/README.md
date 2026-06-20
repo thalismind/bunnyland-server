@@ -7,9 +7,11 @@ that fits how you want to play:
   menu, action search, an action form for arguments, and a queued-action panel.
 - **[Terminal REPL](repl.md)** - a compact terminal command line with clickable targets,
   command history, and tab completion.
-- **[Web REPL](web-repl.md)** - a browser command line with the same typed command style
-  as the terminal REPL.
-- **[The Toon client](../toonsim.md)** - the sprite-based web client from the web repo.
+- **[Web TUI](https://sandbox.bunnyland.dev/web-tui.html)** - a browser version of the
+  panel-based TUI with room lists, action search, target pickers, and queued actions.
+- **[Web REPL](https://sandbox.bunnyland.dev/web-repl.html)** - a browser command line
+  with the same typed command style as the terminal REPL.
+- **[Toon client](../toonsim.md)** - the sprite-based web client from the web repo.
 
 The clients can present different controls, but submitted commands still go through the
 same authoritative server checks. A menu entry or clickable target is a convenience, not a
@@ -21,8 +23,9 @@ shortcut around reachability, permissions, points, or command validation.
 |--------|----------|-------------|
 | Terminal TUI | browsing a room and picking actions without memorizing command syntax | choose a player, search or select an action, then fill its argument form |
 | Terminal REPL | keyboard-first play, scripts, and fast command entry | type canonical or natural commands, with tab completion and clickable names |
+| Web TUI | browsing a room and picking actions from a browser | choose a player, search or select an action, then fill its argument form in the browser |
 | Web REPL | keyboard-first play from a browser | type commands against a live server, with clickable visible names |
-| Bunnyland Toon | visual room play with sprites and mouse movement | click in the room or use the web action menu |
+| Toon client | visual room play with sprites and mouse movement | click in the room or use the web action menu |
 
 ## Running local or remote
 
@@ -46,4 +49,5 @@ uv run --all-extras bunnyland-repl --list-generators
 ```
 
 The web clients connect to a running HTTP server from the browser. See
-[The Toon client](../toonsim.md) and [Web REPL](web-repl.md) for details.
+[Toon client](../toonsim.md), [Web TUI](https://sandbox.bunnyland.dev/web-tui.html),
+and [Web REPL](https://sandbox.bunnyland.dev/web-repl.html) for details.
