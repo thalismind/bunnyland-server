@@ -6,8 +6,9 @@ most of the usual boilerplate. Here is the whole thing.
 
 ## Who this applies to
 
-Everyone. Carbon-based contributors, silicon-based contributors, the one person
-who only ever files issues, and whatever you have wired up to open PRs at 3am.
+Everyone. Humans, robots, and rabbits. Carbon-based contributors, silicon-based
+contributors, the one person who only ever files issues, and whatever you have
+wired up to open PRs at 3am.
 If you can push a commit, open an issue, leave a review, or hallucinate a
 stack trace, you are covered.
 
