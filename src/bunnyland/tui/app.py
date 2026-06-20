@@ -267,6 +267,11 @@ class BunnylandTUI(App[None]):
     #members, #doors, #activity { height: auto; max-height: 1fr; }
     #verbs { height: auto; max-height: 12; }
     #queued { height: 1fr; min-height: 4; }
+    #character-control-row { height: 3; }
+    #character-label { width: 10; content-align: left middle; }
+    #player { width: 1fr; }
+    #character-release { width: 10; min-width: 10; }
+    #play-hint { padding: 0 1; color: $text-muted; height: 1; }
     #points { padding: 0 1; height: 1; }
     #action-filter-row { height: 3; }
     #action-filter { width: 1fr; }
@@ -324,7 +329,16 @@ class BunnylandTUI(App[None]):
                 yield Static("Activity", id="activity-title", classes="col-title")
                 yield OptionList(id="activity")
             with Vertical(id="actions"):
-                yield Select([], prompt="— pick a player —", allow_blank=True, id="player")
+                with Horizontal(id="character-control-row"):
+                    yield Static("Character", id="character-label")
+                    yield Select(
+                        [],
+                        prompt="— select to play —",
+                        allow_blank=True,
+                        id="player",
+                    )
+                    yield Button("Release", id="character-release", disabled=True)
+                yield Static("Select a character to play as.", id="play-hint")
                 yield Static("", id="points")
                 with Horizontal(id="action-filter-row"):
                     yield Input(placeholder="Search actions", id="action-filter")
@@ -386,11 +400,12 @@ class BunnylandTUI(App[None]):
             self.world = World()
             self.action_views = []
         self._sync_players()
+        self._render_play_state()
         self.queued_commands = await self._fetch_queued_commands()
         self.view_room_id = self.world.room_of(self.player_id)
 
         epoch = self.world.epoch
-        who = entity_name(self.world.get(self.player_id)) if self.player_id else "no player"
+        who = entity_name(self.world.get(self.player_id)) if self.player_id else "no character"
         try:
             self.query_one("#status", Static).update(f"{status} · epoch {epoch}s · {who}")
         except NoMatches:
@@ -425,15 +440,29 @@ class BunnylandTUI(App[None]):
 
     def _sync_players(self) -> None:
         ids = [summary.character_id for summary in self.character_list]
-        if ids == self._player_choice_ids:
-            return
-        self._player_choice_ids = ids
         select = self.query_one("#player", Select)
-        select.set_options(
-            [(summary.name, summary.character_id) for summary in self.character_list]
-        )
+        if ids != self._player_choice_ids:
+            self._player_choice_ids = ids
+            select.set_options(
+                [(summary.name, summary.character_id) for summary in self.character_list]
+            )
+        self._player_choice_ids = ids
         if self.player_id in ids:
             select.value = self.player_id
+        else:
+            select.clear()
+
+    def _render_play_state(self) -> None:
+        playing = bool(self.player_id)
+        self.query_one("#character-release", Button).disabled = not playing
+        hint = self.query_one("#play-hint", Static)
+        if playing:
+            name = entity_name(self.world.get(self.player_id)) or self.player_id
+            hint.update(f"Playing: {name}.")
+        elif self.character_list:
+            hint.update("Select a character to play as.")
+        else:
+            hint.update("Connect to a world with playable characters.")
 
     # ── rendering ─────────────────────────────────────────────────────────────
     def _render_room(self) -> None:
@@ -454,6 +483,10 @@ class BunnylandTUI(App[None]):
                 me = "  ← you" if m["id"] == self.player_id else ""
                 members.add_option(Option(f"{entity_icon(m)} {entity_name(m)}{me}", id=m["id"]))
             self._restore_highlight(members)
+        else:
+            members.add_option(
+                Option("Select a character above to play as and see their room.", disabled=True)
+            )
 
         doors = self.query_one("#doors", OptionList)
         doors.clear_options()
@@ -462,6 +495,8 @@ class BunnylandTUI(App[None]):
             # (you learn that by going there), so label each exit by its direction.
             label = direction or (entity_name(dest) if dest else target_id)
             doors.add_option(Option(f"🚪 {label}", id=f"door:{target_id}"))
+        if not room:
+            doors.add_option(Option("No room until a character is selected.", disabled=True))
 
     def _restore_highlight(self, members: OptionList) -> None:
         if not self.selected_id:
@@ -477,10 +512,11 @@ class BunnylandTUI(App[None]):
             line = (f"⚡ {fmt_points(pts['ap'])}/{fmt_points(pts['ap_max'])} AP   "
                     f"🔹 {fmt_points(pts['fp'])}/{fmt_points(pts['fp_max'])} FP")
         else:
-            line = "Pick a player to see their actions."
-        if line != self._points_line:
+            line = "Select a character to play as and see their actions."
+        points_line = line.plain if isinstance(line, Text) else line
+        if points_line != self._points_line:
             self.query_one("#points", Static).update(line)
-            self._points_line = line
+            self._points_line = points_line
 
         actions = self._filtered_actions()
         action_options: dict[str, dict] = {}
@@ -617,12 +653,30 @@ class BunnylandTUI(App[None]):
     # ── events ──────────────────────────────────────────────────────────────────
     @on(Select.Changed, "#player")
     async def _player_changed(self, event: Select.Changed) -> None:
-        new_id = "" if event.value is Select.BLANK else str(event.value)
+        new_id = "" if event.value in (Select.BLANK, Select.NULL) else str(event.value)
         if new_id == self.player_id:
             return
         self.player_id = new_id
         self.selected_id = None
         self.control = await self.backend.claim(new_id, self.world) if new_id else None
+        await self.refresh_world()
+
+    @on(Button.Pressed, "#character-release")
+    async def _character_release_pressed(self, _event: Button.Pressed) -> None:
+        if not self.player_id:
+            return
+        self.player_id = ""
+        self.control = None
+        self.selected_id = None
+        self.world = World()
+        self.action_views = []
+        self.queued_commands = []
+        self.queue_timing = {}
+        self.view_room_id = None
+        self._verbs_signature = ()
+        self._queued_signature = ()
+        self._points_line = ""
+        self.query_one("#player", Select).clear()
         await self.refresh_world()
 
     @on(OptionList.OptionSelected, "#members")

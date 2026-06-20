@@ -1672,6 +1672,40 @@ async def test_app_clears_missing_player_after_refresh():
         assert app.control is None
 
 
+async def test_app_release_clears_character_selection():
+    from textual.widgets import Button, Select
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await app._character_release_pressed(SimpleNamespace())
+        assert app.player_id == ""
+        assert app.control is None
+
+        await _select_player(app, pilot)
+        assert app.player_id == PLAYER
+        assert not app.query_one("#character-release", Button).disabled
+
+        await app._character_release_pressed(SimpleNamespace())
+        await pilot.pause()
+
+        assert app.player_id == ""
+        assert app.control is None
+        assert app.query_one("#player", Select).value == Select.NULL
+        assert app.query_one("#character-release", Button).disabled
+
+
+async def test_app_empty_character_roster_prompts_for_playable_character():
+    from textual.widgets import Button, Static
+
+    app = BunnylandTUI(
+        RecordingBackend(_snapshot(), character_projection=None, character_list=[])
+    )
+    async with app.run_test():
+        assert app.query_one("#character-release", Button).disabled
+        hint = str(app.query_one("#play-hint", Static).render())
+        assert "playable characters" in hint
+
+
 # ── TUI CLI wiring ────────────────────────────────────────────────────────────
 def test_main_runs_remote_backend(monkeypatch):
     backends = []
