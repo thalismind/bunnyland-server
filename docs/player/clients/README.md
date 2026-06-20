@@ -19,13 +19,13 @@ shortcut around reachability, permissions, points, or command validation.
 
 ## Quick comparison
 
-| Client | Best for | How you act |
-|--------|----------|-------------|
-| Terminal TUI | browsing a room and picking actions without memorizing command syntax | choose a player, search or select an action, then fill its argument form |
-| Terminal REPL | keyboard-first play, scripts, and fast command entry | type canonical or natural commands, with tab completion and clickable names |
-| Web TUI | browsing a room and picking actions from a browser | choose a player, search or select an action, then fill its argument form in the browser |
-| Web REPL | keyboard-first play from a browser | type commands against a live server, with clickable visible names |
-| Toon client | visual room play with sprites and mouse movement | click in the room or use the web action menu |
+| Client | Played in | Best for | How you act |
+|--------|-----------|----------|-------------|
+| Terminal TUI | Terminal | browsing a room and picking actions without memorizing command syntax | choose a player, search or select an action, then fill its argument form |
+| Terminal REPL | Terminal | keyboard-first play, scripts, and fast command entry | type canonical or natural commands, with tab completion and clickable names |
+| Web TUI | Web | browsing a room and picking actions from a browser | choose a player, search or select an action, then fill its argument form in the browser |
+| Web REPL | Web | keyboard-first play from a browser | type commands against a live server, with clickable visible names |
+| Toon client | Web | visual room play with sprites and mouse movement | click in the room or use the web action menu |
 
 ## Running local or remote
 
