@@ -7,14 +7,19 @@ from collections.abc import Callable
 from rich.text import Text
 
 # Events that would drown out narration rather than describe activity: command lifecycle,
-# continuous point/need/affect telemetry, and perception/look bookkeeping.
+# continuous point/need/affect telemetry, and perception bookkeeping.
 _UNNARRATED_EVENT_TYPES = frozenset({
     "CommandSubmittedEvent", "CommandAcceptedEvent", "CommandQueuedEvent",
     "CommandExecutedEvent", "CommandExpiredEvent",
     "ActionPointsChangedEvent", "FocusPointsChangedEvent", "EncumbranceChangedEvent",
     "PainChangedEvent", "BleedingChangedEvent", "AttentionShiftedEvent", "AffectChangedEvent",
-    "EntitySeenEvent", "RoomLookedEvent", "RoomQualityUpdatedEvent", "HungerChangedEvent",
+    "EntitySeenEvent", "RoomQualityUpdatedEvent", "HungerChangedEvent",
     "ThirstChangedEvent", "DailyNeedChangedEvent", "SkillXPChangedEvent",
+})
+
+_SYSTEM_EVENT_TYPES = frozenset({
+    "ControllerChangedEvent",
+    "WorldPauseStatusChangedEvent",
 })
 
 # Fields on every ``DomainEvent``; the rest of a serialized event is its specific payload.
@@ -113,6 +118,8 @@ class EventNarrator:
             and event.get("arrival_summary")
         ):
             return Text(str(event["arrival_summary"]))
+        if event_type == "RoomLookedEvent" and event.get("summary"):
+            return Text(str(event["summary"]))
         label = _humanize_event_type(event_type)
         actor = name_for(event.get("actor_id") or "") if event.get("actor_id") else None
         details: list[str] = []
@@ -133,5 +140,8 @@ class EventNarrator:
         line = f"{actor}: {label}" if actor else label
         if details:
             line += f" — {'; '.join(details)}"
-        style = "dark_orange" if event_type == "CommandRejectedEvent" else "dim italic"
-        return Text(line, style=style)
+        if event_type == "CommandRejectedEvent":
+            return Text(line, style="dark_orange")
+        if event_type in _SYSTEM_EVENT_TYPES:
+            return Text(line, style="dim")
+        return Text(line)

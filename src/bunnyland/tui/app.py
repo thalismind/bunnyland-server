@@ -635,16 +635,13 @@ class BunnylandTUI(App[None]):
         self._render_activity()
 
     def _render_activity(self) -> None:
-        try:
-            activity = self.query_one("#activity", OptionList)
-        except NoMatches:
-            return
+        activity = self.query_one("#activity", OptionList)
         activity.clear_options()
         if not self.activity_lines:
             activity.add_option(Option("No recent activity.", id="activity-empty", disabled=True))
             return
         for index, line in enumerate(self.activity_lines):
-            activity.add_option(Option(line, id=f"activity:{index}", disabled=True))
+            activity.add_option(Option(line, id=f"activity:{index}"))
 
     def _name_for(self, entity_id: str) -> str | None:
         entity = self.world.get(entity_id)

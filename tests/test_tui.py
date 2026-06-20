@@ -264,6 +264,58 @@ def test_event_narrator_renders_arrival_room_for_own_move():
     assert [item.plain for item in shown] == ["Hallway\nHere: Pib.\nExits: south."]
 
 
+def test_event_narrator_uses_normal_style_for_activity_and_dim_for_system():
+    world = World.parse(_snapshot())
+    narrator = EventNarrator()
+    shown = narrator.drain_events(
+        [
+            _event(
+                "claim",
+                event_type="CharacterClaimedEvent",
+                visibility="public",
+                actor_id=PLAYER,
+                note="",
+                character_id=PLAYER,
+                controller_id="controller:1",
+                generation=3,
+            ),
+            _event(
+                "look",
+                event_type="RoomLookedEvent",
+                visibility="private",
+                actor_id=PLAYER,
+                note="",
+                room_id=PARLOR,
+                room_title="Parlor",
+                summary="Parlor: Marlow, an apple",
+            ),
+            _event(
+                "controller",
+                event_type="ControllerChangedEvent",
+                visibility="public",
+                actor_id=PLAYER,
+                note="",
+                generation=4,
+                controller_kind="web",
+            ),
+        ],
+        player_id=PLAYER,
+        room_of=world.room_of,
+        name_for=lambda entity_id: entity_name(world.get(entity_id))
+        if world.get(entity_id)
+        else None,
+    )
+
+    assert [item.plain for item in shown] == [
+        "Pib: Character claimed — Pib; generation 3",
+        "Parlor: Marlow, an apple",
+        "Pib: Controller changed — generation 4; controller kind web",
+    ]
+    assert shown[0].style == ""
+    assert shown[1].style == ""
+    assert shown[2].style == "dim"
+
+
 # ── lazy package exports ──────────────────────────────────────────────────────
 def test_tui_package_lazily_exports_app_symbols():
     import bunnyland.tui as tui
