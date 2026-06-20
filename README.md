@@ -215,18 +215,18 @@ metric/span reference and the Tempo setup.
   characters; enabling/disabling plugins.
 - **[Saving & reloading](docs/developer/persistence.md)** — save/autosave/reload a world, and what
   is (and isn't) persisted.
-- **[Scripting catalogue](bunnyland_scripting.md)** — external JSON scripts for deterministic
+- **[Scripting catalogue](docs/bunnyland_scripting.md)** — external JSON scripts for deterministic
   tests, plugin scenarios, and scripted events.
 
-The full design is in [`bunnyland_specification.md`](bunnyland_specification.md); the build
-plan is in [`PLAN.md`](PLAN.md).
+The full design is in [`bunnyland_specification.md`](docs/bunnyland_specification.md); the build
+plan is in [`PLAN.md`](docs/PLAN.md).
 
 ## Simulation packages
 
 Mechanics ship as **plugins** you enable per world, so a world is whatever bundle you turn
 on. Each sim package adds its own components, verbs, systems, and prompt fragments without
 touching the others — emergence comes from small systems reacting to shared events. The
-full catalogue is in [`bunnyland_mechanics.md`](bunnyland_mechanics.md).
+full catalogue is in [`bunnyland_mechanics.md`](docs/bunnyland_mechanics.md).
 
 | Package         | Status      | Inspired by      | Key mechanics it introduces |
 |-----------------|-------------|------------------|-----------------------------|
