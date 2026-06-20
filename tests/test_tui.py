@@ -1263,6 +1263,12 @@ async def test_app_refresh_preserves_stable_action_list_position():
         await _select_player(app, pilot)
         verbs = app.query_one("#verbs", OptionList)
         verbs.highlighted = 17
+        updated_projection = copy.deepcopy(projection)
+        updated_projection["actions"][0] = {
+            **updated_projection["actions"][0],
+            "title": "Renamed action",
+        }
+        app.backend.character_projection = updated_projection
 
         await app.refresh_world()
 
@@ -1358,6 +1364,98 @@ async def test_app_renders_perceived_activity_after_initial_prime():
         shown = str(activity.get_option_at_index(0).prompt)
         assert "Command rejected" in shown and "not portable" in shown
         assert "secret" not in shown
+
+
+async def test_app_points_line_colors_values_and_dims_zero_pips():
+    from textual.widgets import Static
+
+    projection = _client_view()
+    projection["points"] = {
+        "action": 0,
+        "action_max": 5,
+        "focus": 2,
+        "focus_max": 3,
+    }
+    app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        line = app.query_one("#points", Static).render()
+
+    assert line.plain == "⚡ 0/5 AP   🔹 2/3 FP"
+    spans = {line.plain[span.start:span.end]: str(span.style) for span in line.spans}
+    assert "dim" in spans["⚡"]
+    assert "255,135,0" in spans[" 0/5 AP"]
+    assert "cyan" in spans["🔹"]
+    assert "cyan" in spans[" 2/3 FP"]
+
+
+async def test_app_covers_defensive_selection_and_action_branches(monkeypatch):
+    from textual.widgets import OptionList
+
+    projection = _client_view()
+    projection["actions"] = [
+        _projected_action(command_type="wait", tool_name="wait", title="Wait"),
+        _projected_action(command_type="rest", tool_name="wait", title="Rest"),
+    ]
+    app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        verbs = app.query_one("#verbs", OptionList)
+        assert {option.id for option in verbs.options} == {"wait", "wait:1"}
+
+        run_calls = []
+        monkeypatch.setattr(app, "run_worker", lambda *args, **kwargs: run_calls.append(args))
+        app._door_selected(SimpleNamespace(option=SimpleNamespace(id="not-a-door")))
+        app._queued_selected(SimpleNamespace(option=SimpleNamespace(id="not-queued")))
+        app._queued_selected(SimpleNamespace(option=SimpleNamespace(id="queued:99")))
+        assert run_calls == []
+
+        fields = app._action_fields({
+            "arguments": [
+                {"title": "missing key", "required": True},
+                {"key": "optional", "required": False},
+                {"key": "target_id", "required": False, "target_group": "characters"},
+            ],
+        })
+        assert [field.key for field in fields] == ["target_id"]
+
+        app.action_views = []
+        await app._move_through_exit("missing-exit")
+
+        app.action_views = [{
+            "command_type": "move",
+            "tool_name": "move",
+            "arguments": [{"key": "exit_id", "target_group": "elsewhere", "required": True}],
+        }]
+        await app._move_through_exit("missing-exit")
+
+        app.player_id = ""
+        app.control = None
+        await app._do_action({"command_type": "wait", "tool_name": "wait", "arguments": []})
+        await app._submit_action({"command_type": "wait", "tool_name": "wait"}, {})
+        await app._cancel_queued_command({"command_id": "cmd-1"})
+
+
+async def test_app_failed_queue_cancel_reports_activity():
+    class CancelFailBackend(RecordingBackend):
+        async def cancel_command(
+            self,
+            character_id: str,
+            command_id: str,
+            controller_id: str,
+            controller_generation: int,
+        ) -> bool:
+            await super().cancel_command(
+                character_id, command_id, controller_id, controller_generation
+            )
+            return False
+
+    app = BunnylandTUI(CancelFailBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app._cancel_queued_command({"command_id": "cmd-1"})
+
+    assert any("Could not cancel queued command" in line.plain for line in app.activity_lines)
 
 
 async def test_app_renders_empty_and_keeps_last_queue_on_fetch_failure():

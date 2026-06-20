@@ -509,8 +509,18 @@ class BunnylandTUI(App[None]):
     def _render_actions(self) -> None:
         pts = self.world.points(self.player_id) if self.player_id else {"has": False}
         if pts.get("has"):
-            line = (f"⚡ {fmt_points(pts['ap'])}/{fmt_points(pts['ap_max'])} AP   "
-                    f"🔹 {fmt_points(pts['fp'])}/{fmt_points(pts['fp_max'])} FP")
+            line = Text()
+            line.append("⚡", style="dark_orange" if pts["ap"] > 0 else "dim")
+            line.append(
+                f" {fmt_points(pts['ap'])}/{fmt_points(pts['ap_max'])} AP",
+                style="dark_orange",
+            )
+            line.append("   ")
+            line.append("🔹", style="cyan" if pts["fp"] > 0 else "dim")
+            line.append(
+                f" {fmt_points(pts['fp'])}/{fmt_points(pts['fp_max'])} FP",
+                style="cyan",
+            )
         else:
             line = "Select a character to play as and see their actions."
         points_line = line.plain if isinstance(line, Text) else line
@@ -553,23 +563,19 @@ class BunnylandTUI(App[None]):
         if verbs_signature != self._verbs_signature:
             verbs = self.query_one("#verbs", OptionList)
             highlighted_id = None
-            try:
-                highlighted = verbs.highlighted
-                highlighted_id = (
-                    verbs.get_option_at_index(highlighted).id
-                    if highlighted is not None and highlighted >= 0
-                    else None
-                )
-            except Exception:
-                highlighted_id = None
+            highlighted = verbs.highlighted
+            if (
+                highlighted is not None
+                and highlighted >= 0
+                and highlighted < verbs.option_count
+            ):
+                highlighted_id = verbs.get_option_at_index(highlighted).id
             verbs.clear_options()
             for option_id, label, _plain in verb_entries:
                 verbs.add_option(Option(label, id=option_id))
-            if highlighted_id is not None:
-                try:
-                    verbs.highlighted = verbs.get_option_index(highlighted_id)
-                except Exception:
-                    pass
+            option_ids = [option_id for option_id, _label, _plain in verb_entries]
+            if highlighted_id in option_ids:
+                verbs.highlighted = option_ids.index(highlighted_id)
             self._verbs_signature = verbs_signature
 
         if not self.queued_commands:
@@ -771,11 +777,8 @@ class BunnylandTUI(App[None]):
         if action is None:
             return
         exit_arg = next(
-            (arg for arg in _action_arguments(action) if arg.get("target_group") == "exits"),
-            None,
+            arg for arg in _action_arguments(action) if arg.get("target_group") == "exits"
         )
-        if not exit_arg:
-            return
         await self._submit_action(action, {exit_arg.get("key"): exit_id})
 
     async def _do_action(self, action: dict) -> None:
