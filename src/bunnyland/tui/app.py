@@ -358,6 +358,17 @@ class BunnylandTUI(App[None]):
     async def on_unmount(self) -> None:
         await self.backend.close()
 
+    def _main_query_one(self, selector: str, expect_type=None):
+        try:
+            return self.query_one(selector, expect_type)
+        except NoMatches as first_error:
+            for screen in self.get_screen_stack():
+                try:
+                    return screen.query_one(selector, expect_type)
+                except NoMatches:
+                    continue
+            raise first_error
+
     # ── data ────────────────────────────────────────────────────────────────
     async def refresh_world(self) -> None:
         # The picker is sourced from the claim lobby; the world is only ever the player's
@@ -377,7 +388,7 @@ class BunnylandTUI(App[None]):
                 self._append_activity(Text(message, style="red"))
                 self._refresh_error = message
             try:
-                self.query_one("#status", Static).update(message)
+                self._main_query_one("#status", Static).update(message)
             except NoMatches:
                 return
             return
@@ -407,7 +418,7 @@ class BunnylandTUI(App[None]):
         epoch = self.world.epoch
         who = entity_name(self.world.get(self.player_id)) if self.player_id else "no character"
         try:
-            self.query_one("#status", Static).update(f"{status} · epoch {epoch}s · {who}")
+            self._main_query_one("#status", Static).update(f"{status} · epoch {epoch}s · {who}")
         except NoMatches:
             return
         self._render_room()
@@ -440,7 +451,7 @@ class BunnylandTUI(App[None]):
 
     def _sync_players(self) -> None:
         ids = [summary.character_id for summary in self.character_list]
-        select = self.query_one("#player", Select)
+        select = self._main_query_one("#player", Select)
         if ids != self._player_choice_ids:
             self._player_choice_ids = ids
             select.set_options(
@@ -454,8 +465,8 @@ class BunnylandTUI(App[None]):
 
     def _render_play_state(self) -> None:
         playing = bool(self.player_id)
-        self.query_one("#character-release", Button).disabled = not playing
-        hint = self.query_one("#play-hint", Static)
+        self._main_query_one("#character-release", Button).disabled = not playing
+        hint = self._main_query_one("#play-hint", Static)
         if playing:
             name = entity_name(self.world.get(self.player_id)) or self.player_id
             hint.update(f"Playing: {name}.")
@@ -468,9 +479,9 @@ class BunnylandTUI(App[None]):
     def _render_room(self) -> None:
         room = self.world.get(self.view_room_id)
         title = entity_name(room) if room else "No room"
-        self.query_one("#room-title", Static).update(title)
+        self._main_query_one("#room-title", Static).update(title)
 
-        members = self.query_one("#members", OptionList)
+        members = self._main_query_one("#members", OptionList)
         members.clear_options()
         if room:
             shown = [
@@ -488,7 +499,7 @@ class BunnylandTUI(App[None]):
                 Option("Select a character above to play as and see their room.", disabled=True)
             )
 
-        doors = self.query_one("#doors", OptionList)
+        doors = self._main_query_one("#doors", OptionList)
         doors.clear_options()
         for target_id, direction, dest in self.world.doors(self.view_room_id):
             # Own-room view: the projection names the direction, not the room it leads to
@@ -525,7 +536,7 @@ class BunnylandTUI(App[None]):
             line = "Select a character to play as and see their actions."
         points_line = line.plain if isinstance(line, Text) else line
         if points_line != self._points_line:
-            self.query_one("#points", Static).update(line)
+            self._main_query_one("#points", Static).update(line)
             self._points_line = points_line
 
         actions = self._filtered_actions()
@@ -561,7 +572,7 @@ class BunnylandTUI(App[None]):
 
         verbs_signature = tuple((oid, plain) for oid, _label, plain in verb_entries)
         if verbs_signature != self._verbs_signature:
-            verbs = self.query_one("#verbs", OptionList)
+            verbs = self._main_query_one("#verbs", OptionList)
             highlighted_id = None
             highlighted = verbs.highlighted
             if (
@@ -592,7 +603,7 @@ class BunnylandTUI(App[None]):
             )
         if queued_entries == self._queued_signature:
             return
-        queued = self.query_one("#queued", OptionList)
+        queued = self._main_query_one("#queued", OptionList)
         queued.clear_options()
         for option_id, label in queued_entries:
             queued.add_option(Option(label, id=option_id, disabled=option_id == "queued-empty"))
@@ -641,7 +652,7 @@ class BunnylandTUI(App[None]):
         self._render_activity()
 
     def _render_activity(self) -> None:
-        activity = self.query_one("#activity", OptionList)
+        activity = self._main_query_one("#activity", OptionList)
         activity.clear_options()
         if not self.activity_lines:
             activity.add_option(Option("No recent activity.", id="activity-empty", disabled=True))
@@ -679,7 +690,7 @@ class BunnylandTUI(App[None]):
         self._verbs_signature = ()
         self._queued_signature = ()
         self._points_line = ""
-        self.query_one("#player", Select).clear()
+        self._main_query_one("#player", Select).clear()
         await self.refresh_world()
 
     @on(OptionList.OptionSelected, "#members")
@@ -722,7 +733,7 @@ class BunnylandTUI(App[None]):
 
     @on(Button.Pressed, "#action-filter-clear")
     def _action_filter_clear_pressed(self, _event: Button.Pressed) -> None:
-        self.query_one("#action-filter", Input).value = ""
+        self._main_query_one("#action-filter", Input).value = ""
         if self.action_filter:
             self.action_filter = ""
             self._render_actions()

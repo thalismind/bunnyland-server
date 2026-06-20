@@ -1004,8 +1004,35 @@ class FlakyBackend(RecordingBackend):
 async def _select_player(app, pilot):
     from textual.widgets import Select
 
-    app.query_one("#player", Select).value = PLAYER
+    select = await _wait_for_widget(app, pilot, "#player", Select)
+    select.value = PLAYER
     await pilot.pause()
+
+
+async def _wait_for_widget(root, pilot, selector: str, expect_type=None):
+    from textual.css.query import NoMatches
+
+    last_error = None
+    for _ in range(20):
+        try:
+            return root.query_one(selector, expect_type)
+        except NoMatches as exc:
+            last_error = exc
+            await pilot.pause(0.05)
+    raise last_error
+
+
+async def _wait_for_tui_ready(app, pilot) -> None:
+    await _wait_for_widget(app, pilot, "#player")
+    await _wait_for_widget(app, pilot, "#character-release")
+    await _wait_for_widget(app, pilot, "#activity")
+
+
+async def _push_action_form(app, pilot, screen: ActionForm, *, callback=None) -> ActionForm:
+    await _wait_for_tui_ready(app, pilot)
+    await app.push_screen(screen, callback=callback)
+    await _wait_for_widget(screen, pilot, "#form-submit")
+    return screen
 
 
 async def test_action_form_dropdown_selects_and_cancels():
@@ -1021,16 +1048,14 @@ async def test_action_form_dropdown_selects_and_cancels():
 
     async with app.run_test() as pilot:
         screen = ActionForm("Move", [field])
-        app.push_screen(screen, callback=results.append)
-        await pilot.pause()
+        await _push_action_form(app, pilot, screen, callback=results.append)
         screen.query_one("#field-exit_id", Select).value = HALL
         screen.query_one("#form-submit").press()
         await pilot.pause()
         assert results[-1] == {"exit_id": HALL}
 
         cancelled = ActionForm("Move", [field])
-        app.push_screen(cancelled, callback=results.append)
-        await pilot.pause()
+        await _push_action_form(app, pilot, cancelled, callback=results.append)
         await pilot.press("escape")
         await pilot.pause()
         assert results[-1] is None
@@ -1051,8 +1076,7 @@ async def test_action_form_dropdown_uses_initial_value():
 
     async with app.run_test() as pilot:
         screen = ActionForm("Inspect", [field])
-        app.push_screen(screen)
-        await pilot.pause()
+        await _push_action_form(app, pilot, screen)
         assert screen.query_one("#field-target_id", Select).value == APPLE
 
 
@@ -1065,8 +1089,7 @@ async def test_action_form_text_field_submits_and_blocks_when_required():
 
     async with app.run_test() as pilot:
         screen = ActionForm("Say", [field])
-        app.push_screen(screen, callback=results.append)
-        await pilot.pause()
+        await _push_action_form(app, pilot, screen, callback=results.append)
         screen.query_one("#field-text", Input).value = "hello"
         await pilot.press("enter")
         await pilot.pause()
@@ -1074,8 +1097,7 @@ async def test_action_form_text_field_submits_and_blocks_when_required():
 
         # A blank required field reports an error and does not submit (no new result).
         blocked = ActionForm("Say", [field])
-        app.push_screen(blocked, callback=results.append)
-        await pilot.pause()
+        await _push_action_form(app, pilot, blocked, callback=results.append)
         blocked.query_one("#form-submit").press()
         await pilot.pause()
         assert "required" in str(blocked.query_one("#form-error", Label).render())
@@ -1094,8 +1116,7 @@ async def test_action_form_renders_numeric_input_for_number_fields():
 
     async with app.run_test() as pilot:
         screen = ActionForm("Trade", [field])
-        app.push_screen(screen)
-        await pilot.pause()
+        await _push_action_form(app, pilot, screen)
         assert screen.query_one("#field-amount", Input).type == "number"
 
 
@@ -1233,8 +1254,7 @@ async def test_app_ignores_second_action_form_while_one_is_open():
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
         field = FormField(key="text", label="text", kind="string", required=True)
-        app.push_screen(ActionForm("Say", [field]))
-        await pilot.pause()
+        await _push_action_form(app, pilot, ActionForm("Say", [field]))
         assert sum(isinstance(s, ActionForm) for s in app.screen_stack) == 1
 
         # Selecting another action while a form is open is a no-op: no second form, no submit.
@@ -1243,6 +1263,42 @@ async def test_app_ignores_second_action_form_while_one_is_open():
         await pilot.pause()
         assert sum(isinstance(s, ActionForm) for s in app.screen_stack) == 1
         assert app.backend.commands == []
+
+
+async def test_app_refreshes_main_ui_while_action_form_is_open():
+    from textual.widgets import Static
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        field = FormField(key="text", label="text", kind="string", required=True)
+        await _push_action_form(app, pilot, ActionForm("Say", [field]))
+
+        await app.refresh_world()
+
+        assert sum(isinstance(s, ActionForm) for s in app.screen_stack) == 1
+        assert "Parlor" in str(app._main_query_one("#room-title", Static).render())
+
+
+async def test_app_main_query_falls_back_to_mounted_screen_stack(monkeypatch):
+    from textual.css.query import NoMatches
+    from textual.widgets import Static
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _wait_for_tui_ready(app, pilot)
+        original_query_one = app.query_one
+
+        def miss_app_query(selector, expect_type=None):
+            if selector == "#room-title":
+                raise NoMatches("forced app-level miss")
+            return original_query_one(selector, expect_type)
+
+        monkeypatch.setattr(app, "query_one", miss_app_query)
+
+        assert app._main_query_one("#room-title", Static).id == "room-title"
+        with pytest.raises(NoMatches):
+            app._main_query_one("#not-mounted")
 
 
 async def test_app_refresh_preserves_stable_action_list_position():
