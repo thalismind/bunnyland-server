@@ -1380,12 +1380,12 @@ async def test_dispatch_follows_live_world_replacement():
     # pick actable characters, but the builder captured the old world at construction, so
     # building a new-world character's prompt would dereference its id against the stale,
     # replaced world and crash the game loop. The builder must follow the swap.
-    from bunnyland.core import WorldActor
+    from relics import World
 
     new = build_scenario()
     # The builder holds a different (old) world that does not contain the live character,
     # exactly as after a regeneration swaps actor.world for a brand-new World.
-    stale_world = WorldActor().world
+    stale_world = World()
     assert not stale_world.has_entity(new.character)
     builder = PromptBuilder(stale_world)
     dispatch = ControllerDispatch(new.actor, builder, ScriptedAgent([]))
