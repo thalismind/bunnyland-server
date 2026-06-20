@@ -232,6 +232,9 @@ def test_command_queues_report_pending_commands_by_character_and_lane():
     assert queues.pending(str(scenario.character), Lane.WORLD) == [world_command]
     assert queues.pending(str(scenario.character), Lane.FOCUS) == [focus_command]
     assert queues.pending(str(scenario.character)) == [focus_command, world_command]
+    assert queues.remove(str(scenario.character), "world-command") == world_command
+    assert queues.pending(str(scenario.character), Lane.WORLD) == []
+    assert queues.remove(str(scenario.character), "missing") is None
 
 
 async def test_world_actor_hooks_available_commands_and_submit_nowait():

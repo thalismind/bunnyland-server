@@ -70,6 +70,7 @@ from .edges import ControlledBy
 from .events import (
     ActionPointsChangedEvent,
     CharacterClaimedEvent,
+    CommandCancelledEvent,
     CommandExecutedEvent,
     CommandExpiredEvent,
     CommandQueuedEvent,
@@ -300,6 +301,32 @@ class WorldActor:
         """Return commands accepted for ingestion on the next tick."""
 
         return list(self._inbox._queue)
+
+    async def cancel_command(self, character_id: str, command_id: str) -> SubmittedCommand | None:
+        """Remove one queued command for a character by id, from inbox or lane queues."""
+
+        async with self._lock:
+            for index, command in enumerate(list(self._inbox._queue)):
+                if command.character_id == character_id and command.command_id == command_id:
+                    del self._inbox._queue[index]
+                    await self._publish_cancelled(command)
+                    return command
+            command = self.queues.remove(character_id, command_id)
+            if command is not None:
+                await self._publish_cancelled(command)
+            return command
+
+    async def _publish_cancelled(self, command: SubmittedCommand) -> None:
+        await self._publish(
+            CommandCancelledEvent(
+                **self._event_base(
+                    actor_id=command.character_id,
+                    command_id=command.command_id,
+                    command_type=command.command_type,
+                    lane=command.lane.value,
+                )
+            )
+        )
 
     # -- tick pipeline ------------------------------------------------------------------
 

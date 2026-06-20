@@ -33,7 +33,7 @@ from bunnyland.tui.backend import (
     persistent_client_id,
 )
 from bunnyland.tui.events import EventNarrator
-from bunnyland.tui.model import World, entity_icon, entity_name, entity_type
+from bunnyland.tui.model import Target, World, entity_icon, entity_name, entity_type
 from bunnyland.tui.splash import IntroSplash
 from bunnyland.tui.verbs import ACTION_VERBS
 
@@ -194,6 +194,11 @@ def _queued_response(*commands: dict) -> dict:
         "schema_version": 1,
         "world_epoch": 42,
         "character_id": PLAYER,
+        "generated_at_unix": 100.0,
+        "next_tick_at_unix": 101.0,
+        "tick_seconds": 1.0,
+        "time_scale": 3600.0,
+        "game_seconds_per_tick": 3600.0,
         "commands": list(commands),
     }
 
@@ -708,6 +713,10 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
             self.requests.append(("POST", url, json))
             return Response(is_success=False)
 
+        async def delete(self, url: str, params: dict):
+            self.requests.append(("DELETE", url, params))
+            return Response(payload={"cancelled": True})
+
         async def aclose(self):
             self.closed = True
 
@@ -728,6 +737,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     room = await backend.fetch_room_projection(PARLOR)
     queued = await backend.fetch_queued_commands(PLAYER)
     submitted = await backend.submit({"command_type": "wait"})
+    cancelled = await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 3)
     await backend.close()
 
     assert snapshot == {"world_epoch": 7}
@@ -736,6 +746,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     assert room == {"world_epoch": 7}
     assert queued == {"world_epoch": 7}
     assert submitted.accepted is False
+    assert cancelled is True
     assert clients[0].closed is True
     assert clients[0].requests == [
         ("GET", "http://server.example/world/snapshot", None),
@@ -744,6 +755,11 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
         ("GET", f"http://server.example/world/room/{PARLOR}", None),
         ("GET", f"http://server.example/world/character/{PLAYER}/commands", None),
         ("POST", "http://server.example/world/commands", {"command_type": "wait"}),
+        (
+            "DELETE",
+            f"http://server.example/world/character/{PLAYER}/commands/cmd-1",
+            {"controller_id": "controller:1", "controller_generation": 3},
+        ),
     ]
 
 
@@ -811,13 +827,20 @@ async def test_backend_default_queued_commands_response():
         async def claim(self, player_id: str, world: World):
             return None
 
-    assert await MinimalBackend().fetch_queued_commands(PLAYER) == {
+    queued = await MinimalBackend().fetch_queued_commands(PLAYER)
+    assert queued == {
         "ok": True,
         "schema_version": 1,
         "world_epoch": 0,
         "character_id": PLAYER,
+        "generated_at_unix": queued["generated_at_unix"],
+        "next_tick_at_unix": None,
+        "tick_seconds": None,
+        "time_scale": None,
+        "game_seconds_per_tick": None,
         "commands": [],
     }
+    assert isinstance(queued["generated_at_unix"], float)
 
 
 # ── the app (Textual pilot) ───────────────────────────────────────────────────
@@ -866,6 +889,7 @@ class RecordingBackend(Backend):
         )
         self.queued_requests: list[str] = []
         self.commands: list[dict] = []
+        self.cancelled_commands: list[tuple[str, str, str, int]] = []
         self.label = "test"
 
     async def start(self) -> None: ...
@@ -888,6 +912,18 @@ class RecordingBackend(Backend):
     async def submit(self, command: dict) -> SubmitResult:
         self.commands.append(command)
         return SubmitResult(accepted=True)
+
+    async def cancel_command(
+        self,
+        character_id: str,
+        command_id: str,
+        controller_id: str,
+        controller_generation: int,
+    ) -> bool:
+        self.cancelled_commands.append(
+            (character_id, command_id, controller_id, controller_generation)
+        )
+        return True
 
     async def recent_events(self) -> list[dict]:
         return copy.deepcopy(self.events)
@@ -946,6 +982,26 @@ async def test_action_form_dropdown_selects_and_cancels():
         await pilot.press("escape")
         await pilot.pause()
         assert results[-1] is None
+
+
+async def test_action_form_dropdown_uses_initial_value():
+    from textual.widgets import Select
+
+    field = FormField(
+        key="target_id",
+        label="target",
+        kind="entity",
+        required=True,
+        candidates=(Target(APPLE, "an apple", "✦"),),
+        initial_value=APPLE,
+    )
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+
+    async with app.run_test() as pilot:
+        screen = ActionForm("Inspect", [field])
+        app.push_screen(screen)
+        await pilot.pause()
+        assert screen.query_one("#field-target_id", Select).value == APPLE
 
 
 async def test_action_form_text_field_submits_and_blocks_when_required():
@@ -1096,6 +1152,28 @@ async def test_app_uses_projected_actions_and_target_groups(monkeypatch):
         assert command["payload"] == {"target_id": APPLE}
         assert command["cost"] == {"action": 0, "focus": 1}
         assert command["lane"] == "focus"
+
+
+async def test_app_preselects_selected_entity_in_action_form(monkeypatch):
+    from textual.widgets import OptionList
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        app.selected_id = APPLE
+
+        async def fake_form(screen):
+            assert isinstance(screen, ActionForm)
+            (target_field,) = screen.fields
+            assert target_field.key == "target_id"
+            assert target_field.initial_value == APPLE
+            return {"target_id": APPLE}
+
+        monkeypatch.setattr(app, "push_screen_wait", fake_form)
+        verbs = app.query_one("#verbs", OptionList)
+        app._verb_selected(SimpleNamespace(option=SimpleNamespace(id=verbs.get_option_at_index(0).id)))
+        await pilot.pause()
+        assert app.backend.commands[-1]["payload"] == {"target_id": APPLE}
 
 
 async def test_app_ignores_second_action_form_while_one_is_open():
@@ -1250,6 +1328,21 @@ async def test_app_renders_empty_and_keeps_last_queue_on_fetch_failure():
         ]
 
 
+async def test_app_selecting_queued_command_cancels_it():
+    from textual.widgets import OptionList
+
+    backend = RecordingBackend(_snapshot(), _queued_response(_queued_command()))
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        queued = app.query_one("#queued", OptionList)
+
+        app._queued_selected(SimpleNamespace(option=SimpleNamespace(id=queued.get_option_at_index(0).id)))
+        await pilot.pause()
+
+        assert backend.cancelled_commands == [(PLAYER, "cmd-1", "controller:1", 3)]
+
+
 async def test_app_discards_mismatched_queued_command_response():
     app = BunnylandTUI(
         RecordingBackend(
@@ -1301,6 +1394,39 @@ async def test_app_renders_only_the_players_own_room():
         assert [o.id for o in doors.options] == [f"door:{HALL}"]
         assert "north" in str(doors.get_option_at_index(0).prompt)
         assert "Hallway" not in str(doors.get_option_at_index(0).prompt)
+
+
+async def test_app_selecting_door_queues_move():
+    from textual.widgets import OptionList
+
+    projection = _client_view()
+    projection["actions"] = [
+        _projected_action(
+            command_type="move",
+            tool_name="move",
+            title="Move",
+            cost={"action": 1, "focus": 0},
+            arguments=[
+                {
+                    "key": "exit_id",
+                    "title": "exit",
+                    "kind": "entity",
+                    "required": True,
+                    "target_group": "exits",
+                }
+            ],
+        )
+    ]
+    app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        doors = app.query_one("#doors", OptionList)
+
+        app._door_selected(SimpleNamespace(option=SimpleNamespace(id=doors.get_option_at_index(0).id)))
+        await pilot.pause()
+
+        assert app.backend.commands[-1]["command_type"] == "move"
+        assert app.backend.commands[-1]["payload"] == {"exit_id": HALL}
 
 
 async def test_app_member_and_verb_selection_handlers():

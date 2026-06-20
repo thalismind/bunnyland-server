@@ -43,6 +43,18 @@ class CommandQueues:
             return None
         return lanes[lane].popleft()
 
+    def remove(self, character_id: str, command_id: str) -> SubmittedCommand | None:
+        lanes = self._lanes.get(character_id)
+        if not lanes:
+            return None
+        for lane in Lane:
+            lane_queue = lanes[lane]
+            for index, command in enumerate(lane_queue):
+                if command.command_id == command_id:
+                    del lane_queue[index]
+                    return command
+        return None
+
     def has_pending(self, character_id: str, lane: Lane | None = None) -> bool:
         lanes = self._lanes.get(character_id)
         if not lanes:

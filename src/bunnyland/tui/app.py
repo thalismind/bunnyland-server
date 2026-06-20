@@ -5,6 +5,7 @@ right, click to select, pick a target after the action — the toon client in a 
 from __future__ import annotations
 
 import argparse
+import time
 from dataclasses import dataclass
 
 from rich.text import Text
@@ -157,6 +158,7 @@ class FormField:
     kind: str
     required: bool
     candidates: tuple[Target, ...] | None = None
+    initial_value: str | None = None
 
 
 class ActionForm(ModalScreen[dict | None]):
@@ -203,12 +205,21 @@ class ActionForm(ModalScreen[dict | None]):
         return Input(id=widget_id, type="number" if field.kind == "number" else "text")
 
     def on_mount(self) -> None:
+        first_widget = None
         for field in self.fields:
             try:
-                self.query_one(f"#field-{field.key}").focus()
+                widget = self.query_one(f"#field-{field.key}")
             except NoMatches:
                 continue
-            break
+            if field.initial_value is not None:
+                if isinstance(widget, Select):
+                    widget.value = field.initial_value
+                else:
+                    widget.value = field.initial_value
+            if first_widget is None:
+                first_widget = widget
+        if first_widget is not None:
+            first_widget.focus()
 
     @on(Input.Submitted)
     def _input_submitted(self, _event: Input.Submitted) -> None:
@@ -289,6 +300,7 @@ class BunnylandTUI(App[None]):
         self.selected_id: str | None = None
         self._player_choice_ids: list[str] = []
         self.queued_commands: list[dict] = []
+        self.queue_timing: dict = {}
         self.action_views: list[dict] = []
         self._action_options: dict[str, dict] = {}
         self._verbs_signature: tuple[tuple[str, str, bool], ...] = ()
@@ -399,6 +411,16 @@ class BunnylandTUI(App[None]):
             return self.queued_commands
         if data.get("character_id") != self.player_id:
             return []
+        self.queue_timing = {
+            key: data.get(key)
+            for key in (
+                "generated_at_unix",
+                "next_tick_at_unix",
+                "tick_seconds",
+                "time_scale",
+                "game_seconds_per_tick",
+            )
+        }
         return list(data.get("commands") or [])
 
     def _sync_players(self) -> None:
@@ -517,8 +539,13 @@ class BunnylandTUI(App[None]):
         if not self.queued_commands:
             queued_entries = (("queued-empty", "No queued actions."),)
         else:
+            countdown = self._next_tick_countdown()
             queued_entries = tuple(
-                (f"queued:{index}", _queued_command_label(command, actions))
+                (
+                    f"queued:{index}",
+                    f"{_queued_command_label(command, actions)}"
+                    f"{f' · next tick in {countdown}s' if countdown is not None else ''}",
+                )
                 for index, command in enumerate(self.queued_commands)
             )
         if queued_entries == self._queued_signature:
@@ -526,8 +553,14 @@ class BunnylandTUI(App[None]):
         queued = self.query_one("#queued", OptionList)
         queued.clear_options()
         for option_id, label in queued_entries:
-            queued.add_option(Option(label, id=option_id, disabled=True))
+            queued.add_option(Option(label, id=option_id, disabled=option_id == "queued-empty"))
         self._queued_signature = queued_entries
+
+    def _next_tick_countdown(self) -> int | None:
+        next_tick = self.queue_timing.get("next_tick_at_unix")
+        if next_tick is None:
+            return None
+        return max(0, int(round(float(next_tick) - time.time())))
 
     def _available_actions(self) -> list[dict]:
         return self.action_views or [_legacy_action_view(verb) for verb in ACTION_VERBS]
@@ -596,6 +629,13 @@ class BunnylandTUI(App[None]):
     def _member_selected(self, event: OptionList.OptionSelected) -> None:
         self.selected_id = event.option.id
 
+    @on(OptionList.OptionSelected, "#doors")
+    def _door_selected(self, event: OptionList.OptionSelected) -> None:
+        option_id = str(event.option.id or "")
+        if not option_id.startswith("door:"):
+            return
+        self.run_worker(self._move_through_exit(option_id.removeprefix("door:")), exclusive=True)
+
     @on(OptionList.OptionSelected, "#verbs")
     def _verb_selected(self, event: OptionList.OptionSelected) -> None:
         action = self._action_options.get(str(event.option.id))
@@ -604,6 +644,16 @@ class BunnylandTUI(App[None]):
             action = _legacy_action_view(legacy) if legacy else None
         if action:
             self.run_worker(self._do_action(action), exclusive=True)
+
+    @on(OptionList.OptionSelected, "#queued")
+    def _queued_selected(self, event: OptionList.OptionSelected) -> None:
+        option_id = str(event.option.id or "")
+        if not option_id.startswith("queued:"):
+            return
+        index = int(option_id.removeprefix("queued:"))
+        if index < 0 or index >= len(self.queued_commands):
+            return
+        self.run_worker(self._cancel_queued_command(self.queued_commands[index]), exclusive=True)
 
     @on(Input.Changed, "#action-filter")
     def _action_filter_changed(self, event: Input.Changed) -> None:
@@ -641,6 +691,12 @@ class BunnylandTUI(App[None]):
                 if target_group
                 else None
             )
+            initial_value = (
+                self.selected_id
+                if candidates is not None
+                and self.selected_id in {candidate.value for candidate in candidates}
+                else None
+            )
             fields.append(
                 FormField(
                     key=key,
@@ -648,9 +704,28 @@ class BunnylandTUI(App[None]):
                     kind=str(argument.get("kind") or "string"),
                     required=required,
                     candidates=candidates,
+                    initial_value=initial_value,
                 )
             )
         return fields
+
+    async def _move_through_exit(self, exit_id: str) -> None:
+        action = next(
+            (
+                action for action in self._available_actions()
+                if any(arg.get("target_group") == "exits" for arg in _action_arguments(action))
+            ),
+            None,
+        )
+        if action is None:
+            return
+        exit_arg = next(
+            (arg for arg in _action_arguments(action) if arg.get("target_group") == "exits"),
+            None,
+        )
+        if not exit_arg:
+            return
+        await self._submit_action(action, {exit_arg.get("key"): exit_id})
 
     async def _do_action(self, action: dict) -> None:
         if not self.player_id or not self.control:
@@ -667,6 +742,11 @@ class BunnylandTUI(App[None]):
                 return
             payload = result
 
+        await self._submit_action(action, payload)
+
+    async def _submit_action(self, action: dict, payload: dict) -> None:
+        if not self.player_id or not self.control:
+            return
         cost = _action_cost(action)
         result = await self.backend.submit({
             "character_id": self.player_id,
@@ -683,6 +763,19 @@ class BunnylandTUI(App[None]):
             self._append_activity(
                 Text(f"✗ {_action_title(action)} — {reason}", style="dark_orange")
             )
+        await self.refresh_world()
+
+    async def _cancel_queued_command(self, command: dict) -> None:
+        if not self.player_id or not self.control:
+            return
+        ok = await self.backend.cancel_command(
+            self.player_id,
+            str(command.get("command_id") or ""),
+            self.control[0],
+            self.control[1],
+        )
+        if not ok:
+            self._append_activity(Text("Could not cancel queued command.", style="dark_orange"))
         await self.refresh_world()
 
     async def action_refresh(self) -> None:

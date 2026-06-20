@@ -39,6 +39,7 @@ from bunnyland.core import (
     WebControllerComponent,
     WorldActor,
     WorldPauseStatusChangedEvent,
+    build_submitted_command,
     parse_entity_id,
     spawn_entity,
 )
@@ -741,6 +742,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/characters" in paths
     assert "/world/character/{id}" in paths
     assert "/world/character/{id}/commands" in paths
+    assert "/world/character/{id}/commands/{command_id}" in paths
     assert "/world/room/{id}" in paths
     assert "/world/dm/{id}" in paths
     assert "/world/client-view/{character_id}" not in paths
@@ -801,13 +803,20 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
     assert room_view.json()["room"]["id"] == str(scenario.room_a)
     assert "components" not in room_view.text
     assert queued.status_code == 200
-    assert queued.json() == {
+    queued_body = queued.json()
+    assert queued_body == {
         "ok": True,
         "schema_version": 1,
         "world_epoch": scenario.actor.epoch,
         "character_id": str(scenario.character),
+        "generated_at_unix": queued_body["generated_at_unix"],
+        "next_tick_at_unix": None,
+        "tick_seconds": None,
+        "time_scale": None,
+        "game_seconds_per_tick": None,
         "commands": [],
     }
+    assert isinstance(queued_body["generated_at_unix"], float)
 
 
 def test_health_reports_unknown_git_hash_when_env_is_missing(scenario, monkeypatch):
@@ -1090,6 +1099,52 @@ def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
     )
 
 
+def test_fastapi_cancel_queued_command_removes_it(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    command = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="move",
+        payload={"direction": "north"},
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        submitted_at_epoch=scenario.actor.epoch,
+        command_id="cmd-cancel-me",
+    )
+    scenario.actor.queues.enqueue(command)
+
+    response = client.delete(
+        f"/world/character/{scenario.character}/commands/cmd-cancel-me",
+        params={
+            "controller_id": str(scenario.controller),
+            "controller_generation": scenario.generation,
+        },
+    )
+    queued = client.get(f"/world/character/{scenario.character}/commands")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "command_id": "cmd-cancel-me",
+        "cancelled": True,
+        "reason": "",
+    }
+    assert queued.status_code == 200
+    assert queued.json()["commands"] == []
+
+    stale = client.delete(
+        f"/world/character/{scenario.character}/commands/missing",
+        params={
+            "controller_id": str(scenario.controller),
+            "controller_generation": scenario.generation + 1,
+        },
+    )
+    assert stale.status_code == 409
+
+
 def test_fastapi_world_generation_status_endpoint_reports_idle(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
@@ -1108,11 +1163,15 @@ def test_fastapi_runtime_endpoint_reports_attached_loop(scenario):
     class FakeLoop:
         paused = True
         running = False
+        tick_seconds = 2.0
+        time_scale = 1800.0
+        next_tick_at_unix = None
 
     app = create_app(scenario.actor, loop=FakeLoop())
     client = testclient.TestClient(app)
 
     response = client.get("/admin/runtime")
+    queued = client.get(f"/world/character/{scenario.character}/commands")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -1120,7 +1179,20 @@ def test_fastapi_runtime_endpoint_reports_attached_loop(scenario):
         "world_epoch": scenario.actor.epoch,
         "paused": True,
         "running": False,
+        "generated_at_unix": response.json()["generated_at_unix"],
+        "next_tick_at_unix": None,
+        "tick_seconds": 2.0,
+        "time_scale": 1800.0,
+        "game_seconds_per_tick": 3600.0,
     }
+    assert isinstance(response.json()["generated_at_unix"], float)
+    assert queued.status_code == 200
+    queued_body = queued.json()
+    assert queued_body["tick_seconds"] == 2.0
+    assert queued_body["time_scale"] == 1800.0
+    assert queued_body["game_seconds_per_tick"] == 3600.0
+    assert queued_body["next_tick_at_unix"] is None
+    assert isinstance(queued_body["generated_at_unix"], float)
 
 
 def test_fastapi_pause_and_resume_endpoints_update_runtime(scenario):

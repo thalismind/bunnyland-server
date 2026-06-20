@@ -9,6 +9,7 @@ iteration to a span of game seconds so a slow real cadence can drive a faster wo
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -44,6 +45,7 @@ class GameLoop:
         self.autosave_every = autosave_every
         self._running = False
         self._paused = paused
+        self._next_tick_at_unix: float | None = None
 
     @property
     def running(self) -> bool:
@@ -52,6 +54,10 @@ class GameLoop:
     @property
     def paused(self) -> bool:
         return self._paused
+
+    @property
+    def next_tick_at_unix(self) -> float | None:
+        return self._next_tick_at_unix
 
     def pause(self) -> asyncio.Task[None] | None:
         if self._paused:
@@ -95,6 +101,7 @@ class GameLoop:
         try:
             while self._running and (max_ticks is None or ticks < max_ticks):
                 if self._paused:
+                    self._next_tick_at_unix = None
                     await asyncio.sleep(self.tick_seconds)
                     continue
                 game_delta_seconds = self.tick_seconds * self.time_scale
@@ -115,9 +122,11 @@ class GameLoop:
                 if self.autosave and self.autosave_every > 0 and ticks % self.autosave_every == 0:
                     self.autosave(ticks)
                 if max_ticks is None and self._running:
+                    self._next_tick_at_unix = time.time() + self.tick_seconds
                     await asyncio.sleep(self.tick_seconds)
         finally:
             self._running = False
+            self._next_tick_at_unix = None
             # Drop any in-flight agent decisions rather than leaking their tasks past the loop.
             self.dispatch.cancel_pending()
         return ticks

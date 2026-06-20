@@ -91,6 +91,12 @@ class CommandQueuedEvent(DomainEvent):
     lane: str
 
 
+class CommandCancelledEvent(DomainEvent):
+    command_id: str
+    command_type: str
+    lane: str | None = None
+
+
 class CommandExecutedEvent(DomainEvent):
     command_id: str
     command_type: str
@@ -642,6 +648,7 @@ __all__ = [
     "CharacterRevivedEvent",
     "CombatChallengeEvent",
     "CommandAcceptedEvent",
+    "CommandCancelledEvent",
     "CommandExecutedEvent",
     "CommandExpiredEvent",
     "CommandQueuedEvent",

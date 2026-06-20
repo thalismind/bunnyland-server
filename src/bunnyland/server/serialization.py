@@ -183,7 +183,14 @@ def serialize_queued_commands(actor: WorldActor) -> list[dict[str, Any]]:
 
 
 def serialize_character_queued_commands(
-    actor: WorldActor, character_id: str
+    actor: WorldActor,
+    character_id: str,
+    *,
+    generated_at_unix: float | None = None,
+    next_tick_at_unix: float | None = None,
+    tick_seconds: float | None = None,
+    time_scale: float | None = None,
+    game_seconds_per_tick: float | None = None,
 ) -> CharacterQueuedCommandsResponse:
     """Return queued commands attached to one acting character."""
 
@@ -200,6 +207,11 @@ def serialize_character_queued_commands(
     return CharacterQueuedCommandsResponse(
         world_epoch=actor.epoch,
         character_id=str(character.id),
+        generated_at_unix=generated_at_unix,
+        next_tick_at_unix=next_tick_at_unix,
+        tick_seconds=tick_seconds,
+        time_scale=time_scale,
+        game_seconds_per_tick=game_seconds_per_tick,
         commands=command_dicts,
     )
 

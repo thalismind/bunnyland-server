@@ -109,8 +109,22 @@ class Backend(ABC):
             "schema_version": 1,
             "world_epoch": 0,
             "character_id": character_id,
+            "generated_at_unix": time.time(),
+            "next_tick_at_unix": None,
+            "tick_seconds": None,
+            "time_scale": None,
+            "game_seconds_per_tick": None,
             "commands": [],
         }
+
+    async def cancel_command(
+        self,
+        character_id: str,
+        command_id: str,
+        controller_id: str,
+        controller_generation: int,
+    ) -> bool:
+        return False
 
     @abstractmethod
     async def submit(self, command: dict) -> SubmitResult: ...
@@ -217,7 +231,50 @@ class LocalBackend(Backend):
         return serialize_room_projection(self.actor, room_id).model_dump(mode="json")
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
-        return serialize_character_queued_commands(self.actor, character_id).model_dump(mode="json")
+        now = time.time()
+        tick_seconds = getattr(self._loop, "tick_seconds", None) if self._loop is not None else None
+        time_scale = getattr(self._loop, "time_scale", None) if self._loop is not None else None
+        next_tick_at_unix = (
+            getattr(self._loop, "next_tick_at_unix", None) if self._loop is not None else None
+        )
+        if (
+            next_tick_at_unix is None
+            and tick_seconds is not None
+            and self._loop is not None
+            and self._loop.running
+            and not self._loop.paused
+        ):
+            next_tick_at_unix = now + float(tick_seconds)
+        return serialize_character_queued_commands(
+            self.actor,
+            character_id,
+            generated_at_unix=now,
+            next_tick_at_unix=next_tick_at_unix,
+            tick_seconds=float(tick_seconds) if tick_seconds is not None else None,
+            time_scale=float(time_scale) if time_scale is not None else None,
+            game_seconds_per_tick=(
+                float(tick_seconds) * float(time_scale)
+                if tick_seconds is not None and time_scale is not None
+                else None
+            ),
+        ).model_dump(mode="json")
+
+    async def cancel_command(
+        self,
+        character_id: str,
+        command_id: str,
+        controller_id: str,
+        controller_generation: int,
+    ) -> bool:
+        controller = parse_entity_id(controller_id)
+        character = parse_entity_id(character_id)
+        if (
+            character is None
+            or controller is None
+            or self.actor.current_generation(character, controller) != controller_generation
+        ):
+            return False
+        return await self.actor.cancel_command(character_id, command_id) is not None
 
     async def submit(self, command: dict) -> SubmitResult:
         cost = command.get("cost") or {}
@@ -319,6 +376,24 @@ class RemoteBackend(Backend):
         )
         res.raise_for_status()
         return res.json()
+
+    async def cancel_command(
+        self,
+        character_id: str,
+        command_id: str,
+        controller_id: str,
+        controller_generation: int,
+    ) -> bool:
+        res = await self._client.delete(
+            f"{self.base}/world/character/{character_id}/commands/{command_id}",
+            params={
+                "controller_id": controller_id,
+                "controller_generation": controller_generation,
+            },
+        )
+        if not res.is_success:
+            return False
+        return bool(res.json().get("cancelled"))
 
     async def submit(self, command: dict) -> SubmitResult:
         res = await self._client.post(f"{self.base}/world/commands", json=command)

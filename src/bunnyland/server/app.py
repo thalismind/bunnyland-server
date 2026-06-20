@@ -42,6 +42,7 @@ from .models import (
     CharacterListResponse,
     CharacterProjectionResponse,
     CharacterQueuedCommandsResponse,
+    CommandCancelResponse,
     CommandRequest,
     CommandResponse,
     ControllerAssignmentRequest,
@@ -223,7 +224,7 @@ def create_app(
     async def world_character_queued_commands(id: str) -> CharacterQueuedCommandsResponse:
         try:
             with telemetry.span("character.queued_commands", {"character.id": id}):
-                return serialize_character_queued_commands(actor, id)
+                return serialize_character_queued_commands(actor, id, **_runtime_timing())
         except ValueError as exc:
             detail = str(exc)
             status = 400 if detail == "entity is not a character" else 404
@@ -284,6 +285,33 @@ def create_app(
     async def recent_events() -> RecentEventsResponse:
         return RecentEventsResponse(events=stream.recent_messages())
 
+    def _runtime_timing() -> dict:
+        now = time.time()
+        tick_seconds = getattr(loop, "tick_seconds", None) if loop is not None else None
+        time_scale = getattr(loop, "time_scale", None) if loop is not None else None
+        next_tick_at_unix = (
+            getattr(loop, "next_tick_at_unix", None) if loop is not None else None
+        )
+        if (
+            next_tick_at_unix is None
+            and tick_seconds is not None
+            and loop is not None
+            and getattr(loop, "running", False)
+            and not getattr(loop, "paused", False)
+        ):
+            next_tick_at_unix = now + float(tick_seconds)
+        return {
+            "generated_at_unix": now,
+            "next_tick_at_unix": next_tick_at_unix,
+            "tick_seconds": float(tick_seconds) if tick_seconds is not None else None,
+            "time_scale": float(time_scale) if time_scale is not None else None,
+            "game_seconds_per_tick": (
+                float(tick_seconds) * float(time_scale)
+                if tick_seconds is not None and time_scale is not None
+                else None
+            ),
+        }
+
     def _runtime_response() -> WorldRuntimeResponse:
         if loop is None:
             raise HTTPException(status_code=409, detail="server runtime is not attached")
@@ -291,7 +319,35 @@ def create_app(
             world_epoch=actor.epoch,
             paused=loop.paused,
             running=loop.running,
+            **_runtime_timing(),
         )
+
+    async def _cancel_command_request(
+        character_id: str,
+        command_id: str,
+        controller_id: str,
+        controller_generation: int,
+    ) -> CommandCancelResponse:
+        parsed_character = parse_entity_id(character_id)
+        parsed_controller = parse_entity_id(controller_id)
+        if parsed_character is None or not actor.world.has_entity(parsed_character):
+            raise HTTPException(status_code=404, detail="character does not exist")
+        character = actor.world.get_entity(parsed_character)
+        if not character.has_component(CharacterComponent):
+            raise HTTPException(status_code=400, detail="entity is not a character")
+        if parsed_controller is None or actor.current_generation(
+            parsed_character, parsed_controller
+        ) != controller_generation:
+            raise HTTPException(status_code=409, detail="stale controller generation")
+        command = await actor.cancel_command(character_id, command_id)
+        if command is None:
+            return CommandCancelResponse(
+                ok=False,
+                command_id=command_id,
+                cancelled=False,
+                reason="command not found",
+            )
+        return CommandCancelResponse(ok=True, command_id=command_id, cancelled=True)
 
     async def _submit_command_request(request: CommandRequest) -> CommandResponse:
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
@@ -657,6 +713,23 @@ def create_app(
     @app.post("/world/commands", response_model=CommandResponse, status_code=202)
     async def submit_command(request: CommandRequest) -> CommandResponse:
         return await _submit_command_request(request)
+
+    @app.delete(
+        "/world/character/{id}/commands/{command_id}",
+        response_model=CommandCancelResponse,
+    )
+    async def cancel_command(
+        id: str,
+        command_id: str,
+        controller_id: str,
+        controller_generation: int,
+    ) -> CommandCancelResponse:
+        return await _cancel_command_request(
+            id,
+            command_id,
+            controller_id,
+            controller_generation,
+        )
 
     @app.post("/world/controllers/web/claim", response_model=WebControllerClaimResponse)
     async def claim_web_controller(

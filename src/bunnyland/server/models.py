@@ -51,6 +51,13 @@ class CommandResponse(BaseModel):
     reason: str = ""
 
 
+class CommandCancelResponse(BaseModel):
+    ok: bool
+    command_id: str
+    cancelled: bool
+    reason: str = ""
+
+
 class RecentEventsResponse(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -82,6 +89,11 @@ class CharacterQueuedCommandsResponse(BaseModel):
     schema_version: int = 1
     world_epoch: int
     character_id: str
+    generated_at_unix: float | None = None
+    next_tick_at_unix: float | None = None
+    tick_seconds: float | None = None
+    time_scale: float | None = None
+    game_seconds_per_tick: float | None = None
     commands: list[QueuedCommandView] = Field(default_factory=list)
 
 
@@ -510,6 +522,11 @@ class WorldRuntimeResponse(BaseModel):
     world_epoch: int
     paused: bool
     running: bool
+    generated_at_unix: float | None = None
+    next_tick_at_unix: float | None = None
+    tick_seconds: float | None = None
+    time_scale: float | None = None
+    game_seconds_per_tick: float | None = None
 
 
 class EcsTypeSchema(BaseModel):
@@ -552,6 +569,7 @@ __all__ = [
     "ControllerDefinitionListResponse",
     "StoredControllerDefinitions",
     "CommandCostRequest",
+    "CommandCancelResponse",
     "CommandRequest",
     "CommandResponse",
     "ControllerAssignmentRequest",
