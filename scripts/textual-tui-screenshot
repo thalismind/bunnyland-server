@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Capture the Bunnyland Textual TUI as an SVG screenshot from a real server."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+
+from textual.widgets import OptionList, Select
+
+from bunnyland.tui.app import ActionForm, BunnylandTUI
+from bunnyland.tui.backend import RemoteBackend
+
+
+def has_target_argument(action: dict) -> bool:
+    return any(argument.get("target_group") for argument in action.get("arguments") or [])
+
+
+async def select_first_player(app: BunnylandTUI) -> None:
+    select = app.query_one("#player", Select)
+    if not app.character_list:
+        raise RuntimeError("server returned no claimable characters")
+    select.value = app.character_list[0].character_id
+
+
+async def open_target_action(app: BunnylandTUI) -> None:
+    verbs = app.query_one("#verbs", OptionList)
+    for option_id, action in app._action_options.items():
+        if has_target_argument(action):
+            verbs.highlighted = verbs.get_option_index(option_id)
+            app._verb_selected(SimpleNamespace(option=SimpleNamespace(id=option_id)))
+            return
+    if verbs.option_count:
+        option = verbs.get_option_at_index(0)
+        verbs.highlighted = 0
+        app._verb_selected(SimpleNamespace(option=option))
+
+
+async def capture(args: argparse.Namespace) -> None:
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    backend = RemoteBackend(
+        args.server.rstrip("/"),
+        client_id=args.client_id,
+        fallback_controller=args.claim_fallback,
+        timeout_seconds=args.claim_timeout_seconds,
+    )
+    app = BunnylandTUI(backend, show_intro=False)
+    async with app.run_test(size=(args.columns, args.rows)) as pilot:
+        await pilot.pause(args.settle_seconds)
+        await select_first_player(app)
+        await pilot.pause(args.settle_seconds)
+        if args.open_target_action:
+            await open_target_action(app)
+            await pilot.pause(args.settle_seconds)
+            if not any(isinstance(screen, ActionForm) for screen in app.screen_stack):
+                raise RuntimeError("could not open a target action form")
+        app.save_screenshot(filename=output.name, path=str(output.parent))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--server", default="https://sandbox.bunnyland.dev/api")
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--columns", type=int, default=160)
+    parser.add_argument("--rows", type=int, default=48)
+    parser.add_argument("--client-id", default="itch-screenshot-terminal-tui")
+    parser.add_argument("--claim-fallback", choices=("suspend", "llm"), default="suspend")
+    parser.add_argument("--claim-timeout-seconds", type=int, default=1800)
+    parser.add_argument("--open-target-action", action="store_true")
+    parser.add_argument("--settle-seconds", type=float, default=1.0)
+    args = parser.parse_args()
+    asyncio.run(capture(args))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
