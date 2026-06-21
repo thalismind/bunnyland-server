@@ -305,6 +305,13 @@ if confirm "Enable the HTTP MCP endpoint for agentic clients?" "n"; then
   admin_token="$(prompt_secret "BUNNYLAND_ADMIN_TOKEN")"
 fi
 
+comfyui_server_url=""
+image_public_base_url=""
+if confirm "Enable image generation via a ComfyUI server?" "n"; then
+  comfyui_server_url="$(prompt "ComfyUI server URL (e.g. http://localhost:8188)")"
+  image_public_base_url="$(prompt "Public base URL for Discord avatars (blank to skip)")"
+fi
+
 env_file="$(mktemp)"
 chmod 0600 "$env_file"
 trap 'rm -f "$env_file"' EXIT
@@ -322,6 +329,12 @@ if [[ -n "$starter_pack" ]]; then
 fi
 if [[ "$enable_mcp" == "1" ]]; then
   write_env BUNNYLAND_ADMIN_TOKEN "$admin_token"
+fi
+if [[ -n "$comfyui_server_url" ]]; then
+  write_env COMFYUI_SERVER_URL "$comfyui_server_url"
+  if [[ -n "$image_public_base_url" ]]; then
+    write_env BUNNYLAND_PUBLIC_BASE_URL "$image_public_base_url"
+  fi
 fi
 if [[ -n "$cert_email" ]]; then write_env BUNNYLAND_CERT_EMAIL "$cert_email"; fi
 if [[ -n "$world_save" ]]; then write_env BUNNYLAND_WORLD_SAVE "$world_save"; fi

@@ -49,6 +49,9 @@ enable_tls="${BUNNYLAND_TLS:-1}"
 configure_ufw="${BUNNYLAND_CONFIGURE_FIREWALL:-1}"
 generator="${BUNNYLAND_GENERATOR:-lifesim-demo}"
 starter_pack="${BUNNYLAND_STARTER_PACK:-}"
+comfyui_server_url="${COMFYUI_SERVER_URL:-}"
+image_media_dir="${BUNNYLAND_MEDIA_DIR:-/data/media}"
+image_public_base_url="${BUNNYLAND_PUBLIC_BASE_URL:-}"
 tick_seconds="${BUNNYLAND_TICK_SECONDS:-30}"
 time_scale="${BUNNYLAND_TIME_SCALE:-1800}"
 autosave_every="${BUNNYLAND_AUTOSAVE_EVERY:-20}"
@@ -347,6 +350,13 @@ render_server_service() {
     printf '      BUNNYLAND_DISCORD_USER_ID: %s\n' "$(yaml_quote "${BUNNYLAND_DISCORD_USER_ID:-}")"
     printf '      BUNNYLAND_DISCORD_CHANNEL_ID: %s\n' "$(yaml_quote "${BUNNYLAND_DISCORD_CHANNEL_ID:-}")"
     printf '      BUNNYLAND_DISCORD_CHARACTER: %s\n' "$(yaml_quote "${BUNNYLAND_DISCORD_CHARACTER:-}")"
+  fi
+  if [[ -n "$comfyui_server_url" ]]; then
+    printf '      COMFYUI_SERVER_URL: %s\n' "$(yaml_quote "$comfyui_server_url")"
+    printf '      BUNNYLAND_MEDIA_DIR: %s\n' "$(yaml_quote "$image_media_dir")"
+    if [[ -n "$image_public_base_url" ]]; then
+      printf '      BUNNYLAND_PUBLIC_BASE_URL: %s\n' "$(yaml_quote "$image_public_base_url")"
+    fi
   fi
   printf '    expose:\n'
   printf '      - "8765"\n'
