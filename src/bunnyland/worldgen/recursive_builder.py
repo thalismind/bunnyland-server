@@ -20,7 +20,7 @@ from .. import telemetry
 from ..llm_agents.agent import (
     _llm_request_attrs,
     _ollama_usage,
-    _openrouter_usage,
+    _openrouter_enriched_usage,
     _record_llm_usage,
 )
 from .defaults import DEFAULT_WORLDGEN_MODEL
@@ -529,7 +529,10 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
                 response_format={"type": "json_object"},
             )
             _annotate_worldgen_usage(
-                request_span, "openrouter", self._model, _openrouter_usage(response)
+                request_span,
+                "openrouter",
+                self._model,
+                await _openrouter_enriched_usage(self._client, response),
             )
         message = response.choices[0].message
         self._history.append(_message_to_history(message))
@@ -542,9 +545,11 @@ def _annotate_worldgen_usage(
 ) -> None:
     """Record a worldgen LLM call's token counts to both the metric and the active span."""
     _record_llm_usage(provider, model, usage)
+    request_span.set_attribute("llm.tokens.available", usage.tokens_available)
     request_span.set_attribute("llm.tokens.prompt", usage.prompt_tokens)
     request_span.set_attribute("llm.tokens.completion", usage.completion_tokens)
     request_span.set_attribute("llm.tokens.total", usage.total_tokens)
+    request_span.set_attribute("llm.cost.available", usage.cost_available)
     if usage.cost:
         request_span.set_attribute("llm.cost", usage.cost)
 

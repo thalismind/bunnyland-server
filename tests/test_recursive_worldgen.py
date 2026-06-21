@@ -501,6 +501,24 @@ async def test_openrouter_world_agent_preserves_history(monkeypatch):
     assert second[3]["role"] == "user"
 
 
+def test_room_node_proposal_repairs_common_live_numeric_labels():
+    room = RoomNodeProposal.model_validate(
+        {
+            "title": "Fluorescent Annex",
+            "light": "fluorescent",
+            "celsius": "room temperature",
+        }
+    )
+    unknown = RoomNodeProposal.model_validate(
+        {"title": "Weird Annex", "light": "glowing-ish", "celsius": "nice"}
+    )
+
+    assert room.light == 0.7
+    assert room.celsius == 21.0
+    assert unknown.light is None
+    assert unknown.celsius is None
+
+
 async def test_ollama_world_agent_builds_each_proposal_from_json(monkeypatch):
     from bunnyland.worldgen.proposal import CharacterProposal, ItemProposal, StoryEventProposal
 

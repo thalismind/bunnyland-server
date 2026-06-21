@@ -54,6 +54,7 @@ from bunnyland.llm_agents.agent import (
     _call_provider_with_retries,
     _message_to_history,
     _openrouter_arguments,
+    _openrouter_enriched_usage,
     _openrouter_usage,
     _tool_call_history,
     normalize_model,
@@ -1430,6 +1431,75 @@ def test_openrouter_usage_includes_total_tokens_and_provider_cost():
     assert parsed.completion_tokens == 4
     assert parsed.total_tokens == 7
     assert parsed.cost == 0.0042
+
+
+async def test_openrouter_usage_enriches_cost_from_generation_metadata():
+    class FakeGenerations:
+        async def get_generation_async(self, *, id):
+            assert id == "gen_1"
+            data = types.SimpleNamespace(
+                tokens_prompt=11,
+                tokens_completion=5,
+                total_cost=0.006,
+            )
+            return types.SimpleNamespace(data=data)
+
+    client = types.SimpleNamespace(generations=FakeGenerations())
+    usage = types.SimpleNamespace(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+    response = types.SimpleNamespace(id="gen_1", usage=usage)
+
+    parsed = await _openrouter_enriched_usage(client, response)
+
+    assert parsed.prompt_tokens == 11
+    assert parsed.completion_tokens == 5
+    assert parsed.total_tokens == 16
+    assert parsed.cost == 0.006
+
+
+async def test_openrouter_usage_handles_missing_generation_metadata():
+    class FakeGenerations:
+        async def get_generation_async(self, *, id):
+            assert id == "gen_1"
+            return types.SimpleNamespace(data=None)
+
+    client = types.SimpleNamespace(generations=FakeGenerations())
+    usage = types.SimpleNamespace(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+    response = types.SimpleNamespace(id="gen_1", usage=usage)
+
+    parsed = await _openrouter_enriched_usage(client, response)
+
+    assert parsed.prompt_tokens == 11
+    assert parsed.completion_tokens == 5
+    assert parsed.total_tokens == 16
+    assert parsed.cost == 0.0
+
+
+async def test_openrouter_usage_falls_back_when_generation_lookup_fails(monkeypatch):
+    class FakeGenerations:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_generation_async(self, *, id):
+            assert id == "gen_1"
+            self.calls += 1
+            raise RuntimeError("metadata unavailable")
+
+    async def no_sleep(_seconds):
+        return None
+
+    generations = FakeGenerations()
+    client = types.SimpleNamespace(generations=generations)
+    usage = types.SimpleNamespace(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+    response = types.SimpleNamespace(id="gen_1", usage=usage)
+    monkeypatch.setattr("bunnyland.llm_agents.agent.asyncio.sleep", no_sleep)
+
+    parsed = await _openrouter_enriched_usage(client, response)
+
+    assert generations.calls == 3
+    assert parsed.prompt_tokens == 11
+    assert parsed.completion_tokens == 5
+    assert parsed.total_tokens == 16
+    assert parsed.cost == 0.0
 
 
 async def test_openrouter_agent_retries_transient_provider_errors(monkeypatch):

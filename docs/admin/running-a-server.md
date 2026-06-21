@@ -266,8 +266,9 @@ controller turn hanging off it:
   `character.id`, `decision.tool`, `decision.arguments`, and — for LLM-controlled
   characters — `decision.prompted`, `decision.prompt`, `decision.prompt_chars`; live LLM
   calls also add `llm.request.kind`, `llm.tools.count`, `llm.history.messages`,
-  `llm.system_prompt_chars`, `llm.tokens.prompt`/`.completion`/`.total`, and
-  provider-reported `llm.cost` when the SDK exposes it).
+  `llm.system_prompt_chars`, `llm.tokens.available`, input/output token counts as
+  `llm.tokens.prompt`/`.completion`, `llm.tokens.total`, and `llm.cost.available`.
+  Provider-reported `llm.cost` is attached when the SDK/API exposes cost metadata.
 - `command.submit` at the single submission chokepoint, so every queued command (API,
   MCP, Discord, or autonomous dispatch) is tied back to its originating trace.
 - `world.generate` at startup, with child `worldgen.llm.request` spans when recursive

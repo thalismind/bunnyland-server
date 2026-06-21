@@ -44,6 +44,14 @@ class LLMUsage:
     total_tokens: int = 0
     cost: float = 0.0
 
+    @property
+    def tokens_available(self) -> bool:
+        return bool(self.prompt_tokens or self.completion_tokens or self.total_tokens)
+
+    @property
+    def cost_available(self) -> bool:
+        return bool(self.cost)
+
 
 def _int_field(source: object, *names: str) -> int:
     for name in names:
@@ -77,8 +85,6 @@ def _usage_total(prompt_tokens: int, completion_tokens: int, explicit_total: int
 
 def _ollama_usage(response: object) -> LLMUsage:
     """Pull token counts from an Ollama chat response, defensively."""
-    if not isinstance(response, MappingABC):
-        return LLMUsage()
     prompt_tokens = _int_field(response, "prompt_eval_count", "prompt_tokens")
     completion_tokens = _int_field(response, "eval_count", "completion_tokens")
     total_tokens = _usage_total(
@@ -99,6 +105,51 @@ def _openrouter_usage(response: object) -> LLMUsage:
     )
     cost = _float_field(usage, "cost", "total_cost", "estimated_cost")
     return LLMUsage(prompt_tokens, completion_tokens, total_tokens, cost)
+
+
+async def _openrouter_enriched_usage(client: object, response: object) -> LLMUsage:
+    usage = _openrouter_usage(response)
+    if usage.cost:
+        return usage
+    generation_id = getattr(response, "id", None)
+    generations = getattr(client, "generations", None)
+    get_generation = getattr(generations, "get_generation_async", None)
+    if not generation_id or get_generation is None:
+        return usage
+
+    async def lookup(attempt: int) -> LLMUsage:
+        try:
+            with telemetry.span(
+                "llm.provider.usage",
+                {
+                    "provider": "openrouter",
+                    "llm.generation.id": generation_id,
+                    "llm.attempt": attempt,
+                },
+            ):
+                generation = await get_generation(id=generation_id)
+            data = getattr(generation, "data", None)
+            if data is None:
+                return usage
+            prompt_tokens = usage.prompt_tokens or _int_field(data, "tokens_prompt")
+            completion_tokens = usage.completion_tokens or _int_field(
+                data, "tokens_completion"
+            )
+            total_tokens = _usage_total(prompt_tokens, completion_tokens, usage.total_tokens)
+            cost = _float_field(data, "total_cost", "usage", "upstream_inference_cost")
+            return LLMUsage(prompt_tokens, completion_tokens, total_tokens, cost)
+        except Exception as exc:
+            if attempt >= 2:
+                logger.debug(
+                    "OpenRouter generation usage lookup failed for %s: %s",
+                    generation_id,
+                    exc,
+                )
+                return usage
+            await asyncio.sleep(0.25)
+            return await lookup(attempt + 1)
+
+    return await lookup(0)
 
 
 def _ollama_token_usage(response: object) -> tuple[int, int]:
@@ -123,9 +174,11 @@ def _record_llm_usage(provider: str, model: str, usage: LLMUsage) -> None:
         cost=usage.cost,
     )
     attrs = {
+        "llm.tokens.available": usage.tokens_available,
         "llm.tokens.prompt": usage.prompt_tokens,
         "llm.tokens.completion": usage.completion_tokens,
         "llm.tokens.total": usage.total_tokens,
+        "llm.cost.available": usage.cost_available,
     }
     if usage.cost:
         attrs["llm.cost"] = usage.cost
@@ -732,7 +785,11 @@ class OpenRouterAgent:
         )
         if response is None:
             return None
-        _record_llm_usage("openrouter", resolved_model, _openrouter_usage(response))
+        _record_llm_usage(
+            "openrouter",
+            resolved_model,
+            await _openrouter_enriched_usage(self._client, response),
+        )
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
         history.append(user_message)

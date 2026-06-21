@@ -27,6 +27,29 @@ _SEVERITY_LABELS = {
     "critical": 5.0,
 }
 
+_LIGHT_LABELS = {
+    "dark": 0.0,
+    "dim": 0.25,
+    "low": 0.3,
+    "soft": 0.45,
+    "medium": 0.5,
+    "moderate": 0.5,
+    "fluorescent": 0.7,
+    "artificial": 0.7,
+    "bright": 0.85,
+    "sunny": 0.95,
+}
+
+_CELSIUS_LABELS = {
+    "freezing": -5.0,
+    "cold": 5.0,
+    "cool": 12.0,
+    "room temperature": 21.0,
+    "temperate": 21.0,
+    "warm": 27.0,
+    "hot": 35.0,
+}
+
 
 def _coerce_profile_string(value: object, default: str) -> object:
     if value is None:
@@ -44,6 +67,16 @@ def _coerce_numeric_label(value: object) -> object:
     if isinstance(value, str):
         return _SEVERITY_LABELS.get(value.strip().lower(), value)
     return value
+
+
+def _coerce_float_or_label(value: object, labels: Mapping[str, float]) -> object:
+    if not isinstance(value, str):
+        return value
+    text = value.strip().lower()
+    try:
+        return float(text)
+    except ValueError:
+        return labels.get(text, None)
 
 
 def _default_if_none(value: object, default: object) -> object:
@@ -196,6 +229,16 @@ class RoomNodeProposal(_GenerationIntentModel):
     indoor: bool = False
     light: float | None = None
     celsius: float | None = None
+
+    @field_validator("light", mode="before")
+    @classmethod
+    def _coerce_light_label(cls, value: object) -> object:
+        return _coerce_float_or_label(value, _LIGHT_LABELS)
+
+    @field_validator("celsius", mode="before")
+    @classmethod
+    def _coerce_celsius_label(cls, value: object) -> object:
+        return _coerce_float_or_label(value, _CELSIUS_LABELS)
 
 
 class DoorProposal(BaseModel):

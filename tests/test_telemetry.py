@@ -162,8 +162,14 @@ def test_token_usage_helpers_are_defensive():
     ollama_usage = _ollama_usage({"prompt_eval_count": 12, "eval_count": 7})
     assert ollama_usage.total_tokens == 19
     assert ollama_usage.cost == 0.0
-
-    import types
+    assert ollama_usage.tokens_available is True
+    assert ollama_usage.cost_available is False
+    ollama_object_usage = _ollama_usage(
+        types.SimpleNamespace(prompt_eval_count=8, eval_count=5)
+    )
+    assert ollama_object_usage.prompt_tokens == 8
+    assert ollama_object_usage.completion_tokens == 5
+    assert ollama_object_usage.total_tokens == 13
 
     usage = types.SimpleNamespace(
         prompt_tokens=3, completion_tokens=9, total_tokens=12, total_cost=0.005
@@ -172,11 +178,15 @@ def test_token_usage_helpers_are_defensive():
     openrouter_usage = _openrouter_usage(types.SimpleNamespace(usage=usage))
     assert openrouter_usage.total_tokens == 12
     assert openrouter_usage.cost == 0.005
+    assert openrouter_usage.tokens_available is True
+    assert openrouter_usage.cost_available is True
     mapping_usage = _openrouter_usage(
         types.SimpleNamespace(usage={"prompt_tokens": 1, "completion_tokens": 2})
     )
     assert mapping_usage.total_tokens == 3
     assert mapping_usage.cost == 0.0
+    assert mapping_usage.tokens_available is True
+    assert mapping_usage.cost_available is False
     assert _openrouter_token_usage(types.SimpleNamespace()) == (0, 0)
 
 

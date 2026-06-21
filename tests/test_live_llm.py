@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from bunnyland import telemetry
 from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
@@ -35,7 +36,8 @@ from bunnyland.core import (
 )
 from bunnyland.core.controllers import LLMControllerComponent
 from bunnyland.core.events import SpeechSaidEvent
-from bunnyland.llm_agents import ControllerDispatch, OllamaAgent, OpenRouterAgent
+from bunnyland.llm_agents import ControllerDispatch, OllamaAgent, OpenRouterAgent, tool_schemas
+from bunnyland.llm_agents.agent import CHARACTER_SYSTEM_PROMPT
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server.models import (
@@ -158,6 +160,72 @@ def _world_options(provider: str, *, max_rooms: int = 2) -> GenOptions:
     raise AssertionError(f"unknown provider {provider!r}")
 
 
+@pytest.fixture
+def live_otel_capture(monkeypatch):
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    monkeypatch.setenv("BUNNYLAND_OTEL_ENABLED", "1")
+    resource = Resource.create({"service.name": "bunnyland-live-llm-test"})
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider(resource=resource)
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    metric_reader = InMemoryMetricReader()
+    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+
+    telemetry.reset_for_tests()
+    assert telemetry.init_telemetry(providers=(tracer_provider, meter_provider)) is True
+    yield span_exporter, metric_reader
+    telemetry.reset_for_tests()
+
+
+def _spans_named(span_exporter, name: str):
+    return [span for span in span_exporter.get_finished_spans() if span.name == name]
+
+
+def _metric_points(reader) -> dict[str, list]:
+    points: dict[str, list] = {}
+    data = reader.get_metrics_data()
+    if data is None:
+        return points
+    for resource_metric in data.resource_metrics:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                points.setdefault(metric.name, []).extend(metric.data.data_points)
+    return points
+
+
+def _wait_tool_schema() -> list[dict]:
+    return [schema for schema in tool_schemas() if schema["function"]["name"] == "wait"]
+
+
+def _assert_llm_usage_trace_attrs(attrs, provider: str, model: str, request_kind: str) -> None:
+    assert attrs["provider"] == provider
+    assert attrs["model"] == model
+    assert attrs["llm.request.kind"] == request_kind
+    assert attrs["llm.history.messages"] >= 2
+    assert attrs["llm.system_prompt_chars"] > 0
+
+
+def _assert_token_metrics_are_consistent(points: dict[str, list], provider: str, model: str):
+    prompt = points.get("bunnyland.llm.tokens.prompt", [])
+    completion = points.get("bunnyland.llm.tokens.completion", [])
+    total = points.get("bunnyland.llm.tokens.total", [])
+    token_points = [*prompt, *completion, *total]
+    assert token_points, f"{provider} did not expose token usage for {model}"
+    for point in token_points:
+        assert point.attributes == {"provider": provider, "model": model}
+        assert point.value > 0
+    if prompt and completion and total:
+        assert total[0].value >= prompt[0].value + completion[0].value
+    return token_points
+
+
 class _InstructionPromptBuilder(PromptBuilder):
     def __init__(self, *args, instruction: str, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -214,6 +282,91 @@ async def test_live_openrouter_world_agent_can_propose_room():
 
     assert room.title
     assert room.description
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_live_character_agent_records_prompt_tools_metrics_and_traces(
+    provider, live_otel_capture
+):
+    span_exporter, metric_reader = live_otel_capture
+    agent = _character_agent(provider)
+    model = _character_model(provider)
+
+    with telemetry.span("live.character.decide"):
+        call = await agent.decide(
+            "Call exactly one tool: wait. Do not call any other tool.",
+            None,
+            character_id=f"live-{provider}-telemetry",
+            tools=_wait_tool_schema(),
+        )
+
+    assert call is not None
+    assert call.name == "wait"
+
+    attempt = _spans_named(span_exporter, "llm.provider.attempt")[-1]
+    _assert_llm_usage_trace_attrs(attempt.attributes, provider, model, "character")
+    assert attempt.attributes["llm.tools.count"] == 1
+    assert attempt.attributes["llm.system_prompt_chars"] == len(CHARACTER_SYSTEM_PROMPT)
+
+    decide = _spans_named(span_exporter, "live.character.decide")[-1]
+    assert decide.attributes["llm.tokens.available"] is True
+    assert "llm.tokens.prompt" in decide.attributes
+    assert "llm.tokens.completion" in decide.attributes
+    assert "llm.tokens.total" in decide.attributes
+    assert "llm.cost.available" in decide.attributes
+
+    points = _metric_points(metric_reader)
+    _assert_token_metrics_are_consistent(points, provider, model)
+    if decide.attributes["llm.cost.available"]:
+        assert points["bunnyland.llm.cost"][0].attributes == {
+            "provider": provider,
+            "model": model,
+        }
+        assert points["bunnyland.llm.cost"][0].value > 0
+    else:
+        assert "bunnyland.llm.cost" not in points
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_live_world_agent_records_history_metrics_and_traces(
+    provider, live_otel_capture
+):
+    span_exporter, metric_reader = live_otel_capture
+    agent = _world_agent(provider)
+    model = _world_options(provider, max_rooms=1).model
+
+    room = await agent.propose_room(
+        "live telemetry test: one tiny room with a short name",
+        behind=None,
+        known_rooms={},
+    )
+
+    assert room.title
+    assert room.description
+
+    request = _spans_named(span_exporter, "worldgen.llm.request")[-1]
+    _assert_llm_usage_trace_attrs(request.attributes, provider, model, "worldgen")
+    assert request.attributes["llm.tools.count"] == 0
+    assert request.attributes["instruction.chars"] > 0
+    assert request.attributes["llm.tokens.available"] is True
+    assert "llm.tokens.prompt" in request.attributes
+    assert "llm.tokens.completion" in request.attributes
+    assert "llm.tokens.total" in request.attributes
+    assert "llm.cost.available" in request.attributes
+
+    points = _metric_points(metric_reader)
+    assert "bunnyland.worldgen.request.duration" in points
+    _assert_token_metrics_are_consistent(points, provider, model)
+    if request.attributes["llm.cost.available"]:
+        assert points["bunnyland.llm.cost"][0].attributes == {
+            "provider": provider,
+            "model": model,
+        }
+        assert points["bunnyland.llm.cost"][0].value > 0
+    else:
+        assert "bunnyland.llm.cost" not in points
 
 
 @pytest.mark.asyncio
