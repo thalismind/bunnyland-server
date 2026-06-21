@@ -1302,6 +1302,24 @@ async def test_deploy_drone_activates_and_powers_it():
     assert entity.get_component(DeviceComponent).powered is True
 
 
+async def test_deploy_drone_without_a_device_component_still_activates():
+    """A bare drone (DroneComponent but no DeviceComponent) deploys without the power step."""
+    scenario = build_scenario()
+    _install(scenario.actor)
+    drone = _room_entity(scenario, "raw drone", "device", [DroneComponent()])
+    deployed: list[DroneDeployedEvent] = []
+    scenario.actor.bus.subscribe(DroneDeployedEvent, deployed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "deploy-drone", target_id=str(drone)))
+    await scenario.actor.tick(1.0)
+
+    assert deployed[0].device_id == str(drone)
+    entity = scenario.actor.world.get_entity(drone)
+    assert entity.get_component(DroneComponent).active is True
+    # No DeviceComponent means the powered-on branch is skipped, but the drone is still live.
+    assert not entity.has_component(DeviceComponent)
+
+
 async def test_camera_records_evidence_of_intruder():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -3442,6 +3460,30 @@ async def test_plant_evidence_creates_a_blackmail_file():
     assert planted[0].target_id == str(mark)
     file_entity = scenario.actor.world.get_entity(parse_entity_id(planted[0].file_id))
     assert file_entity.get_component(BlackmailFileComponent).target_id == str(mark)
+
+
+async def test_plant_evidence_without_a_room_leaves_the_file_uncontained():
+    """When the planter is in no room there is nowhere to drop the file, so it stays loose.
+
+    Roomless, the actor's only reachable target is itself, so it frames itself; the room-drop
+    step is skipped and the freshly spawned blackmail file ends up in no container.
+    """
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+    planted: list[EvidencePlantedEvent] = []
+    scenario.actor.bus.subscribe(EvidencePlantedEvent, planted.append)
+
+    await scenario.actor.submit(
+        _cmd(scenario, "plant-evidence", target_id=str(scenario.character))
+    )
+    await scenario.actor.tick(1.0)
+
+    assert planted[0].target_id == str(scenario.character)
+    file_entity = world.get_entity(parse_entity_id(planted[0].file_id))
+    assert file_entity.get_component(BlackmailFileComponent).target_id == str(scenario.character)
+    assert container_of(file_entity) is None
 
 
 async def test_blackmail_target_extracts_a_favor():

@@ -320,9 +320,9 @@ def _spend_scrip(character: Entity, world: World, amount: int) -> bool:
                     IdentityComponent(name=f"{SCRIP_RESOURCE} x{remaining}", kind="resource"),
                 )
             else:
-                parent_id = container_of(item)
-                if parent_id is not None and world.has_entity(parent_id):
-                    world.get_entity(parent_id).remove_relationship(Contains, item_id)
+                # The stack was found on the character's own Contains edge, so the character
+                # is its container; detach the now-empty stack.
+                character.remove_relationship(Contains, item_id)
             return True
     return False
 
@@ -1086,9 +1086,7 @@ class WipeEvidenceHandler:
         if component.wiped:
             return rejected("evidence is already wiped")
         evidence_id = str(record.id)
-        parent_id = container_of(record)
-        if parent_id is not None and ctx.world.has_entity(parent_id):
-            ctx.world.get_entity(parent_id).remove_relationship(Contains, record.id)
+        # world.remove cascades the record's inbound Contains edge, so no explicit detach.
         ctx.world.remove(record.id)
         return ok(
             EvidenceWipedEvent(
@@ -1438,9 +1436,7 @@ class RunExploitHandler:
         if hack.backdoored or power >= hack.security:
             replace_component(device, replace(hack, breached=True))
             if exploit_item is not None and exploit_item.get_component(ExploitComponent).single_use:
-                parent_id = container_of(exploit_item)
-                if parent_id is not None and ctx.world.has_entity(parent_id):
-                    ctx.world.get_entity(parent_id).remove_relationship(Contains, exploit_item.id)
+                # world.remove cascades the exploit's inbound Contains edge; just consume it.
                 ctx.world.remove(exploit_item.id)
             events: list[DomainEvent] = [
                 HackSucceededEvent(
