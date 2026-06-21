@@ -224,6 +224,7 @@ jobs:
             ""                            # homepage domain (blank to skip)
             "n"                           # full deployment with LLM + Discord?
             "n"                           # enable HTTP MCP endpoint?
+            "n"                           # enable image generation via ComfyUI?
             "y"                           # proceed?
           )
           printf '%s\n' "${answers[@]}" | scripts/vps-docker-wizard
