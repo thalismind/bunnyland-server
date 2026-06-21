@@ -486,6 +486,7 @@ def _setup_discord_bot(
     credentials: ServeCredentials,
     models: ServeModels,
     meta: WorldMeta,
+    imagegen=None,
 ):
     if not args.discord:
         return None
@@ -505,6 +506,7 @@ def _setup_discord_bot(
             channel_ids=channel_filter_ids,
             dm_user_ids=dm_user_filter_ids,
         ),
+        imagegen=imagegen,
     )
     _maybe_assign_startup_discord_claim(actor, args, meta)
     return discord_bot
@@ -672,7 +674,7 @@ async def _serve(args) -> None:
         autosave=autosave, autosave_every=args.autosave_every,
         paused=bool(args.load and args.load_paused),
     )
-    discord_bot = _setup_discord_bot(actor, loop, args, credentials, models, meta)
+    discord_bot = _setup_discord_bot(actor, loop, args, credentials, models, meta, imagegen)
     ticks = await _run_serve_runtime(
         loop,
         actor,

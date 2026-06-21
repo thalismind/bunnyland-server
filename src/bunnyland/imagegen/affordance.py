@@ -13,6 +13,8 @@ REQUEST_EMOJI = "📷"
 ACK_EMOJI = "👀"
 #: The emoji a client/bot shows when the finished image is delivered.
 DELIVER_EMOJI = "📸"
+#: The emoji a client/bot shows when a requested image could not be generated.
+FAIL_EMOJI = "⚠️"
 
 #: Human-readable label for the request affordance (button tooltip / menu entry).
 REQUEST_LABEL = "Request image"
@@ -26,6 +28,7 @@ VIDEO_COMING_SOON = "Event & interaction videos: coming soon!"
 __all__ = [
     "ACK_EMOJI",
     "DELIVER_EMOJI",
+    "FAIL_EMOJI",
     "REQUEST_COMMAND",
     "REQUEST_EMOJI",
     "REQUEST_LABEL",

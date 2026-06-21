@@ -20,15 +20,16 @@ import logging
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from io import BytesIO
+from typing import TYPE_CHECKING, Any
 
 from ..core.claim_timeout import (
     normalize_claim_timeout,
 )
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
-from ..core.components import ControllerOutboxMessageComponent
+from ..core.components import ControllerOutboxMessageComponent, RoomComponent
 from ..core.controllers import DiscordControllerComponent
-from ..core.ecs import replace_component
+from ..core.ecs import container_of, entity_name, replace_component
 from ..core.events import (
     CharacterClaimedEvent,
     CommandExecutedEvent,
@@ -37,6 +38,13 @@ from ..core.events import (
     WorldPauseStatusChangedEvent,
 )
 from ..core.world_actor import WorldActor
+from ..imagegen.affordance import ACK_EMOJI, DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
+from ..imagegen.events import ImageGenerationCompletedEvent, ImageGenerationFailedEvent
+from ..imagegen.spec import ImagePurpose
+from ..mechanics.history import history_record_for_event, record_world_history
+
+if TYPE_CHECKING:
+    from ..imagegen.service import ImageGenService
 from ..llm_agents import DEFAULT_MODEL
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.natural_language import parse_natural_command
@@ -326,6 +334,7 @@ class DiscordBot:
         character_model: str = DEFAULT_MODEL,
         pause_status: Callable[[], bool] | None = None,
         message_filters: DiscordMessageFilters | None = None,
+        imagegen: ImageGenService | None = None,
     ) -> None:
         discord, commands = _require_discord()
         self.actor = actor
@@ -334,16 +343,23 @@ class DiscordBot:
         self.llm_provider = llm_provider
         self.character_model = character_model
         self.message_filters = message_filters or DiscordMessageFilters()
+        self.imagegen = imagegen
         self._pause_status = pause_status
         self._world_paused = pause_status() if pause_status is not None else False
         intents = discord.Intents.default()
         intents.message_content = True  # required to read "!" command text
+        intents.reactions = True  # required to receive the 📷 image-request reaction
         self.client = commands.Bot(command_prefix="!", intents=intents, help_command=None)
         self._pending: dict[str, asyncio.Future[CommandExecutedEvent | CommandRejectedEvent]] = {}
         self._paused_reactions: dict[str, Any] = {}
+        # record entity id -> the Discord message that requested an image for it.
+        self._image_messages: dict[str, Any] = {}
         self.actor.bus.subscribe(CommandExecutedEvent, self._complete_pending)
         self.actor.bus.subscribe(CommandRejectedEvent, self._complete_pending)
         self.actor.bus.subscribe(WorldPauseStatusChangedEvent, self._post_pause_status)
+        if imagegen is not None:
+            self.actor.bus.subscribe(ImageGenerationCompletedEvent, self._deliver_image)
+            self.actor.bus.subscribe(ImageGenerationFailedEvent, self._image_failed)
         self._register_commands()
 
     def _character_for_user(self, discord_user_id: int):
@@ -404,6 +420,77 @@ class DiscordBot:
             except Exception:
                 pass
         self._paused_reactions.clear()
+
+    async def _on_image_reaction(self, reaction, user) -> None:
+        """Handle the 📷 image-request reaction: illustrate the reactor's current scene."""
+        if self.imagegen is None:
+            return
+        if getattr(user, "bot", False):
+            return
+        if str(getattr(reaction, "emoji", "")) != REQUEST_EMOJI:
+            return
+        try:
+            await self._request_scene_image(reaction.message, user)
+        except Exception:
+            logger.warning("Discord image request failed.", exc_info=True)
+
+    async def _request_scene_image(self, message, user) -> None:
+        found = self._character_for_user(user.id)
+        if found is None:
+            return
+        character_id = found[0]
+        async with self.actor._lock:
+            character = self.actor.world.get_entity(character_id)
+            room_id = container_of(character)
+            if room_id is None or not self.actor.world.has_entity(room_id):
+                return
+            room = self.actor.world.get_entity(room_id)
+            if not room.has_component(RoomComponent):
+                return
+            room_title = room.get_component(RoomComponent).title
+            summary = f"{entity_name(character)} in {room_title}"
+            source_event_id = f"discord-scene:{character_id}:{self.actor.epoch}"
+            record = record_world_history(
+                self.actor.world,
+                summary=summary,
+                source_event_id=source_event_id,
+                event_type="scene",
+                created_at_epoch=self.actor.epoch,
+                location_id=str(room_id),
+            )
+            if record is None:  # a record for this moment already exists -> reuse it
+                record = history_record_for_event(self.actor.world, source_event_id)
+            record_id = str(record.id)
+        self._image_messages[record_id] = message
+        job = await self.imagegen.start(
+            record_id, ImagePurpose.EVENT, requested_by=str(user.id)
+        )
+        if job.status == "skipped" and job.url:
+            # The scene already has an image: deliver it immediately.
+            self._image_messages.pop(record_id, None)
+            await self._post_image(message, job.url)
+            await message.add_reaction(DELIVER_EMOJI)
+            return
+        await message.add_reaction(ACK_EMOJI)
+
+    async def _deliver_image(self, event: ImageGenerationCompletedEvent) -> None:
+        message = self._image_messages.pop(event.entity_id, None)
+        if message is None:
+            return
+        await self._post_image(message, event.url)
+        await message.add_reaction(DELIVER_EMOJI)
+
+    async def _image_failed(self, event: ImageGenerationFailedEvent) -> None:
+        message = self._image_messages.pop(event.entity_id, None)
+        if message is None:
+            return
+        await message.add_reaction(FAIL_EMOJI)
+
+    async def _post_image(self, message, url: str) -> None:
+        discord, _ = _require_discord()
+        parts = url.strip("/").split("/")
+        data = self.imagegen.media.read(parts[1], parts[2])
+        await message.reply(file=discord.File(BytesIO(data), filename=parts[2]))
 
     async def _build_command(self, discord_user_id: int, action: DiscordAction):
         found = self._character_for_user(discord_user_id)
@@ -876,6 +963,10 @@ class DiscordBot:
                 return
             ctx = await self.client.get_context(message)
             await self.handle_text_command(ctx, message.content[1:])
+
+        @self.client.event
+        async def on_reaction_add(reaction, user):
+            await self._on_image_reaction(reaction, user)
 
         @self.client.event
         async def on_command_error(ctx, error):

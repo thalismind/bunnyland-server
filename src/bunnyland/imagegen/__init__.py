@@ -12,6 +12,7 @@ from __future__ import annotations
 from .affordance import (
     ACK_EMOJI,
     DELIVER_EMOJI,
+    FAIL_EMOJI,
     REQUEST_COMMAND,
     REQUEST_EMOJI,
     REQUEST_LABEL,
@@ -63,6 +64,7 @@ from .wiring import build_image_service, select_enhancer
 __all__ = [
     "ACK_EMOJI",
     "DELIVER_EMOJI",
+    "FAIL_EMOJI",
     "REQUEST_COMMAND",
     "REQUEST_EMOJI",
     "REQUEST_LABEL",
