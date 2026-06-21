@@ -422,8 +422,14 @@ async def test_ollama_world_agent_preserves_history(monkeypatch):
 class _FakeOpenRouterChat:
     def __init__(self):
         self.calls: list[dict] = []
+        self.sync_send_called = False
 
     def send(self, *, model, messages, response_format):
+        del model, messages, response_format
+        self.sync_send_called = True
+        raise AssertionError("OpenRouter worldgen must use send_async")
+
+    async def send_async(self, *, model, messages, response_format):
         self.calls.append(
             {
                 "model": model,
@@ -461,6 +467,7 @@ async def test_openrouter_world_agent_parses_json_response(monkeypatch):
     assert agent._client.kwargs == {"api_key": "key"}
     assert agent._client.chat.calls[0]["model"] == "openai/gpt-4.1"
     assert agent._client.chat.calls[0]["response_format"] == {"type": "json_object"}
+    assert agent._client.chat.sync_send_called is False
 
 
 async def test_openrouter_world_agent_forwards_server_url(monkeypatch):

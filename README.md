@@ -106,8 +106,8 @@ Bunnyland can export **OpenTelemetry traces and metrics** so you can watch a liv
 Grafana/Tempo, Jaeger, or any OTLP backend. Distributed traces span the game tick → command
 dispatch → handler → LLM decision (plus auto-instrumented HTTP requests), alongside world
 metrics: entity/character/room counts, tick cadence, command accept/reject rates, handler and
-LLM-decision latency, and LLM token usage. It is **off by default** — install the `otel`
-extra and set `BUNNYLAND_OTEL_ENABLED`:
+LLM-decision latency, LLM token usage, and provider-reported LLM cost when available. It is
+**off by default** — install the `otel` extra and set `BUNNYLAND_OTEL_ENABLED`:
 
 ```bash
 uv sync --extra otel

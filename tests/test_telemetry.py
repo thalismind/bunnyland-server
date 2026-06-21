@@ -9,6 +9,8 @@ needed.
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 from conftest import build_scenario
@@ -17,7 +19,14 @@ from bunnyland import telemetry
 from bunnyland.core import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
-from bunnyland.llm_agents.agent import _ollama_token_usage, _openrouter_token_usage
+from bunnyland.llm_agents.agent import (
+    CHARACTER_SYSTEM_PROMPT,
+    OllamaAgent,
+    _ollama_token_usage,
+    _ollama_usage,
+    _openrouter_token_usage,
+    _openrouter_usage,
+)
 from bunnyland.prompts.builder import PromptBuilder
 
 
@@ -150,11 +159,24 @@ def test_token_usage_helpers_are_defensive():
     assert _ollama_token_usage({"prompt_eval_count": 12, "eval_count": 7}) == (12, 7)
     assert _ollama_token_usage({}) == (0, 0)
     assert _ollama_token_usage("not a mapping") == (0, 0)
+    ollama_usage = _ollama_usage({"prompt_eval_count": 12, "eval_count": 7})
+    assert ollama_usage.total_tokens == 19
+    assert ollama_usage.cost == 0.0
 
     import types
 
-    usage = types.SimpleNamespace(prompt_tokens=3, completion_tokens=9)
+    usage = types.SimpleNamespace(
+        prompt_tokens=3, completion_tokens=9, total_tokens=12, total_cost=0.005
+    )
     assert _openrouter_token_usage(types.SimpleNamespace(usage=usage)) == (3, 9)
+    openrouter_usage = _openrouter_usage(types.SimpleNamespace(usage=usage))
+    assert openrouter_usage.total_tokens == 12
+    assert openrouter_usage.cost == 0.005
+    mapping_usage = _openrouter_usage(
+        types.SimpleNamespace(usage={"prompt_tokens": 1, "completion_tokens": 2})
+    )
+    assert mapping_usage.total_tokens == 3
+    assert mapping_usage.cost == 0.0
     assert _openrouter_token_usage(types.SimpleNamespace()) == (0, 0)
 
 
@@ -342,6 +364,53 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
     assert "bunnyland.llm.decision.duration" in points
 
 
+@pytestmark_otel
+async def test_ollama_character_agent_records_provider_attempt_span(otel_capture, monkeypatch):
+    span_exporter, reader = otel_capture
+
+    class _FakeOllamaClient:
+        async def chat(self, *, model, messages, tools):
+            assert messages[0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
+            assert tools == [{"type": "function", "function": {"name": "wait"}}]
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "ok",
+                    "tool_calls": [{"function": {"name": "wait", "arguments": {}}}],
+                },
+                "prompt_eval_count": 5,
+                "eval_count": 3,
+            }
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    with telemetry.span("agent.decide"):
+        agent = OllamaAgent(model="llama3")
+        assert await agent.decide(
+            "turn one",
+            None,
+            character_id="hazel",
+            tools=[{"type": "function", "function": {"name": "wait"}}],
+        ) == ToolCall("wait", {})
+
+    attempts = [
+        span for span in span_exporter.get_finished_spans() if span.name == "llm.provider.attempt"
+    ]
+    assert len(attempts) == 1
+    attrs = attempts[0].attributes
+    assert attrs["provider"] == "ollama"
+    assert attrs["model"] == "deepseek-v4-flash"
+    assert attrs["llm.request.kind"] == "character"
+    assert attrs["llm.tools.count"] == 1
+    assert attrs["llm.history.messages"] == 2
+    assert attrs["llm.system_prompt_chars"] == len(CHARACTER_SYSTEM_PROMPT)
+
+    points = _metric_points(reader)
+    assert points["bunnyland.llm.tokens.total"][0].value == 8
+
+
 class _AsyncMoveAgent:
     """Async agent whose decision is optionally gated, for background-path telemetry tests."""
 
@@ -524,6 +593,27 @@ def test_record_llm_tokens_emits_counters(otel_capture):
 
 
 @pytestmark_otel
+def test_record_llm_usage_emits_total_tokens_and_cost(otel_capture):
+    _span_exporter, reader = otel_capture
+    telemetry.record_llm_usage(
+        "openrouter",
+        "openai/test",
+        40,
+        12,
+        total_tokens=52,
+        cost=0.004,
+    )
+
+    points = _metric_points(reader)
+    total = points["bunnyland.llm.tokens.total"][0]
+    cost = points["bunnyland.llm.cost"][0]
+    assert total.value == 52
+    assert total.attributes == {"provider": "openrouter", "model": "openai/test"}
+    assert cost.value == 0.004
+    assert cost.attributes == {"provider": "openrouter", "model": "openai/test"}
+
+
+@pytestmark_otel
 async def test_traced_generate_emits_world_generate_span_and_metric(otel_capture):
     span_exporter, reader = otel_capture
     from bunnyland.core import WorldActor
@@ -569,15 +659,71 @@ async def test_worldgen_llm_request_is_traced(otel_capture):
     request = spans["worldgen.llm.request"]
     assert request.attributes["provider"] == "ollama"
     assert request.attributes["model"] == "deepseek-test"
+    assert request.attributes["llm.request.kind"] == "worldgen"
+    assert request.attributes["llm.tools.count"] == 0
+    assert request.attributes["llm.history.messages"] == 2
+    assert request.attributes["llm.system_prompt_chars"] > 0
     assert request.attributes["instruction.chars"] > 0
     assert request.attributes["llm.tokens.prompt"] == 11
     assert request.attributes["llm.tokens.completion"] == 7
+    assert request.attributes["llm.tokens.total"] == 18
 
     points = _metric_points(reader)
     assert "bunnyland.worldgen.request.duration" in points
     tokens = points["bunnyland.llm.tokens.prompt"][0]
     assert tokens.value == 11
     assert tokens.attributes == {"provider": "ollama", "model": "deepseek-test"}
+    total = points["bunnyland.llm.tokens.total"][0]
+    assert total.value == 18
+    assert total.attributes == {"provider": "ollama", "model": "deepseek-test"}
+
+
+@pytestmark_otel
+async def test_openrouter_worldgen_llm_request_records_provider_cost(
+    otel_capture, monkeypatch
+):
+    span_exporter, reader = otel_capture
+    from bunnyland.worldgen.recursive_builder import OpenRouterWorldAgent
+
+    class _FakeOpenRouterChat:
+        async def send_async(self, **kwargs):
+            del kwargs
+            message = types.SimpleNamespace(
+                role="assistant",
+                content="{}",
+                model_dump=lambda **_: {"role": "assistant", "content": "{}"},
+            )
+            usage = types.SimpleNamespace(
+                prompt_tokens=6,
+                completion_tokens=4,
+                total_tokens=10,
+                cost=0.002,
+            )
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=message)], usage=usage
+            )
+
+    class _FakeOpenRouterClient:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.chat = _FakeOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterWorldAgent(model="openai/test", api_key="key")
+    assert await agent._ask("describe the starting room") == {}
+
+    request = _spans_by_name(span_exporter)["worldgen.llm.request"]
+    assert request.attributes["provider"] == "openrouter"
+    assert request.attributes["llm.tokens.total"] == 10
+    assert request.attributes["llm.cost"] == 0.002
+
+    points = _metric_points(reader)
+    cost = points["bunnyland.llm.cost"][0]
+    assert cost.value == 0.002
+    assert cost.attributes == {"provider": "openrouter", "model": "openai/test"}
 
 
 @pytestmark_otel

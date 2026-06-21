@@ -47,12 +47,14 @@ from bunnyland.llm_agents import (
     tool_schemas,
 )
 from bunnyland.llm_agents.agent import (
+    CHARACTER_SYSTEM_PROMPT,
     DEFAULT_MODEL,
     OllamaAgent,
     _AutonomySignals,
     _call_provider_with_retries,
     _message_to_history,
     _openrouter_arguments,
+    _openrouter_usage,
     _tool_call_history,
     normalize_model,
 )
@@ -1063,10 +1065,11 @@ class _FakeOllamaClient:
     def __init__(self, *args, **kwargs):
         self.calls: list[list[dict]] = []
         self.models: list[str] = []
+        self.tools: list[list[dict] | None] = []
 
     async def chat(self, *, model, messages, tools):
-        del tools
         self.models.append(model)
+        self.tools.append(tools)
         self.calls.append([dict(m) for m in messages])  # snapshot
         return {
             "message": {
@@ -1181,11 +1184,12 @@ async def test_ollama_agent_resends_prior_turns_as_context(monkeypatch):
     client = agent._client
     # Second chat call carries the full history: turn one (user + assistant) + turn two.
     second = client.calls[1]
-    assert second[0] == {"role": "user", "content": "turn one"}
-    assert second[1]["role"] == "assistant"
-    assert second[1]["content"] == "Selected tool wait with arguments {}."
-    assert "tool_calls" not in second[1]
-    assert second[2] == {"role": "user", "content": "turn two"}
+    assert second[0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
+    assert second[1] == {"role": "user", "content": "turn one"}
+    assert second[2]["role"] == "assistant"
+    assert second[2]["content"] == "Selected tool wait with arguments {}."
+    assert "tool_calls" not in second[2]
+    assert second[3] == {"role": "user", "content": "turn two"}
 
 
 async def test_ollama_agent_keeps_history_per_character(monkeypatch):
@@ -1199,7 +1203,23 @@ async def test_ollama_agent_keeps_history_per_character(monkeypatch):
 
     # Juniper's first call must not contain Hazel's history.
     juniper_call = agent._client.calls[1]
-    assert juniper_call == [{"role": "user", "content": "juniper turn"}]
+    assert juniper_call == [
+        {"role": "system", "content": CHARACTER_SYSTEM_PROMPT},
+        {"role": "user", "content": "juniper turn"},
+    ]
+
+
+async def test_ollama_agent_sends_system_prompt_and_tool_schemas(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    tools = [{"type": "function", "function": {"name": "wait"}}]
+    agent = OllamaAgent(model="llama3")
+    await agent.decide("turn one", None, character_id="hazel", tools=tools)
+
+    assert agent._client.calls[0][0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
+    assert agent._client.tools == [tools]
 
 
 async def test_ollama_agent_can_override_model_per_decision(monkeypatch):
@@ -1287,8 +1307,9 @@ class _FakeOpenRouterChat:
         self.calls: list[dict] = []
 
     async def send_async(self, *, model, messages, tools):
-        del tools
-        self.calls.append({"model": model, "messages": [dict(m) for m in messages]})
+        self.calls.append(
+            {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+        )
         function = types.SimpleNamespace(name="wait", arguments='{"reason": "rest"}')
         tool_call = types.SimpleNamespace(function=function)
         message = types.SimpleNamespace(
@@ -1301,7 +1322,13 @@ class _FakeOpenRouterChat:
                 "tool_calls": [{"function": {"name": "wait", "arguments": '{"reason": "rest"}'}}],
             },
         )
-        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+        usage = types.SimpleNamespace(
+            prompt_tokens=14,
+            completion_tokens=6,
+            total_tokens=20,
+            cost=0.0012,
+        )
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)], usage=usage)
 
 
 class _FakeOpenRouterClient:
@@ -1368,11 +1395,41 @@ async def test_openrouter_agent_resends_prior_turns_as_context(monkeypatch):
     await agent.decide("turn two", None, character_id="hazel")
 
     second = agent._client.chat.calls[1]["messages"]
-    assert second[0] == {"role": "user", "content": "turn one"}
-    assert second[1]["role"] == "assistant"
-    assert second[1]["content"] == 'Selected tool wait with arguments {"reason": "rest"}.'
-    assert "tool_calls" not in second[1]
-    assert second[2] == {"role": "user", "content": "turn two"}
+    assert second[0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
+    assert second[1] == {"role": "user", "content": "turn one"}
+    assert second[2]["role"] == "assistant"
+    assert second[2]["content"] == 'Selected tool wait with arguments {"reason": "rest"}.'
+    assert "tool_calls" not in second[2]
+    assert second[3] == {"role": "user", "content": "turn two"}
+
+
+async def test_openrouter_agent_sends_system_prompt_and_tool_schemas(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    tools = [{"type": "function", "function": {"name": "wait"}}]
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key")
+    await agent.decide("turn one", None, character_id="hazel", tools=tools)
+
+    call = agent._client.chat.calls[0]
+    assert call["messages"][0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
+    assert call["tools"] == tools
+
+
+def test_openrouter_usage_includes_total_tokens_and_provider_cost():
+    usage = types.SimpleNamespace(
+        prompt_tokens=3,
+        completion_tokens=4,
+        total_tokens=7,
+        cost=0.0042,
+    )
+    parsed = _openrouter_usage(types.SimpleNamespace(usage=usage))
+
+    assert parsed.prompt_tokens == 3
+    assert parsed.completion_tokens == 4
+    assert parsed.total_tokens == 7
+    assert parsed.cost == 0.0042
 
 
 async def test_openrouter_agent_retries_transient_provider_errors(monkeypatch):

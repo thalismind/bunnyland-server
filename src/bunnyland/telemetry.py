@@ -154,6 +154,15 @@ class _Instruments:
             "bunnyland.llm.tokens.completion",
             description="Completion tokens produced by agents.",
         )
+        self.llm_tokens_total = meter.create_counter(
+            "bunnyland.llm.tokens.total",
+            description="Total tokens consumed and produced by agents.",
+        )
+        self.llm_cost = meter.create_counter(
+            "bunnyland.llm.cost",
+            unit="USD",
+            description="Provider-reported LLM cost.",
+        )
         self.worldgen_duration = meter.create_histogram(
             "bunnyland.worldgen.duration",
             unit="s",
@@ -444,6 +453,18 @@ def record_llm_decision(duration: float, attributes: dict[str, Any] | None = Non
 def record_llm_tokens(
     provider: str | None, model: str | None, prompt_tokens: int, completion_tokens: int
 ) -> None:
+    record_llm_usage(provider, model, prompt_tokens, completion_tokens)
+
+
+def record_llm_usage(
+    provider: str | None,
+    model: str | None,
+    prompt_tokens: int,
+    completion_tokens: int,
+    *,
+    total_tokens: int = 0,
+    cost: float = 0.0,
+) -> None:
     if not _ENABLED:
         return
     attributes = {"provider": provider or "unknown", "model": model or "unknown"}
@@ -451,6 +472,10 @@ def record_llm_tokens(
         _instruments.llm_tokens_prompt.add(prompt_tokens, attributes)
     if completion_tokens:
         _instruments.llm_tokens_completion.add(completion_tokens, attributes)
+    if total_tokens:
+        _instruments.llm_tokens_total.add(total_tokens, attributes)
+    if cost:
+        _instruments.llm_cost.add(cost, attributes)
 
 
 def record_worldgen(duration: float, attributes: dict[str, Any] | None = None) -> None:
