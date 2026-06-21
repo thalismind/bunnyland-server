@@ -226,5 +226,56 @@ def test_speech_affect_ignores_invalid_hearer_with_fallback_interpretation():
     assert char.get_relationships(HasThought) == []
 
 
+def test_add_thought_ignores_non_character_target():
+    scenario = affect_scenario()
+    # A real entity that lacks CharacterComponent: no thought may be attached to it.
+    rock = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="rock", kind="item")],
+    )
+
+    AffectReactor(scenario.actor.world)._add_thought(
+        str(rock.id),
+        "satisfied",
+        "good",
+        AffectDelta(valence=8),
+        epoch=0,
+        source_event_id="evt",
+    )
+
+    assert rock.get_relationships(HasThought) == []
+
+
+async def test_subthreshold_thought_shifts_current_without_changing_labels():
+    scenario = affect_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+    # A small valence bump stays below every label threshold, so current moves but the
+    # derived labels stay empty and no AffectChangedEvent is emitted.
+    thought = spawn_entity(
+        scenario.actor.world,
+        [
+            ThoughtComponent(
+                label="pleased",
+                text="mild",
+                affect_delta=AffectDelta(valence=2),
+                created_at_epoch=0,
+                expires_at_epoch=int(HOUR * 10),
+            )
+        ],
+    )
+    char.add_relationship(HasThought(), thought.id)
+    events = []
+    from bunnyland.core.events import AffectChangedEvent
+
+    scenario.actor.bus.subscribe(AffectChangedEvent, events.append)
+
+    await scenario.actor.tick(HOUR)
+
+    affect = char.get_component(AffectComponent)
+    assert affect.current.valence == 2
+    assert affect.labels == ()
+    assert events == []
+
+
 def test_thought_ttl_is_positive():
     assert THOUGHT_TTL_SECONDS > 0

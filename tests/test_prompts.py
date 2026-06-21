@@ -18,6 +18,7 @@ from bunnyland.core import (
     IdentityComponent,
     MemoryProfileComponent,
     PortableComponent,
+    RoomComponent,
     SleepingComponent,
     SuspendedComponent,
     spawn_entity,
@@ -902,3 +903,125 @@ def test_recent_context_appears_in_prompt():
     ctx = builder.build(scenario.character, epoch=scenario.actor.epoch)
     assert "Hazel warned the water tasted strange." in ctx.recent
     assert "Recent context:" in render_prompt(ctx)
+
+
+def test_unnamed_inventory_item_falls_back_to_something():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    # An inventory item with no IdentityComponent is labelled "something".
+    bare = spawn_entity(world)
+    world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), bare.id
+    )
+
+    ctx = PromptBuilder(world).build(scenario.character)
+
+    assert "something" in ctx.inventory
+
+
+def test_build_context_for_roomless_character_reports_nowhere():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    # Detach the character from every room: the room block is skipped entirely.
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+
+    ctx = PromptBuilder(world).build(scenario.character)
+
+    assert ctx.location_title == "nowhere"
+    assert ctx.room_summary == ""
+    assert ctx.exits == ()
+
+
+def test_status_line_reports_human_for_discord_controller():
+    from bunnyland.core.controllers import DiscordControllerComponent
+
+    scenario = build_scenario()
+    world = scenario.actor.world
+    discord = spawn_entity(
+        world,
+        [DiscordControllerComponent(discord_user_id=1, default_channel_id=2)],
+    )
+    scenario.actor.assign_controller(scenario.character, discord.id)
+
+    ctx = PromptBuilder(world).build(scenario.character)
+
+    assert "controlled by a human" in ctx.status
+
+
+def test_status_line_covers_all_controller_kinds():
+    from bunnyland.core.controllers import (
+        BehaviorControllerComponent,
+        MCPControllerComponent,
+        ScriptedControllerComponent,
+    )
+
+    cases = [
+        (MCPControllerComponent(agent_id="a"), "controlled by an MCP agent"),
+        (BehaviorControllerComponent(behavior_name="wander"), "controlled by a behavior routine"),
+        (ScriptedControllerComponent(), "controlled by a scripted routine"),
+        # An unrecognized controller kind falls through to the suspended label.
+        (IdentityComponent(name="mystery", kind="controller"), "suspended"),
+    ]
+    for component, expected in cases:
+        scenario = build_scenario()
+        world = scenario.actor.world
+        controller = spawn_entity(world, [component])
+        scenario.actor.assign_controller(scenario.character, controller.id)
+
+        ctx = PromptBuilder(world).build(scenario.character)
+
+        assert expected in ctx.status
+
+
+def test_social_cue_reports_a_visible_character_just_left():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    recent = RecentContextProjection(world)
+    # Hazel is still physically present but a recent "left." line exists for the room.
+    recent._log[str(scenario.room_a)].append("hazel left.")
+
+    ctx = PromptBuilder(world, recent_context=recent).build(scenario.character)
+
+    assert "Hazel just left." in ctx.social_cues
+
+
+def test_recall_is_empty_when_query_has_no_content():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    # A room with an empty title and nothing visible produces an empty recall query.
+    blank_room = spawn_entity(world, [RoomComponent(title="")])
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+    blank_room.add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character
+    )
+    char = world.get_entity(scenario.character)
+    char.add_component(MemoryProfileComponent(vector_collection="juniper"))
+    store = InMemoryStore()
+    store.add("juniper", text="A memory.", created_at_epoch=1)
+
+    ctx = PromptBuilder(world, memory_store=store).build(scenario.character)
+
+    assert ctx.location_title == ""
+    assert ctx.recall == ()
+
+
+def test_recall_budget_of_zero_drops_all_memory():
+    scenario = build_scenario()
+    add_item(scenario, scenario.room_a, "stone basin")
+    char = scenario.actor.world.get_entity(scenario.character)
+    char.add_component(MemoryProfileComponent(vector_collection="juniper"))
+    store = InMemoryStore()
+    store.add("juniper", text="The basin water is unsafe.", tags=("basin",), created_at_epoch=1)
+
+    ctx = PromptBuilder(
+        scenario.actor.world, memory_store=store, recall_budget_chars=0
+    ).build(scenario.character)
+
+    assert ctx.recall == ()

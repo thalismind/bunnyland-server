@@ -207,10 +207,9 @@ class ActionForm(ModalScreen[dict | None]):
     def on_mount(self) -> None:
         first_widget = None
         for field in self.fields:
-            try:
-                widget = self.query_one(f"#field-{field.key}")
-            except NoMatches:
-                continue
+            # Every field yields a widget with this id in compose(), so the lookup always
+            # resolves here.
+            widget = self.query_one(f"#field-{field.key}")
             if field.initial_value is not None:
                 if isinstance(widget, Select):
                     widget.value = field.initial_value

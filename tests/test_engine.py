@@ -114,6 +114,52 @@ async def test_game_loop_pause_blocks_ticks_until_resumed():
     assert actor.epoch > 0
 
 
+async def test_game_loop_autosave_fires_on_cadence_and_exposes_state():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    await instantiate(actor, await StubWorldBuilder().propose("seed"))
+    builder = PromptBuilder(actor.world)
+    dispatch = ControllerDispatch(actor, builder, ScriptedAgent([]))
+
+    saved: list[int] = []
+    loop = GameLoop(
+        actor,
+        dispatch,
+        tick_seconds=1.0,
+        autosave=saved.append,
+        autosave_every=2,
+    )
+
+    # State getters before running.
+    assert loop.paused is False
+    assert loop.next_tick_at_unix is None
+
+    ticks = await loop.run(max_ticks=4)
+
+    assert ticks == 4
+    # Autosave fired on ticks 2 and 4.
+    assert saved == [2, 4]
+    assert loop.next_tick_at_unix is None
+
+
+def test_game_loop_pause_publishes_synchronously_without_a_running_loop():
+    # Called outside any event loop, pause/resume fall back to asyncio.run and return None
+    # rather than scheduling a task; the events still reach subscribers.
+    actor = WorldActor()
+    builder = PromptBuilder(actor.world)
+    loop = GameLoop(actor, ControllerDispatch(actor, builder, ScriptedAgent([])))
+    events = []
+    actor.bus.subscribe(WorldPauseStatusChangedEvent, events.append)
+
+    assert loop.pause() is None
+    assert loop.resume() is None
+
+    assert [(event.paused, event.state) for event in events] == [
+        (True, "paused"),
+        (False, "resumed"),
+    ]
+
+
 async def test_game_loop_emits_pause_status_events_once_per_transition():
     actor = WorldActor()
     builder = PromptBuilder(actor.world)

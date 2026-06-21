@@ -485,6 +485,17 @@ def test_queued_command_label_formats_unknown_free_command():
     assert label == "custom command — free · target_id: item:1"
 
 
+def test_queued_command_label_prefers_projected_action_title():
+    # When a projected action matches the queued command's type, its title wins over the
+    # verb-catalogue fallback.
+    label = tui_app._queued_command_label(
+        {"command_type": "inspect", "payload": {}, "cost": {"action": 1, "focus": 0}},
+        [{"command_type": "inspect", "title": "Inspect Closely"}],
+    )
+
+    assert label.startswith("Inspect Closely")
+
+
 # ── web controller ────────────────────────────────────────────────────────────
 def test_web_controller_registered_for_persistence():
     components, _edges = type_registries()
@@ -1242,6 +1253,73 @@ async def test_action_form_text_field_submits_and_blocks_when_required():
         assert results[-1] is None
 
 
+async def test_action_form_boolean_field_initial_value_and_cancel_button():
+    from textual.widgets import Input, Select
+
+    # A boolean field renders a yes/no dropdown; a text field with an initial value is
+    # pre-filled; on mount the first field is focused and later fields are not reassigned.
+    fields = [
+        FormField(key="confirm", label="confirm", kind="boolean", required=False),
+        FormField(
+            key="note", label="note", kind="string", required=False, initial_value="hi"
+        ),
+    ]
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+
+    async with app.run_test() as pilot:
+        screen = ActionForm("Confirm", fields)
+        app.push_screen(screen, callback=results.append)
+        await pilot.pause()
+
+        confirm = screen.query_one("#field-confirm", Select)
+        # The boolean dropdown offers yes/no options (plus the blank prompt placeholder).
+        assert {"true", "false"} <= {value for _label, value in confirm._options}
+        # The text field was pre-filled from its initial value.
+        assert screen.query_one("#field-note", Input).value == "hi"
+
+        # The Cancel button dismisses with None (distinct from the escape binding).
+        screen.query_one("#form-cancel").press()
+        await pilot.pause()
+        assert results[-1] is None
+
+
+async def test_action_form_with_no_fields_submits_empty_payload():
+    # A form with no fields has nothing to focus on mount and submits an empty payload.
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+
+    async with app.run_test() as pilot:
+        screen = ActionForm("Wait", [])
+        app.push_screen(screen, callback=results.append)
+        await pilot.pause()
+        screen.query_one("#form-submit").press()
+        await pilot.pause()
+        assert results[-1] == {}
+
+
+async def test_action_form_omits_blank_optional_fields_from_payload():
+    from textual.widgets import Input
+
+    # An optional field left blank is omitted from the payload rather than sent as None.
+    fields = [
+        FormField(key="text", label="text", kind="string", required=True),
+        FormField(key="aside", label="aside", kind="string", required=False),
+    ]
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+
+    async with app.run_test() as pilot:
+        screen = ActionForm("Say", fields)
+        app.push_screen(screen, callback=results.append)
+        await pilot.pause()
+        screen.query_one("#field-text", Input).value = "hello"
+        # Leave #field-aside blank.
+        screen.query_one("#form-submit").press()
+        await pilot.pause()
+        assert results[-1] == {"text": "hello"}
+
+
 async def test_action_form_renders_numeric_input_for_number_fields():
     from textual.widgets import Input
 
@@ -1547,6 +1625,25 @@ async def test_app_filters_and_clears_action_list():
         assert verbs.option_count == 3
 
 
+async def test_app_clear_filter_is_a_noop_when_already_empty():
+    from textual.widgets import Button, Input
+
+    # Pressing Clear with no active filter clears the input but skips the re-render
+    # (the filter string is already empty).
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        assert app.action_filter == ""
+
+        app._action_filter_clear_pressed(
+            SimpleNamespace(button=app.query_one("#action-filter-clear", Button))
+        )
+        await pilot.pause()
+
+        assert app.query_one("#action-filter", Input).value == ""
+        assert app.action_filter == ""
+
+
 async def test_app_renders_perceived_activity_after_initial_prime():
     from textual.widgets import OptionList
 
@@ -1651,6 +1748,52 @@ async def test_app_covers_defensive_selection_and_action_branches(monkeypatch):
         await app._do_action({"command_type": "wait", "tool_name": "wait", "arguments": []})
         await app._submit_action({"command_type": "wait", "tool_name": "wait"}, {})
         await app._cancel_queued_command({"command_id": "cmd-1"})
+
+
+async def test_app_keeps_prior_control_when_projection_omits_controller():
+    from textual.widgets import OptionList
+
+    # A projection without a controller block leaves the existing control tuple untouched
+    # while still rendering the player's room.
+    projection = _client_view()
+    del projection["controller"]
+    app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        # The claim still set control; the controller-less refresh did not clear it.
+        assert app.control == ("controller:1", 2)
+        members = app.query_one("#members", OptionList)
+        assert {o.id for o in members.options} == {PLAYER, MARLOW, APPLE}
+
+
+async def test_refresh_world_returns_quietly_when_status_widget_is_absent():
+    from textual.css.query import NoMatches
+
+    # refresh_world tolerates the status widget being gone (e.g. mid-teardown): both the
+    # error path and the success path swallow NoMatches and return instead of crashing.
+    def hide_status(app):
+        real = app.query_one
+
+        def query_one(selector, *args, **kwargs):
+            if selector == "#status":
+                raise NoMatches("#status")
+            return real(selector, *args, **kwargs)
+
+        app.query_one = query_one  # type: ignore[method-assign]
+
+    # Error path: the backend fails and the status update finds no widget.
+    failing = FlakyBackend(_snapshot())
+    app = BunnylandTUI(failing)
+    async with app.run_test():
+        hide_status(app)
+        await app.refresh_world()  # error branch hits the NoMatches guard
+
+    # Success path: a healthy refresh whose status update finds no widget also returns.
+    healthy = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with healthy.run_test() as pilot:
+        await _select_player(healthy, pilot)
+        hide_status(healthy)
+        await healthy.refresh_world()  # success branch hits the NoMatches guard
 
 
 async def test_app_failed_queue_cancel_reports_activity():

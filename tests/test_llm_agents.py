@@ -454,6 +454,55 @@ def test_parse_natural_command_ignores_patterns_without_slots():
     assert parse_natural_command("wave", (definition,)) is None
 
 
+def test_parse_natural_command_supports_leading_slot_patterns():
+    # A pattern that begins with a slot (no leading literal) compiles and matches; this
+    # exercises the split path where the first slot starts at position 0.
+    definition = ActionDefinition(
+        command_type="move",
+        tool_name="move",
+        arguments={"direction": ActionArgument(kind="direction")},
+        natural_patterns=(ActionPattern("{direction}"),),
+    )
+
+    assert parse_natural_command("north", (definition,)) == ToolCall(
+        "move", {"direction": "north"}
+    )
+
+
+def test_parse_natural_command_drops_whitespace_only_slot_captures():
+    # A middle text slot wrapped in literals becomes optional; matching with only
+    # whitespace in that slot leaves it out of the arguments (only fixed args remain).
+    definition = ActionDefinition(
+        command_type="say",
+        tool_name="say",
+        arguments={"text": ActionArgument(kind="text")},
+        natural_patterns=(
+            ActionPattern("say{text}please", fixed_arguments={"mode": "polite"}),
+        ),
+    )
+
+    assert parse_natural_command("say  please", (definition,)) == ToolCall(
+        "say", {"mode": "polite"}
+    )
+
+
+def test_parse_natural_command_ignores_unsatisfiable_argument_aliases():
+    # An alias whose source argument is never captured leaves the target absent rather
+    # than raising; the alias loop simply skips it.
+    definition = ActionDefinition(
+        command_type="greet",
+        tool_name="greet",
+        arguments={"name": ActionArgument(kind="entity")},
+        natural_patterns=(
+            ActionPattern("greet {name}", argument_aliases={"target_id": "missing"}),
+        ),
+    )
+
+    assert parse_natural_command("greet Hazel", (definition,)) == ToolCall(
+        "greet", {"name": "Hazel"}
+    )
+
+
 def test_scripted_agent_replays_then_waits():
     agent = ScriptedAgent([ToolCall("wait", {})])
     first = agent.decide("prompt", None, character_id="char_1")
