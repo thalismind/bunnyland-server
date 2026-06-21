@@ -1,0 +1,10 @@
+[
+  {
+    "prompt": "a single carved oak chest with iron bands, centered on a plain background, even lighting, product shot, sharp focus",
+    "negative": "blurry, lowres, deformed, text, watermark, busy background"
+  },
+  {
+    "prompt": "a brass lantern glowing softly, isolated on a neutral background, studio lighting, fine detail",
+    "negative": "blurry, lowres, deformed, text, watermark, busy background"
+  }
+]

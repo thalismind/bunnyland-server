@@ -1,0 +1,14 @@
+[
+  {
+    "prompt": "a character portrait of a weathered rabbit ranger, soft studio lighting, head and shoulders, detailed fur, neutral background",
+    "negative": "blurry, lowres, deformed, extra limbs, text, watermark"
+  },
+  {
+    "prompt": "portrait of a stern human guard in leather armor, three-quarter view, warm key light, shallow depth of field, plain backdrop",
+    "negative": "blurry, lowres, deformed, text, watermark"
+  },
+  {
+    "prompt": "close-up portrait of a curious fox scholar wearing round glasses, gentle rim light, calm expression, simple background",
+    "negative": "blurry, lowres, deformed, text, watermark"
+  }
+]

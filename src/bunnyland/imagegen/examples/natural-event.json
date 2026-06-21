@@ -1,0 +1,10 @@
+[
+  {
+    "prompt": "a warm tavern interior at night, two rabbits sharing a table with mugs while a fox plays a lute by the hearth, candlelight, wide establishing shot",
+    "negative": "blurry, lowres, deformed, extra limbs, text, watermark"
+  },
+  {
+    "prompt": "a moonlit courtyard where three guards confront a cloaked stranger near a stone well, dramatic shadows, cinematic composition",
+    "negative": "blurry, lowres, deformed, text, watermark"
+  }
+]

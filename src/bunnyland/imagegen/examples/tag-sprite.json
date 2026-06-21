@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "1girl, rabbit girl, animal ears, full body, standing, simple background, white background, chibi, game sprite, cel shading",
+    "negative": "blurry, lowres, bad anatomy, text, watermark, busy background",
+    "tags": ["1girl", "rabbit girl", "animal ears", "full body", "simple background", "chibi"]
+  },
+  {
+    "prompt": "1boy, fox, full body, walking, simple background, white background, flat colors, game sprite",
+    "negative": "blurry, lowres, bad anatomy, text, watermark, busy background",
+    "tags": ["1boy", "fox", "full body", "simple background", "flat colors"]
+  }
+]

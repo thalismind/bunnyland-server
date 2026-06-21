@@ -9,6 +9,15 @@ never requires the ``imagegen`` extra.
 
 from __future__ import annotations
 
+from .prompt import (
+    CatalogExampleSource,
+    ImagePromptRequest,
+    LLMPromptEnhancer,
+    PromptEnhancer,
+    PromptExampleSource,
+    StubPromptEnhancer,
+    VectorExampleSource,
+)
 from .spec import (
     GeneratedPrompt,
     ImagePurpose,
@@ -21,11 +30,18 @@ from .spec import (
 from .store import WorkflowTemplateStore, default_templates, load_templates_from
 
 __all__ = [
+    "CatalogExampleSource",
     "GeneratedPrompt",
+    "ImagePromptRequest",
     "ImagePurpose",
+    "LLMPromptEnhancer",
     "MediaKind",
+    "PromptEnhancer",
+    "PromptExampleSource",
     "PromptStyle",
+    "StubPromptEnhancer",
     "SubstitutionSlot",
+    "VectorExampleSource",
     "WorkflowTemplate",
     "WorkflowTemplateStore",
     "default_templates",
