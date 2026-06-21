@@ -38,6 +38,7 @@ from .prompt import (
     StubPromptEnhancer,
     VectorExampleSource,
 )
+from .service import ImageGenError, ImageGenJob, ImageGenService
 from .spec import (
     GeneratedPrompt,
     ImagePurpose,
@@ -58,6 +59,9 @@ __all__ = [
     "GeneratedPrompt",
     "HttpComfyClient",
     "ImageGenConfig",
+    "ImageGenError",
+    "ImageGenJob",
+    "ImageGenService",
     "ImageGenerationCompletedEvent",
     "ImageGenerationFailedEvent",
     "ImageGenerationStartedEvent",

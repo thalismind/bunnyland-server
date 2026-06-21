@@ -19,6 +19,7 @@ ALLOWED_EXTENSIONS = frozenset({"png", "jpg", "webp", "mp4", "webm"})
 
 #: Server-chosen subdirectories (segments) for each kind of media.
 SEGMENT_PORTRAITS = "portraits"
+SEGMENT_ENTITIES = "entities"
 SEGMENT_SPRITES = "sprites"
 SEGMENT_EVENTS = "events"
 SEGMENT_ALPHA = "alpha"
@@ -104,6 +105,7 @@ def extension_for(name: str) -> str:
 __all__ = [
     "ALLOWED_EXTENSIONS",
     "SEGMENT_ALPHA",
+    "SEGMENT_ENTITIES",
     "SEGMENT_EVENTS",
     "SEGMENT_PORTRAITS",
     "SEGMENT_SPRITES",
