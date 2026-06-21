@@ -78,12 +78,11 @@ class TakeHandler:
             return rejected("item is nowhere")
         if source_id == character_id:
             return rejected("already holding item")
-        source = ctx.entity(source_id) if ctx.world.has_entity(source_id) else None
-        if source is not None:
-            if source.has_component(CharacterComponent) and not source.has_component(
-                DeadComponent
-            ):
-                return rejected("item is not reachable")
+        # A live incoming Contains edge always names an existing entity: world.remove
+        # cascades inbound edges, so source_id is guaranteed resolvable here.
+        source = ctx.entity(source_id)
+        if source.has_component(CharacterComponent) and not source.has_component(DeadComponent):
+            return rejected("item is not reachable")
         if source_id not in _reachable_container_ids(ctx, character):
             return rejected("item is not reachable")
 
@@ -92,7 +91,7 @@ class TakeHandler:
         ).can_pick_up:
             return rejected("item cannot be picked up")
 
-        if source is not None and source.has_component(ContainerComponent):
+        if source.has_component(ContainerComponent):
             container = source.get_component(ContainerComponent)
             if not container.allow_remove:
                 return rejected("container does not allow removal")

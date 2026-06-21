@@ -431,6 +431,40 @@ def test_worldgen_hook_keeps_existing_character_position():
     assert character.get_component(SpritePosition).y == 24.0
 
 
+def test_ensure_renderable_skips_layer_and_bounds_for_non_renderable_entity():
+    scenario = build_scenario()
+    actor = scenario.actor
+    hook = toonsim.ToonWorldgenHook()
+    hook.actor = actor
+    # A faction is not renderable: default_layer_for and default_bounds_for both
+    # return None, so the layer guard (375->377) and bounds guard (383->exit) both
+    # take their false path -- only SpriteImage/SpriteScale get attached.
+    faction = spawn_entity(actor.world, [IdentityComponent(name="The Warren", kind="faction")])
+
+    hook._ensure_renderable(faction)
+
+    assert not faction.has_component(SpriteLayer)
+    assert not faction.has_component(SpriteBounds)
+    assert faction.has_component(SpriteImage)
+    assert faction.has_component(SpriteScale)
+
+
+def test_backfill_skips_bounds_when_default_is_missing(monkeypatch):
+    scenario = build_scenario()
+    world = scenario.actor.world
+    apple = spawn_entity(
+        world, [IdentityComponent(name="an apple", kind="food"), PortableComponent()]
+    )
+    # Force the renderable entity to report no default footprint so the backfill's
+    # bounds guard (211->198) takes its false path and loops on without adding bounds.
+    monkeypatch.setattr(toonsim, "default_bounds_for", lambda entity: None)
+
+    _backfill(world)
+
+    assert apple.get_component(SpriteLayer).layer == LAYER_ITEM
+    assert not apple.has_component(SpriteBounds)
+
+
 def _move_sprite(scenario, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),

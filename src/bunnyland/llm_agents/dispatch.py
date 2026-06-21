@@ -74,9 +74,11 @@ def name_candidates(world: World, character: Entity) -> list[tuple[str, EntityId
         ids.add(room_id)
         for _edge, target in world.get_entity(room_id).get_relationships(ExitTo):
             ids.add(target)
+    # Every id collected above is a live entity: reachable_ids pre-filters, container_of follows
+    # a live edge, and Relics cascades dangling ExitTo edges on world.remove(), so no has_entity
+    # guard is needed before expanding contents.
     for entity_id in tuple(ids):
-        if world.has_entity(entity_id):
-            ids.update(contents(world.get_entity(entity_id)))
+        ids.update(contents(world.get_entity(entity_id)))
 
     candidates: list[tuple[str, EntityId]] = []
     for entity_id in ids:

@@ -373,6 +373,49 @@ def test_equipment_handlers_reject_duplicate_hold_and_wear_directly():
     )
 
 
+def test_take_from_open_container_succeeds():
+    scenario = setup_inventory_scenario()
+    world = scenario.actor.world
+    chest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="open chest", kind="container"),
+            ContainerComponent(open=True, allow_remove=True),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        chest.id,
+    )
+    item = spawn_entity(
+        world,
+        [IdentityComponent(name="coin", kind="item"), PortableComponent()],
+    )
+    chest.add_relationship(Contains(mode=ContainmentMode.CONTAINER), item.id)
+
+    result = execute_take(scenario, item.id)
+
+    assert result.ok is True
+    assert container_of(world.get_entity(item.id)) == scenario.character
+
+
+def test_put_rejects_fixed_in_place_item():
+    scenario = setup_inventory_scenario()
+    world = scenario.actor.world
+    item = spawn_entity(
+        world,
+        [IdentityComponent(name="implant", kind="item"), PortableComponent(can_pick_up=False)],
+    )
+    world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY),
+        item.id,
+    )
+
+    assert execute_put(scenario, item.id).reason == (
+        "item is fixed in place and cannot be moved"
+    )
+
+
 async def test_put_into_container_in_room():
     scenario = setup_inventory_scenario()
     chest = spawn_entity(

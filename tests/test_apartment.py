@@ -102,6 +102,22 @@ def test_apartment_demo_is_registered():
     assert registry.get("apartment-demo") is APARTMENT_DEMO
 
 
+async def test_residents_without_known_for_get_no_reputation(monkeypatch):
+    # ``known_for`` is optional in a tenant dossier; a resident lacking it should
+    # simply be left without a ReputationComponent (the false side of the guard).
+    from bunnyland.mechanics.lifesim import ReputationComponent
+    from bunnyland.worldgen import apartment
+
+    stripped = tuple(
+        {k: v for k, v in r.items() if k != "known_for"} for r in apartment._RESIDENTS
+    )
+    monkeypatch.setattr(apartment, "_RESIDENTS", stripped)
+
+    actor = await _build()
+
+    assert not _entities(actor, ReputationComponent)
+
+
 async def test_backstory_without_emoji_skips_editor_display():
     from bunnyland.core.components import DescriptionComponent, EditorDisplayComponent
     from bunnyland.core.ecs import spawn_entity
