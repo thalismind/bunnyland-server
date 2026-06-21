@@ -56,6 +56,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "live_llm: optional live LLM integration tests; skipped unless BUNNYLAND_LIVE_LLM=1 and provider credentials are set",
+    "live_generation: optional live ComfyUI image-generation tests; skipped unless BUNNYLAND_LIVE_GENERATION=1 and COMFYUI_SERVER_URL is set",
     "otel: telemetry tests; skipped unless the 'otel' extra (opentelemetry-sdk) is installed",
 ]
 
