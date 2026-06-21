@@ -44,6 +44,10 @@ jobs:
           BUNNYLAND_PLAYTEST_TRACE_DIR: artifacts/playtests
         run: scripts/test-coverage
 
+      - name: Publish test and coverage summary
+        if: always()
+        run: python3 scripts/ci_report.py
+
       - name: Upload playtest traces
         if: always()
         uses: actions/upload-artifact@v4
