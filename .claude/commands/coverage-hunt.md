@@ -11,6 +11,24 @@ per uncovered line/branch — whether it is **unreachable code to remove** or
 **reachable behavior to test**, then act. Optional argument `$ARGUMENTS` narrows
 the hunt to a specific module/path, or sets a coverage threshold to target.
 
+## The goal is 100% BEHAVIOR coverage
+
+The target is not a line-coverage number — it is **100% behavior coverage**:
+every behavior the code can exhibit is exercised by a test, including both the
+**happy paths** (valid input, normal flow, success) AND the **unhappy paths**
+(invalid/malformed input, rejected commands, error or incompatible
+server/LLM responses, missing optional data, empty collections, failure and
+fallback branches).
+
+Behavior coverage is the cause; line and branch coverage are the effect. Cover
+every behavior and you will naturally fill 100% of branches, and 100% of
+branches requires 100% of statements — like filling the back of a shovel fills
+the front. So treat an uncovered line/branch as a **missing-behavior signal**:
+ask "what behavior is this line for, and which test should exercise it?" If the
+answer is "no valid behavior reaches it," that's not a test gap — it's dead code
+to remove. Never chase the number with a contrived test that doesn't correspond
+to a real behavior, and never paper over a line with a pragma.
+
 ## Project conventions (do not deviate)
 
 - Work in the coverage worktree `/home/ssube/tmp/bunnyland-cov-wt/`, branch
@@ -61,6 +79,12 @@ in the working tree and report back. Use this prompt template (fill the blanks):
 > `COVERAGE_FILE=/tmp/cov-<tag>.dat uv run -m pytest <test file> --cov=<dotted>
 > --cov-report=term-missing -q`. Pick ONE test command + ONE test file and use it
 > consistently. Lint with `uv run -m ruff check .` (judge only files you changed).
+>
+> The goal is 100% BEHAVIOR coverage, not a line number: every behavior — happy
+> paths (valid input, success) AND unhappy paths (invalid input, rejections,
+> errors, fallbacks) — gets a test. Branch and statement coverage follow from
+> that. Treat each uncovered line as a missing-behavior signal: name the behavior
+> it's for, then test it (or, if no valid behavior reaches it, remove it).
 >
 > For EACH uncovered line/partial branch (`NN->MM`), decide which case it is:
 >   1. **Reachable behavior → write a real test.** Prefer behavior-driven tests.
