@@ -17,7 +17,18 @@ from .client import (
     WebSocketComfyClient,
     build_comfy_client,
 )
+from .components import (
+    EventImageComponent,
+    ImageRequestComponent,
+    PortraitImageComponent,
+)
 from .config import ImageGenConfig
+from .events import (
+    ImageGenerationCompletedEvent,
+    ImageGenerationFailedEvent,
+    ImageGenerationStartedEvent,
+)
+from .media import MediaError, MediaStore
 from .prompt import (
     CatalogExampleSource,
     ImagePromptRequest,
@@ -43,13 +54,21 @@ __all__ = [
     "ComfyClient",
     "ComfyError",
     "ComfyTimeoutError",
+    "EventImageComponent",
     "GeneratedPrompt",
     "HttpComfyClient",
     "ImageGenConfig",
+    "ImageGenerationCompletedEvent",
+    "ImageGenerationFailedEvent",
+    "ImageGenerationStartedEvent",
     "ImagePromptRequest",
     "ImagePurpose",
+    "ImageRequestComponent",
     "LLMPromptEnhancer",
+    "MediaError",
     "MediaKind",
+    "MediaStore",
+    "PortraitImageComponent",
     "PromptEnhancer",
     "PromptExampleSource",
     "PromptStyle",
