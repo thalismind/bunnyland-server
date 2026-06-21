@@ -145,6 +145,12 @@ class PutHandler:
             return error
         if container_of(item) != character_id:
             return rejected("item is not in inventory")
+        # A fixed-in-place item (e.g. an installed implant) can be carried but not
+        # set down or stashed; if you cannot pick it up, you cannot drop it either.
+        if item.has_component(PortableComponent) and not item.get_component(
+            PortableComponent
+        ).can_pick_up:
+            return rejected("item is fixed in place and cannot be moved")
 
         room_id = container_of(character)
         target_id = parse_entity_id(payload.get("target_container_id"))
