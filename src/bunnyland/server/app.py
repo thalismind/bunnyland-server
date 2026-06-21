@@ -113,7 +113,7 @@ if TYPE_CHECKING:
 try:
     from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
-except ImportError:  # pragma: no cover - exercised only without optional deps
+except ImportError:
     FastAPI = Header = HTTPException = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
 
 

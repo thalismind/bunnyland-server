@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 __all__ = ["BunnylandTUI", "main"]
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from .app import BunnylandTUI, main
 
 

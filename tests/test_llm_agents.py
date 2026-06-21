@@ -2167,3 +2167,15 @@ async def test_dispatch_cancel_pending_drops_inflight_decisions():
     await asyncio.sleep(0)  # let the cancellation propagate
     assert not dispatch._has_pending(str(scenario.character))
     assert scenario.actor._inbox.empty()
+
+
+def test_ollama_agent_missing_extra_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "ollama", None)
+    with pytest.raises(RuntimeError, match="OllamaAgent requires the 'llm' extra"):
+        OllamaAgent()
+
+
+def test_openrouter_agent_missing_extra_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "openrouter", None)
+    with pytest.raises(RuntimeError, match="OpenRouterAgent requires the 'llm' extra"):
+        OpenRouterAgent()

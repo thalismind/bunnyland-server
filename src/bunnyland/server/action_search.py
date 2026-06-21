@@ -146,7 +146,7 @@ class ChromaActionSearchIndex:
         if client is None:
             try:
                 import chromadb
-            except ImportError as exc:  # pragma: no cover - requires missing extra
+            except ImportError as exc:
                 raise RuntimeError(
                     "smart action search requires the 'chroma' extra: "
                     "pip install bunnyland[chroma]"

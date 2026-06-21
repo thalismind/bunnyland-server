@@ -35,7 +35,7 @@ async def run_loop_with_api(
 
     try:
         import uvicorn
-    except ImportError as exc:  # pragma: no cover - exercised only without optional deps
+    except ImportError as exc:
         raise RuntimeError(
             "bunnyland server API requires uvicorn; install the server dependencies first"
         ) from exc

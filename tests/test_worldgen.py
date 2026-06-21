@@ -240,6 +240,37 @@ def test_ollama_world_builder_initializes_client_with_host_and_auth(monkeypatch)
     }
 
 
+def test_ollama_world_builder_missing_extra_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "ollama", None)
+    with pytest.raises(RuntimeError, match="OllamaWorldBuilder requires the 'llm' extra"):
+        OllamaWorldBuilder()
+
+
+async def test_ollama_world_builder_propose_parses_chat_response(monkeypatch):
+    class AsyncClient:
+        def __init__(self, **kwargs):
+            self.calls: list[dict] = []
+
+        async def chat(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "message": {
+                    "content": '{"rooms": [{"key": "atrium", "title": "Atrium", '
+                    '"intent": "a glassy atrium"}]}'
+                }
+            }
+
+    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(AsyncClient=AsyncClient))
+
+    builder = OllamaWorldBuilder(model="world-model")
+    proposal = await builder.propose("a quiet seed")
+
+    assert isinstance(proposal, WorldProposal)
+    assert proposal.seed == "a quiet seed"
+    assert builder._client.calls[0]["model"] == "world-model"
+    assert builder._client.calls[0]["format"] == "json"
+
+
 def test_story_event_proposal_accepts_common_severity_labels():
     event = StoryEventProposal.model_validate(
         {

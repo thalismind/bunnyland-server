@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 import bunnyland.server.action_search as action_search_module
 from bunnyland.core.actions import (
     ActionArgument,
@@ -143,3 +147,9 @@ def test_smart_action_search_reuses_the_module_level_index():
     # The existing singleton was reused (branch 198->200 false), no new index built.
     assert result == list(definitions)
     assert recording.calls == ["travel somewhere"]
+
+
+def test_chroma_action_search_index_missing_extra_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "chromadb", None)
+    with pytest.raises(RuntimeError, match="smart action search requires the 'chroma' extra"):
+        ChromaActionSearchIndex()

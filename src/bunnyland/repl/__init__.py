@@ -13,7 +13,7 @@ from .client import BunnylandRepl
 
 __all__ = ["BunnylandRepl", "BunnylandReplApp", "main"]
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from .app import BunnylandReplApp, main
 
 

@@ -45,7 +45,7 @@ class OllamaWorldBuilder:
     ):
         try:
             import ollama
-        except ImportError as exc:  # pragma: no cover - exercised only without extra
+        except ImportError as exc:
             raise RuntimeError(
                 "OllamaWorldBuilder requires the 'llm' extra: pip install bunnyland[llm]"
             ) from exc
@@ -54,7 +54,7 @@ class OllamaWorldBuilder:
         self._client = client_cls(host=host, headers=headers) if host else client_cls()
         self._model = model
 
-    async def propose(self, seed: str) -> WorldProposal:  # pragma: no cover - needs network + extra
+    async def propose(self, seed: str) -> WorldProposal:
         response = await self._client.chat(
             model=self._model,
             format="json",

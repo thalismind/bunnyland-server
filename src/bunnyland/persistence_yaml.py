@@ -42,7 +42,7 @@ _PLAIN_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 def _yaml_module():
     try:
         import yaml
-    except ImportError as exc:  # pragma: no cover - exercised only without optional extra
+    except ImportError as exc:
         raise RuntimeError(
             "YAML persistence requires PyYAML; install the yaml extra to use it"
         ) from exc

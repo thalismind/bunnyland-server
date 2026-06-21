@@ -609,3 +609,15 @@ async def test_ollama_world_agent_builds_each_proposal_from_json(monkeypatch):
     assert "Live ECS JSON schemas" in calls[0]
     assert "Through the north door" in calls[1]
     assert "Rooms so far: Root" in calls[5]
+
+
+def test_ollama_world_agent_missing_extra_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "ollama", None)
+    with pytest.raises(RuntimeError, match="OllamaWorldAgent requires the 'llm' extra"):
+        OllamaWorldAgent()
+
+
+def test_openrouter_world_agent_missing_extra_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "openrouter", None)
+    with pytest.raises(RuntimeError, match="OpenRouterWorldAgent requires the 'llm' extra"):
+        OpenRouterWorldAgent()

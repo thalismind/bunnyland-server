@@ -60,7 +60,7 @@ from ..server.serialization import (
     serialize_world_overview,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - import-only typing aliases
+if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
     from ..engine import GameLoop
     from ..persistence import WorldMeta
@@ -534,7 +534,7 @@ def create_bunnyland_mcp_app(
     try:
         from mcp.server.fastmcp import FastMCP
         from mcp.server.fastmcp.exceptions import ToolError
-    except ImportError as exc:  # pragma: no cover - exercised only without optional deps
+    except ImportError as exc:
         raise RuntimeError(
             "the MCP server requires the 'mcp' extra: pip install bunnyland[mcp]"
         ) from exc

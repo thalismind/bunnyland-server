@@ -5,6 +5,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from conftest import build_scenario
@@ -869,6 +870,37 @@ def test_event_serialization_includes_type_and_json_fields(scenario):
     assert serialized["event_type"] == "ActorMovedEvent"
     assert serialized["event"]["world_epoch"] == 7
     assert serialized["event"]["created_at"] is not None
+
+
+def test_server_app_module_falls_back_when_fastapi_missing(scenario):
+    import importlib
+
+    import bunnyland.server.app as app_mod
+
+    try:
+        with patch.dict(sys.modules, {"fastapi": None, "fastapi.middleware.cors": None}):
+            reloaded = importlib.reload(app_mod)
+            assert reloaded.FastAPI is None
+            with pytest.raises(RuntimeError, match="requires FastAPI"):
+                reloaded.create_app(scenario.actor)
+    finally:
+        # Restore a healthy module so unrelated tests keep the real FastAPI symbols.
+        importlib.reload(app_mod)
+
+
+async def test_run_loop_with_api_missing_uvicorn_raises(scenario, monkeypatch):
+    monkeypatch.setitem(sys.modules, "uvicorn", None)
+    loop = GameLoop(
+        scenario.actor,
+        ControllerDispatch(
+            scenario.actor,
+            PromptBuilder(scenario.actor.world),
+            ScriptedAgent([]),
+        ),
+    )
+    meta = WorldMeta(seed="moss", generator="oneshot")
+    with pytest.raises(RuntimeError, match="requires uvicorn"):
+        await run_loop_with_api(loop, scenario.actor, meta, host="127.0.0.1", port=0)
 
 
 def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(scenario):

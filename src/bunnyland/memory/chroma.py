@@ -25,7 +25,7 @@ class ChromaMemoryStore:
         if client is None:
             try:
                 import chromadb
-            except ImportError as exc:  # pragma: no cover - exercised only without extra
+            except ImportError as exc:
                 raise RuntimeError(
                     "ChromaMemoryStore requires the 'chroma' extra: pip install bunnyland[chroma]"
                 ) from exc

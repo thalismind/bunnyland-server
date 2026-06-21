@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+
+import pytest
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -785,3 +788,9 @@ def test_chroma_store_vector_keyword_and_embedding_paths():
     # keyword mode filters by shared tokens.
     keyword = store.search("c", query="water", mode="keyword", limit=5)
     assert [entry.text for entry in keyword] == ["the basin water is unsafe"]
+
+
+def test_chroma_memory_store_missing_extra_raises(monkeypatch):
+    monkeypatch.setitem(sys.modules, "chromadb", None)
+    with pytest.raises(RuntimeError, match="ChromaMemoryStore requires the 'chroma' extra"):
+        ChromaMemoryStore()

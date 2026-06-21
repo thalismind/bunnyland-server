@@ -506,7 +506,7 @@ class OllamaAgent:
     ) -> None:
         try:
             import ollama
-        except ImportError as exc:  # pragma: no cover - exercised only without extra
+        except ImportError as exc:
             raise RuntimeError(
                 "OllamaAgent requires the 'llm' extra: pip install bunnyland[llm]"
             ) from exc
@@ -596,7 +596,7 @@ class OpenRouterAgent:
     ) -> None:
         try:
             from openrouter import OpenRouter
-        except ImportError as exc:  # pragma: no cover - exercised only without extra
+        except ImportError as exc:
             raise RuntimeError(
                 "OpenRouterAgent requires the 'llm' extra: pip install bunnyland[llm]"
             ) from exc

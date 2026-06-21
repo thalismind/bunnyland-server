@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from enum import Enum
 
@@ -660,3 +661,11 @@ def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):
             target == child.id and edge.mode == ContainmentMode.REGION
             for edge, target in relationships
         )
+
+
+def test_yaml_module_missing_extra_raises(monkeypatch):
+    from bunnyland.persistence_yaml import _yaml_module
+
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    with pytest.raises(RuntimeError, match="YAML persistence requires PyYAML"):
+        _yaml_module()

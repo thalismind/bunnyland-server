@@ -1928,3 +1928,28 @@ async def test_perceived_for_agent_scopes_and_paginates(scenario):
 
     assert bridge.perceived_for_agent("missing")["ok"] is False
     bridge.close()
+
+
+def test_create_bunnyland_mcp_app_missing_extra_raises(monkeypatch, scenario):
+    monkeypatch.setitem(sys.modules, "mcp", None)
+    monkeypatch.setitem(sys.modules, "mcp.server", None)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", None)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", None)
+
+    async def _unused(*_args, **_kwargs):  # pragma: no cover - never invoked
+        raise AssertionError("callable should not run before the import guard")
+
+    with pytest.raises(RuntimeError, match="the MCP server requires the 'mcp' extra"):
+        create_bunnyland_mcp_app(
+            actor=scenario.actor,
+            meta=WorldMeta(seed="moss"),
+            loop=None,
+            admin_token="secret",
+            patch_world=_unused,
+            generate_world=_unused,
+            generation_status=_unused,
+            generate_room=_unused,
+            generate_character=_unused,
+            generate_item=_unused,
+            generate_event=_unused,
+        )

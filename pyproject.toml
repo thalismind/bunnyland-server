@@ -61,7 +61,8 @@ branch = true
 source = ["bunnyland"]
 
 [tool.coverage.report]
-fail_under = 99
+fail_under = 99.9
+precision = 2
 exclude_also = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
