@@ -61,7 +61,7 @@ branch = true
 source = ["bunnyland"]
 
 [tool.coverage.report]
-fail_under = 99.9
+fail_under = 100
 precision = 2
 exclude_also = [
     "if TYPE_CHECKING:",
