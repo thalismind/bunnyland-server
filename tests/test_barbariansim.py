@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from conftest import build_scenario
 
 from bunnyland.core import (
+    BodyPlanComponent,
     CharacterComponent,
     CommandCost,
     ContainmentMode,
@@ -15,6 +16,7 @@ from bunnyland.core import (
     DownedComponent,
     GenerationIntentComponent,
     HandlerContext,
+    HasInjury,
     HealthComponent,
     IdentityComponent,
     Lane,
@@ -41,6 +43,7 @@ from bunnyland.mechanics.barbariansim import (
     ArmorComponent,
     AttackHandler,
     BarbarianRaidEnrichment,
+    BarbarianSimPolicyComponent,
     BaseClaimComponent,
     BaseClaimedEvent,
     BlessingComponent,
@@ -119,9 +122,13 @@ from bunnyland.mechanics.barbariansim import (
     UpgradeBuildingHandler,
     WeaponComponent,
     barbariansim_fragments,
+    ensure_barbariansim_policy,
     generate_raid_spawn_specs,
     install_barbariansim,
 )
+from bunnyland.mechanics.barbariansim import _ambient_celsius as ambient_celsius
+from bunnyland.mechanics.barbariansim import _armor_rating as armor_rating
+from bunnyland.mechanics.barbariansim import _damage_item as damage_item
 from bunnyland.mechanics.colonysim import install_colonysim
 from bunnyland.mechanics.policy import BoundaryTag, install_policy
 from bunnyland.mechanics.storyteller import (
@@ -2164,6 +2171,22 @@ def test_attack_uses_requested_body_part_string():
     assert injuries and injuries[0].body_part == "left arm"
 
 
+def test_attack_defaults_to_body_when_body_plan_has_no_parts():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = _target(scenario, health=20.0)
+    # A body plan present but with no parts falls back to the generic "body".
+    scenario.actor.world.get_entity(target).add_component(BodyPlanComponent(parts=()))
+    _weapon(scenario, damage=6.0)
+    result = AttackHandler().execute(
+        ctx, _handler_cmd(scenario, "attack", target_id=str(target))
+    )
+    assert result.ok, result.reason
+    injuries = [e for e in result.events if e.__class__.__name__ == "InjuryAddedEvent"]
+    assert injuries and injuries[0].body_part == "body"
+
+
 def test_place_trap_rejects_when_character_has_no_room():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -2391,3 +2414,195 @@ def test_damage_item_noop_when_item_is_already_broken():
         e.__class__.__name__ in {"ItemDamagedEvent", "ItemBrokenEvent"}
         for e in result.events
     )
+
+
+def test_exposure_fragments_cover_each_danger_independently():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    owner = world.get_entity(scenario.character)
+    self_ctx = ComponentPromptContext.for_entity(world, owner)
+
+    # No exposure values but cold is dangerous: skips the exposure summary and
+    # the heat-danger line, emitting only the cold-danger warning.
+    cold_only = TemperatureExposureComponent(cold_danger=True)
+    assert cold_only.prompt_fragments(self_ctx) == (
+        "You are suffering dangerous cold exposure.",
+    )
+
+    # Heat danger without cold danger emits only the heat-danger warning.
+    heat_only = TemperatureExposureComponent(heat_danger=True)
+    assert heat_only.prompt_fragments(self_ctx) == (
+        "You are suffering dangerous heat exposure.",
+    )
+
+
+def test_armor_rating_ignores_worn_items_without_armor_component():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    target = _target(scenario, health=20.0, armor=2.0)
+    # A worn item with no ArmorComponent must not change the armor rating.
+    cloak = spawn_entity(
+        world,
+        [IdentityComponent(name="plain cloak", kind="armor"), PortableComponent()],
+    )
+    target_entity = world.get_entity(target)
+    target_entity.add_relationship(Contains(mode=ContainmentMode.INVENTORY), cloak.id)
+    target_entity.add_relationship(Wearing(slot="torso"), cloak.id)
+
+    assert armor_rating(ctx, target) == 2.0
+
+
+def test_ambient_celsius_is_none_without_temperature_component():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    # The starting room carries no TemperatureComponent.
+    assert ambient_celsius(world, scenario.room_a) is None
+
+
+def test_damage_item_skips_already_broken_item():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    weapon = _durable_weapon(scenario, durability=1.0)
+    replace_component(
+        scenario.actor.world.get_entity(weapon),
+        DurabilityComponent(current=0.0, maximum=1.0, broken=True),
+    )
+
+    events = damage_item(ctx, weapon, amount=1.0, actor_id=scenario.character)
+
+    # A broken item yields no events and its durability is untouched.
+    assert events == []
+    durability = scenario.actor.world.get_entity(weapon).get_component(DurabilityComponent)
+    assert durability.broken is True
+    assert durability.current == 0.0
+
+
+def test_damage_item_without_breaking_emits_only_a_damage_event():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    weapon = _durable_weapon(scenario, durability=5.0)
+
+    events = damage_item(ctx, weapon, amount=2.0, actor_id=scenario.character)
+
+    # Durability stays above zero, so only a damage event (no break) is emitted.
+    assert [e.__class__.__name__ for e in events] == ["ItemDamagedEvent"]
+    assert events[0].durability == 3.0
+    durability = scenario.actor.world.get_entity(weapon).get_component(DurabilityComponent)
+    assert durability.broken is False
+    assert durability.current == 3.0
+
+
+async def test_attack_fully_absorbed_by_armor_inflicts_no_injury():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    # Armor outweighs the weapon, so damage clamps to zero and no injury is made.
+    target = _target(scenario, health=20.0, armor=10.0)
+    weapon = _weapon(scenario, damage=4.0)
+
+    result = AttackHandler().execute(
+        HandlerContext(scenario.actor.world, scenario.actor.epoch),
+        _handler_cmd(scenario, "attack", target_id=str(target), weapon_id=str(weapon)),
+    )
+
+    assert result.ok, result.reason
+    # Zero damage: the attack still lands but no injury entity is spawned.
+    assert not any(e.__class__.__name__ == "InjuryAddedEvent" for e in result.events)
+    target_entity = scenario.actor.world.get_entity(target)
+    assert target_entity.get_component(HealthComponent).current == 20.0
+    assert not target_entity.get_relationships(HasInjury)
+
+
+async def test_raid_with_depleted_fortification_does_not_replace_component():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset())
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = _room_entity(
+        scenario,
+        "cracked wall",
+        "fortification",
+        [FortificationComponent(rating=1.0, durability=0.0)],
+    )
+    raids: list[RaidStartedEvent] = []
+    scenario.actor.bus.subscribe(RaidStartedEvent, raids.append)
+
+    result = RaidHandler().execute(
+        ctx, _handler_cmd(scenario, "raid", target_id=str(target.id), intensity=5.0)
+    )
+
+    assert result.ok, result.reason
+    # Durability already at zero: the component is left exactly as-is.
+    fortification = target.get_component(FortificationComponent)
+    assert fortification.durability == 0.0
+    assert fortification.rating == 1.0
+
+
+async def test_prepare_siege_defaults_to_current_room():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset())
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    result = PrepareSiegeHandler().execute(
+        ctx, _handler_cmd(scenario, "prepare-siege", score=3.0)
+    )
+
+    assert result.ok, result.reason
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    assert room.get_component(SiegeReadinessComponent).score == 3.0
+
+
+async def test_start_purge_wave_defaults_to_current_room():
+    scenario = build_scenario()
+    _install(scenario.actor, enabled=frozenset())
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    result = StartPurgeWaveHandler().execute(
+        ctx, _handler_cmd(scenario, "start-purge-wave", intensity=2.0)
+    )
+
+    assert result.ok, result.reason
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    assert room.get_component(PurgeWaveComponent).active is True
+
+
+def test_unlock_treasure_without_key_requirement_needs_no_key():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    treasure = _room_entity(
+        scenario,
+        "open hoard",
+        "treasure",
+        [TreasureComponent(treasure_type="hoard", key_name="")],
+    )
+
+    result = UnlockTreasureHandler().execute(
+        ctx, _handler_cmd(scenario, "unlock-treasure", treasure_id=str(treasure.id))
+    )
+
+    assert result.ok, result.reason
+    assert treasure.get_component(TreasureComponent).locked is False
+
+
+def test_ensure_barbariansim_policy_returns_existing_singleton():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    # install_barbariansim already spawned the policy; a second call must reuse it.
+    before = list(
+        scenario.actor.world.query()
+        .with_all([BarbarianSimPolicyComponent])
+        .execute_entities()
+    )
+    assert len(before) == 1
+
+    policy = ensure_barbariansim_policy(scenario.actor)
+
+    assert isinstance(policy, BarbarianSimPolicyComponent)
+    after = list(
+        scenario.actor.world.query()
+        .with_all([BarbarianSimPolicyComponent])
+        .execute_entities()
+    )
+    assert len(after) == 1

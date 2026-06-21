@@ -660,6 +660,45 @@ def test_render_room_includes_clickable_inventory():
     assert {KEY, APPLE} <= clicked
 
 
+async def test_refresh_resets_world_when_projection_missing():
+    # player_id is a known character but the projection comes back None -> empty World (152)
+    class NoProjectionBackend(RecordingBackend):
+        async def fetch_character_projection(self, character_id: str) -> dict | None:
+            return None
+
+    repl = BunnylandRepl(NoProjectionBackend())
+    repl.player_id = PLAYER
+    await repl.refresh()
+    assert repl.player_id == PLAYER  # still claimed; only the world was reset
+    assert repl.world.get(PLAYER) is None
+    assert repl.world.get(PARLOR) is None
+
+
+async def test_refresh_resets_world_when_projection_id_mismatches():
+    # projection returns a view for a different character -> empty World (152)
+    class MismatchedBackend(RecordingBackend):
+        async def fetch_character_projection(self, character_id: str) -> dict | None:
+            return _client_view_from_snapshot(await self.fetch_snapshot(), MARLOW)
+
+    repl = BunnylandRepl(MismatchedBackend())
+    repl.player_id = PLAYER
+    await repl.refresh()
+    assert repl.world.get(PLAYER) is None
+
+
+def test_render_room_omits_carrying_when_empty():
+    # player holds nothing -> the "carrying:" section is skipped (284->290 false branch)
+    snapshot = _snapshot()
+    player = next(e for e in snapshot["entities"] if e["id"] == PLAYER)
+    player["relationships"]["Holding"] = []
+    repl = BunnylandRepl(RecordingBackend(snapshot))
+    repl.world = World.parse(snapshot)
+    repl.player_id = PLAYER
+    room = repl.render_room().plain
+    assert "Pib (you)" in room
+    assert "carrying:" not in room
+
+
 def test_render_room_skips_doors_and_omits_empty_exits():
     snapshot = _snapshot()
     parlor = snapshot["entities"][0]

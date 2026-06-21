@@ -1187,9 +1187,10 @@ def selected_kaiju_rooms(
     if not target_room.has_component(RoomComponent):
         return ()
     region = _region_for_room(world, target_room)
+    # When a region is found it always contains `target_room` (same REGION edge,
+    # traversed in reverse) which carries RoomComponent, so `_region_rooms` is never
+    # empty here; the `if not rooms` fallback was dead and is removed.
     rooms = list(_region_rooms(world, region)) if region is not None else [target_room]
-    if not rooms:
-        rooms = [target_room]
     rng = Random(seed)
     rng.shuffle(rooms)
     if len(rooms) >= count:
@@ -1369,9 +1370,9 @@ def _first_exit_target(room: Entity) -> EntityId | None:
 
 def _creatures_in_room(world: World, room: Entity) -> list[Entity]:
     creatures: list[Entity] = []
+    # Relics cascades inbound Contains edge removal, so a Contains relationship can
+    # never point at a removed entity; no has_entity dangling-edge guard is needed.
     for _edge, entity_id in room.get_relationships(Contains):
-        if not world.has_entity(entity_id):
-            continue
         entity = world.get_entity(entity_id)
         if _is_creature(entity):
             creatures.append(entity)
@@ -3450,9 +3451,10 @@ class CreatureNeedConsequence:
             stress = need.stress
             if hunger >= HUNGRY_THRESHOLD:
                 stress = min(100.0, stress + HUNGER_STRESS_PER_HOUR * hours)
+            # `last_updated_epoch` is always advanced to `epoch` here while `elapsed > 0`
+            # guarantees the prior value was strictly smaller, so `updated` can never
+            # equal `need` -- the no-change short-circuit was dead and is removed.
             updated = replace(need, hunger=hunger, stress=stress, last_updated_epoch=epoch)
-            if updated == need:
-                continue
             replace_component(creature, updated)
             became_hungry = need.hunger < HUNGRY_THRESHOLD <= hunger
             if became_hungry:
@@ -3898,9 +3900,9 @@ class EvacuateRoomHandler:
         if not destination.has_component(RoomComponent):
             return rejected("destination is not a room")
         moved: list[str] = []
+        # Relics cascades inbound Contains edge removal, so a Contains relationship can
+        # never point at a removed entity; no has_entity dangling-edge guard is needed.
         for _edge, entity_id in tuple(room.get_relationships(Contains)):
-            if not ctx.world.has_entity(entity_id):
-                continue
             entity = ctx.entity(entity_id)
             if not entity.has_component(CharacterComponent) or _is_creature(entity):
                 continue

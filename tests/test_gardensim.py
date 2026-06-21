@@ -741,10 +741,26 @@ def test_growth_consequences_skip_not_ready_edge_states():
             AnimalProductComponent(product_type="egg", last_produced_epoch=DAY),
         ],
     )
-    for entity in (no_product, ready_product, sick_animal, young_animal, cooldown_animal):
+    # Unfed animal already at mood 0 and past the day's age: age/mood are unchanged, so the
+    # FarmAnimalComponent is not replaced (branch 1015 -> 1017 false). No product either.
+    stable_animal = spawn_entity(
+        world,
+        [FarmAnimalComponent(species="chicken", age_days=2.0, mood=0.0, fed_until_epoch=0)],
+    )
+    for entity in (
+        no_product,
+        ready_product,
+        sick_animal,
+        young_animal,
+        cooldown_animal,
+        stable_animal,
+    ):
         room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
 
     assert AnimalProductConsequence().process(world, DAY) == []
+    # The unchanged animal kept its original component instance values.
+    assert stable_animal.get_component(FarmAnimalComponent).mood == 0.0
+    assert stable_animal.get_component(FarmAnimalComponent).age_days == 2.0
 
 
 async def test_fishing_mining_foraging_gifts_festivals_and_bundles():
@@ -2210,6 +2226,15 @@ def test_gift_preferences_apply_loved_disliked_and_plain_item_deltas():
         scenario.actor.world,
         [IdentityComponent(name="Plain Target", kind="character")],
     )
+    # Has preferences, but the gift matches none of loves/likes/dislikes (2246 -> 2248):
+    # the default delta of 5.0 is used.
+    neutral_target = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Neutral Target", kind="character"),
+            GiftPreferenceComponent(likes=("apple",)),
+        ],
+    )
     diamond = spawn_entity(
         scenario.actor.world,
         [
@@ -2230,15 +2255,20 @@ def test_gift_preferences_apply_loved_disliked_and_plain_item_deltas():
         scenario.actor.world,
         [IdentityComponent(name="shell", kind="gift"), PortableComponent(can_pick_up=True)],
     )
-    for entity in (loved_target, disliked_target, plain_target):
+    pebble = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="pebble", kind="gift"), PortableComponent(can_pick_up=True)],
+    )
+    for entity in (loved_target, disliked_target, plain_target, neutral_target):
         room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
-    for item in (diamond, trash, shell):
+    for item in (diamond, trash, shell, pebble):
         character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
 
     for target, item in (
         (loved_target, diamond),
         (disliked_target, trash),
         (plain_target, shell),
+        (neutral_target, pebble),
     ):
         result = GiveGiftHandler().execute(
             ctx,
@@ -2254,6 +2284,7 @@ def test_gift_preferences_apply_loved_disliked_and_plain_item_deltas():
     assert loved_target.get_component(FriendshipComponent).points == 20.0
     assert disliked_target.get_component(FriendshipComponent).points == -100.0
     assert plain_target.get_component(FriendshipComponent).points == 5.0
+    assert neutral_target.get_component(FriendshipComponent).points == 5.0
     assert container_of(shell) == plain_target.id
 
 
@@ -3346,3 +3377,310 @@ def test_gardensim_fragments_cover_catalogue_state_variants():
     assert "Nearby museum collection: 1 donations." in fragments
     assert "Nearby reward: seed x3." in fragments
     assert "Collection entries: opal, leek." in fragments
+
+
+def test_collection_component_first_person_fragment_empty_when_no_entries():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # First-person view but no entries -> empty fragment (line 396 guard true).
+    ctx = ComponentPromptContext.for_entity(world, character, target=character)
+    assert CollectionComponent(entries=()).prompt_fragments(ctx) == ()
+
+
+def test_inspect_crop_notes_omit_absent_pests_and_weeds_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    # Crop with neither pests nor weeds: both note branches are skipped
+    # (1341 -> 1343 and 1343 -> 1345 false).
+    soil = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="clean bed", kind="soil"),
+            SoilComponent(),
+            CropComponent(crop_type="turnip", planted_at_epoch=0, stage=1),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
+
+    result = InspectCropHandler().execute(
+        ctx, _handler_cmd(scenario, "inspect", soil_id=str(soil.id))
+    )
+    assert result.ok
+    assert soil.get_component(CropInspectionComponent).notes == "turnip stage 1"
+
+
+def test_weed_and_treat_without_quality_component_skip_quality_bump_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    # Soil has weeds and pests but no CropQualityComponent: the quality bump is skipped
+    # (1375 -> 1378 and 1407 -> 1410 false).
+    soil = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="rough bed", kind="soil"),
+            SoilComponent(),
+            CropComponent(crop_type="turnip", planted_at_epoch=0),
+            WeedComponent(),
+            PestComponent(),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
+
+    assert WeedCropHandler().execute(
+        ctx, _handler_cmd(scenario, "weed-crop", soil_id=str(soil.id))
+    ).ok
+    assert TreatPestsHandler().execute(
+        ctx, _handler_cmd(scenario, "treat-pests", soil_id=str(soil.id))
+    ).ok
+    assert not soil.has_component(WeedComponent)
+    assert not soil.has_component(PestComponent)
+    assert not soil.has_component(CropQualityComponent)
+
+
+def test_weed_treat_repair_reject_unparseable_character_id_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # Unparseable character id short-circuits each handler (lines 1366, 1398, 1815).
+    assert (
+        WeedCropHandler()
+        .execute(ctx, _handler_cmd(scenario, "weed-crop", character_id="bad", soil_id="entity_1"))
+        .reason
+        == "invalid character or soil id"
+    )
+    assert (
+        TreatPestsHandler()
+        .execute(
+            ctx, _handler_cmd(scenario, "treat-pests", character_id="bad", soil_id="entity_1")
+        )
+        .reason
+        == "invalid character or soil id"
+    )
+    assert (
+        RepairMachineHandler()
+        .execute(
+            ctx,
+            _handler_cmd(scenario, "repair-machine", character_id="bad", machine_id="entity_1"),
+        )
+        .reason
+        == "invalid character or machine id"
+    )
+
+
+def test_start_machine_rejects_broken_machine_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    # Broken machine is rejected before the busy check (line 1675).
+    machine = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="cracked keg", kind="machine"),
+            MachineComponent(machine_type="keg"),
+            MachineBreakdownComponent(),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), machine.id)
+
+    result = StartMachineHandler().execute(
+        ctx, _handler_cmd(scenario, "start-machine", machine_id=str(machine.id), recipe_id="juice")
+    )
+    assert result.ok is False
+    assert result.reason == "machine is broken"
+
+
+def test_repair_intact_machine_skips_breakdown_removal_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    # Machine without a breakdown component: the removal branch is skipped (1828 -> 1830).
+    machine = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="sturdy keg", kind="machine"),
+            MachineComponent(machine_type="keg", quality=0.2),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), machine.id)
+
+    result = RepairMachineHandler().execute(
+        ctx, _handler_cmd(scenario, "repair-machine", machine_id=str(machine.id))
+    )
+    assert result.ok
+    assert machine.get_component(MachineComponent).quality == 0.8
+
+
+def test_claim_mail_and_complete_quest_without_reward_skip_spawn_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    # Mail with no reward: the spawn branch is skipped (2380 -> 2387).
+    mail = spawn_entity(
+        world,
+        [IdentityComponent(name="plain note", kind="mail"), MailComponent(subject="Hi")],
+    )
+    # Quest with no reward and no requirements: reward spawn skipped (2436 -> 2443).
+    quest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="easy task", kind="quest"),
+            FarmQuestComponent(quest_id="easy", requested={}),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), mail.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), quest.id)
+
+    assert ClaimMailHandler().execute(
+        ctx, _handler_cmd(scenario, "claim-mail", mail_id=str(mail.id))
+    ).ok
+    assert mail.get_component(MailComponent).claimed is True
+
+    assert CompleteFarmQuestHandler().execute(
+        ctx, _handler_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id))
+    ).ok
+    assert quest.get_component(FarmQuestComponent).completed is True
+
+
+def test_complete_farm_quest_rejects_unreachable_quest_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    other_room = world.get_entity(scenario.room_b)
+    quest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="far task", kind="quest"),
+            FarmQuestComponent(quest_id="far", requested={}),
+        ],
+    )
+    # In another room -> not reachable (line 2414).
+    other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), quest.id)
+
+    result = CompleteFarmQuestHandler().execute(
+        ctx, _handler_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id))
+    )
+    assert result.ok is False
+    assert result.reason == "quest is not reachable"
+
+
+def test_ship_and_donate_skip_collection_event_for_known_entry_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    # Resource is already in the character's collection, so no CollectionUpdatedEvent is
+    # appended on ship (2505 -> 2515) or donate (2556 -> 2566).
+    replace_component(character, CollectionComponent(entries=("ruby",)))
+    shipping_bin = spawn_entity(
+        world,
+        [IdentityComponent(name="bin", kind="shipping"), ShippingBinComponent()],
+    )
+    museum = spawn_entity(
+        world,
+        [IdentityComponent(name="museum", kind="museum"), MuseumCollectionComponent()],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), shipping_bin.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), museum.id)
+    for _ in range(2):
+        stack = spawn_entity(
+            world,
+            [
+                IdentityComponent(name="ruby", kind="resource"),
+                ResourceStackComponent(resource_type="ruby", quantity=1),
+                PortableComponent(can_pick_up=True),
+            ],
+        )
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), stack.id)
+
+    ship_result = ShipItemsHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "ship-items",
+            bin_id=str(shipping_bin.id),
+            resource_type="ruby",
+            quantity=1,
+            unit_price=2,
+        ),
+    )
+    assert ship_result.ok
+    assert not any(isinstance(e, CollectionUpdatedEvent) for e in ship_result.events)
+
+    donate_result = DonateMuseumHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "donate-museum", museum_id=str(museum.id), resource_type="ruby"),
+    )
+    assert donate_result.ok
+    assert not any(isinstance(e, CollectionUpdatedEvent) for e in donate_result.events)
+
+
+def test_record_collection_returns_false_for_existing_entry_directly():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    replace_component(character, CollectionComponent(entries=("ruby",)))
+    from bunnyland.mechanics.gardensim import _record_collection
+
+    # Entry already present -> returns False without changing the collection (line 819).
+    assert _record_collection(world, character, "ruby") is False
+    assert character.get_component(CollectionComponent).entries == ("ruby",)
+    # A new entry returns True and is recorded.
+    assert _record_collection(world, character, "opal") is True
+    assert "opal" in character.get_component(CollectionComponent).entries
+
+
+def test_animal_birth_skips_when_not_due_and_handles_uncontained_parent_directly():
+    from bunnyland.mechanics.gardensim import AnimalBirthConsequence
+
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    # Breeding not yet due -> skipped (line 1055).
+    not_due = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="pending cow", kind="animal"),
+            FarmAnimalComponent(species="cow"),
+            AnimalBreedingComponent(due_epoch=DAY * 2),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), not_due.id)
+    # Due but the parent is not in any room: offspring is created without a room link
+    # (1068 -> 1072 false).
+    uncontained = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="loose cow", kind="animal"),
+            FarmAnimalComponent(species="cow"),
+            AnimalBreedingComponent(due_epoch=0, offspring_species="cow"),
+        ],
+    )
+    assert container_of(uncontained) is None
+
+    events = AnimalBirthConsequence().process(world, DAY)
+
+    assert any(isinstance(e, AnimalBornEvent) for e in events)
+    assert not_due.has_component(AnimalBreedingComponent)
+    assert not uncontained.has_component(AnimalBreedingComponent)
+    born = next(
+        entity
+        for entity in world.query().with_all([FarmAnimalComponent]).execute_entities()
+        if entity.get_component(IdentityComponent).name == "baby cow"
+    )
+    assert container_of(born) is None

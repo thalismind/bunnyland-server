@@ -100,3 +100,20 @@ async def test_building_sits_under_a_neighborhood_region():
 def test_apartment_demo_is_registered():
     registry = collect_generators(bunnyland_plugins())
     assert registry.get("apartment-demo") is APARTMENT_DEMO
+
+
+async def test_backstory_without_emoji_skips_editor_display():
+    from bunnyland.core.components import DescriptionComponent, EditorDisplayComponent
+    from bunnyland.core.ecs import spawn_entity
+    from bunnyland.worldgen.apartment import _backstory
+
+    actor = WorldActor()
+    entity = spawn_entity(actor.world, [DescriptionComponent(short="x", long="y")])
+
+    _backstory(actor, entity.id, short="a courtly rat", long="once a janitor")
+
+    refreshed = actor.world.get_entity(entity.id)
+    # The description is replaced...
+    assert refreshed.get_component(DescriptionComponent).short == "a courtly rat"
+    # ...but with no emoji given, no editor icon is attached.
+    assert not refreshed.has_component(EditorDisplayComponent)

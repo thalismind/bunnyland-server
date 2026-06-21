@@ -410,6 +410,27 @@ def test_worldgen_hook_preserves_explicit_renderable_parts():
     assert entity.get_component(SpritePosition).x == 22.0
 
 
+def test_worldgen_hook_keeps_existing_character_position():
+    scenario = build_scenario()
+    actor = scenario.actor
+    hook = toonsim.ToonWorldgenHook()
+    hook.actor = actor
+    character = actor.world.get_entity(scenario.character)
+    character.add_component(SpritePosition(x=42.0, y=24.0))
+
+    hook._on_character(
+        SimpleNamespace(
+            entity_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            character_key="juniper",
+        )
+    )
+
+    # Already-positioned character is left where it sits (430->exit false branch).
+    assert character.get_component(SpritePosition).x == 42.0
+    assert character.get_component(SpritePosition).y == 24.0
+
+
 def _move_sprite(scenario, **payload):
     return build_submitted_command(
         character_id=str(scenario.character),
@@ -546,6 +567,23 @@ def test_move_sprite_rejects_entity_without_sprite_bounds():
     result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     assert result.reason == "character has no sprite bounds"
+
+
+def test_move_sprite_preserves_existing_character_bounds():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(SpriteBounds(width=3.0, height=7.0, solid=True))
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+
+    # The character already has bounds, so they are reused unchanged (477->479).
+    assert result.ok is True
+    bounds = world.get_entity(scenario.character).get_component(SpriteBounds)
+    assert bounds.width == 3.0
+    assert bounds.height == 7.0
+    assert world.get_entity(scenario.character).get_component(SpritePosition).x == 40.0
 
 
 async def test_move_sprite_rejects_bad_payload():

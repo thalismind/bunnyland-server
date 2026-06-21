@@ -1650,6 +1650,33 @@ def test_persona_contradiction_guard_covers_relationship_line_shapes():
     assert persona_contradictions(context, ToolCall("wait", {})) == ()
 
 
+def test_persona_contradiction_guard_ignores_consistent_relationship_speech():
+    # Persona declares relationship, partnership, and bond lines, but the spoken text
+    # affirms them rather than denying — every relationship branch matches its regex yet
+    # appends no issue (the no-contradiction arc of each shape).
+    scenario = build_scenario()
+    context = PromptBuilder(scenario.actor.world).build(scenario.character)
+    context = replace(
+        context,
+        persona=(
+            *context.persona,
+            "Hazel is your friend.",
+            "You are partners with Hazel.",
+            "You know Hazel.",
+        ),
+    )
+
+    issues = persona_contradictions(
+        context,
+        ToolCall(
+            "say",
+            {"text": "Hazel is my friend, my partner, and someone I know well."},
+        ),
+    )
+
+    assert issues == ()
+
+
 async def test_dispatch_flags_persona_contradiction_without_blocking_valid_action():
     scenario = build_scenario()
     scenario.actor.register_handler(SayHandler())
@@ -1768,6 +1795,35 @@ def test_resolve_reference_matches_names_case_insensitively():
     assert resolve_reference(str(journal), candidates, world=world) == str(journal)
     # no match -> returned unchanged so the handler rejects it observably
     assert resolve_reference("dragon", candidates, world=world) == "dragon"
+    # blank/whitespace-only query -> returned unchanged without matching anything
+    assert resolve_reference("   ", candidates, world=world) == "   "
+    assert resolve_reference("", candidates, world=world) == ""
+
+
+def test_name_candidates_skips_roomless_and_unnameable_entities():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    # An entity in the room with neither an identity nor a room component is reachable but
+    # contributes no candidate (the neither-name-nor-title branch).
+    blank = spawn_entity(world, [PortableComponent(can_pick_up=True)])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), blank.id
+    )
+    journal = _add_item(scenario, "marsh journal")
+    candidates = name_candidates(world, character)
+    candidate_ids = {entity_id for _name, entity_id in candidates}
+    assert journal in candidate_ids
+    assert blank not in candidate_ids
+
+    # A roomless character (no containing room) skips the exit-expansion block entirely and
+    # still yields no crash — only its own inventory would appear, here empty.
+    loner = spawn_entity(
+        world, [CharacterComponent(), IdentityComponent(name="Loner", kind="character")]
+    )
+    assert container_of(world.get_entity(loner.id)) is None
+    assert name_candidates(world, world.get_entity(loner.id)) == []
 
 
 def test_resolve_reference_args_reports_unresolved_with_suggestions():
@@ -1992,6 +2048,18 @@ async def test_dispatch_does_not_reprompt_a_character_with_a_pending_decision():
 
     dispatch.cancel_pending()
     assert scenario.actor._inbox.empty()
+
+
+async def test_await_pending_returns_empty_when_no_decisions_are_in_flight():
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])
+    )
+
+    # Nothing has been scheduled, so the no-tasks arc returns immediately with no decisions
+    # and never reaches asyncio.gather.
+    assert dispatch._inflight == {}
+    assert await dispatch.await_pending() == []
 
 
 async def test_dispatch_rebuilds_prompt_from_latest_state_after_a_response():

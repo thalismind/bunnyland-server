@@ -434,6 +434,52 @@ def test_world_model_empty_and_missing_lookup_fallbacks():
     assert world.target_candidates("missing", "unknown") == []
 
 
+def test_parse_client_view_without_room_keeps_character_only():
+    # A client view whose room is empty (no id) routes through _parse_client_view but skips
+    # all room/containment synthesis: only the character entity is materialized.
+    view = {
+        "world_epoch": 7,
+        "character_id": PLAYER,
+        "character_name": "Pib",
+        "room": {},
+        "points": {"action": 1, "action_max": 2, "focus": 0, "focus_max": 1},
+    }
+    world = World.parse(view)
+    assert set(world.entities) == {PLAYER}
+    assert world.get(PLAYER) is not None
+    assert world.rooms() == []
+    assert world.room_of(PLAYER) is None
+
+
+def test_carried_skips_relationship_targets_missing_from_snapshot():
+    # A Holding edge whose target is absent from the snapshot (a dangling reference) is
+    # skipped rather than surfacing a None entry in the carried list.
+    snapshot = {
+        "world_epoch": 0,
+        "entities": [
+            {
+                "id": PLAYER,
+                "components": {"CharacterComponent": {}},
+                "relationships": {
+                    "Holding": [
+                        {"target_id": KEY},
+                        {"target_id": "item:ghost"},
+                    ]
+                },
+            },
+            {
+                "id": KEY,
+                "components": {"PortableComponent": {}},
+                "relationships": {},
+            },
+        ],
+    }
+    world = World.parse(snapshot)
+    carried = world.carried(PLAYER)
+    assert [e["id"] for e in carried] == [KEY]
+    assert world.get("item:ghost") is None
+
+
 def test_entity_presentation_fallbacks():
     room = {"id": "room:missing-title", "components": {"RoomComponent": {}}, "relationships": {}}
     door = {"id": "door:1", "components": {"DoorComponent": {}}, "relationships": {}}
@@ -1772,14 +1818,21 @@ async def test_refresh_world_returns_quietly_when_status_widget_is_absent():
     # refresh_world tolerates the status widget being gone (e.g. mid-teardown): both the
     # error path and the success path swallow NoMatches and return instead of crashing.
     def hide_status(app):
-        real = app.query_one
+        # _main_query_one falls back to the screen stack, so #status must miss on the app
+        # *and* on every mounted screen for the refresh guards to fire.
+        def patch(obj):
+            real = obj.query_one
 
-        def query_one(selector, *args, **kwargs):
-            if selector == "#status":
-                raise NoMatches("#status")
-            return real(selector, *args, **kwargs)
+            def query_one(selector, *args, **kwargs):
+                if selector == "#status":
+                    raise NoMatches("#status")
+                return real(selector, *args, **kwargs)
 
-        app.query_one = query_one  # type: ignore[method-assign]
+            obj.query_one = query_one  # type: ignore[method-assign]
+
+        patch(app)
+        for screen in app.get_screen_stack():
+            patch(screen)
 
     # Error path: the backend fails and the status update finds no widget.
     failing = FlakyBackend(_snapshot())

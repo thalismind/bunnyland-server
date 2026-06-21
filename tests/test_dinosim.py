@@ -209,6 +209,7 @@ from bunnyland.mechanics.dinosim import (
     _entity_name,
     _entity_room_id,
     _hatch_room_id,
+    _move_to_room,
     _payload_entity_id,
     _reachable_creature,
     _region_for_room,
@@ -4127,3 +4128,165 @@ def test_hatch_egg_with_egg_having_no_room_container():
     assert result.ok, result.reason
     hatched = [e for e in result.events if e.__class__.__name__ == "EggHatchedEvent"]
     assert hatched
+
+
+def test_generate_kaiju_spawn_specs_uses_single_group_for_small_budget():
+    # Budgets under 10 yield a single kaiju (the elif branch is not taken).
+    specs = generate_kaiju_spawn_specs(6, "small")
+    assert len(specs) == 1
+    assert specs[0].threat_level == 6
+    assert specs == generate_kaiju_spawn_specs(6, "small")
+
+
+def test_region_for_room_skips_non_region_and_non_region_sources():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = spawn_entity(world, [RoomComponent(title="den")])
+    # A non-region incoming containment edge must be ignored (mode guard).
+    holder = spawn_entity(world, [IdentityComponent(name="holder", kind="prop")])
+    holder.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), room.id)
+    # A REGION-mode incoming edge from a source that is not a region must be skipped.
+    pseudo_region = spawn_entity(world, [IdentityComponent(name="cluster", kind="prop")])
+    pseudo_region.add_relationship(Contains(mode=ContainmentMode.REGION), room.id)
+
+    assert _region_for_room(world, room) is None
+
+    # Add a genuine region above the same room: it is now resolved.
+    region = spawn_entity(world, [RegionComponent(name="Glade")])
+    region.add_relationship(Contains(mode=ContainmentMode.REGION), room.id)
+    found = _region_for_room(world, room)
+    assert found is not None and found.id == region.id
+
+
+def test_region_rooms_tolerates_cycles_between_regions():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    region = spawn_entity(world, [RegionComponent(name="loop")])
+    other = spawn_entity(world, [RegionComponent(name="loop-back")])
+    room = spawn_entity(world, [RoomComponent(title="shared")])
+    region.add_relationship(Contains(mode=ContainmentMode.REGION), other.id)
+    # Cycle back to the first region; the seen-set must stop the walk re-visiting it.
+    other.add_relationship(Contains(mode=ContainmentMode.REGION), region.id)
+    other.add_relationship(Contains(mode=ContainmentMode.REGION), room.id)
+
+    rooms = _region_rooms(world, region)
+    assert [r.id for r in rooms] == [room.id]
+
+
+def test_move_to_room_handles_entity_without_a_container():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    # An entity that lives in no container at all (parent_id is None).
+    loose = spawn_entity(world, [IdentityComponent(name="drifter", kind="creature")])
+    assert container_of(loose) is None
+
+    _move_to_room(world, loose, scenario.room_a)
+
+    assert container_of(loose) == scenario.room_a
+    room = world.get_entity(scenario.room_a)
+    assert loose.id in {target for _edge, target in room.get_relationships(Contains)}
+
+
+def _roomless_character(scenario):
+    character = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Wanderer", kind="character"), CharacterComponent()],
+    )
+    return character.id
+
+
+def test_lay_egg_skips_placement_when_no_room_is_available():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A roomless creature-character laying its own egg: neither the parent nor the
+    # actor has a containing room, so the egg is spawned without a room.
+    parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="brooder", kind="character"),
+            CharacterComponent(),
+            DinosaurComponent(species_name="raptor"),
+            ReptileProcreationComponent(),
+        ],
+    )
+    assert container_of(parent) is None
+
+    result = LayEggHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario, "lay-egg", character_id=str(parent.id), parent_id=str(parent.id)
+        ),
+    )
+
+    assert result.ok, result.reason
+    laid = [e for e in result.events if e.__class__.__name__ == "EggLaidEvent"]
+    assert laid and laid[0].room_id is None
+    # The egg exists but is not contained in any room.
+    egg_ids = [
+        parse_entity_id(t)
+        for t in laid[0].target_ids
+        if parse_entity_id(t) is not None and parse_entity_id(t) != parent.id
+    ]
+    assert egg_ids
+    assert all(container_of(scenario.actor.world.get_entity(eid)) is None for eid in egg_ids)
+
+
+def test_hatch_egg_skips_placement_when_no_room_is_available():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character_id = _roomless_character(scenario)
+    # Egg carried by the roomless character and ready to hatch.
+    egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ready egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True),
+            IncubationComponent(started_at_epoch=0, ready=True),
+        ],
+    )
+    scenario.actor.world.get_entity(character_id).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), egg.id
+    )
+
+    result = HatchEggHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario, "hatch-egg", character_id=str(character_id), egg_id=str(egg.id)
+        ),
+    )
+
+    assert result.ok, result.reason
+    hatched = [e for e in result.events if e.__class__.__name__ == "EggHatchedEvent"]
+    assert hatched and hatched[0].room_id is None
+
+
+def test_drive_off_predator_rejects_creature_without_a_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A roomless character that is itself a creature: reachable (it is itself) but
+    # has no containing room, so drive-off cannot relocate it.
+    creature = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="feral drifter", kind="creature"),
+            CharacterComponent(),
+            DinosaurComponent(species_name="raptor"),
+        ],
+    )
+    assert container_of(creature) is None
+
+    result = DriveOffPredatorHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "drive-off-predator",
+            character_id=str(creature.id),
+            creature_id=str(creature.id),
+        ),
+    )
+
+    assert not result.ok
+    assert result.reason == "creature is not in a room"

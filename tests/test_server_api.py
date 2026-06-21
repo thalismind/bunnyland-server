@@ -1210,9 +1210,16 @@ def test_room_description_prefers_long_then_short_description(scenario):
         ],
     )
 
+    # Has a DescriptionComponent but both long and short are empty (branch 115->117).
+    empty = spawn_entity(
+        world,
+        [RoomComponent(title="Empty Room"), DescriptionComponent(short="", long="")],
+    )
+
     assert _room_description(bare) == "Bare Room"
     assert _room_description(short) == "Short Room - brief"
     assert _room_description(long) == "Long Room - detailed"
+    assert _room_description(empty) == "Empty Room"
 
 
 def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
@@ -2687,6 +2694,51 @@ def test_worldgen_builder_selects_ollama_world_agent(monkeypatch):
     }
 
 
+def test_patch_helpers_reject_missing_entity_and_unknown_types_directly(scenario):
+    # The _apply_* helpers carry defense-in-depth guards that duplicate the preflight
+    # checks; exercise them directly (bypassing preflight) to confirm their behavior.
+    from bunnyland.server.models import (
+        RemoveComponentPatchRequest,
+        RemoveEdgePatchRequest,
+    )
+    from bunnyland.server.patches import (
+        _apply_remove_component,
+        _apply_remove_edge,
+        _entity_id,
+    )
+
+    # _entity_id raises for an entity that does not exist (patches.py:47).
+    with pytest.raises(WorldPatchError, match="entity 'entity_999' does not exist"):
+        _entity_id(scenario.actor, "entity_999")
+
+    # remove_component with an unknown component type (patches.py:260).
+    with pytest.raises(WorldPatchError, match="unknown component 'NoSuchComponent'"):
+        _apply_remove_component(
+            scenario.actor,
+            RemoveComponentPatchRequest(
+                op="remove_component",
+                entity_id=str(scenario.character),
+                component_type="NoSuchComponent",
+            ),
+            set(),
+            {},
+        )
+
+    # remove_edge with an unknown edge type (patches.py:287).
+    with pytest.raises(WorldPatchError, match="unknown edge 'NoSuchEdge'"):
+        _apply_remove_edge(
+            scenario.actor,
+            RemoveEdgePatchRequest(
+                op="remove_edge",
+                source_id=str(scenario.room_a),
+                target_id=str(scenario.room_b),
+                edge_type="NoSuchEdge",
+            ),
+            set(),
+            {},
+        )
+
+
 def test_world_patch_updates_component_and_edge(scenario):
     response = apply_world_patch(
         scenario.actor,
@@ -3382,6 +3434,19 @@ def test_worldgen_room_selection_uses_short_description_fallback(scenario):
     assert context.room.description == "short room"
 
 
+def test_worldgen_room_selection_prefers_long_description(scenario):
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(DescriptionComponent(short="short room", long="a long vivid room"))
+
+    context = collect_room_selection_context(
+        scenario.actor,
+        WorldCharacterGenerationRequest(room_entity_id=str(scenario.room_a)),
+    )
+
+    # Long is present, so the short fallback is skipped (branch 194->196).
+    assert context.room.description == "a long vivid room"
+
+
 def test_worldgen_room_selection_rejects_non_room_entity(scenario):
     with pytest.raises(WorldPatchError, match="is not a room"):
         collect_room_selection_context(
@@ -3517,6 +3582,39 @@ def test_worldgen_room_response_can_generate_locked_hidden_doors(scenario):
     assert generated_door.components[2].type == "LockableComponent"
     exit_edge = response.patch.operations[1].edge.fields
     assert exit_edge["locked"] is True
+
+
+def test_worldgen_room_generation_response_includes_generated_characters(scenario):
+    door = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="north door", kind="door"), DoorComponent(open=False)],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        door.id,
+    )
+    context = collect_room_expansion_context(
+        scenario.actor,
+        WorldRoomGenerationRequest(door_entity_id=str(door.id), prompt="north"),
+    )
+
+    proposal = CharacterProposal(name="Wandering Hare")
+    response = build_room_generation_response(
+        context,
+        room=RoomNodeProposal(title="Glade"),
+        contents=RoomContentsProposal(characters=[proposal]),
+        doors=[DoorProposal(direction="north")],
+        epoch=scenario.actor.epoch,
+    )
+
+    # The character loop assigns the generator key and emits operations (lines 474-475).
+    assert proposal.key == "generated_character_0"
+    character_ops = [
+        op
+        for op in response.patch.operations
+        if op.op == "add_entity" and op.client_id == "$generated_character_0"
+    ]
+    assert len(character_ops) == 1
 
 
 async def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):

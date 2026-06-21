@@ -483,8 +483,7 @@ def creator_fragments(world: World, character: Entity) -> list[str]:
 
     fragments: list[str] = []
     for artifact_id in sorted(reachable_ids(world, character), key=str):
-        if not world.has_entity(artifact_id):
-            continue
+        # reachable_ids only returns live ids, so the entity is always present here.
         artifact = world.get_entity(artifact_id)
         if not artifact.has_component(CreatorSignatureComponent):
             continue
@@ -508,8 +507,7 @@ def mark_fragments(world: World, character: Entity) -> list[str]:
 
     fragments: list[str] = []
     for target_id in sorted(reachable_ids(world, character), key=str):
-        if not world.has_entity(target_id):
-            continue
+        # reachable_ids only returns live ids, so the entity is always present here.
         target_name = entity_name(world.get_entity(target_id))
         for mark_entity, mark in marks_on(world, target_id):
             author = _name(world, mark.author_id) if mark.author_id else "someone"

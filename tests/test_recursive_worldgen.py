@@ -109,6 +109,30 @@ async def test_no_duplicate_exit_overwrites_on_link():
             assert world.has_entity(target)
 
 
+async def test_connect_is_idempotent_and_does_not_clobber_existing_exit():
+    # A second _connect for an already-connected pair must skip rather than overwrite
+    # the first edge (Relics keys edges by (type, target)).
+    actor = WorldActor()
+    gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=2)
+    async with actor._lock:
+        a = gen._spawn_room("a", RoomNodeProposal(title="Hall A"))
+        b = gen._spawn_room("b", RoomNodeProposal(title="Hall B"))
+        gen._connect(a, b, DoorProposal(direction="north", bidirectional=False))
+        # Re-connect with a different direction: the guard must keep the original edge.
+        gen._connect(a, b, DoorProposal(direction="south", bidirectional=False))
+
+    exits = _exits(actor.world, gen.result.rooms["a"])
+    assert exits == {"north": gen.result.rooms["b"]}
+    assert "south" not in exits
+
+
+async def test_stub_builder_proposes_contents_only_for_chests():
+    builder = StubWorldAgent()
+    assert await builder.propose_container_contents(name="a battered chest")
+    # A non-chest container yields nothing.
+    assert await builder.propose_container_contents(name="a wicker basket") == []
+
+
 class _DuplicateRoomTitleAgent(StubWorldAgent):
     def __init__(self) -> None:
         self._door_calls = 0
@@ -437,6 +461,21 @@ async def test_openrouter_world_agent_parses_json_response(monkeypatch):
     assert agent._client.kwargs == {"api_key": "key"}
     assert agent._client.chat.calls[0]["model"] == "openai/gpt-4.1"
     assert agent._client.chat.calls[0]["response_format"] == {"type": "json_object"}
+
+
+async def test_openrouter_world_agent_forwards_server_url(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterWorldAgent(
+        model="openai/gpt-4.1", api_key="key", server_url="https://router.example"
+    )
+
+    assert agent._client.kwargs == {
+        "api_key": "key",
+        "server_url": "https://router.example",
+    }
 
 
 async def test_openrouter_world_agent_preserves_history(monkeypatch):

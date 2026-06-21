@@ -745,6 +745,7 @@ async def _call_provider_with_retries(
     max_retries: int,
     retry_delay_seconds: float,
 ):
+    last_exc: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
             with telemetry.span(
@@ -754,26 +755,25 @@ async def _call_provider_with_retries(
         except Exception as exc:
             if not _is_transient_provider_error(exc):
                 raise
-            if attempt >= max_retries:
+            last_exc = exc
+            if attempt < max_retries:
                 logger.warning(
-                    "%s provider failed after %s attempt%s; character will wait: %s",
+                    "%s provider transient error on attempt %s/%s; retrying: %s",
                     provider,
                     attempt + 1,
-                    "" if attempt == 0 else "s",
+                    max_retries + 1,
                     exc,
                 )
-                return None
-            logger.warning(
-                "%s provider transient error on attempt %s/%s; retrying: %s",
-                provider,
-                attempt + 1,
-                max_retries + 1,
-                exc,
-            )
-            if retry_delay_seconds > 0:
-                await asyncio.sleep(retry_delay_seconds)
-    # Unreachable: ``range(max_retries + 1)`` always has >=1 element (max_retries is clamped
-    # to >=0), and the final iteration always returns or raises.
+                if retry_delay_seconds > 0:
+                    await asyncio.sleep(retry_delay_seconds)
+    logger.warning(
+        "%s provider failed after %s attempt%s; character will wait: %s",
+        provider,
+        max_retries + 1,
+        "" if max_retries == 0 else "s",
+        last_exc,
+    )
+    return None
 
 
 def _message_to_history(message) -> dict:

@@ -33,6 +33,8 @@ from bunnyland.llm_agents import (
     script_names,
 )
 from bunnyland.llm_agents.behavior_tree import (
+    ACTION_LIBRARY,
+    CONDITION_LIBRARY,
     Action,
     BehaviorTree,
     BehaviorTreeAgent,
@@ -42,9 +44,13 @@ from bunnyland.llm_agents.behavior_tree import (
     Sequence,
     Status,
     _greet_first_character,
+    _has_open_exit,
     _move_first_exit,
+    _say_action,
     _take_first_item,
     _warn_first_character,
+    register_action,
+    register_condition,
 )
 from bunnyland.prompts.builder import PromptBuilder, PromptContext
 from bunnyland.scripting.runtime import ScriptRuntime
@@ -218,6 +224,24 @@ def test_leaf_choosers_wait_when_their_command_is_unavailable():
     assert _warn_first_character(_bare_context(visible_characters=("Hazel",))) is None
 
 
+def test_has_open_exit_reflects_unlocked_exits():
+    # No exits -> no open exit; a plain exit is open; a fully-locked exit is not.
+    assert _has_open_exit(_bare_context(exits=())) is False
+    assert _has_open_exit(_bare_context(exits=("north to Meadow",))) is True
+    assert _has_open_exit(_bare_context(exits=("north to Vault (locked)",))) is False
+
+
+def test_say_action_waits_when_say_command_unavailable():
+    chooser = _say_action({"text": "hello there", "intent": "praise", "approach": "friendly"})
+    # 'say' is not in the available commands -> the chooser declines to act.
+    assert chooser(_bare_context(commands=())) is None
+    # With the command available it emits the say call verbatim.
+    call = chooser(_bare_context(commands=("say something to the room",)))
+    assert call == ToolCall(
+        "say", {"text": "hello there", "intent": "praise", "approach": "friendly"}
+    )
+
+
 # -- registries ---------------------------------------------------------------------------
 
 
@@ -239,6 +263,17 @@ def test_script_registry_round_trip_and_unknown():
     assert "wait" in script_names()
     with pytest.raises(ValueError, match="unknown script"):
         resolve_script("no-such-script")
+
+
+def test_register_condition_makes_factory_available():
+    register_condition("always-test-true", lambda _params: lambda _ctx: True)
+    assert CONDITION_LIBRARY["always-test-true"]({})(_bare_context()) is True
+
+
+def test_register_action_makes_factory_available():
+    call = ToolCall("move", {"direction": "north"})
+    register_action("fixed-test-move", lambda _params: lambda _ctx: call)
+    assert ACTION_LIBRARY["fixed-test-move"]({})(_bare_context()) == call
 
 
 # -- scripted agent replay ----------------------------------------------------------------
@@ -310,6 +345,24 @@ async def test_dispatch_loops_scripted_controller():
 
     assert (await dispatch.run_once())[0].tool == "move"
     assert (await dispatch.run_once())[0].tool == "move"
+
+
+async def test_dispatch_reuses_cached_behavior_agent_across_ticks():
+    scenario = build_scenario()
+    _assign(scenario, BehaviorControllerComponent(behavior_name="wanderer"))
+    dispatch = ControllerDispatch(
+        scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])
+    )
+
+    await dispatch.run_once()
+    first_agent = dispatch._behavior_agents["wanderer"]
+    await dispatch.run_once()
+    second_agent = dispatch._behavior_agents["wanderer"]
+
+    # The behavior agent is built once and then served from cache (the agent-not-None arc),
+    # so the same instance drives every tick.
+    assert first_agent is second_agent
+    assert list(dispatch._behavior_agents) == ["wanderer"]
 
 
 async def test_dispatch_throttles_behavioral_controller_by_act_every_ticks():

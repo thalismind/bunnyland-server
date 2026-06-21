@@ -59,6 +59,7 @@ from bunnyland.core.edges import ControlledBy
 from bunnyland.core.events import (
     ActionPointsChangedEvent,
     AttentionShiftedEvent,
+    CommandCancelledEvent,
     CommandExecutedEvent,
     CommandExpiredEvent,
     CommandRejectedEvent,
@@ -936,3 +937,37 @@ def test_entity_id_from_string_rejects_unknown_id():
     scenario = build_scenario()
     with pytest.raises(KeyError):
         _entity_id_from_string(scenario.actor.world, "not-a-real-entity")
+
+
+async def test_submit_rejects_command_for_missing_character_synchronously():
+    scenario = build_scenario()
+    rejected = collect(scenario.actor, CommandRejectedEvent)
+
+    outcome = await scenario.actor.submit(_command(scenario, character_id="entity_999999"))
+
+    # _validate_submission rejects before queueing: never enters the inbox, emits a
+    # synchronous rejection with the missing-character reason.
+    assert outcome.accepted is False
+    assert outcome.reason == "character does not exist"
+    assert scenario.actor._inbox.empty()
+    assert rejected[-1].reason == "character does not exist"
+
+
+async def test_cancel_command_removes_a_queued_command_from_the_inbox():
+    scenario = build_scenario()
+    cancelled = collect(scenario.actor, CommandCancelledEvent)
+    command = _command(scenario, command_id="inbox-cancel-me")
+
+    outcome = await scenario.actor.submit(command)
+    assert outcome.accepted is True
+    assert not scenario.actor._inbox.empty()
+
+    removed = await scenario.actor.cancel_command(
+        str(scenario.character), "inbox-cancel-me"
+    )
+
+    # The command is pulled out of the inbox (before any tick ingests it) and a
+    # cancellation event is published for the removed command.
+    assert removed is command
+    assert scenario.actor._inbox.empty()
+    assert [event.command_id for event in cancelled] == ["inbox-cancel-me"]

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import bunnyland.server.action_search as action_search_module
 from bunnyland.core.actions import (
     ActionArgument,
     ActionDefinition,
     ActionExample,
     ActionPattern,
 )
-from bunnyland.server.action_search import ActionSearchEmbedding, ChromaActionSearchIndex
+from bunnyland.server.action_search import (
+    ActionSearchEmbedding,
+    ChromaActionSearchIndex,
+    _tokens,
+    smart_action_search,
+)
 
 
 def test_action_search_embedding_is_deterministic_and_chroma_compatible():
@@ -96,3 +102,44 @@ def test_chroma_action_search_index_populates_and_reuses_catalogue_collection():
     ]
     assert "look at {target_id}" in "\n".join(client.collection.documents)
     assert client.collection_names[0].startswith("bunnyland-action-verbs-")
+
+
+def test_tokens_skips_non_alias_token_in_the_middle_of_text():
+    # "look" aliases to itself (alias == token) so it adds no synonym, and it is
+    # followed by another token, exercising the loop-continue branch (52->49).
+    tokens = _tokens("look gizmo north")
+
+    assert tokens == ["look", "gizmo", "north", "move"]
+    # "look" added no alias (alias == token), "gizmo" has no alias, "north" -> "move".
+    assert tokens.count("look") == 1
+
+
+def test_smart_action_search_reuses_the_module_level_index():
+    definitions = (
+        ActionDefinition(
+            command_type="move",
+            title="Move",
+            description="Travel through an exit.",
+            natural_patterns=(ActionPattern("go {direction}"),),
+        ),
+    )
+
+    class RecordingIndex:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def search(self, defs, *, query):
+            self.calls.append(query)
+            return list(defs)
+
+    recording = RecordingIndex()
+    previous = action_search_module._SMART_ACTION_INDEX
+    action_search_module._SMART_ACTION_INDEX = recording
+    try:
+        result = smart_action_search(definitions, query="travel somewhere")
+    finally:
+        action_search_module._SMART_ACTION_INDEX = previous
+
+    # The existing singleton was reused (branch 198->200 false), no new index built.
+    assert result == list(definitions)
+    assert recording.calls == ["travel somewhere"]

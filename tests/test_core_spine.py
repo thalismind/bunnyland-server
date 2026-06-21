@@ -49,7 +49,7 @@ from bunnyland.core.controllers import (
     SuspendedControllerComponent,
     WebControllerComponent,
 )
-from bunnyland.core.ecs import get_or_none
+from bunnyland.core.ecs import get_or_none, reachable_ids
 from bunnyland.core.events import (
     CommandExecutedEvent,
     CommandRejectedEvent,
@@ -140,6 +140,15 @@ def test_safe_entity_helpers_cover_missing_and_dangling_paths(monkeypatch):
         return original_has_entity(entity_id)
 
     monkeypatch.setattr(world, "has_entity", has_entity)
+
+    # reachable_ids must skip a containing room whose entity no longer exists: the
+    # character is still contained by room_a (container_of returns it), but has_entity
+    # is patched False, so the room and its contents are dropped — only the character
+    # (and any of its own existing inventory) remains reachable.
+    reachable = reachable_ids(world, character)
+    assert reachable == {character.id}
+    assert scenario.room_a not in reachable
+
     remove_from_container(world, scenario.character)
     assert entity_room_id(character) == str(scenario.room_a)
 

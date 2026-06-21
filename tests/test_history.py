@@ -300,6 +300,61 @@ async def test_history_reactor_resolves_location_from_target_when_actor_is_missi
     assert record.summary.endswith('..."')
 
 
+async def test_history_reactor_ignores_duplicate_source_event():
+    scenario = build_scenario()
+    apply_plugins(_plugins(), scenario.actor)
+    world = scenario.actor.world
+    payload = event_base(
+        9,
+        event_id="fixed-death-event",
+        actor_id=str(scenario.character),
+        target_ids=(str(scenario.character),),
+        cause="a rockfall",
+    )
+
+    await scenario.actor.bus.publish(CharacterDiedEvent(**payload))
+    # Re-emitting the same source event id must not create a second record (577).
+    await scenario.actor.bus.publish(CharacterDiedEvent(**payload))
+
+    records = world_history_records(world)
+    assert len(records) == 1
+    assert records[0][1].source_event_id == "fixed-death-event"
+
+
+async def test_history_reactor_leaves_location_blank_when_nothing_is_roomed():
+    scenario = build_scenario()
+    apply_plugins(_plugins(), scenario.actor)
+    world = scenario.actor.world
+    # Roomless actor (693->695), a missing target id (697->695), and a roomless
+    # target (699->695): _location_for_event_actor exhausts every branch to "".
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+    roomless_target = spawn_entity(
+        world, [IdentityComponent(name="drifting husk", kind="character")]
+    )
+
+    await scenario.actor.bus.publish(
+        CharacterDiedEvent(
+            **event_base(
+                8,
+                actor_id=str(scenario.character),
+                target_ids=("entity_999", str(roomless_target.id)),
+                cause="the void",
+            )
+        )
+    )
+
+    _entity, record = world_history_records(world)[0]
+    assert record.location_id == ""
+    assert record.summary == "Juniper died from the void."
+
+
+def test_deed_reputation_fragments_empty_without_component():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    assert deed_reputation_fragments(scenario.actor.world, character) == []
+
+
 def test_record_world_history_skips_empty_and_duplicate_sources():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -662,6 +717,32 @@ def test_history_fragments_can_filter_all_records_as_irrelevant():
     )
 
     assert history_fragments(world, world.get_entity(scenario.character)) == []
+
+
+def test_history_fragments_skip_records_with_other_actors_and_targets():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    other_character = spawn_entity(
+        world, [IdentityComponent(name="Bramble", kind="character")]
+    )
+    far_target = spawn_entity(
+        world, [IdentityComponent(name="distant relic", kind="item")]
+    )
+    # Far record whose only actor/target are someone else and an unreachable item:
+    # both relevance loops iterate fully without matching (653->652, 656->655).
+    record_world_history(
+        world,
+        summary="Bramble blessed a distant relic.",
+        source_event_id="other-only",
+        event_type="Manual",
+        created_at_epoch=1,
+        location_id=str(scenario.room_b),
+        actor_ids=(str(other_character.id),),
+        target_ids=(str(far_target.id),),
+    )
+
+    assert history_fragments(world, character) == []
 
 
 def test_mark_fragments_show_reachable_marks_with_limit():

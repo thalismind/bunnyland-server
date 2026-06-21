@@ -281,6 +281,37 @@ def test_yaml_driver_save_serializes_world_prefabs_entities_and_relationships(tm
     ]
 
 
+def test_yaml_driver_save_omits_relic_name_and_temporary_components(tmp_path):
+    from dataclasses import dataclass as _dataclass
+
+    from relics import Component
+    from relics.shared import temporary_component
+
+    @temporary_component
+    @_dataclass
+    class ScratchComponent(Component):
+        value: int = 0
+
+    driver = YAMLPersistenceDriver()
+    world = World()
+    world.register_prefab(
+        "room", {IdentityComponent: IdentityComponent(name="Room", kind="room")}
+    )
+    room = world.spawn(
+        "room", {IdentityComponent: IdentityComponent(name="Source", kind="room")}
+    )
+    room.add_component(ScratchComponent(value=7))
+
+    path = tmp_path / "world.yaml"
+    driver.save(world, path)  # no relic_name -> metadata branch 99->102 skipped
+    snapshot = driver.read_snapshot(path)
+
+    assert "relic_name" not in snapshot["metadata"]
+    # Temporary component skipped during serialization (line 114).
+    assert "ScratchComponent" not in snapshot["components"]
+    assert "IdentityComponent" in snapshot["components"]
+
+
 def test_yaml_driver_dumps_plain_values_and_quoted_keys():
     driver = YAMLPersistenceDriver()
 

@@ -448,6 +448,36 @@ async def test_reflection_loop_waits_for_interval_and_new_source_notes():
     assert "trusted the repair" in reflected[1].text
 
 
+def test_reflection_loop_skips_characters_whose_reflection_fails():
+    from bunnyland.core.handlers.base import rejected
+
+    scenario, store = memory_scenario()
+    # Enough source entries to clear min_entries so the handler is actually invoked.
+    store.add("juniper", text="Hazel found fresh tracks.", created_at_epoch=1)
+    store.add("juniper", text="The north bridge cracked.", created_at_epoch=2)
+
+    consequence = ReflectionLoopConsequence(
+        store, interval_seconds=0, min_entries=2, limit=2
+    )
+
+    class RejectingHandler:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, ctx, command):
+            del ctx, command
+            self.calls += 1
+            return rejected("no usable notes")
+
+    consequence._handler = RejectingHandler()
+
+    events = consequence.process(scenario.actor.world, epoch=int(HOUR))
+
+    # The handler ran but returned not-ok, so the loop emits nothing (branch 292->259).
+    assert consequence._handler.calls == 1
+    assert events == []
+
+
 async def test_focus_lane_note_does_not_consume_world_action():
     # A note (focus) and a move (world) can both run in the same tick.
     scenario, _store = memory_scenario()  # build_scenario already registered MoveHandler
@@ -625,6 +655,19 @@ def test_inmemory_store_vector_falls_back_to_keyword():
     results = store.search("c", query="water", mode="vector", limit=5)
     assert len(results) == 1
     assert "basin" in results[0].text
+
+
+def test_inmemory_store_delete_skips_non_matching_entries():
+    store = InMemoryStore()
+    first = store.add("c", text="the basin water is unsafe", created_at_epoch=1)
+    second = store.add("c", text="berries are tasty", created_at_epoch=2)
+
+    # Deleting the second entry forces the loop to skip the first (branch 138->137).
+    assert store.delete("c", second.id) is True
+
+    remaining = store.search("c", mode="recent")
+    assert [entry.id for entry in remaining] == [first.id]
+    assert store.delete("c", "no-such-id") is False
 
 
 def test_chroma_store_delete_removes_existing_note():

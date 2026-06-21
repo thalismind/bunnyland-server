@@ -2865,24 +2865,8 @@ def test_dragonsim_fragments_skip_missing_and_componentless_relationships():
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
 
-    # MemberOf points at a now-deleted faction (line 2347 continue).
-    ghost_faction = spawn_entity(world, [IdentityComponent(name="ghost", kind="faction")])
-    character.add_relationship(MemberOf(rank="member", since_epoch=0), ghost_faction.id)
-    world.remove(ghost_faction.id)
-
-    # HasPerk/KnowsWord/KnowsSpell targets that are deleted (2367/2379/2388 continue).
-    ghost_perk = spawn_entity(world, [PerkComponent(name="Gone", skill_name="blade")])
-    character.add_relationship(HasPerk(unlocked_at_epoch=0), ghost_perk.id)
-    world.remove(ghost_perk.id)
-    ghost_word = spawn_entity(world, [WordOfPowerComponent(name="Gone")])
-    character.add_relationship(KnowsWord(learned_at_epoch=0), ghost_word.id)
-    world.remove(ghost_word.id)
-    ghost_spell = spawn_entity(world, [SpellComponent(name="Gone")])
-    character.add_relationship(KnowsSpell(learned_at_epoch=0), ghost_spell.id)
-    world.remove(ghost_spell.id)
-
     # HasPerk/KnowsWord/KnowsSpell targets that exist but lack the component
-    # (branches 2370/2382/2391 false).
+    # (the has_component branches are false).
     bare_perk = spawn_entity(world, [IdentityComponent(name="bare", kind="prop")])
     character.add_relationship(HasPerk(unlocked_at_epoch=0), bare_perk.id)
     bare_word = spawn_entity(world, [IdentityComponent(name="bare", kind="prop")])
@@ -2908,3 +2892,77 @@ def test_dragonsim_fragments_show_known_spell_and_jail():
     lines = dragonsim_fragments(world, character)
     assert any("Spell learned: Firebolt" in line for line in lines)
     assert any("Serving jail time for f1" in line for line in lines)
+
+
+def test_cast_spell_without_skill_name_skips_xp_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    character.add_component(MagicComponent(current=5, maximum=5))
+    spell = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Wordless Spark", kind="spell"),
+            SpellComponent(name="Wordless", magic_cost=2, skill_name=""),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), spell.id)
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), spell.id)
+
+    # skill_name is empty -> the XP branch (1975 true) is skipped (1975 -> 1986).
+    result = CastDragonSpellHandler().execute(
+        ctx, _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id))
+    )
+    assert result.ok
+    assert character.get_component(MagicComponent).current == 3
+    assert not character.has_component(SkillSetComponent)
+
+
+def test_use_artifact_can_handle_true_for_explicit_artifact_id_key():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    use = UseArtifactHandler()
+    # "artifact_id" present in payload short-circuits can_handle to True (line 2065),
+    # even before the entity is looked up.
+    assert use.can_handle(ctx, _handler_cmd(scenario, "use", artifact_id="entity_999")) is True
+    # Falls through to the artifact-component check when only item_id is given.
+    assert use.can_handle(ctx, _handler_cmd(scenario, "use", item_id="entity_999")) is False
+
+
+def test_fragments_show_bounty_when_faction_key_is_non_faction_entity():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # Key parses and the entity exists, but it is not a faction (2411 -> 2413):
+    # the bounty line falls back to the raw key as the faction name.
+    prop = spawn_entity(world, [IdentityComponent(name="plain rock", kind="prop")])
+    character.add_component(WantedComponent(amounts={str(prop.id): 8}))
+
+    lines = dragonsim_fragments(world, character)
+    assert any(f"Bounty of 8 with {prop.id}" in line for line in lines)
+
+
+def test_fragments_skip_spell_component_for_already_known_nearby_spell():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    # A SpellComponent entity in the room that the character already knows: the nearby
+    # SpellComponent fragment is skipped (line 2438 continue).
+    known = spawn_entity(
+        world,
+        [IdentityComponent(name="Familiar Spark", kind="spell"), SpellComponent(name="Familiar")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), known.id)
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), known.id)
+
+    lines = dragonsim_fragments(world, character)
+    # The "known spell" fragment still appears, but the nearby SpellComponent is skipped.
+    assert any("Spell learned: Familiar" in line for line in lines)
+    assert not any("Learnable spell nearby: Familiar" in line for line in lines)

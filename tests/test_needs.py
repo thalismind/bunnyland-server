@@ -37,7 +37,10 @@ from bunnyland.mechanics.needs import (
     SafetyNeedComponent,
     SocialNeedComponent,
     ThirstComponent,
+    hunger_band,
     need_fragments,
+    recover_daily_need,
+    thirst_band,
 )
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
@@ -121,6 +124,27 @@ def execute_drink(scenario, source_id, *, character_id=None):
 
 
 # -- rise over time ---------------------------------------------------------------------
+
+
+def test_hunger_and_thirst_bands_track_meter_severity():
+    scenario = needs_scenario(hunger=95.0, thirst=10.0)
+    char = scenario.actor.world.get_entity(scenario.character)
+
+    assert hunger_band(char) == "crisis"
+    assert thirst_band(char) == "calm"
+
+
+def test_recover_daily_need_without_timestamp_field_leaves_epoch_unchanged():
+    scenario = needs_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+    char.add_component(SocialNeedComponent(meter=Meter(value=60.0), last_social_epoch=7))
+
+    updated = recover_daily_need(char, SocialNeedComponent, 25.0, epoch=99)
+
+    # timestamp_field is None: the meter drops but the stored epoch is untouched (353->355).
+    assert updated.meter.value == pytest.approx(35.0)
+    assert updated.last_social_epoch == 7
+    assert char.get_component(SocialNeedComponent).meter.value == pytest.approx(35.0)
 
 
 async def test_hunger_and_thirst_rise_independently():

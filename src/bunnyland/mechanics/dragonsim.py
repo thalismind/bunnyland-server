@@ -2018,9 +2018,9 @@ class BrewPotionHandler:
                 return rejected("required ingredient is not carried")
 
         for raw_id in recipe.ingredient_ids:
+            # Every ingredient id parsed during the validation loop above, so it is non-None here.
             ingredient_id = parse_entity_id(raw_id)
-            if ingredient_id is not None:
-                character.remove_relationship(Contains, ingredient_id)
+            character.remove_relationship(Contains, ingredient_id)
         potion = spawn_entity(
             ctx.world,
             [
@@ -2343,8 +2343,7 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     ctx = ComponentPromptContext.for_entity(world, character)
     for edge, faction_id in character.get_relationships(MemberOf):
-        if not world.has_entity(faction_id):
-            continue
+        # Relics cascades inbound edge removal, so MemberOf never points at a missing faction.
         faction = world.get_entity(faction_id)
         edge_ctx = ComponentPromptContext.for_entity(
             world, character, perspective=ctx.perspective, target=faction
@@ -2364,8 +2363,7 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         lines.extend(stage_entity.get_component(QuestStageComponent).prompt_fragments(stage_ctx))
 
     for _perk_edge, perk_id in character.get_relationships(HasPerk):
-        if not world.has_entity(perk_id):
-            continue
+        # Relics cascades inbound edge removal, so HasPerk never points at a missing perk.
         perk = world.get_entity(perk_id)
         if perk.has_component(PerkComponent):
             perk_ctx = ComponentPromptContext.for_entity(
@@ -2376,8 +2374,7 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(GreatSoulComponent):
         lines.extend(character.get_component(GreatSoulComponent).prompt_fragments(ctx))
     for _word_edge, word_id in character.get_relationships(KnowsWord):
-        if not world.has_entity(word_id):
-            continue
+        # Relics cascades inbound edge removal, so KnowsWord never points at a missing word.
         word = world.get_entity(word_id)
         if word.has_component(WordOfPowerComponent):
             word_ctx = ComponentPromptContext.for_entity(
@@ -2385,8 +2382,7 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
             )
             lines.extend(word.get_component(WordOfPowerComponent).prompt_fragments(word_ctx))
     for _spell_edge, spell_id in character.get_relationships(KnowsSpell):
-        if not world.has_entity(spell_id):
-            continue
+        # Relics cascades inbound edge removal, so KnowsSpell never points at a missing spell.
         spell = world.get_entity(spell_id)
         if spell.has_component(SpellComponent):
             spell_ctx = ComponentPromptContext.for_entity(

@@ -308,6 +308,8 @@ class ConversationMemoryReactor:
         speaker_id = parse_entity_id(event.speaker_id)
         if speaker_id is None or not self.world.has_entity(speaker_id):
             return
+        # speaker_id passed the has_entity guard above, so it is always retained here —
+        # `participants` therefore can never be empty and needs no further guard.
         participants = tuple(
             participant_id
             for participant_id in (
@@ -316,8 +318,6 @@ class ConversationMemoryReactor:
             )
             if participant_id is not None and self.world.has_entity(participant_id)
         )
-        if not participants:
-            return
         speaker = self.world.get_entity(speaker_id)
         speaker_name = entity_name(speaker)
         listener_names = tuple(

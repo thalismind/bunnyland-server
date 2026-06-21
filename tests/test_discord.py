@@ -25,6 +25,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     ControlledBy,
+    ControllerOutboxMessageComponent,
     DiscordControllerComponent,
     IdentityComponent,
     LLMControllerComponent,
@@ -35,6 +36,7 @@ from bunnyland.core import (
 )
 from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.events import (
+    CharacterClaimedEvent,
     CommandExecutedEvent,
     CommandRejectedEvent,
     EventVisibility,
@@ -924,6 +926,22 @@ def test_discord_action_parser_uses_plugin_action_definition_patterns():
     assert action.payload == {"target_id": "Hazel"}
 
 
+def test_discord_action_parser_maps_command_type_directly_to_tool():
+    # The tool form ("be_happy") is not a real tool name, so the direct
+    # command-type path resolves the mapped tool ("grin") instead.
+    definition = ActionDefinition(
+        command_type="be-happy",
+        tool_name="grin",
+        arguments={"reason": ActionArgument(kind="text")},
+    )
+
+    action = parse_discord_action("be-happy sunshine", ("be-happy",), (definition,))
+
+    assert action.command_type == "be-happy"
+    assert action.tool == "grin"
+    assert action.payload == {"reason": "sunshine"}
+
+
 def test_discord_action_parser_accepts_natural_enchant_commands():
     action = parse_discord_action(
         "enchant moss charm with Mend Moss",
@@ -1158,6 +1176,27 @@ async def test_discord_threaded_reply_logs_thread_creation_failure(caplog):
 
     assert ctx.replies == [("Help body", True)]
     assert "Discord thread creation failed; falling back." in caplog.text
+
+
+async def test_discord_threaded_reply_sends_multiple_chunks_in_thread(monkeypatch):
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(discord_bot.asyncio, "sleep", fake_sleep)
+    thread = _DiscordThread()
+    ctx = _DiscordThreadCtx(channel=thread)
+
+    body = "x" * 4100
+    chunks = split_discord_text(body)
+    assert len(chunks) > 1
+
+    await DiscordBot._send_threaded_or_reply(ctx, body, title="Bunnyland help")
+
+    assert thread.sent == list(chunks)
+    assert ctx.replies == []
+    assert sleeps == [0.25] * (len(chunks) - 1)
 
 
 def test_discord_thread_detection_and_permission_edges():
@@ -2095,6 +2134,87 @@ async def test_discord_bot_submit_action_renders_remember_notes(scenario):
     assert ctx.message.reactions == [QUEUED_REACTION]
 
 
+async def test_discord_bot_submit_action_ignores_notes_for_other_actors(scenario):
+    install_memory(scenario.actor, InMemoryStore())
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+    bot = _bot_for_scenario(scenario)
+
+    async def submit(command):
+        # A notes event for a different actor must not satisfy this command's future.
+        await scenario.actor.bus.publish(
+            NotesSearchedEvent(
+                event_id="event-other",
+                world_epoch=1,
+                created_at=datetime.now(UTC),
+                visibility=EventVisibility.PRIVATE,
+                actor_id="someone-else",
+                query="trust",
+                mode="vector",
+                results=("Not for you.",),
+                note_ids=("note-other",),
+            )
+        )
+        await scenario.actor.bus.publish(
+            NotesSearchedEvent(
+                event_id="event-notes",
+                world_epoch=1,
+                created_at=datetime.now(UTC),
+                visibility=EventVisibility.PRIVATE,
+                actor_id=command.character_id,
+                query="trust",
+                mode="vector",
+                results=("Trust the moss keeper.",),
+                note_ids=("note-1",),
+            )
+        )
+        bot._complete_pending(
+            CommandExecutedEvent(
+                event_id="event-1",
+                world_epoch=1,
+                created_at=datetime.now(UTC),
+                visibility=EventVisibility.PRIVATE,
+                actor_id=command.character_id,
+                command_id=command.command_id,
+                command_type=command.command_type,
+            )
+        )
+
+    bot.actor.submit = submit
+    ctx = _DiscordThreadCtx(message=_DiscordCommandMessage())
+
+    result = await bot._submit_action(
+        ctx,
+        parse_discord_action("remember trust", scenario.actor.available_command_types()),
+    )
+
+    assert "`note-1`" in result
+    assert "Trust the moss keeper." in result
+    assert "Not for you." not in result
+
+
+async def test_discord_bot_reply_uses_message_reply_when_context_reply_absent():
+    class Ctx:
+        def __init__(self):
+            self.author = _DiscordObject(mention="<@123>")
+            self.message = _DiscordObject()
+            self.message_calls = []
+            self.send_calls = []
+
+            async def message_reply(body, mention_author=False):
+                self.message_calls.append((body, mention_author))
+
+            self.message.reply = message_reply
+
+        async def send(self, body):
+            self.send_calls.append(body)
+
+    ctx = Ctx()
+    await DiscordBot._reply(ctx, "hello")
+
+    assert ctx.message_calls == [("hello", True)]
+    assert ctx.send_calls == []
+
+
 async def test_discord_bot_reply_falls_back_across_context_shapes(caplog):
     class TypeErrorReplyCtx:
         def __init__(self):
@@ -2213,6 +2333,80 @@ async def test_discord_bot_meta_commands_cover_success_and_errors(scenario):
     assert ctx.replies[-1][0] == "Juniper is suspended until someone claims them."
 
     assert await bot._handle_meta_command(ctx, "dance", "") is False
+
+
+async def test_discord_bot_publish_claimed_skips_unclaimed_user(scenario):
+    bot = _bot_for_scenario(scenario)
+    claimed_events = []
+    scenario.actor.bus.subscribe(CharacterClaimedEvent, claimed_events.append)
+
+    await bot._publish_claimed(999)
+
+    assert claimed_events == []
+
+
+async def test_discord_bot_drain_controller_outbox_skips_unclaimed_user(scenario):
+    bot = _bot_for_scenario(scenario)
+    ctx = _DiscordThreadCtx()
+
+    await bot._drain_controller_outbox(ctx, 999)
+
+    assert ctx.replies == []
+    assert ctx.sent == []
+
+
+async def test_discord_bot_drain_controller_outbox_delivers_only_matching_pending(scenario):
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+    controller_id = discord_controlled_character(scenario.actor, 123)[1]
+    bot = _bot_for_scenario(scenario)
+    ctx = _DiscordThreadCtx()
+
+    matching = spawn_entity(
+        scenario.actor.world,
+        [
+            ControllerOutboxMessageComponent(
+                controller_id=str(controller_id),
+                text="Welcome back!",
+                created_at_epoch=0,
+            )
+        ],
+    )
+    already_delivered = spawn_entity(
+        scenario.actor.world,
+        [
+            ControllerOutboxMessageComponent(
+                controller_id=str(controller_id),
+                text="Old news.",
+                created_at_epoch=0,
+                delivered_at_epoch=7,
+            )
+        ],
+    )
+    other_controller = spawn_entity(
+        scenario.actor.world,
+        [
+            ControllerOutboxMessageComponent(
+                controller_id="some-other-controller",
+                text="Not yours.",
+                created_at_epoch=0,
+            )
+        ],
+    )
+
+    await bot._drain_controller_outbox(ctx, 123)
+
+    assert ctx.replies == [("Welcome back!", True)]
+
+    matching_after = matching.get_component(ControllerOutboxMessageComponent)
+    assert matching_after.delivered_at_epoch == scenario.actor.epoch
+
+    # Skipped messages are untouched.
+    assert (
+        already_delivered.get_component(ControllerOutboxMessageComponent).delivered_at_epoch == 7
+    )
+    assert (
+        other_controller.get_component(ControllerOutboxMessageComponent).delivered_at_epoch is None
+    )
 
 
 async def test_discord_bot_meta_commands_report_parse_and_fallback_errors(scenario):

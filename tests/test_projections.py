@@ -179,6 +179,19 @@ def test_room_summary_projection_dirty_edge_cases():
         RoomSummaryComponent
     ).dirty is True
 
+    # An item whose container parent is NOT a room: _dirty walks to the parent, finds
+    # it has no RoomComponent, and falls through without marking anything (260->exit).
+    chest = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="chest", kind="container"), ContainerComponent(open=True)],
+    )
+    trinket = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="trinket", kind="item")]
+    )
+    chest.add_relationship(Contains(mode=ContainmentMode.CONTAINER), trinket.id)
+    projection._dirty(trinket)
+    assert not chest.has_component(RoomSummaryComponent)
+
 
 # -- projection dirty/rebuild -----------------------------------------------------------
 
@@ -280,6 +293,31 @@ def test_perceive_lists_room_entities_and_exits_excluding_self():
     assert "a pebble" in names
     assert "Juniper" not in names  # self excluded
     assert [e.direction for e in perception.exits] == ["north"]
+
+
+def test_perceive_skips_invisible_contains_edges():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    hidden = spawn_entity(world, [IdentityComponent(name="ghost crate", kind="item")])
+    # An explicitly invisible Contains edge must be skipped (perception line 75).
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT, visible=False), hidden.id
+    )
+
+    perception = perceive(world, world.get_entity(scenario.character))
+
+    assert "ghost crate" not in {e.name for e in perception.entities}
+
+
+def test_build_room_facts_names_identityless_object_something():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    # Object with no IdentityComponent -> _name falls back to "something" (line 119).
+    add_object(scenario, scenario.room_a, [ContainerComponent(open=True)])
+
+    facts = build_room_facts(world, scenario.room_a)
+
+    assert any(obj.name == "something" for obj in facts.objects)
 
 
 def test_perceive_hides_hidden_exits():

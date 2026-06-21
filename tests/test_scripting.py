@@ -655,3 +655,10 @@ def test_example_scripts_are_valid():
         "examples.move_arrival_patch",
         "examples.llm_only_prompt",
     ]
+
+
+def test_trigger_without_predicate_is_rejected():
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="trigger must define a predicate"):
+        Trigger()

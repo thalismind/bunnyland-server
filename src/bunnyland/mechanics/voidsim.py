@@ -1073,8 +1073,7 @@ def _tech_unlocked(world: World, tech_id: str) -> bool:
 
 def _inventory_resource_stack(character: Entity, world: World, resource_type: str) -> Entity | None:
     for _edge, item_id in character.get_relationships(Contains):
-        if not world.has_entity(item_id):
-            continue
+        # Relics cascades inbound edge removal, so a related id is always live here.
         item = world.get_entity(item_id)
         if (
             item.has_component(ResourceStackComponent)
@@ -3339,8 +3338,7 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
         if character.has_component(component_type):
             lines.extend(character.get_component(component_type).prompt_fragments(ctx))
     for edge, shift_id in character.get_relationships(WorksShift):
-        if not world.has_entity(shift_id):
-            continue
+        # Relics cascades inbound edge removal, so a related id is always live here.
         shift_entity = world.get_entity(shift_id)
         if shift_entity.has_component(DutyShiftComponent):
             shift = shift_entity.get_component(DutyShiftComponent)
