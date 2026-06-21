@@ -1288,3 +1288,49 @@ def test_main_no_icons_disables_repl_icons(monkeypatch):
 
     assert repl_app.main(["--no-icons"]) == 0
     assert apps[0].repl.show_icons is False
+
+
+# ── image request (camera affordance) ────────────────────────────────────────────────
+
+
+async def test_dispatch_image_requires_player():
+    repl = _repl(player=False)
+    message = await repl.dispatch("image")
+    assert "Pick a player first" in message.plain
+
+
+async def test_dispatch_image_unavailable():
+    # RecordingBackend inherits the base default -> unavailable.
+    repl = _repl()
+    message = await repl.dispatch("image")
+    assert "not available" in message.plain
+
+
+async def test_dispatch_image_queued_and_ready():
+    from bunnyland.tui.backend import ImageRequestResult
+
+    class _ImageBackend(RecordingBackend):
+        def __init__(self, snapshot, result):
+            super().__init__(snapshot)
+            self.result = result
+            self.requested: list[str] = []
+
+        async def request_image(self, character_id):
+            self.requested.append(character_id)
+            return self.result
+
+    queued = BunnylandRepl(_ImageBackend(_snapshot(), ImageRequestResult(ok=True, status="queued")))
+    queued.player_id = PLAYER
+    message = await queued.dispatch("image")
+    assert "image requested" in message.plain
+    assert queued.backend.requested == [PLAYER]
+
+    ready = BunnylandRepl(_ImageBackend(_snapshot(), ImageRequestResult(ok=True, status="skipped")))
+    ready.player_id = PLAYER
+    assert "image ready" in (await ready.dispatch("img")).plain
+
+
+def test_image_is_a_meta_command():
+    from bunnyland.repl.client import META_COMMANDS
+
+    assert "image" in META_COMMANDS

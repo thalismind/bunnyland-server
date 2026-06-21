@@ -27,6 +27,7 @@ from rich.style import Style
 from rich.text import Text
 
 from ..core.actions import ActionDefinition, action_icon_for, definitions_by_tool_name
+from ..imagegen.affordance import REQUEST_EMOJI
 from ..llm_agents.dispatch import suggest_names
 from ..llm_agents.natural_language import NaturalCommandParser
 from ..server.models import CharacterSummaryView
@@ -38,7 +39,7 @@ from ..tui.model import KIND_ICON, World, entity_icon, entity_name, fmt_points, 
 from .completion import complete_line, reference_candidates
 
 META_COMMANDS = (
-    "help", "who", "look", "inventory", "points", "play", "refresh", "quit", "exit"
+    "help", "who", "look", "inventory", "points", "play", "image", "refresh", "quit", "exit"
 )
 
 
@@ -224,7 +225,18 @@ class BunnylandRepl:
             if not rest:
                 return Text("Usage: play <player name>")
             return Text(await self.select_player(rest))
+        if verb in {"image", "img"}:
+            return await self._request_image()
         return await self._act(line, verb)
+
+    async def _request_image(self) -> Text:
+        if not self.player_id:
+            return Text("Pick a player first: play <name>.")
+        result = await self.backend.request_image(self.player_id)
+        if result.ok:
+            note = "image ready" if result.status == "skipped" else "image requested"
+            return Text(f"{REQUEST_EMOJI} {note}.", style="cyan")
+        return Text(f"{REQUEST_EMOJI} {result.reason}", style="yellow")
 
     async def _act(self, line: str, verb: str) -> Text:
         parsed = parse_line(line, self._defs)
