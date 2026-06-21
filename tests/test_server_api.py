@@ -2304,6 +2304,51 @@ async def test_register_behavior_endpoint_translates_value_errors(scenario):
     assert exc.value.status_code == 400
 
 
+async def test_register_script_endpoint_translates_value_errors(scenario):
+    app = create_app(scenario.actor)
+    route = next(
+        route for route in app.routes if route.path == "/admin/controllers/scripts"
+    )
+
+    # A script call referencing an unknown tool fails to compile -> ValueError -> 400.
+    bad = ScriptSpec(
+        name="broken",
+        calls=(ToolCallSpec(name="definitely_not_a_real_tool", arguments={}),),
+    )
+    with pytest.raises(Exception) as exc:
+        await route.endpoint(bad)
+
+    assert exc.value.status_code == 400
+    assert "definitely_not_a_real_tool" in exc.value.detail
+
+
+async def test_world_updates_websocket_handles_disconnect_on_send(scenario):
+    from fastapi import WebSocketDisconnect
+
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    route = next(route for route in app.routes if route.path == "/world/updates")
+
+    closed = []
+
+    class FakeWebSocket:
+        headers = {"x-bunnyland-admin-token": "secret"}
+
+        async def accept(self):
+            return None
+
+        async def send_json(self, _payload):
+            # Client vanished as the server pushed the snapshot: the send raises
+            # WebSocketDisconnect, which the handler swallows before cleanup.
+            raise WebSocketDisconnect(code=1006)
+
+        async def close(self, code=1000):
+            closed.append(code)
+
+    # Should not raise: the handler catches WebSocketDisconnect and still closes the
+    # subscription in its finally block.
+    await route.endpoint(FakeWebSocket())
+
+
 async def test_world_generation_status_endpoint_reports_running_job(scenario):
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
     app = create_app(scenario.actor, plugins=plugins)

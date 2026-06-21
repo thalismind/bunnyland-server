@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from .specs import ScriptSpec
-from .tools import ToolCall
+from .tools import ToolCall, tool_names
 
 BUILTIN_SCRIPTS: dict[str, tuple[ToolCall, ...]] = {
     # Empty script: the character always waits. A safe default for an unconfigured scripted
@@ -53,7 +53,15 @@ def script_names() -> frozenset[str]:
 
 
 def compile_script(spec: ScriptSpec) -> tuple[ToolCall, ...]:
-    """Compile a ``ScriptSpec`` into the tuple of tool calls a scripted controller replays."""
+    """Compile a ``ScriptSpec`` into the tuple of tool calls a scripted controller replays.
+
+    Every call must name a registered tool; an unknown tool raises ``ValueError`` so a bad
+    spec is rejected at registration time rather than failing silently during replay.
+    """
+    known = tool_names()
+    for call in spec.calls:
+        if call.name not in known:
+            raise ValueError(f"unknown tool {call.name!r} in script {spec.name!r}")
     return tuple(call.to_tool_call() for call in spec.calls)
 
 
