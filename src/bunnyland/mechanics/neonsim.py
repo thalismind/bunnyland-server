@@ -2584,6 +2584,8 @@ class InstallImplantHandler:
         )
         if item is None:
             return rejected("you are not carrying that implant")
+        if character.has_relationship(HasImplant, item.id):
+            return rejected("that implant is already installed")
         implant = item.get_component(ImplantComponent)
         used = sum(
             impl.get_component(ImplantComponent).slot_cost
@@ -2596,10 +2598,13 @@ class InstallImplantHandler:
             return rejected("a licensed clinic will not fit an illegal implant")
         if not _spend_scrip(character, ctx.world, clinic_comp.install_cost):
             return rejected("not enough scrip for the procedure")
-        character.remove_relationship(Contains, item.id)
+        # The implant stays in the character's inventory (so it remains reachable for
+        # perception) but is wired in via HasImplant and pinned non-portable so it cannot
+        # be dropped or stashed until surgically removed.
         character.add_relationship(
             HasImplant(slot=implant.slot, installed_epoch=ctx.epoch), item.id
         )
+        replace_component(item, PortableComponent(can_pick_up=False))
         replace_component(
             item,
             replace(
@@ -2649,8 +2654,10 @@ class RemoveImplantHandler:
         implant = _own_implant(character, ctx.world, command.payload.get("implant_id"))
         if implant is None:
             return rejected("you have no such implant")
+        # The implant kept its inventory Contains edge while installed; removal just
+        # unwires it and restores portability so it can be carried or dropped again.
         character.remove_relationship(HasImplant, implant.id)
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), implant.id)
+        replace_component(implant, PortableComponent(can_pick_up=True))
         return ok(
             ImplantRemovedEvent(
                 **ctx.event_base(

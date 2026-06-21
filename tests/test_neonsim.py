@@ -24,6 +24,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.handlers.inventory import DropHandler
 from bunnyland.mechanics.colonysim import ResourceStackComponent
 from bunnyland.mechanics.daggersim import BountyComponent, BountyPostedEvent, DebtComponent
 from bunnyland.mechanics.neonsim import (
@@ -249,14 +250,22 @@ def _implant_item(scenario, name="cyberdeck", **kwargs):
 
 
 def _install_implant(scenario, *, components=(), slot="body"):
-    """Spawn an implant already installed on the character via a HasImplant edge."""
+    """Spawn an implant already installed on the character.
+
+    Mirrors the production install state: still inventory-contained (so it stays
+    reachable for perception) but wired in via HasImplant and pinned non-portable.
+    """
     implant = spawn_entity(
         scenario.actor.world,
-        [IdentityComponent(name="installed aug", kind="implant"), *components],
+        [
+            IdentityComponent(name="installed aug", kind="implant"),
+            PortableComponent(can_pick_up=False),
+            *components,
+        ],
     )
-    scenario.actor.world.get_entity(scenario.character).add_relationship(
-        HasImplant(slot=slot), implant.id
-    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), implant.id)
+    character.add_relationship(HasImplant(slot=slot), implant.id)
     return implant.id
 
 
@@ -2734,7 +2743,10 @@ async def test_install_implant_consumes_scrip_and_links_it():
     assert installed[0].implant_type == "reflex"
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.has_relationship(HasImplant, implant)
-    assert not character.has_relationship(Contains, implant)
+    # Installed implants stay inventory-contained (reachable) but are pinned non-portable.
+    assert character.has_relationship(Contains, implant)
+    implant_entity = scenario.actor.world.get_entity(implant)
+    assert not implant_entity.get_component(PortableComponent).can_pick_up
     assert _scrip_quantity(scenario) == 50
 
 
@@ -2773,9 +2785,93 @@ async def test_remove_implant_returns_it_to_inventory():
     character = scenario.actor.world.get_entity(scenario.character)
     assert not character.has_relationship(HasImplant, implant)
     assert character.has_relationship(Contains, implant)
+    # Unwiring restores portability so it can be carried or dropped again.
+    assert scenario.actor.world.get_entity(implant).get_component(PortableComponent).can_pick_up
 
 
-async def test_service_implant_resets_maintenance():
+async def test_installed_implant_cannot_be_dropped():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 100)
+    clinic = _clinic(scenario, install_cost=50)
+    implant = _implant_item(scenario, "reflex booster", implant_type="reflex")
+    await scenario.actor.submit(
+        _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    await scenario.actor.tick(1.0)
+
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = DropHandler().execute(ctx, _cmd(scenario, "drop", item_id=str(implant)))
+
+    assert result.ok is False
+    assert result.reason == "item is fixed in place and cannot be moved"
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.has_relationship(HasImplant, implant)
+    assert character.has_relationship(Contains, implant)
+
+
+async def test_cannot_reinstall_an_installed_implant():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 200)
+    clinic = _clinic(scenario, install_cost=50)
+    implant = _implant_item(scenario, "reflex booster", implant_type="reflex")
+    await scenario.actor.submit(
+        _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    await scenario.actor.tick(1.0)
+
+    rejects = await _reject(
+        scenario, _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+
+    assert any("already installed" in event.reason for event in rejects)
+    # The failed re-install must not charge a second procedure fee.
+    assert _scrip_quantity(scenario) == 150
+
+
+async def test_removed_implant_can_be_dropped_again():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 100)
+    clinic = _clinic(scenario, install_cost=50)
+    implant = _implant_item(scenario, "reflex booster", implant_type="reflex")
+    await scenario.actor.submit(
+        _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    await scenario.actor.tick(1.0)
+    await scenario.actor.submit(_cmd(scenario, "remove-implant", implant_id=str(implant)))
+    await scenario.actor.tick(1.0)
+
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = DropHandler().execute(ctx, _cmd(scenario, "drop", item_id=str(implant)))
+
+    assert result.ok is True
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_relationship(Contains, implant)
+    assert scenario.actor.world.get_entity(scenario.room_a).has_relationship(Contains, implant)
+
+
+async def test_installed_implant_surfaces_once_in_fragments():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _give_scrip(scenario, 100)
+    clinic = _clinic(scenario, install_cost=50)
+    implant = _implant_item(scenario, "reflex booster", implant_type="reflex")
+    await scenario.actor.submit(
+        _cmd(scenario, "install-implant", implant_id=str(implant), clinic_id=str(clinic))
+    )
+    await scenario.actor.tick(1.0)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    lines = neonsim_fragments(scenario.actor.world, character)
+
+    # The implant is now reachable (inventory-contained) AND installed; the reachable
+    # sweep must defer to the dedicated installed-implant pass so it is reported exactly
+    # once, with the installed view rather than the "for sale" view.
+    implant_lines = [line for line in lines if "reflex" in line.lower()]
+    assert len(implant_lines) == 1
+    assert "for sale" not in implant_lines[0].lower()
     scenario = build_scenario()
     _install(scenario.actor)
     _give_scrip(scenario, 50)
