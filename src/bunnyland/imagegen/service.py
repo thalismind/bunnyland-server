@@ -123,12 +123,17 @@ class ImageGenService:
         self._extras: dict[str, str] = {}
         self._alpha_jobs: set[str] = set()
         self._worker: asyncio.Task | None = None
+        self._backfill: asyncio.Task | None = None
         self._busy = False
 
     # -- public API ------------------------------------------------------------------
 
     def job(self, job_id: str) -> ImageGenJob | None:
         return self._jobs.get(job_id)
+
+    @property
+    def media(self) -> MediaStore:
+        return self._media
 
     @property
     def idle(self) -> bool:
@@ -208,13 +213,35 @@ class ImageGenService:
         """Wait until every queued job has finished (used by tests)."""
         await self._queue.join()
 
+    def start_backfill(self, interval_seconds: float | None = None) -> None:
+        """Start the throttled portrait/sprite backfill loop (idempotent).
+
+        Runs independently of the world tick (so it never contends with the tick lock),
+        enqueuing at most one missing image per interval.
+        """
+        if self._backfill is not None and not self._backfill.done():
+            return
+        interval = (
+            self._config.backfill_interval_seconds if interval_seconds is None else interval_seconds
+        )
+        self._backfill = asyncio.create_task(
+            self._run_backfill(interval), name="imagegen-backfill"
+        )
+
+    async def _run_backfill(self, interval: float) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            await self.enqueue_one_missing()
+
     async def aclose(self) -> None:
-        """Cancel the worker; awaited from the server lifespan to avoid task leaks."""
-        if self._worker is not None:
-            self._worker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._worker
-            self._worker = None
+        """Cancel the worker and backfill loop; awaited from the server lifespan."""
+        for task in (self._worker, self._backfill):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._worker = None
+        self._backfill = None
 
     # -- worker ----------------------------------------------------------------------
 

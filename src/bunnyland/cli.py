@@ -545,6 +545,7 @@ async def _run_serve_runtime(
     discord_bot,
     credentials: ServeCredentials,
     models: ServeModels,
+    imagegen=None,
 ) -> int:
     max_ticks = args.ticks if args.ticks > 0 else None
     display_ticks = (
@@ -570,6 +571,7 @@ async def _run_serve_runtime(
         credentials,
         models,
         max_ticks,
+        imagegen=imagegen,
     )
 
 
@@ -594,6 +596,7 @@ async def _run_api_runtime(
     credentials: ServeCredentials,
     models: ServeModels,
     max_ticks: int | None,
+    imagegen=None,
 ) -> int:
     from .server.runtime import run_loop_with_api
 
@@ -614,6 +617,7 @@ async def _run_api_runtime(
                 plugins=plugins,
                 admin_token=args.admin_token
                 or os.environ.get("BUNNYLAND_ADMIN_TOKEN"),
+                imagegen=imagegen,
                 max_ticks=max_ticks,
             ),
             loop,
@@ -621,6 +625,18 @@ async def _run_api_runtime(
         )
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
+
+
+def _build_imagegen_service(actor, plugins):
+    """Build the image generation service when ``COMFYUI_SERVER_URL`` is configured."""
+    from .imagegen.config import ImageGenConfig
+    from .imagegen.wiring import build_image_service
+
+    config = ImageGenConfig.from_env()
+    if config is None:
+        return None
+    print(f"Image generation enabled via ComfyUI at {config.server_url}.")
+    return build_image_service(actor, config, plugins=plugins)
 
 
 async def _serve(args) -> None:
@@ -641,6 +657,7 @@ async def _serve(args) -> None:
     )
     telemetry.register_world_gauges(actor)
     _configure_actor_backends(actor, args, lifesim_natural_aging)
+    imagegen = _build_imagegen_service(actor, plugins)
     agent = _build_serve_agent(args, credentials, models)
     autosave = _make_autosave(actor, args, meta)
     builder = PromptBuilder(
@@ -666,6 +683,7 @@ async def _serve(args) -> None:
         discord_bot,
         credentials,
         models,
+        imagegen=imagegen,
     )
     print(f"Stopped after {ticks} ticks at game epoch {actor.epoch}s.")
 

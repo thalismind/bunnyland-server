@@ -9,6 +9,14 @@ never requires the ``imagegen`` extra.
 
 from __future__ import annotations
 
+from .affordance import (
+    ACK_EMOJI,
+    DELIVER_EMOJI,
+    REQUEST_COMMAND,
+    REQUEST_EMOJI,
+    REQUEST_LABEL,
+    VIDEO_COMING_SOON,
+)
 from .client import (
     ComfyClient,
     ComfyError,
@@ -50,8 +58,15 @@ from .spec import (
     substitute,
 )
 from .store import WorkflowTemplateStore, default_templates, load_templates_from
+from .wiring import build_image_service, select_enhancer
 
 __all__ = [
+    "ACK_EMOJI",
+    "DELIVER_EMOJI",
+    "REQUEST_COMMAND",
+    "REQUEST_EMOJI",
+    "REQUEST_LABEL",
+    "VIDEO_COMING_SOON",
     "CatalogExampleSource",
     "ComfyClient",
     "ComfyError",
@@ -84,8 +99,10 @@ __all__ = [
     "WorkflowTemplate",
     "WorkflowTemplateStore",
     "build_comfy_client",
+    "build_image_service",
     "default_templates",
     "load_templates_from",
     "remove_edge_background",
+    "select_enhancer",
     "substitute",
 ]

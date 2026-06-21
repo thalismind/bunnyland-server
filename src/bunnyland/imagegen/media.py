@@ -97,9 +97,24 @@ class MediaStore:
         return f"{base_url.rstrip('/')}{relative}"
 
 
+#: Content types for the extensions we serve.
+_CONTENT_TYPES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "webp": "image/webp",
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+}
+
+
 def extension_for(name: str) -> str:
     """Return the validated extension of a media filename."""
     return _check_name(name)[1]
+
+
+def content_type_for(name: str) -> str:
+    """Return the HTTP content type for a validated media filename."""
+    return _CONTENT_TYPES[extension_for(name)]
 
 
 __all__ = [
@@ -111,5 +126,6 @@ __all__ = [
     "SEGMENT_SPRITES",
     "MediaError",
     "MediaStore",
+    "content_type_for",
     "extension_for",
 ]

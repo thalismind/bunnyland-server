@@ -26,6 +26,8 @@ from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.controllers import ClaimTimeoutComponent
 from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
 from ..core.world_actor import WorldActor
+from ..imagegen.media import MediaError, content_type_for
+from ..imagegen.spec import ImagePurpose
 from ..llm_agents import (
     ControllerDefinitionStore,
     action_library_names,
@@ -49,6 +51,7 @@ from .models import (
     ControllerAssignmentRequest,
     ControllerDefinitionListResponse,
     DmProjectionResponse,
+    EventImageRequest,
     HealthResponse,
     RecentEventsResponse,
     RoomProjectionResponse,
@@ -66,6 +69,8 @@ from .models import (
     WorldGenerationStatusResponse,
     WorldGeneratorInfo,
     WorldGeneratorListResponse,
+    WorldImageGenerationRequest,
+    WorldImageGenerationResponse,
     WorldItemGenerationRequest,
     WorldItemGenerationResponse,
     WorldLibraryResponse,
@@ -102,6 +107,7 @@ WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 
 if TYPE_CHECKING:
     from ..engine import GameLoop
+    from ..imagegen.service import ImageGenService
     from ..plugins.model import Plugin
     from .subscriptions import EventSubscription
 
@@ -112,10 +118,11 @@ if TYPE_CHECKING:
 # parameter as a query field, closing every connection with a 403. Optional dependency, so
 # fall back to ``None`` and raise a friendly error from ``create_app`` if it is missing.
 try:
-    from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
 except ImportError:
-    FastAPI = Header = HTTPException = WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
+    FastAPI = Header = HTTPException = Response = None  # type: ignore[assignment, misc]
+    WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
 
 
 ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
@@ -143,6 +150,7 @@ def create_app(
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
     admin_token: str | None = None,
+    imagegen: ImageGenService | None = None,
     title: str = "bunnyland",
 ):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
@@ -162,12 +170,18 @@ def create_app(
             if mcp_session_manager is not None:
                 mcp_session_context = mcp_session_manager.run()
                 await mcp_session_context.__aenter__()
+            if imagegen is not None:
+                # Throttled portrait/sprite backfill runs beside the loop (not in the tick),
+                # filling in characters still missing an image, one request at a time.
+                imagegen.start_backfill()
             yield
         finally:
             if mcp_session_context is not None:
                 await mcp_session_context.__aexit__(None, None, None)
             if mcp_event_bridge is not None:
                 mcp_event_bridge.close()
+            if imagegen is not None:
+                await imagegen.aclose()
 
     app = FastAPI(title=title, lifespan=lifespan)
     app.add_middleware(
@@ -184,6 +198,31 @@ def create_app(
     # so a restarted server keeps the scripts and behavior trees the editor previously saved.
     definition_store = ControllerDefinitionStore(definitions_path)
     definition_store.load()
+
+    def _require_imagegen() -> ImageGenService:
+        if imagegen is None:
+            raise HTTPException(status_code=409, detail="image generation is not configured")
+        return imagegen
+
+    def _parse_purpose(value: str) -> ImagePurpose:
+        try:
+            return ImagePurpose(value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"invalid image purpose {value!r}"
+            ) from exc
+
+    def _image_response(job) -> WorldImageGenerationResponse:
+        return WorldImageGenerationResponse(
+            world_epoch=actor.epoch,
+            job_id=job.job_id,
+            status=job.status,
+            entity_id=job.entity_id,
+            purpose=job.purpose.value,
+            url=job.url,
+            alpha_url=job.alpha_url,
+            error=job.error,
+        )
 
     def _git_hash() -> str:
         hash_value = os.environ.get(GIT_HASH_ENV, "").strip()
@@ -852,6 +891,62 @@ def create_app(
         request: WorldEventGenerationRequest,
     ) -> WorldEventGenerationResponse:
         return await _generate_event_request(request)
+
+    @app.post("/admin/world/generate-image", response_model=WorldImageGenerationResponse)
+    async def generate_image(
+        request: WorldImageGenerationRequest,
+        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
+    ) -> WorldImageGenerationResponse:
+        _require_projection_admin(admin_token)
+        service = _require_imagegen()
+        purpose = _parse_purpose(request.purpose)
+        job = await service.start(
+            request.entity_id,
+            purpose,
+            template_name=request.template,
+            extra=request.extra,
+            alpha=request.alpha,
+            force=request.force,
+        )
+        return _image_response(job)
+
+    @app.get(
+        "/admin/world/generate-image/{job_id}",
+        response_model=WorldImageGenerationResponse,
+    )
+    async def image_job_status(
+        job_id: str,
+        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
+    ) -> WorldImageGenerationResponse:
+        _require_projection_admin(admin_token)
+        service = _require_imagegen()
+        job = service.job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="unknown image job")
+        return _image_response(job)
+
+    @app.post(
+        "/world/event/{record_id}/image",
+        response_model=WorldImageGenerationResponse,
+    )
+    async def request_event_image(
+        record_id: str, body: EventImageRequest | None = None
+    ) -> WorldImageGenerationResponse:
+        # Player-facing: events are on-request only and deduped per record by the service.
+        service = _require_imagegen()
+        extra = body.extra if body is not None else ""
+        job = await service.start(record_id, ImagePurpose.EVENT, extra=extra)
+        return _image_response(job)
+
+    @app.get("/media/{segment}/{name}")
+    async def get_media(segment: str, name: str) -> Response:
+        service = _require_imagegen()
+        try:
+            data = service.media.read(segment, name)
+            content_type = content_type_for(name)
+        except MediaError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(content=data, media_type=content_type)
 
     @app.post("/admin/world/save", response_model=WorldSaveResponse)
     async def save_world_now() -> WorldSaveResponse:

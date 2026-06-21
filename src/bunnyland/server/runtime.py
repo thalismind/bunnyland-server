@@ -13,6 +13,7 @@ from ..persistence import WorldMeta
 from .app import create_app
 
 if TYPE_CHECKING:
+    from ..imagegen.service import ImageGenService
     from ..plugins.model import Plugin
     from ..worldgen import GenOptions
 
@@ -29,6 +30,7 @@ async def run_loop_with_api(
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
     admin_token: str | None = None,
+    imagegen: ImageGenService | None = None,
     max_ticks: int | None = None,
 ) -> int:
     """Run uvicorn and the game loop until either one stops."""
@@ -49,6 +51,7 @@ async def run_loop_with_api(
         worldgen_options=worldgen_options,
         plugins=plugins,
         admin_token=admin_token,
+        imagegen=imagegen,
     )
     telemetry.instrument_fastapi(app)
     server = uvicorn.Server(

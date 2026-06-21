@@ -488,6 +488,32 @@ class WorldEventGenerationResponse(BaseModel):
     patch: WorldPatchRequest
 
 
+class WorldImageGenerationRequest(BaseModel):
+    entity_id: str
+    purpose: str = "portrait"
+    template: str = ""
+    extra: str = ""
+    alpha: bool = False
+    force: bool = False
+
+
+class EventImageRequest(BaseModel):
+    extra: str = ""
+
+
+class WorldImageGenerationResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    job_id: str
+    status: str
+    entity_id: str
+    purpose: str
+    url: str = ""
+    alpha_url: str = ""
+    error: str | None = None
+
+
 class WorldSaveResponse(BaseModel):
     ok: bool = True
     path: str
@@ -589,6 +615,7 @@ __all__ = [
     "ClientTargetView",
     "DmProjectionResponse",
     "DmRoomProjectionView",
+    "EventImageRequest",
     "QueuedCommandView",
     "RecentEventsResponse",
     "RoomProjectionEntityView",
@@ -606,6 +633,8 @@ __all__ = [
     "WorldGenerateResponse",
     "WorldGenerationStatusResponse",
     "WorldGeneratorInfo",
+    "WorldImageGenerationRequest",
+    "WorldImageGenerationResponse",
     "WorldGeneratorListResponse",
     "WorldItemGenerationRequest",
     "WorldItemGenerationResponse",
