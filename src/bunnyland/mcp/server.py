@@ -44,6 +44,7 @@ from ..server.models import (
     WorldEventGenerationRequest,
     WorldGenerateRequest,
     WorldGenerationStatusResponse,
+    WorldImageGenerationRequest,
     WorldItemGenerationRequest,
     WorldPatchRequest,
     WorldRoomGenerationRequest,
@@ -70,6 +71,7 @@ if TYPE_CHECKING:
         WorldCharacterGenerationResponse,
         WorldEventGenerationResponse,
         WorldGenerateResponse,
+        WorldImageGenerationResponse,
         WorldItemGenerationResponse,
         WorldPatchResponse,
         WorldRoomGenerationResponse,
@@ -517,6 +519,10 @@ def create_bunnyland_mcp_app(
     generate_event: Callable[
         [WorldEventGenerationRequest], Awaitable[WorldEventGenerationResponse]
     ],
+    generate_image: Callable[
+        [WorldImageGenerationRequest], Awaitable[WorldImageGenerationResponse]
+    ]
+    | None = None,
     register_script: Callable[[ScriptSpec], Awaitable[ControllerDefinitionListResponse]]
     | None = None,
     register_behavior: Callable[[BehaviorTreeSpec], Awaitable[ControllerDefinitionListResponse]]
@@ -1191,6 +1197,40 @@ def create_bunnyland_mcp_app(
         try:
             response = await generate_event(
                 WorldEventGenerationRequest(room_entity_id=room_entity_id, prompt=prompt)
+            )
+        except Exception as exc:
+            raise ToolError(str(exc)) from exc
+        return response.model_dump(mode="json")
+
+    @mcp.tool()
+    async def generate_image_admin(
+        entity_id: str,
+        purpose: str = "portrait",
+        template: str = "",
+        extra: str = "",
+        alpha: bool = False,
+        force: bool = False,
+        admin_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate (or regenerate) an image for an entity or history record.
+
+        ``purpose`` is one of portrait/entity/sprite/event. Requires the admin token and a
+        server configured with a ComfyUI image generation backend.
+        """
+
+        admin(admin_token)
+        if generate_image is None:
+            raise ToolError("image generation is not configured")
+        try:
+            response = await generate_image(
+                WorldImageGenerationRequest(
+                    entity_id=entity_id,
+                    purpose=purpose,
+                    template=template,
+                    extra=extra,
+                    alpha=alpha,
+                    force=force,
+                )
             )
         except Exception as exc:
             raise ToolError(str(exc)) from exc

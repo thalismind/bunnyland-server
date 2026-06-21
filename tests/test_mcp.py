@@ -43,6 +43,7 @@ from bunnyland.server.models import (
     WorldEventGenerationResponse,
     WorldGenerateResponse,
     WorldGenerationStatusResponse,
+    WorldImageGenerationResponse,
     WorldItemGenerationResponse,
     WorldPatchRequest,
     WorldPatchResponse,
@@ -670,7 +671,17 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
             patch=WorldPatchRequest(),
         )
 
-    create_bunnyland_mcp_app(
+    async def generate_image(request):
+        calls["generate_image"] = request
+        return WorldImageGenerationResponse(
+            world_epoch=scenario.actor.epoch,
+            job_id="img-1",
+            status="queued",
+            entity_id=request.entity_id,
+            purpose=request.purpose,
+        )
+
+    create_kwargs = dict(
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=SimpleNamespace(running=True, paused=False),
@@ -683,6 +694,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         generate_item=generate_item,
         generate_event=generate_event,
     )
+    create_bunnyland_mcp_app(generate_image=generate_image, **create_kwargs)
 
     characters = registered_tools["list_characters"]()
     assert characters["ok"] is True
@@ -772,6 +784,23 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     )
     assert event["generated_kind"] == "scene"
     assert calls["generate_event"].prompt == "event prompt"
+
+    with pytest.raises(RuntimeError):  # wrong admin token
+        await registered_tools["generate_image_admin"](
+            admin_token="wrong", entity_id=str(scenario.character)
+        )
+    image = await registered_tools["generate_image_admin"](
+        admin_token="secret", entity_id=str(scenario.character), purpose="portrait"
+    )
+    assert image["job_id"] == "img-1"
+    assert calls["generate_image"].entity_id == str(scenario.character)
+
+    # Re-create without an image callback: the tool reports it is not configured.
+    create_bunnyland_mcp_app(**create_kwargs)
+    with pytest.raises(RuntimeError, match="not configured"):
+        await registered_tools["generate_image_admin"](
+            admin_token="secret", entity_id=str(scenario.character)
+        )
 
 
 async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
@@ -1055,6 +1084,7 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(
         generate_character=boom,
         generate_item=boom,
         generate_event=boom,
+        generate_image=boom,
         register_script=register_script,
         register_behavior=register_behavior,
         list_controller_definitions=list_controller_definitions,
@@ -1071,6 +1101,7 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(
         ("generate_character_patch_admin", {"room_entity_id": str(scenario.room_a)}),
         ("generate_item_patch_admin", {"container_entity_id": str(scenario.room_a)}),
         ("generate_event_patch_admin", {"room_entity_id": str(scenario.room_a)}),
+        ("generate_image_admin", {"entity_id": str(scenario.character)}),
     ]:
         with pytest.raises(RuntimeError, match="generator unavailable"):
             await registered_tools[tool_name](admin_token="secret", **kwargs)

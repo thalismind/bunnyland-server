@@ -893,12 +893,9 @@ def create_app(
     ) -> WorldEventGenerationResponse:
         return await _generate_event_request(request)
 
-    @app.post("/admin/world/generate-image", response_model=WorldImageGenerationResponse)
-    async def generate_image(
+    async def _generate_image_request(
         request: WorldImageGenerationRequest,
-        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
     ) -> WorldImageGenerationResponse:
-        _require_projection_admin(admin_token)
         service = _require_imagegen()
         purpose = _parse_purpose(request.purpose)
         job = await service.start(
@@ -910,6 +907,14 @@ def create_app(
             force=request.force,
         )
         return _image_response(job)
+
+    @app.post("/admin/world/generate-image", response_model=WorldImageGenerationResponse)
+    async def generate_image(
+        request: WorldImageGenerationRequest,
+        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
+    ) -> WorldImageGenerationResponse:
+        _require_projection_admin(admin_token)
+        return await _generate_image_request(request)
 
     @app.get(
         "/admin/world/generate-image/{job_id}",
@@ -1011,6 +1016,7 @@ def create_app(
             generate_character=_generate_character_request,
             generate_item=_generate_item_request,
             generate_event=_generate_event_request,
+            generate_image=_generate_image_request,
             register_script=_register_script_request,
             register_behavior=_register_behavior_request,
             list_controller_definitions=_controller_definitions_response,
