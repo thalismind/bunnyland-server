@@ -1242,6 +1242,31 @@ async def test_discord_playtest_writes_trace_artifacts(scenario, tmp_path, monke
     assert trace["final_world"] == json.loads(world_path.read_text())
 
 
+async def test_discord_playtest_skips_trace_when_dir_unset(scenario, tmp_path, monkeypatch):
+    # When BUNNYLAND_PLAYTEST_TRACE_DIR is unset, run_discord_playtest must skip writing
+    # any trace artifacts. Clear it explicitly so this holds even when CI exports the var
+    # globally to capture traces (otherwise the false arm of `if trace_dir:` goes uncovered).
+    monkeypatch.delenv("BUNNYLAND_PLAYTEST_TRACE_DIR", raising=False)
+    spec = DiscordPlaytest(
+        name="no-trace",
+        ticks=1,
+        inputs=(
+            PlaytestInput(
+                tick=0,
+                user_id=123,
+                channel_id=456,
+                content="!claim Juniper",
+                expect=("You are now controlling Juniper.",),
+            ),
+        ),
+    )
+
+    result = await run_discord_playtest(_loop(scenario.actor), spec)
+
+    assert result.inputs[0].messages == ("<@123> You are now controlling Juniper.",)
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_discord_playtest_resolved_ticks_requires_limit_for_epoch_only_inputs():
     assert (
         DiscordPlaytest(inputs=(PlaytestInput(tick=3, content="wait"),)).resolved_ticks(None) == 4
