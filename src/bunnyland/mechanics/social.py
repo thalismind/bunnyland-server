@@ -201,9 +201,9 @@ def known_gossip(world: World, character_id: EntityId) -> list[tuple[Entity, Kno
     if not world.has_entity(character_id):
         return []
     known: list[tuple[Entity, KnowsGossip]] = []
+    # get_relationships only yields live targets: world.remove() cascades incoming edges, so a
+    # dangling claim_id can't appear here.
     for edge, claim_id in world.get_entity(character_id).get_relationships(KnowsGossip):
-        if not world.has_entity(claim_id):
-            continue
         claim = world.get_entity(claim_id)
         if claim.has_component(GossipClaimComponent):
             known.append((claim, edge))
@@ -219,8 +219,7 @@ def known_gossip(world: World, character_id: EntityId) -> list[tuple[Entity, Kno
 
 
 def _knows_claim(world: World, character_id: EntityId, claim_id: EntityId) -> bool:
-    if not world.has_entity(character_id):
-        return False
+    # Only ever called for a character the caller has already confirmed exists.
     return any(
         target == claim_id
         for _edge, target in world.get_entity(character_id).get_relationships(KnowsGossip)
@@ -665,9 +664,9 @@ def _describe_bond(bond: SocialBond, perspective: str = "second-person") -> str 
 def relationship_fragments(world: World, character: Entity) -> list[str]:
     """Foundation-prompt lines for the character's notable bonds."""
     lines: list[str] = []
+    # get_relationships only yields live targets: world.remove() cascades incoming edges, so a
+    # dangling target_id can't appear here.
     for bond, target_id in character.get_relationships(SocialBond):
-        if not world.has_entity(target_id):
-            continue
         target = world.get_entity(target_id)
         ctx = ComponentPromptContext.for_entity(world, character, target=target)
         lines.extend(bond.prompt_fragments(ctx))
@@ -707,7 +706,9 @@ def obligation_fragments(world: World, character: Entity) -> list[str]:
                 f"You owe {other}: {component.text} "
                 f"[obligation:{entity.id} kind:{component.kind}]"
             )
-        elif character.id == creditor_id:
+        else:
+            # obligations_for only returns obligations the character is party to, so if it is
+            # not the debtor it is necessarily the creditor.
             other = entity_name(world.get_entity(debtor_id), "someone")
             lines.append(
                 f"{other} owes you: {component.text} "
@@ -725,8 +726,7 @@ def _obligation_parties(entity: Entity) -> tuple[EntityId, EntityId]:
 def _apply_obligation_resolution(
     world: World, debtor_id: EntityId, creditor_id: EntityId, status: str
 ) -> None:
-    if not world.has_entity(debtor_id) or not world.has_entity(creditor_id):
-        return
+    # Both parties are resolved from a live obligation's edges, so they exist here.
     if status == "fulfilled":
         adjust_bond(world, creditor_id, debtor_id, {"trust": 0.1, "affinity": 0.05})
     elif status == "failed":

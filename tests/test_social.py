@@ -767,3 +767,141 @@ def test_gossip_reactor_ignores_invalid_sources_targets_and_known_claims():
     )
 
     assert len(known_gossip(world, hazel)) == 1
+
+
+def test_social_bond_first_person_fragment_needs_a_target():
+    # A first-person bond fragment with no target entity surfaces nothing (it has no name to
+    # speak about), even when the bond itself is strong enough to describe.
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    no_target = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=character, perspective="first-person"),
+        target=None,
+    )
+    assert SocialBond(affinity=0.5).prompt_fragments(no_target) == ()
+
+
+def test_obligation_for_source_skips_matching_debtor_with_other_creditor():
+    # An obligation whose debtor matches but whose creditor differs is not the one we asked
+    # for: the lookup keeps scanning and ultimately finds nothing.
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    other = spawn_entity(
+        world, [IdentityComponent(name="Other", kind="character"), CharacterComponent()]
+    )
+    obligation = create_obligation(
+        world,
+        kind="promise",
+        text="mind the gate",
+        debtor_id=scenario.character,
+        creditor_id=hazel,
+        source_event_id="src-mismatch",
+        created_at_epoch=1,
+    )
+    assert obligation is not None
+    # Same source and debtor, but a creditor that is not party to the obligation.
+    assert obligation_for_source(world, "src-mismatch", scenario.character, other.id) is None
+
+
+def test_obligations_for_skips_obligations_without_the_character():
+    # An obligation between two other characters is not returned when querying a third.
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    bystander = spawn_entity(
+        world, [IdentityComponent(name="Bystander", kind="character"), CharacterComponent()]
+    )
+    obligation = create_obligation(
+        world,
+        kind="promise",
+        text="mind the gate",
+        debtor_id=scenario.character,
+        creditor_id=hazel,
+        source_event_id="src-bystander",
+        created_at_epoch=1,
+    )
+    assert obligation is not None
+    assert obligations_for(world, bystander.id) == []
+
+
+def test_conversation_line_skips_invalid_targets():
+    # Unparseable, self, and missing targets are all skipped; only the valid listener learns.
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    reactor = GossipReactor(world)
+
+    reactor._on_conversation_line(
+        ConversationLineEvent(
+            event_id="line-targets",
+            world_epoch=10,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            target_ids=("not-an-id", str(scenario.character), "entity_999", str(hazel)),
+            conversation_id="conversation_targets",
+            speaker_id=str(scenario.character),
+            text="The east gate is unlatched.",
+            turn_index=0,
+            final_interpretation="inform",
+        )
+    )
+
+    assert len(known_gossip(world, hazel)) == 1
+
+
+def test_gossip_speech_with_no_known_claims_relays_nothing():
+    # A speaker who knows no gossip cannot relay any, even with a valid listener.
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    reactor = GossipReactor(world)
+
+    reactor._on_speech(
+        SpeechToldEvent(
+            event_id="empty-gossip",
+            world_epoch=5,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(scenario.character),
+            target_ids=(str(hazel),),
+            text="Rumor has it.",
+            final_interpretation="gossip",
+        )
+    )
+
+    assert known_gossip(world, hazel) == []
+
+
+def test_resolve_obligation_cancel_leaves_bond_unchanged():
+    # A cancelled obligation resolves without warming or souring the bond between parties.
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    obligation = create_obligation(
+        world,
+        kind="promise",
+        text="repair the latch",
+        debtor_id=scenario.character,
+        creditor_id=hazel,
+        source_event_id="promise-cancel",
+        created_at_epoch=1,
+    )
+    assert obligation is not None
+    ctx = HandlerContext(world, HOUR)
+    command = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="resolve-obligation",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"obligation_id": str(obligation.id), "status": "canceled"},
+    )
+
+    result = ResolveObligationHandler().execute(ctx, command)
+
+    assert result.ok is True
+    assert obligation.get_component(ObligationComponent).status == "canceled"
+    # No bond is created as a consequence of a cancellation.
+    assert bond_between(world, hazel, scenario.character) is None

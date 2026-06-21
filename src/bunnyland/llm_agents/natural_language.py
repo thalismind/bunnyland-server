@@ -95,10 +95,8 @@ def _pattern_regex(
 
     slot_kinds: dict[str, str] = {}
     for part in slots:
-        slot = _slot_name_kind(part)
-        if slot is None:
-            continue
-        name, explicit = slot
+        # ``slots`` is already filtered to parts where ``_slot_name_kind`` is not None.
+        name, explicit = _slot_name_kind(part)  # type: ignore[misc]
         slot_kinds[name] = _slot_kind(definition, name, explicit)
     regex = "^"
     for index, part in enumerate(parts):

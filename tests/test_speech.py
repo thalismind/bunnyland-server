@@ -754,3 +754,89 @@ def test_end_conversation_rejects_bad_speaker_wrong_kind_nonparticipant_and_ende
 
     assert execute_end_conversation(scenario, conversation_id).ok is True
     assert execute_end_conversation(scenario, conversation_id).reason == "conversation has ended"
+
+
+def test_current_participant_returns_none_for_empty_roster():
+    from bunnyland.core.handlers.speech import _current_participant
+
+    component = ConversationComponent(active_turn=0)
+    assert _current_participant((), component) is None
+
+
+def test_start_conversation_rejects_speaker_with_no_room():
+    scenario = speech_scenario()
+    listener = add_listener(scenario, scenario.room_a)
+    # Detach the speaker from any room: they are still active/awake but roomless.
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains,
+        scenario.character,
+    )
+
+    assert execute_start_conversation(scenario, [listener]).reason == (
+        "speaker is not in a room"
+    )
+
+
+def test_start_conversation_with_no_participant_keys_needs_another():
+    scenario = speech_scenario()
+    add_listener(scenario, scenario.room_a)
+    # A payload carrying none of the participant keys yields an empty roster.
+    result = execute_start_conversation(scenario, [], payload={"topic": "alone"})
+
+    assert result.reason == "conversation needs another participant"
+
+
+def test_start_conversation_skips_duplicate_participants():
+    scenario = speech_scenario()
+    listener = add_listener(scenario, scenario.room_a)
+
+    result = execute_start_conversation(
+        scenario,
+        [],
+        payload={"target_ids": (str(listener), str(listener))},
+    )
+
+    assert result.ok is True
+    # The duplicate is dropped; the roster is just speaker + listener.
+    assert result.events[0].participant_ids == (str(scenario.character), str(listener))
+
+
+def test_start_conversation_handles_scalar_non_string_target_payload():
+    scenario = speech_scenario()
+    add_listener(scenario, scenario.room_a)
+    # A non-string, non-sequence target_id is wrapped as a single id, which then fails
+    # to parse into an entity id.
+    result = execute_start_conversation(
+        scenario,
+        [],
+        payload={"target_id": 12345},
+    )
+
+    assert result.reason == "invalid participant id"
+
+
+def test_end_conversation_skips_room_lookup_for_a_missing_lead_participant():
+    # The room is resolved from the first participant; if that participant id no longer
+    # resolves to an entity, ending still succeeds with no room_id rather than raising.
+    from bunnyland.core.handlers.speech import _end_conversation
+
+    scenario = speech_scenario()
+    listener = add_listener(scenario, scenario.room_a)
+    start = execute_start_conversation(scenario, [listener])
+    conversation_id = start.events[0].conversation_id
+    conversation = scenario.actor.world.get_entity(parse_entity_id(conversation_id))
+    component = conversation.get_component(ConversationComponent)
+    ghost = parse_entity_id("entity_999")
+
+    result = _end_conversation(
+        handler_context(scenario),
+        conversation,
+        component,
+        (ghost, listener),
+        "resolved",
+    )
+
+    assert result.ok is True
+    assert isinstance(result.events[0], ConversationEndedEvent)
+    assert result.events[0].room_id is None
+    assert result.events[0].reason == "resolved"
