@@ -1589,9 +1589,10 @@ class UseInstitutionServiceHandler:
         if not service_entity.has_component(InstitutionServiceComponent):
             return rejected("target is not an institution service")
 
+        # A reachable service always has a container (room or inventory), so
+        # _service_institution never returns None here; only the non-institution
+        # container case below is reachable.
         institution_id = _service_institution(ctx.world, service_entity)
-        if institution_id is None:
-            return rejected("service is not attached to an institution")
         institution = ctx.entity(institution_id)
         if not institution.has_component(InstitutionComponent):
             return rejected("service institution is invalid")

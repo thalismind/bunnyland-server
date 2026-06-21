@@ -195,6 +195,30 @@ def test_trace_file_exporter_writes_jsonl(monkeypatch, tmp_path):
     assert rows[0]["resource"]["service.name"] == "bunnyland-release-test"
 
 
+def test_jsonl_exporter_returns_failure_on_oserror(tmp_path):
+    pytest.importorskip("opentelemetry.sdk.trace.export")
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    exporter = telemetry._JsonlSpanExporter(tmp_path / "trace.jsonl")
+    # Point the exporter at a directory so opening it for append raises OSError.
+    exporter.path = tmp_path
+    assert exporter.export([]) is SpanExportResult.FAILURE
+
+
+def test_jsonl_exporter_shutdown_and_force_flush(tmp_path):
+    pytest.importorskip("opentelemetry.sdk.trace.export")
+    exporter = telemetry._JsonlSpanExporter(tmp_path / "trace.jsonl")
+    assert exporter.shutdown() is None
+    assert exporter.force_flush() is True
+    assert exporter.force_flush(timeout_millis=5) is True
+
+
+def test_observe_yields_nothing_without_registered_actor():
+    telemetry.reset_for_tests()
+    # No actor registered: _observe short-circuits and yields no observations.
+    assert list(telemetry._observe(lambda world: 0)) == []
+
+
 @pytestmark_otel
 async def test_tick_emits_spans_and_command_metrics(otel_capture):
     span_exporter, reader = otel_capture

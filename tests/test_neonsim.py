@@ -3628,3 +3628,390 @@ async def test_leak_file_with_non_character_target_skips_heat():
     await scenario.actor.tick(1.0)
 
     assert leaked[0].file_id == str(file)
+
+
+# --- helper coverage: dangling/edge-case branches ------------------------------------
+
+from bunnyland.mechanics import neonsim as _neon  # noqa: E402
+
+
+def test_payload_entity_id_returns_none_when_no_key_matches():
+    scenario = build_scenario()
+    command = _cmd(scenario, "noop", other="x")
+    # Neither requested key is in the payload -> falls through to None.
+    assert _neon._payload_entity_id(command, "target_id", "device_id") is None
+
+
+def test_can_handle_target_component_when_character_is_invalid():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    device = _hackable(scenario, security=1)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # An existing, reachable target but an unparseable character id: can_handle
+    # short-circuits to True (the handler will reject with a clear reason later).
+    command = _cmd(scenario, "unlock", target_id=str(device), character_id="not-an-id")
+    assert UnlockDoorHandler().can_handle(ctx, command) is True
+
+
+def test_can_handle_target_component_alias_key_is_handled():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A non-"target_id" alias key present in the payload claims the command.
+    command = _cmd(scenario, "unlock", device_id="anything")
+    assert UnlockDoorHandler().can_handle(ctx, command) is True
+
+
+def test_district_name_empty_when_room_has_no_region():
+    scenario = build_scenario()
+    # The starting room has no RegionComponent.
+    assert _neon._district_name(scenario.actor.world, scenario.character) == ""
+
+
+def test_spend_scrip_no_op_for_non_positive_amount():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert _neon._spend_scrip(character, scenario.actor.world, 0) is True
+
+
+def test_spend_scrip_partial_leaves_unparented_stack_in_place():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    scrip = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="scrip x10", kind="resource"),
+            ResourceStackComponent(resource_type="scrip", quantity=10),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), scrip.id)
+    # Spend less than the stack: it is decremented and kept, container_of path runs
+    # but the full-drain removal branch is not taken.
+    assert _neon._spend_scrip(character, world, 4) is True
+    stack = world.get_entity(scrip.id).get_component(ResourceStackComponent)
+    assert stack.quantity == 6
+
+
+def test_evidence_for_skips_wiped_and_mismatched_records():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    spawn_entity(
+        world,
+        [RecordedEvidenceComponent(subject_id="A", device_id="cam", wiped=True)],
+    )
+    spawn_entity(
+        world,
+        [RecordedEvidenceComponent(subject_id="other", device_id="cam", wiped=False)],
+    )
+    assert _neon._evidence_for(world, "A", "cam") is None
+
+
+def test_best_exploit_ignores_non_inventory_and_weaker_items():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # A stronger exploit sitting in the room (ROOM_CONTENT, not inventory) is ignored.
+    room_exploit = spawn_entity(world, [_neon.ExploitComponent(power=9)])
+    character.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), room_exploit.id)
+    # Two inventory exploits: the weaker one must not displace the stronger.
+    _inventory_entity(scenario, "weak", "tool", [_neon.ExploitComponent(power=2)])
+    _inventory_entity(scenario, "strong", "tool", [_neon.ExploitComponent(power=5)])
+    power, item = _neon._best_exploit(character, world)
+    assert power == 5
+    assert item is not None
+
+
+def test_matching_credential_skips_non_inventory_relationships():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    cred = spawn_entity(world, [_neon.CredentialComponent(target_owner="arasaka")])
+    # In the room, not the inventory: ignored by the inventory-only scan.
+    character.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), cred.id)
+    assert _neon._matching_credential(character, world, "arasaka") is None
+
+
+def test_raise_local_alarm_leaves_already_raised_zone_untouched():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    room.add_component(SecurityZoneComponent(clearance_required=1, alarm_raised=True))
+    _neon._raise_local_alarm(world, scenario.character)
+    assert room.get_component(SecurityZoneComponent).alarm_raised is True
+
+
+def test_scrip_stack_skips_non_inventory_and_non_scrip_items():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # Non-inventory scrip is skipped by the mode filter.
+    room_scrip = spawn_entity(
+        world, [ResourceStackComponent(resource_type="scrip", quantity=5)]
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), room_scrip.id)
+    # Inventory item that is not scrip is skipped by the resource-type check.
+    _inventory_entity(
+        scenario, "ammo", "resource", [ResourceStackComponent(resource_type="ammo", quantity=3)]
+    )
+    assert _neon._scrip_stack(character, world) is None
+
+
+def test_add_scrip_no_op_for_non_positive_amount():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    _neon._add_scrip(character, world, 0)
+    assert _neon._scrip_stack(character, world) is None
+
+
+def test_remove_item_handles_unparented_entity():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    orphan = spawn_entity(world, [IdentityComponent(name="loose", kind="item")])
+    # No container relationship: the remove path skips the parent-detach branch.
+    _neon._remove_item(world, orphan.id)
+    assert not world.has_entity(orphan.id)
+
+
+def test_installed_implants_skips_relationships_without_implant_component():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # A HasImplant edge to an entity lacking ImplantComponent is filtered out.
+    not_an_implant = spawn_entity(world, [IdentityComponent(name="bracket", kind="part")])
+    character.add_relationship(HasImplant(slot="body"), not_an_implant.id)
+    assert _neon._installed_implants(character, world) == []
+
+
+def test_own_implant_returns_none_without_has_implant_edge():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # Implant exists and is owned-by-inventory, but no HasImplant edge -> None.
+    implant = _inventory_entity(scenario, "loose aug", "implant", [ImplantComponent()])
+    assert _neon._own_implant(character, world, str(implant)) is None
+
+
+def test_contraband_component_fragment_names_the_item():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    item = _room_entity(scenario, "red dust", "contraband", [ContrabandComponent(value=20)])
+    ctx = ComponentPromptContext.for_entity(world, world.get_entity(item))
+    assert world.get_entity(item).get_component(ContrabandComponent).prompt_fragments(ctx) == (
+        "Contraband: red dust.",
+    )
+
+
+async def test_trespass_in_restricted_area_without_security_zone():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    site = _room_entity(
+        scenario,
+        "open vault",
+        "site",
+        [CyberpunkSiteComponent(site_type="vault"), RestrictedAreaComponent(patrol=True)],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        InsideZone(authorized=False), site
+    )
+    trespass: list[TrespassDetectedEvent] = []
+    scenario.actor.bus.subscribe(TrespassDetectedEvent, trespass.append)
+
+    await scenario.actor.tick(1.0)
+
+    assert len(trespass) == 1
+    # No SecurityZoneComponent to flag, but the InsideZone edge is still dropped.
+    assert _inside(scenario, site) is None
+
+
+async def test_deploy_drone_powers_a_powered_drone_without_double_toggle():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    drone = _room_entity(
+        scenario,
+        "recon drone",
+        "device",
+        [DeviceComponent(device_type="drone", powered=True), DroneComponent(active=False)],
+    )
+    deployed: list[DroneDeployedEvent] = []
+    scenario.actor.bus.subscribe(DroneDeployedEvent, deployed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "deploy-drone", target_id=str(drone)))
+    await scenario.actor.tick(1.0)
+
+    assert deployed and deployed[0].device_id == str(drone)
+    device = scenario.actor.world.get_entity(drone)
+    assert device.get_component(DroneComponent).active is True
+    assert device.get_component(DeviceComponent).powered is True
+
+
+async def test_wipe_evidence_for_unparented_record():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    # Record reachable via the room, then detached so it has no container.
+    record = _room_entity(
+        scenario,
+        "free tape",
+        "evidence",
+        [RecordedEvidenceComponent(subject_id="x", device_id="cam")],
+    )
+    # Keep it reachable for the handler by leaving it in the room; the parent
+    # branch runs. Instead exercise the no-parent path via the helper directly.
+    orphan = spawn_entity(
+        world, [RecordedEvidenceComponent(subject_id="y", device_id="cam2")]
+    )
+    _neon._remove_item(world, orphan.id)
+    assert not world.has_entity(orphan.id)
+    assert world.has_entity(parse_entity_id(str(record)))
+
+
+async def test_trace_network_on_uncontained_room_device():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    # Make the character's own (uncontained) room a hackable network device. Tracing
+    # it finds no containing room, so the sibling scan is skipped (node_count stays 0).
+    room = world.get_entity(scenario.room_a)
+    room.add_component(DeviceComponent(device_type="terminal"))
+    room.add_component(HackableComponent(security=1))
+    traced: list[NetworkTracedEvent] = []
+    scenario.actor.bus.subscribe(NetworkTracedEvent, traced.append)
+
+    await scenario.actor.submit(_cmd(scenario, "trace-network", target_id=str(scenario.room_a)))
+    await scenario.actor.tick(1.0)
+
+    assert traced and traced[0].node_count == 0
+
+
+async def test_run_exploit_consumes_single_use_inventory_exploit():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    device = _hackable(scenario, security=2)
+    exploit = _give_exploit(scenario, power=5, single_use=True)
+    succeeded: list = []
+    scenario.actor.bus.subscribe(HackSucceededEvent, succeeded.append)
+
+    await scenario.actor.submit(_cmd(scenario, "run-exploit", target_id=str(device)))
+    await scenario.actor.tick(1.0)
+
+    assert succeeded
+    assert world.get_entity(device).get_component(HackableComponent).breached is True
+    # Single-use exploit was consumed (removed via its inventory container).
+    assert not world.has_entity(parse_entity_id(str(exploit)))
+
+
+async def test_sabotage_system_without_device_component():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    # A breached HackableComponent with no DeviceComponent: the disable block is skipped.
+    target = _room_entity(
+        scenario,
+        "raw node",
+        "device",
+        [HackableComponent(security=1, breached=True)],
+    )
+    sabotaged: list[SystemSabotagedEvent] = []
+    scenario.actor.bus.subscribe(SystemSabotagedEvent, sabotaged.append)
+
+    await scenario.actor.submit(_cmd(scenario, "sabotage-system", target_id=str(target)))
+    await scenario.actor.tick(1.0)
+
+    assert sabotaged and sabotaged[0].device_id == str(target)
+    assert not world.get_entity(target).has_component(DeviceComponent)
+
+
+async def test_unlock_lockable_that_is_not_a_network_device():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    # LockableComponent but no HackableComponent. can_handle() declines such targets,
+    # so call execute() directly to reach the in-handler rejection.
+    door = _room_entity(
+        scenario,
+        "manual gate",
+        "device",
+        [LockableComponent(locked=True)],
+    )
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = UnlockDoorHandler().execute(ctx, _cmd(scenario, "unlock", target_id=str(door)))
+    assert result.ok is False
+    assert result.reason == "target is not a network device"
+
+
+def test_pay_debt_rejects_when_spend_scrip_underdrains(monkeypatch):
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(DebtComponent(amount=50, defaulted_at_epoch=0))
+    _give_scrip(scenario, 30)
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    # Force the defensive double-check: _spend_scrip reports failure even though
+    # _scrip_stack reported available funds.
+    monkeypatch.setattr(_neon, "_spend_scrip", lambda *a, **k: False)
+    result = PayDebtHandler().execute(ctx, _cmd(scenario, "pay-debt"))
+    assert result.ok is False
+    assert result.reason == "not enough scrip to pay the debt"
+
+
+async def test_scan_implant_skips_already_breached_implants():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    subject = _other_character(scenario)
+    subject_entity = world.get_entity(subject)
+    # An installed implant that is hackable but already breached -> loop continues
+    # past it without selecting a target.
+    breached_implant = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="cracked deck", kind="implant"),
+            ImplantComponent(),
+            HackableComponent(security=1, breached=True),
+        ],
+    )
+    subject_entity.add_relationship(HasImplant(slot="body"), breached_implant.id)
+    rejects = await _reject(
+        scenario, _cmd(scenario, "exploit-implant", target_id=str(subject))
+    )
+    assert rejects
+
+
+def test_district_name_empty_when_character_has_no_room():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    # A character with no containing room: room_id is None.
+    loner = spawn_entity(
+        world, [IdentityComponent(name="drifter", kind="character"), CharacterComponent()]
+    )
+    assert _neon._district_name(world, loner.id) == ""
+
+
+def test_best_exploit_keeps_first_when_later_is_weaker():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    _inventory_entity(scenario, "strong", "tool", [_neon.ExploitComponent(power=8)])
+    _inventory_entity(scenario, "weak", "tool", [_neon.ExploitComponent(power=3)])
+    power, _item = _neon._best_exploit(character, world)
+    assert power == 8
+
+
+def test_neonsim_fragments_dedup_when_installed_implant_is_also_reachable():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # Implant in the room (reachable) AND installed via HasImplant -> reported once,
+    # via the installed pass; the reachable pass skips it.
+    implant = _room_entity(
+        scenario, "reflex wire", "implant", [ImplantComponent(implant_type="reflex")]
+    )
+    character.add_relationship(HasImplant(slot="body"), implant)
+    lines = _neon.neonsim_fragments(world, character)
+    assert len([line for line in lines if "reflex" in line]) == 1
+
+

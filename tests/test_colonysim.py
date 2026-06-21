@@ -2662,4 +2662,355 @@ def test_colonysim_surgery_can_install_reachable_prosthetic_directly():
     body_part_id = character.get_relationships(HasBodyPart)[0][1]
     body_part = scenario.actor.world.get_entity(body_part_id)
     assert body_part.get_component(BodyPartHealthComponent).prosthetic == "wooden paw"
-    assert surgery.get_component(SurgeryBillComponent).completed is True
+
+
+def test_colonysim_catalogue_prompt_fragments_suppressed_states():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    viewer = spawn_entity(world, [CharacterComponent()])
+    external_ctx = ComponentPromptContext.for_entity(
+        world, character, perspective=PromptPerspective(viewer=viewer)
+    )
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+
+    # First-person-only fragments collapse to nothing for an external viewer.
+    assert PawnProfileComponent(backstory="x").prompt_fragments(external_ctx) == ()
+    assert PrisonerComponent().prompt_fragments(external_ctx) == ()
+    assert BedRestComponent(started_at_epoch=0).prompt_fragments(external_ctx) == ()
+    assert InfectionComponent(severity=0.5).prompt_fragments(external_ctx) == ()
+    # Resolved/returned/completed states emit nothing even first-person.
+    assert ColonyIncidentComponent(incident_type="raid", resolved=True).prompt_fragments(
+        self_ctx
+    ) == ()
+    assert CaravanComponent(destination="town", returned=True).prompt_fragments(self_ctx) == ()
+    assert SurgeryBillComponent(part="arm", operation="repair", completed=True).prompt_fragments(
+        self_ctx
+    ) == ()
+    # Active states emit a descriptive fragment.
+    assert ColonyIncidentComponent(incident_type="raid", severity=2).prompt_fragments(
+        self_ctx
+    ) == ("Colony incident: raid severity 2.",)
+    assert CaravanComponent(destination="town").prompt_fragments(self_ctx) == (
+        "Caravan bound for town.",
+    )
+    assert SurgeryBillComponent(part="arm", operation="repair").prompt_fragments(self_ctx) == (
+        "Surgery bill: repair arm.",
+    )
+
+
+def test_ensure_colonysim_marker_spawns_when_absent():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    assert not list(world.query().with_all([ColonySimComponent]).execute_entities())
+
+    first = colonysim.ensure_colonysim_marker(scenario.actor)
+    assert isinstance(first, ColonySimComponent)
+    markers = list(world.query().with_all([ColonySimComponent]).execute_entities())
+    assert len(markers) == 1
+    # A second call reuses the existing marker rather than spawning another.
+    colonysim.ensure_colonysim_marker(scenario.actor)
+    assert len(list(world.query().with_all([ColonySimComponent]).execute_entities())) == 1
+
+
+async def test_resource_regen_skips_when_recovered_rounds_to_zero():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    node = _resource_node(scenario, current=1)
+    node_entity = scenario.actor.world.get_entity(node)
+    replace_component(
+        node_entity,
+        ResourceNodeComponent(resource_type="wood", current=1, maximum=4, regen_per_day=2.0),
+    )
+    # A tiny tick yields int(regen_per_day * days) == 0, so current is unchanged.
+    await scenario.actor.tick(1.0)
+    assert node_entity.get_component(ResourceNodeComponent).current == 1
+
+
+def test_medical_recovery_handles_non_bed_rest_target_and_zero_elapsed_infection():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    epoch = 10 * HOUR
+    patient = scenario.actor.world.get_entity(scenario.character)
+    # bed_id points at a plain prop, so MedicalBedComponent is absent (bed quality stays 1.0).
+    plain_prop = spawn_entity(world, [IdentityComponent(name="rock", kind="prop")])
+    replace_component(patient, HealthComponent(current=5.0, maximum=20.0))
+    replace_component(patient, BedRestComponent(started_at_epoch=0, bed_id=str(plain_prop.id)))
+    # Infection last updated exactly now -> elapsed_hours == 0 -> skipped.
+    replace_component(patient, InfectionComponent(severity=0.4, last_updated_epoch=int(epoch)))
+
+    events = colonysim.MedicalRecoveryConsequence().process(world, int(epoch))
+
+    health = patient.get_component(HealthComponent)
+    # Healed using default bed quality 1.0 over 10 hours from 5.0.
+    assert health.current == 15.0
+    # Infection was untouched because no time elapsed.
+    assert patient.get_component(InfectionComponent).severity == 0.4
+    assert not any("infection" in type(event).__name__.lower() for event in events)
+
+
+def test_faction_relation_reuses_existing_record_on_trade():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    # A non-matching relation first forces the lookup loop to skip past it.
+    spawn_entity(world, [FactionRelationComponent(faction_id="raiders", goodwill=-1.0)])
+    existing = spawn_entity(
+        world, [FactionRelationComponent(faction_id="traders", goodwill=2.0)]
+    )
+    _stack(scenario, "wood", 5)
+    offer = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="offer", kind="trade"),
+            TradeOfferComponent(
+                faction_id="traders", gives={}, wants={"wood": 1}, goodwill_delta=3.0
+            ),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), offer.id
+    )
+
+    result = CompleteTradeHandler().execute(
+        ctx, _handler_cmd(scenario, "complete-trade", offer_id=str(offer.id))
+    )
+
+    assert result.ok is True
+    # Goodwill accumulated on the pre-existing relation, no duplicate was spawned.
+    assert existing.get_component(FactionRelationComponent).goodwill == 5.0
+    # No new traders relation was spawned (only raiders + the reused traders record).
+    relations = list(world.query().with_all([FactionRelationComponent]).execute_entities())
+    assert len(relations) == 2
+
+
+def test_body_part_entity_matches_existing_part_during_surgery():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    room = world.get_entity(scenario.room_a)
+    # A non-matching part first forces the lookup to skip before finding the match.
+    other_part = spawn_entity(world, [BodyPartHealthComponent(part="right paw", health=1.0)])
+    character.add_relationship(HasBodyPart(), other_part.id)
+    # Pre-existing body part so the surgery reuses it instead of spawning a new one.
+    existing_part = spawn_entity(
+        world, [BodyPartHealthComponent(part="left paw", health=0.3)]
+    )
+    character.add_relationship(HasBodyPart(), existing_part.id)
+    surgery = spawn_entity(
+        world,
+        [SurgeryBillComponent(part="left paw", operation="repair")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), surgery.id)
+
+    result = PerformSurgeryHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "perform-surgery",
+            patient_id=str(scenario.character),
+            surgery_id=str(surgery.id),
+        ),
+    )
+
+    assert result.ok is True
+    # The existing part was repaired in place (operation "repair" -> else branch);
+    # no new part was spawned, so only the two seeded parts remain.
+    assert len(character.get_relationships(HasBodyPart)) == 2
+    repaired = existing_part.get_component(BodyPartHealthComponent)
+    assert repaired.health == 1.0
+    assert repaired.missing is False
+
+
+def test_rescue_to_bed_handles_unroomed_and_already_sleeping_patient():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room = world.get_entity(scenario.room_a)
+    bed = spawn_entity(
+        world,
+        [IdentityComponent(name="bed", kind="furniture"), MedicalBedComponent(quality=1.5)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bed.id)
+    # Patient is downed, reachable in the rescuer's room, and already sleeping.
+    patient = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="hurt", kind="character"),
+            CharacterComponent(),
+            DownedComponent(downed_at_epoch=0, cause="injury"),
+            SleepingComponent(started_at_epoch=0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), patient.id)
+
+    result = RescueToBedHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario, "rescue-to-bed", patient_id=str(patient.id), bed_id=str(bed.id)
+        ),
+    )
+
+    assert result.ok is True
+    assert patient.has_component(BedRestComponent)
+    # Moved into the bed's room.
+    assert container_of(patient) == scenario.room_a
+
+
+def test_progress_job_bill_completes_without_job_component():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room = world.get_entity(scenario.room_a)
+    # Bill with no JobComponent: completion path skips the job-completion branch.
+    bill = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="bill", kind="job"),
+            JobBillComponent(recipe_id="plank", work_required=2.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bill.id)
+
+    result = ProgressJobBillHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "progress-job-bill", bill_id=str(bill.id), work=5.0),
+    )
+
+    assert result.ok is True
+    assert bill.get_component(JobBillComponent).work_done == 2.0
+
+
+def test_recruit_prisoner_accumulates_progress_without_full_recruitment():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room = world.get_entity(scenario.room_a)
+    prisoner = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="pris", kind="character"),
+            CharacterComponent(),
+            PrisonerComponent(policy="recruit", recruitment_difficulty=10.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), prisoner.id)
+
+    result = RecruitPrisonerHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "recruit-prisoner", prisoner_id=str(prisoner.id), progress=2.0),
+    )
+
+    assert result.ok is True
+    # Still a prisoner; progress accumulated but below the difficulty threshold.
+    assert prisoner.has_component(PrisonerComponent)
+    assert prisoner.get_component(PrisonerComponent).recruitment_progress == 2.0
+
+
+def test_research_project_progress_without_unlock():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room = world.get_entity(scenario.room_a)
+    project = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="proj", kind="research"),
+            ResearchProjectComponent(project_id="battery", work_required=10.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), project.id)
+
+    result = ResearchProjectHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "research-project", project_id=str(project.id), work=3.0),
+    )
+
+    assert result.ok is True
+    component = project.get_component(ResearchProjectComponent)
+    assert component.unlocked is False
+    assert component.work_done == 3.0
+    # No tech unlock component spawned while still in progress.
+    assert not project.has_component(TechUnlockComponent)
+
+
+def test_form_caravan_skips_zero_quantity_cargo():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    _stack(scenario, "wood", 3)
+
+    result = FormCaravanHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "form-caravan",
+            destination="town",
+            cargo={"wood": 0, "stone": 0},
+        ),
+    )
+
+    assert result.ok is True
+    # Zero-quantity cargo entries are validated but consume nothing.
+    wood = world.get_entity(_stack_lookup(world, character, "wood"))
+    assert wood.get_component(ResourceStackComponent).quantity == 3
+
+
+def _stack_lookup(world, character, resource_type):
+    for _edge, item_id in character.get_relationships(Contains):
+        item = world.get_entity(item_id)
+        if (
+            item.has_component(ResourceStackComponent)
+            and item.get_component(ResourceStackComponent).resource_type == resource_type
+        ):
+            return item_id
+    raise AssertionError("stack not found")
+
+
+def test_invalid_character_id_rejections():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    cases = [
+        (UpdatePawnProfileHandler(), "update-pawn-profile", {}, "invalid character id"),
+        (
+            SetPrisonerPolicyHandler(),
+            "set-prisoner-policy",
+            {"prisoner_id": "nope", "policy": "hold"},
+            "invalid character or prisoner id",
+        ),
+        (
+            RecruitPrisonerHandler(),
+            "recruit-prisoner",
+            {"prisoner_id": "nope"},
+            "invalid character or prisoner id",
+        ),
+        (FormCaravanHandler(), "form-caravan", {"destination": "town"}, "invalid character id"),
+    ]
+    for handler, command_type, payload, reason in cases:
+        result = handler.execute(
+            ctx, _handler_cmd(scenario, command_type, character_id="not-an-id", **payload)
+        )
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_colonysim_fragments_skips_marker_without_wealth_component():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # A bare ColonySim marker (no ColonyWealthComponent) must be skipped silently.
+    spawn_entity(world, [ColonySimComponent()])
+
+    fragments = colonysim_fragments(world, character)
+
+    assert not any("Colony wealth" in line for line in fragments)

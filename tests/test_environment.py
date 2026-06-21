@@ -176,6 +176,70 @@ def test_environment_component_fragments_describe_clock_and_fire():
     )
 
 
+def test_time_of_day_fragment_without_calendar_omits_day_and_season():
+    actor = _world()
+    clock = spawn_entity(actor.world, [TimeOfDayComponent(phase="dusk")])
+    ctx = ComponentPromptContext.for_entity(actor.world, clock)
+    # No CalendarComponent on the entity -> the short "It is <sky>." form.
+    assert clock.get_component(TimeOfDayComponent).prompt_fragments(ctx) == ("It is dusk.",)
+
+
+def test_fire_fragment_is_empty_for_non_room_third_person_entity():
+    actor = _world()
+    # An item that is on fire, viewed in third person: neither a room nor a
+    # first-person character, so it contributes no fragment.
+    item = spawn_entity(
+        actor.world,
+        [IdentityComponent(name="ember", kind="item"), FireComponent(intensity=1.0)],
+    )
+    ctx = ComponentPromptContext.for_entity(actor.world, item)
+    assert item.get_component(FireComponent).prompt_fragments(ctx) == ()
+
+
+def test_environment_consequence_no_clock_returns_no_events():
+    from relics import World
+
+    from bunnyland.mechanics.environment import EnvironmentConsequence
+
+    # A bare world with no WorldClockComponent: the consequence is a no-op.
+    assert EnvironmentConsequence().process(World(), 0) == []
+
+
+async def test_outdoor_light_unchanged_when_already_at_target_level():
+    actor = _world()
+    # Pre-set the meadow to exactly the night-time outdoor level so the
+    # consequence finds no change to apply.
+    meadow = spawn_entity(
+        actor.world, [RoomComponent(title="Meadow", indoor=False), LightComponent(level=0.05)]
+    )
+    await actor.tick(0.0)  # midnight -> night, outdoor level 0.05 (already set)
+    assert meadow.get_component(LightComponent).level == 0.05
+
+
+def test_damage_targets_empty_for_entity_without_health_or_room():
+    from bunnyland.mechanics.environment import FireConsequence
+
+    actor = _world()
+    item = spawn_entity(
+        actor.world,
+        [IdentityComponent(name="lone ember", kind="item"), FireComponent(intensity=0.5)],
+    )
+    # Plain burning item with no HealthComponent and no RoomComponent: no
+    # damage targets, so the fire just burns its own fuel with no events.
+    assert FireConsequence._damage_targets(actor.world, item) == []
+
+
+async def test_environment_fragment_for_burning_character_in_safe_room():
+    scenario = build_scenario()
+    install_environment(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(FireComponent(intensity=1.0))
+    # The current room is not on fire, but the character is.
+    fragments = environment_fragments(scenario.actor.world, character)
+    assert any("on fire" in line for line in fragments)
+    assert all("fire here" not in line for line in fragments)
+
+
 # -- weather ----------------------------------------------------------------------------
 
 

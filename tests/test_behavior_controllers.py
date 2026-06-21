@@ -37,6 +37,7 @@ from bunnyland.llm_agents.behavior_tree import (
     BehaviorTree,
     BehaviorTreeAgent,
     Condition,
+    Node,
     Selector,
     Sequence,
     Status,
@@ -71,6 +72,11 @@ def _add_visitor(scenario, name: str):
 
 
 # -- behavior-tree nodes ------------------------------------------------------------------
+
+
+def test_base_node_tick_is_abstract():
+    with pytest.raises(NotImplementedError):
+        Node().tick(None)
 
 
 def test_condition_reports_success_and_failure():

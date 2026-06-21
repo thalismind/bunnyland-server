@@ -15,6 +15,7 @@ from bunnyland.core import (
     Contains,
     ControlledBy,
     Lane,
+    RoomComponent,
     build_submitted_command,
     container_of,
     parse_entity_id,
@@ -441,6 +442,55 @@ def test_script_runtime_controller_kind_query_filter_paths():
         parse_entity_id("entity_999")
     ] = ControlledBy(generation=0)
     assert runtime._controller_kind(scenario.actor, stray) is None
+
+    # A controller_kind that does not match the character's actual controller
+    # filters it out (the mismatch branch in _matches_query).
+    scenario.actor.assign_controller(scenario.character, discord.id)
+    assert runtime._controller_kind(scenario.actor, character) == "discord"
+    assert (
+        runtime._resolve_query(
+            scenario.actor,
+            EntityQuery(components=("CharacterComponent",), controller_kind="llm"),
+            {},
+        )
+        == []
+    )
+
+
+def test_script_runtime_select_rejects_unknown_fanout_mode():
+    scenario = build_scenario()
+    runtime = ScriptRuntime()
+    selector = SimpleNamespace(
+        query=EntityQuery(components=("CharacterComponent",)),
+        mode=SimpleNamespace(name="BOGUS"),
+        bind="actor",
+    )
+    with pytest.raises(ScriptRuntimeError, match="unknown fanout mode"):
+        runtime._select(scenario.actor, selector, {})
+
+
+def test_script_runtime_set_component_fields_patch_updates_existing_component():
+    scenario = build_scenario()
+    runtime = ScriptRuntime()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    original_title = room.get_component(RoomComponent).title
+
+    runtime._patch_world(
+        scenario.actor,
+        PatchWorldAction(
+            operations=(
+                SetComponentFieldsPatch(
+                    target=TargetSelector(query=EntityQuery(id=str(scenario.room_a))),
+                    component_type="RoomComponent",
+                    fields={"title": "Renamed Burrow"},
+                ),
+            )
+        ),
+        {},
+    )
+
+    assert room.get_component(RoomComponent).title == "Renamed Burrow"
+    assert original_title != "Renamed Burrow"
 
 
 async def test_script_runtime_records_block_errors_without_marking_fired():

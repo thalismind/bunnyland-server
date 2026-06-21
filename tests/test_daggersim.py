@@ -20,7 +20,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.components import CharacterComponent, HealthComponent
-from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.events import CommandRejectedEvent, SpeechSaidEvent
 from bunnyland.core.handlers import HandlerContext, SayHandler, TellHandler
 from bunnyland.mechanics.daggersim import (
     AbandonGeneratedQuestHandler,
@@ -218,6 +218,7 @@ from bunnyland.mechanics.daggersim import (
     _current_law_region,
     _institution_membership,
     _name,
+    _payload_entity_id,
     _rank_allows,
     _route_between,
     _selected_rumor_id,
@@ -5037,3 +5038,722 @@ def test_daggersim_fragments_show_transformed_state():
         scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
     )
     assert any("Transformed into vampire" in line for line in lines)
+
+
+def _first_and_observer_contexts(world, entity, character):
+    """Build (first-person, observer) prompt contexts for an entity vs. character."""
+    observer = spawn_entity(world, [CharacterComponent()])
+    first = ComponentPromptContext.for_entity(
+        world,
+        entity,
+        perspective=PromptPerspective(viewer=character),
+        target=character,
+    )
+    observer_ctx = ComponentPromptContext.for_entity(
+        world,
+        entity,
+        perspective=PromptPerspective(viewer=observer),
+        target=character,
+    )
+    return first, observer_ctx
+
+
+def test_daggersim_first_person_only_fragments_hide_from_observers():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # carrier entity is the character itself for self-scoped components
+    first, observer = _first_and_observer_contexts(world, character, character)
+
+    cases = [
+        (
+            TravelPlanComponent(
+                destination_id="d", started_at_epoch=0, arrive_at_epoch=10, mode="cart"
+            ),
+            "Traveling by cart; arrival due at epoch 10.",
+        ),
+        (
+            InstitutionReputationComponent(scores={"guild_1": 3}),
+            "Institution reputation with guild_1: 3.",
+        ),
+        (
+            LegalReputationComponent(scores={"region_a": -2}),
+            "Legal reputation in region_a: -2.",
+        ),
+        (
+            ServiceAccessComponent(service_ids=("svc_1", "svc_2")),
+            "Unlocked institution services: 2.",
+        ),
+        (
+            CustomClassComponent(class_name="Tunnel Sage"),
+            "Custom class: Tunnel Sage.",
+        ),
+        (
+            SupernaturalAfflictionComponent(affliction_type="vampire", contracted_at_epoch=0),
+            "Affliction: vampire (incubating).",
+        ),
+        (
+            AfflictionStigmaComponent(region_id="moss-road", severity=4),
+            "Affliction stigma: moss-road severity 4.",
+        ),
+        (
+            CureQuestHookComponent(affliction_type="vampire"),
+            "Cure quest hook: vampire.",
+        ),
+        (
+            FeedingNeedComponent(current=3.0, maximum=10.0),
+            "Feeding need: 3.0/10.0.",
+        ),
+        (
+            WereformComponent(form_name="wolf", transformed_at_epoch=0),
+            "Transformed into wolf.",
+        ),
+        (
+            AutomapComponent(discovered_rooms=("r1", "r2", "r3")),
+            "Automap: 3 room(s) discovered.",
+        ),
+        (
+            RecallAnchorComponent(room_id="room_x"),
+            "Recall anchor set at room room_x.",
+        ),
+        (
+            EtiquetteSkillComponent(level=7),
+            "Etiquette skill: 7.",
+        ),
+        (
+            StreetwiseSkillComponent(level=5),
+            "Streetwise skill: 5.",
+        ),
+    ]
+    for component, expected in cases:
+        assert component.prompt_fragments(first) == (expected,), component
+        assert component.prompt_fragments(observer) == (), component
+
+
+def test_daggersim_service_directory_and_membership_fragments():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+
+    # InstitutionServiceComponent: with and without deed-tag requirement.
+    plain = InstitutionServiceComponent(service_name="ferry pass")
+    assert plain.prompt_fragments(self_ctx) == ("Service directory entry: ferry pass.",)
+    gated = InstitutionServiceComponent(
+        service_name="charter",
+        required_deed_tag="heroism",
+        required_deed_score=2.5,
+    )
+    assert gated.prompt_fragments(self_ctx) == (
+        "Service directory entry: charter requires heroism deed reputation 2.5.",
+    )
+
+    # MemberOfInstitution edge fragment is first-person only, target must be an institution.
+    institution = spawn_entity(world, [InstitutionComponent(name="Burrow Cartographers")])
+    edge = MemberOfInstitution(rank="cartographer")
+    member_ctx = ComponentPromptContext.for_entity(
+        world, character, perspective=self_ctx.perspective, target=institution
+    )
+    assert edge.prompt_fragments(member_ctx) == (
+        "Institution membership: Burrow Cartographers (cartographer).",
+    )
+    # Observer perspective hides it.
+    observer = spawn_entity(world, [CharacterComponent()])
+    observer_ctx = ComponentPromptContext.for_entity(
+        world, character, perspective=PromptPerspective(viewer=observer), target=institution
+    )
+    assert edge.prompt_fragments(observer_ctx) == ()
+    # First-person but target is not an institution -> empty.
+    non_institution = spawn_entity(world, [IdentityComponent(name="rock", kind="item")])
+    non_inst_ctx = ComponentPromptContext.for_entity(
+        world, character, perspective=self_ctx.perspective, target=non_institution
+    )
+    assert edge.prompt_fragments(non_inst_ctx) == ()
+
+
+def test_daggersim_travel_interruption_and_class_template_fragments():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    ctx = ComponentPromptContext.for_entity(world, character)
+
+    assert TravelInterruptionComponent(reason="storm").prompt_fragments(ctx) == (
+        "Travel interruption: storm (unresolved).",
+    )
+    assert TravelInterruptionComponent(reason="storm", resolved=True).prompt_fragments(ctx) == (
+        "Travel interruption: storm (resolved).",
+    )
+    assert ClassTemplateComponent(class_name="Tunnel Sage").prompt_fragments(ctx) == (
+        "Class template available: Tunnel Sage.",
+    )
+    assert RestRiskComponent(band="high").prompt_fragments(ctx) == ("Rest risk here: high.",)
+    assert DungeonRoomComponent(dungeon_id="dgn", depth=2).prompt_fragments(ctx) == (
+        "In dungeon dgn at depth 2.",
+    )
+
+
+def test_daggersim_dungeon_and_secret_door_fragments_state_dependent():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    other = spawn_entity(world, [CharacterComponent()])
+
+    # Dungeon nearby is shown when the entity is not the target.
+    dungeon_entity = spawn_entity(world, [DungeonComponent(dungeon_id="crypt")])
+    nearby_ctx = ComponentPromptContext.for_entity(
+        world, dungeon_entity, perspective=PromptPerspective(viewer=character), target=character
+    )
+    assert DungeonComponent(dungeon_id="crypt").prompt_fragments(nearby_ctx) == (
+        "Dungeon nearby: crypt (unexplored).",
+    )
+    assert DungeonComponent(dungeon_id="crypt", entered=True).prompt_fragments(nearby_ctx) == (
+        "Dungeon nearby: crypt (explored).",
+    )
+    # When the dungeon entity IS the target it is suppressed.
+    self_target_ctx = ComponentPromptContext.for_entity(
+        world,
+        dungeon_entity,
+        perspective=PromptPerspective(viewer=other),
+        target=dungeon_entity,
+    )
+    assert DungeonComponent(dungeon_id="crypt").prompt_fragments(self_target_ctx) == ()
+
+    # DungeonObjective only shows when found.
+    obj_ctx = ComponentPromptContext.for_entity(world, character)
+    assert DungeonObjectiveComponent(objective_kind="idol").prompt_fragments(obj_ctx) == ()
+    assert DungeonObjectiveComponent(
+        objective_kind="idol", found=True
+    ).prompt_fragments(obj_ctx) == ("Dungeon objective found: idol.",)
+
+    # SecretDoor shows only when found and not yet opened.
+    assert SecretDoorComponent(target_room_id="r").prompt_fragments(obj_ctx) == ()
+    assert SecretDoorComponent(
+        target_room_id="r", found=True, hint="loose brick"
+    ).prompt_fragments(obj_ctx) == ("Secret door found here: loose brick.",)
+    assert SecretDoorComponent(
+        target_room_id="r", found=True, opened=True
+    ).prompt_fragments(obj_ctx) == ()
+
+
+def test_daggersim_social_register_and_conversation_tone_fragments():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    speaker = spawn_entity(world, [IdentityComponent(name="Reeve Tamsin", kind="character")])
+
+    # SocialRegister of another entity is shown; suppressed when entity is the target.
+    nearby_ctx = ComponentPromptContext.for_entity(
+        world, speaker, perspective=PromptPerspective(viewer=character), target=character
+    )
+    assert SocialRegisterComponent(register="courtly").prompt_fragments(nearby_ctx) == (
+        "Social register of Reeve Tamsin: courtly.",
+    )
+    self_target_ctx = ComponentPromptContext.for_entity(
+        world, speaker, perspective=PromptPerspective(viewer=character), target=speaker
+    )
+    assert SocialRegisterComponent(register="courtly").prompt_fragments(self_target_ctx) == ()
+
+    # ConversationTone: no last reaction -> empty.
+    assert ConversationToneComponent().prompt_fragments(nearby_ctx) == ()
+    # Suppressed when the toned entity is the target itself.
+    assert ConversationToneComponent(
+        tone="warm", last_reaction="well"
+    ).prompt_fragments(self_target_ctx) == ()
+    # Shown to the addressed viewer (can_view_private_state via target==viewer).
+    addressed_ctx = ComponentPromptContext.for_entity(
+        world, speaker, perspective=PromptPerspective(viewer=character), target=character
+    )
+    assert ConversationToneComponent(
+        tone="warm", last_reaction="well"
+    ).prompt_fragments(addressed_ctx) == (
+        "Reeve Tamsin took your last approach well (tone: warm).",
+    )
+    # Hidden from a third-party observer (cannot view private state).
+    third = spawn_entity(world, [CharacterComponent()])
+    third_ctx = ComponentPromptContext.for_entity(
+        world, speaker, perspective=PromptPerspective(viewer=third), target=character
+    )
+    assert ConversationToneComponent(
+        tone="warm", last_reaction="well"
+    ).prompt_fragments(third_ctx) == ()
+
+
+def test_daggersim_owns_property_fragment_requires_target():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    # First-person but no target -> empty (line 416 path).
+    no_target = ComponentPromptContext.for_entity(
+        world, character, perspective=self_ctx.perspective, target=None
+    )
+    assert OwnsProperty(deed_id="deed").prompt_fragments(no_target) == ()
+
+
+def test_daggersim_payload_entity_id_and_route_helpers():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    command = _cmd(scenario, "noop")
+    # No matching key -> None (line 41).
+    assert _payload_entity_id(command, "missing_key") is None
+    keyed = _cmd(scenario, "noop", target_id="not-a-real-id")
+    assert _payload_entity_id(keyed, "target_id") is None
+
+    # _route_between returns None when no TravelRoute matches the destination.
+    origin = world.get_entity(scenario.room_a)
+    other = world.get_entity(scenario.room_b)
+    assert _route_between(origin, other.id) is None
+    origin.add_relationship(TravelRoute(travel_seconds=60, label="moss road"), other.id)
+    found = _route_between(origin, other.id)
+    assert found is not None and found.label == "moss road"
+
+
+def test_daggersim_fragments_include_legal_reputation_and_named_institution():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    institution = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Coin Wardens", kind="institution"),
+            InstitutionComponent(name="Coin Wardens"),
+        ],
+    )
+    # InstitutionReputationComponent with a resolvable entity id -> uses its name (4091->4093).
+    replace_component(
+        character,
+        InstitutionReputationComponent(scores={str(institution.id): 6}),
+    )
+    replace_component(
+        character,
+        LegalReputationComponent(scores={"moss-road": -3}),
+    )
+    lines = daggersim_fragments(world, character)
+    assert any("Institution reputation with Coin Wardens: 6." == line for line in lines)
+    assert any("Legal reputation in moss-road: -3." == line for line in lines)
+
+
+def test_daggersim_use_service_rejects_non_institution_container():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    # A service whose container is a plain room (not an institution) is invalid (line 1597).
+    service = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="floating desk", kind="service"),
+            InstitutionServiceComponent(service_name="floating desk"),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), service.id
+    )
+    result = UseInstitutionServiceHandler().execute(
+        ctx, _handler_cmd(scenario, "use-institution-service", service_id=str(service.id))
+    )
+    assert not result.ok
+    assert result.reason == "service institution is invalid"
+    del character
+
+
+def test_daggersim_commit_crime_rejects_blank_crime_type():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = CommitCrimeHandler().execute(
+        ctx, _handler_cmd(scenario, "commit-crime", crime_type="   ")
+    )
+    assert not result.ok
+    assert result.reason == "invalid character or crime type"
+
+
+def test_daggersim_camp_rejects_character_without_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    # Detach the character from its room so container_of returns None (line 2673).
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+    result = CampHandler().execute(ctx, _handler_cmd(scenario, "camp"))
+    assert not result.ok
+    assert result.reason == "character is not in a room"
+
+
+def test_daggersim_search_room_rejects_character_without_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+    result = SearchRoomHandler().execute(ctx, _handler_cmd(scenario, "search-room"))
+    assert not result.ok
+    assert result.reason == "character is not in a room"
+
+
+def test_daggersim_use_recall_rejects_without_anchor():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
+    assert not result.ok
+    assert result.reason == "no recall anchor is set"
+
+
+def test_daggersim_pacify_fail_leaves_creature_hostile():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    character.add_component(LanguageSkillComponent(languages={"growl": 0}))
+    creature = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="cave bear", kind="creature"),
+            CreatureLanguageComponent(language="growl", pacification_difficulty=100),
+            HostilityComponent(hostile=True),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), creature.id
+    )
+    result = AttemptPacifyHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario, "attempt-pacify", target_id=str(creature.id), language="growl"
+        ),
+    )
+    # Difficulty 100 vs skill 0 => failure; creature stays hostile, not pacified (3222->3248).
+    assert result.ok
+    refreshed = world.get_entity(creature.id)
+    assert refreshed.get_component(HostilityComponent).hostile is True
+    assert not refreshed.has_component(PacifiedComponent)
+
+
+def test_daggersim_pacify_succeeds_on_nonhostile_creature():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    character.add_component(LanguageSkillComponent(languages={"growl": 100}))
+    creature = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="shy mole", kind="creature"),
+            CreatureLanguageComponent(language="growl", pacification_difficulty=0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), creature.id
+    )
+    result = AttemptPacifyHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario, "attempt-pacify", target_id=str(creature.id), language="growl"
+        ),
+    )
+    # Success path where the creature has no HostilityComponent (3223->3228).
+    assert result.ok
+    assert world.get_entity(creature.id).has_component(PacifiedComponent)
+
+
+def test_daggersim_end_transformation_without_affliction():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    # Transformed but with no SupernaturalAfflictionComponent (3458->3462).
+    character.add_component(WereformComponent(form_name="wolf", transformed_at_epoch=0))
+    result = EndTransformationHandler().execute(
+        ctx, _handler_cmd(scenario, "end-transformation")
+    )
+    assert result.ok
+    assert not world.get_entity(scenario.character).has_component(WereformComponent)
+
+
+def test_daggersim_cure_affliction_without_feeding_or_wereform():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    # Affliction present but no FeedingNeed / Wereform (3488->3490, 3490->3492).
+    character.add_component(
+        SupernaturalAfflictionComponent(affliction_type="ghoul", contracted_at_epoch=0)
+    )
+    result = CureAfflictionHandler().execute(ctx, _handler_cmd(scenario, "cure-affliction"))
+    assert result.ok
+    assert not world.get_entity(scenario.character).has_component(
+        SupernaturalAfflictionComponent
+    )
+
+
+def test_daggersim_rest_allows_low_risk_area():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room = world.get_entity(scenario.room_a)
+    room.add_component(RestRiskComponent(band="low"))
+    # Low-risk band is not high/ambush, so rest is allowed (3979->3981).
+    result = RestHandler().execute(ctx, _handler_cmd(scenario, "rest"))
+    assert result.ok
+
+
+def test_daggersim_withdraw_and_string_tuple_and_identify_can_handle():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+
+    # _string_tuple over a comma string (line 3536).
+    assert _string_tuple("a, b ,, c", ()) == ("a", "b", "c")
+
+    # IdentifyIngredientHandler.can_handle resolves via target_id when ingredient_id absent.
+    ingredient = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="moss sprig", kind="ingredient"),
+            IngredientComponent(ingredient_name="mossbane"),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), ingredient.id
+    )
+    handler = IdentifyIngredientHandler()
+    assert handler.can_handle(
+        ctx, _handler_cmd(scenario, "identify", target_id=str(ingredient.id))
+    )
+
+    # Withdraw success path (lines 2127-2129).
+    bank_id = _bank(scenario)
+    OpenBankAccountHandler().execute(
+        ctx, _handler_cmd(scenario, "open-bank-account", bank_id=str(bank_id))
+    )
+    DepositHandler().execute(
+        ctx, _handler_cmd(scenario, "deposit", bank_id=str(bank_id), amount=10)
+    )
+    result = WithdrawHandler().execute(
+        ctx, _handler_cmd(scenario, "withdraw", bank_id=str(bank_id), amount=4)
+    )
+    assert result.ok
+    del character
+
+
+def _put_character_in_dungeon_room(scenario):
+    """Place the character in a fresh, undiscovered dungeon room."""
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    world.get_entity(scenario.room_a).remove_relationship(Contains, character.id)
+    dungeon_room = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Vault Antechamber", kind="room"),
+            RoomComponent(title="Vault Antechamber"),
+            DungeonRoomComponent(dungeon_id="vault", depth=1),
+        ],
+    )
+    dungeon_room.add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
+    )
+    return dungeon_room
+
+
+def test_daggersim_search_room_discovers_door_and_objective():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    dungeon_room = _put_character_in_dungeon_room(scenario)
+    door = spawn_entity(
+        world,
+        [SecretDoorComponent(target_room_id="r2", hint="cracked tile")],
+    )
+    objective = spawn_entity(
+        world,
+        [DungeonObjectiveComponent(objective_kind="idol")],
+    )
+    dungeon_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), door.id)
+    dungeon_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), objective.id)
+
+    result = SearchRoomHandler().execute(ctx, _handler_cmd(scenario, "search-room"))
+    assert result.ok
+    # Fresh room gets discovered + noted on automap (lines 3778-3779).
+    character = world.get_entity(scenario.character)
+    assert world.get_entity(dungeon_room.id).get_component(DungeonRoomComponent).discovered
+    assert str(dungeon_room.id) in character.get_component(AutomapComponent).discovered_rooms
+    assert world.get_entity(door.id).get_component(SecretDoorComponent).found
+    assert world.get_entity(objective.id).get_component(DungeonObjectiveComponent).found
+
+    # Searching again: room already discovered, door & objective already found
+    # (branches 3796->3810, 3812->3792 take the "already found" path).
+    again = SearchRoomHandler().execute(ctx, _handler_cmd(scenario, "search-room"))
+    assert not again.ok
+    assert again.reason == "you find nothing of note"
+
+
+def test_daggersim_use_recall_moves_character_to_anchor():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    anchor = world.get_entity(scenario.room_b)
+    character.add_component(RecallAnchorComponent(room_id=str(anchor.id)))
+    result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
+    assert result.ok
+    assert container_of(world.get_entity(scenario.character)) == anchor.id
+
+
+def test_daggersim_route_between_skips_non_matching_routes():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    origin = world.get_entity(scenario.room_a)
+    decoy = spawn_entity(world, [RoomComponent(title="Decoy")])
+    destination = world.get_entity(scenario.room_b)
+    # First edge does not match the destination, forcing the loop to continue (1507->1506).
+    origin.add_relationship(TravelRoute(travel_seconds=30, label="decoy path"), decoy.id)
+    origin.add_relationship(TravelRoute(travel_seconds=60, label="real path"), destination.id)
+    route = _route_between(origin, destination.id)
+    assert route is not None and route.label == "real path"
+
+
+def test_daggersim_identify_can_handle_via_ingredient_id():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # ingredient_id present in payload short-circuits to True (line 3114).
+    assert IdentifyIngredientHandler().can_handle(
+        ctx, _handler_cmd(scenario, "identify", ingredient_id="anything")
+    )
+
+
+def test_daggersim_send_debt_collector_without_borrower_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    # Borrower (the acting character) is not in any room (2434->2438).
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+    debt = spawn_entity(world, [DebtComponent(amount=10, defaulted_at_epoch=0)])
+    result = SendDebtCollectorHandler().execute(
+        ctx, _handler_cmd(scenario, "send-debt-collector", debt_id=str(debt.id))
+    )
+    assert result.ok
+
+
+def test_daggersim_selected_rumor_skips_already_heard():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    # A reachable rumor already heard by the character is skipped (3609->3604).
+    heard = spawn_entity(
+        world, [RumorComponent(text="old news", heard_by=(str(scenario.character),))]
+    )
+    fresh = spawn_entity(world, [RumorComponent(text="fresh tip")])
+    room = world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), heard.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), fresh.id)
+    selected = _selected_rumor_id(ctx, scenario.character, None)
+    assert selected == fresh.id
+
+
+def test_daggersim_use_recall_from_roomless_character():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    anchor = world.get_entity(scenario.room_b)
+    character.add_component(RecallAnchorComponent(room_id=str(anchor.id)))
+    # Detach the character from any room so _move_character sees no origin (3616->3618).
+    world.get_entity(scenario.room_a).remove_relationship(Contains, character.id)
+    result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
+    assert result.ok
+    assert container_of(world.get_entity(scenario.character)) == anchor.id
+
+
+def test_daggersim_fragments_keep_unresolvable_reputation_label():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    # InstitutionReputation keyed by a non-entity string keeps the raw label (4092->4094).
+    replace_component(
+        character, InstitutionReputationComponent(scores={"not-an-entity": 4})
+    )
+    lines = daggersim_fragments(world, character)
+    assert any("Institution reputation with not-an-entity: 4." == line for line in lines)
+
+
+def test_daggersim_social_register_reactor_ignores_missing_speaker():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    reactor = SocialRegisterReactor(world)
+    listener = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Reeve", kind="character"),
+            SocialRegisterComponent(register="courtly", expected_approaches=("courtly",)),
+        ],
+    )
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    event = SpeechSaidEvent(
+        event_id=uuid4().hex,
+        world_epoch=0,
+        created_at=datetime.now(UTC),
+        actor_id="not-a-real-entity",
+        target_ids=(str(listener.id),),
+        text="oi",
+        approach="blunt",
+    )
+    # speaker is None, so the DialogueApproach write is skipped (speaker-guard branch);
+    # the listener still reacts to the clashing approach with skill level 0.
+    reactor._on_speech(event)
+    assert world.get_entity(listener.id).has_component(ConversationToneComponent)
+
+
+def test_daggersim_mark_path_twice_keeps_single_discovery():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room_id = str(scenario.room_a)
+    assert MarkPathHandler().execute(ctx, _handler_cmd(scenario, "mark-path")).ok
+    # Second mark: the room is already in discovered_rooms (branch 3639->3641).
+    assert MarkPathHandler().execute(ctx, _handler_cmd(scenario, "mark-path")).ok
+    automap = world.get_entity(scenario.character).get_component(AutomapComponent)
+    assert automap.discovered_rooms.count(room_id) == 1
+    assert automap.marked_rooms.count(room_id) == 1
+
+
+def test_daggersim_fragments_skip_owned_property_when_entity_gone(monkeypatch):
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    property_entity = spawn_entity(
+        world, [IdentityComponent(name="Vanished Loft", kind="home")]
+    )
+    character.add_relationship(OwnsProperty(deed_id="d"), property_entity.id)
+    original_has_entity = world.has_entity
+
+    def has_entity(entity_id):
+        if entity_id == property_entity.id:
+            return False
+        return original_has_entity(entity_id)
+
+    monkeypatch.setattr(world, "has_entity", has_entity)
+    lines = daggersim_fragments(world, character)
+    # The owned-property edge is skipped because the target reads as gone (4105->4104).
+    assert not any("Property owned" in line for line in lines)

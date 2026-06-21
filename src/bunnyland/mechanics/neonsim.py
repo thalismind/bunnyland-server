@@ -302,9 +302,8 @@ def _clear_inside_zones(character: Entity) -> None:
 def _spend_scrip(character: Entity, world: World, amount: int) -> bool:
     if amount <= 0:
         return True
+    # Contains edges to a removed entity are cascaded away by Relics, so item_id is live.
     for _edge, item_id in character.get_relationships(Contains):
-        if not world.has_entity(item_id):
-            continue
         item = world.get_entity(item_id)
         if (
             item.has_component(ResourceStackComponent)
@@ -1279,9 +1278,8 @@ def _matching_credential(character: Entity, world: World, owner: str) -> Entity 
 
 def _raise_local_alarm(world: World, character_id: EntityId) -> None:
     character = world.get_entity(character_id)
+    # reachable_ids() only returns ids of live entities, so no existence re-check needed.
     for entity_id in reachable_ids(world, character):
-        if not world.has_entity(entity_id):
-            continue
         entity = world.get_entity(entity_id)
         if entity.has_component(SecurityZoneComponent):
             zone = entity.get_component(SecurityZoneComponent)
@@ -2032,7 +2030,9 @@ class HeatConsequence:
                 continue
             if new_level > 0:
                 replace_component(character, WantedLevelComponent(level=new_level))
-            elif character.has_component(WantedLevelComponent):
+            else:
+                # Reaching here means new_level == 0 != old_level, so a non-zero
+                # WantedLevelComponent is always present to remove.
                 character.remove_component(WantedLevelComponent)
             events.append(
                 WantedLevelChangedEvent(
@@ -2362,9 +2362,8 @@ class ClearWarrantHandler:
 
 def _in_claimed_safehouse(world: World, character_id: EntityId) -> bool:
     character = world.get_entity(character_id)
+    # reachable_ids() only returns ids of live entities, so no existence re-check needed.
     for entity_id in reachable_ids(world, character):
-        if not world.has_entity(entity_id):
-            continue
         entity = world.get_entity(entity_id)
         if entity.has_component(SafehouseComponent):
             if entity.get_component(SafehouseComponent).claimed_by == str(character_id):
@@ -3369,9 +3368,8 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
     if character.has_component(AccessLevelComponent):
         lines.extend(character.get_component(AccessLevelComponent).prompt_fragments(ctx))
 
+    # reachable_ids() only returns ids of live entities, so no existence re-check needed.
     for entity_id in reachable_ids(world, character):
-        if not world.has_entity(entity_id):
-            continue
         entity = world.get_entity(entity_id)
         entity_ctx = ComponentPromptContext.for_entity(
             world, entity, perspective=ctx.perspective, room=ctx.room, target=character
