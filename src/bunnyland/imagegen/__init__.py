@@ -29,6 +29,7 @@ from .events import (
     ImageGenerationStartedEvent,
 )
 from .media import MediaError, MediaStore
+from .postprocess import remove_edge_background
 from .prompt import (
     CatalogExampleSource,
     ImagePromptRequest,
@@ -85,5 +86,6 @@ __all__ = [
     "build_comfy_client",
     "default_templates",
     "load_templates_from",
+    "remove_edge_background",
     "substitute",
 ]

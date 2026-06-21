@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import itertools
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from uuid import uuid4
@@ -40,6 +41,7 @@ from .events import (
     ImageGenerationStartedEvent,
 )
 from .media import (
+    SEGMENT_ALPHA,
     SEGMENT_ENTITIES,
     SEGMENT_EVENTS,
     SEGMENT_PORTRAITS,
@@ -105,6 +107,7 @@ class ImageGenService:
         enhancer: PromptEnhancer,
         examples: PromptExampleSource,
         media: MediaStore,
+        alpha: Callable[[bytes], bytes] | None = None,
     ) -> None:
         self._actor = actor
         self._config = config
@@ -113,10 +116,12 @@ class ImageGenService:
         self._enhancer = enhancer
         self._examples = examples
         self._media = media
+        self._alpha = alpha
         self._queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self._seq = itertools.count()
         self._jobs: dict[str, ImageGenJob] = {}
         self._extras: dict[str, str] = {}
+        self._alpha_jobs: set[str] = set()
         self._worker: asyncio.Task | None = None
         self._busy = False
 
@@ -137,6 +142,7 @@ class ImageGenService:
         template_name: str = "",
         requested_by: str = "",
         extra: str = "",
+        alpha: bool = False,
         force: bool = False,
     ) -> ImageGenJob:
         """Queue a job (or reuse an existing image). Returns immediately."""
@@ -175,6 +181,8 @@ class ImageGenService:
             )
         self._jobs[job.job_id] = job
         self._extras[job.job_id] = extra
+        if alpha:
+            self._alpha_jobs.add(job.job_id)
         await self._publish_started(job)
         self._ensure_worker()
         priority = _EVENT_PRIORITY if purpose is ImagePurpose.EVENT else _BACKFILL_PRIORITY
@@ -227,6 +235,8 @@ class ImageGenService:
     async def _process(self, job: ImageGenJob) -> None:
         parsed = parse_entity_id(job.entity_id)
         extra = self._extras.pop(job.job_id, "")
+        alpha_requested = job.job_id in self._alpha_jobs
+        self._alpha_jobs.discard(job.job_id)
         try:
             async with self._actor._lock:
                 if parsed is None or not self._actor.world.has_entity(parsed):
@@ -241,16 +251,17 @@ class ImageGenService:
                 template, prompt=prompt.prompt, seed=seed, negative=prompt.negative
             )
             data = await self._client.generate(graph, output_node_id=template.output_node_id)
-            name = self._media.new_name("png")
-            segment = _SEGMENT_BY_PURPOSE[job.purpose]
-            self._media.write(segment, name, data)
-            url = self._media.url_for(segment, name)
+            do_alpha = self._alpha is not None and (
+                alpha_requested or job.purpose is ImagePurpose.SPRITE
+            )
+            url, alpha_url = await self._store_image(job.purpose, data, do_alpha)
             async with self._actor._lock:
                 entity = self._actor.world.get_entity(parsed)
-                self._attach(entity, job.purpose, url, prompt, seed, template)
+                self._attach(entity, job.purpose, url, alpha_url, prompt, seed, template)
                 _clear_request(entity)
             job.status = "succeeded"
             job.url = url
+            job.alpha_url = alpha_url
             await self._publish_completed(job, template.name)
         except Exception as exc:  # noqa: BLE001 - any failure becomes a failed job + event
             logger.warning("image generation failed for %s: %s", job.entity_id, exc)
@@ -262,6 +273,27 @@ class ImageGenService:
             await self._publish_failed(job)
 
     # -- helpers ---------------------------------------------------------------------
+
+    async def _store_image(
+        self, purpose: ImagePurpose, data: bytes, do_alpha: bool
+    ) -> tuple[str, str]:
+        """Write the image (and any alpha variant) to disk and return their URLs.
+
+        The alpha pass is CPU-heavy, so it runs in a worker thread, never on the event loop.
+        Sprites become the transparent image directly; other purposes keep both variants.
+        """
+        segment = _SEGMENT_BY_PURPOSE[purpose]
+        if not do_alpha:
+            return self._write(segment, data), ""
+        alpha_bytes = await asyncio.to_thread(self._alpha, data)
+        if purpose is ImagePurpose.SPRITE:
+            return self._write(segment, alpha_bytes), ""
+        return self._write(segment, data), self._write(SEGMENT_ALPHA, alpha_bytes)
+
+    def _write(self, segment: str, data: bytes) -> str:
+        name = self._media.new_name("png")
+        self._media.write(segment, name, data)
+        return self._media.url_for(segment, name)
 
     def _template_for(self, job: ImageGenJob) -> WorkflowTemplate:
         if job.template_name:
@@ -297,6 +329,7 @@ class ImageGenService:
         entity: Entity,
         purpose: ImagePurpose,
         url: str,
+        alpha_url: str,
         prompt: GeneratedPrompt,
         seed: int,
         template: WorkflowTemplate,
@@ -312,6 +345,7 @@ class ImageGenService:
                 entity,
                 EventImageComponent(
                     url=url,
+                    alpha_url=alpha_url,
                     prompt=prompt.prompt,
                     seed=seed,
                     template=template.name,
@@ -324,6 +358,7 @@ class ImageGenService:
             entity,
             PortraitImageComponent(
                 url=url,
+                alpha_url=alpha_url,
                 prompt=prompt.prompt,
                 seed=seed,
                 template=template.name,
