@@ -625,7 +625,7 @@ class NarrationProjection:
                         scene,
                         self._render_text_sync(scene),
                     )
-        except Exception as exc:  # pragma: no cover - exact exception is stored for operators.
+        except Exception as exc:
             self.errors.append(str(exc))
 
     def _on_event(self, event: DomainEvent) -> None:

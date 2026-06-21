@@ -34,7 +34,7 @@ class Status(Enum):
 class Node:
     """Base class: tick the node against the current context and report a ``Result``."""
 
-    def tick(self, context: PromptContext) -> Result:  # pragma: no cover - abstract
+    def tick(self, context: PromptContext) -> Result:
         raise NotImplementedError
 
 

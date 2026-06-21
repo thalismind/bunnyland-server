@@ -985,8 +985,7 @@ def _faction_relation(world: World, faction_id: str) -> Entity:
 
 def _body_part_entity(world: World, patient: Entity, part_name: str) -> Entity | None:
     for _edge, part_id in patient.get_relationships(HasBodyPart):
-        if not world.has_entity(part_id):
-            continue
+        # Relics cascades inbound edge removal, so a related id is always live here.
         body_part = world.get_entity(part_id)
         if (
             body_part.has_component(BodyPartHealthComponent)
@@ -1214,12 +1213,11 @@ class RescueToBedHandler:
             return rejected("patient does not need rescue")
         if not bed.has_component(MedicalBedComponent):
             return rejected("target is not a medical bed")
+        # A reachable bed is always inventory- or room-contained.
         bed_room = container_of(bed)
-        if bed_room is None:
-            return rejected("bed is not in a room")
+        # A reachable patient is always inventory- or room-contained.
         old_room = container_of(patient)
-        if old_room is not None:
-            ctx.entity(old_room).remove_relationship(Contains, patient_id)
+        ctx.entity(old_room).remove_relationship(Contains, patient_id)
         ctx.entity(bed_room).add_relationship(
             Contains(mode=ContainmentMode.ROOM_CONTENT), patient_id
         )
@@ -1464,11 +1462,11 @@ class SplitStackHandler:
                 HaulableComponent(),
             ],
         )
+        # A reachable, validated stack is always inventory- or room-contained.
         container_id = container_of(item)
-        if container_id is not None:
-            ctx.entity(container_id).add_relationship(
-                Contains(mode=ContainmentMode.CONTAINER), new_stack.id
-            )
+        ctx.entity(container_id).add_relationship(
+            Contains(mode=ContainmentMode.CONTAINER), new_stack.id
+        )
         return ok(
             StackSplitEvent(
                 **ctx.event_base(
@@ -1522,9 +1520,9 @@ class MergeStackHandler:
                 kind="resource",
             ),
         )
+        # A reachable, validated source stack is always inventory- or room-contained.
         container_id = container_of(source)
-        if container_id is not None:
-            ctx.entity(container_id).remove_relationship(Contains, source_id)
+        ctx.entity(container_id).remove_relationship(Contains, source_id)
         return ok(
             StackMergedEvent(
                 **ctx.event_base(
@@ -2295,8 +2293,7 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
         if character.has_relationship(Owns, entity_id) and entity_id != character.id:
             lines.append(f"You own {entity_name(entity, 'something')}.")
     for _edge, part_id in character.get_relationships(HasBodyPart):
-        if not world.has_entity(part_id):
-            continue
+        # Relics cascades inbound edge removal, so a related id is always live here.
         part_entity = world.get_entity(part_id)
         if part_entity.has_component(BodyPartHealthComponent):
             part_ctx = ComponentPromptContext.for_entity(

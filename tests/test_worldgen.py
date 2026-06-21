@@ -2773,3 +2773,191 @@ async def test_neon_worldgen_hook_enriches_from_mentions():
         FixerComponent,
     ):
         assert _has_component(actor, component), component.__name__
+
+
+def _gen_event(event_cls, *, entity_id, wants=(), needs=(), description="", tags=(),
+               entity_kind="object", world_epoch=0, **extra):
+    """Build a *GeneratedEvent for direct enrichment-hook unit tests."""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from bunnyland.core.components import GenerationIntentComponent
+
+    key = extra.pop("key", "k1")
+    payload = {
+        "event_id": uuid4().hex,
+        "world_epoch": world_epoch,
+        "created_at": datetime.now(UTC),
+        "seed": "unit",
+        "entity_id": entity_id,
+        "entity_key": key,
+        "entity_kind": entity_kind,
+        "generation": GenerationIntentComponent(
+            description=description, tags=tuple(tags), wants=tuple(wants), needs=tuple(needs)
+        ),
+    }
+    payload.update(extra)
+    return event_cls(**payload)
+
+
+def test_enrichment_helper_fallbacks():
+    """Cover the literal fallback branches in the small enrichment helpers."""
+    from bunnyland.worldgen.enrichment import (
+        _animal_species,
+        _expansion_trigger,
+        _fish_type,
+        _orbital_body_type,
+        _season,
+        _trade_faction,
+    )
+
+    obj = ObjectGeneratedEvent
+
+    # _expansion_trigger: quest branch (rumor not present, quest present)
+    assert _expansion_trigger(_gen_event(obj, entity_id="x_1", wants=("quest",),
+                                         object_key="o")) == "quest"
+    assert _expansion_trigger(_gen_event(obj, entity_id="x_1", wants=("rumor",),
+                                         object_key="o")) == "rumor"
+    assert _expansion_trigger(_gen_event(obj, entity_id="x_1", object_key="o")) == "worldgen"
+
+    # _orbital_body_type: moon / station / planet (asteroid covered elsewhere)
+    assert _orbital_body_type(_gen_event(obj, entity_id="x_1", description="a pale moon",
+                                         object_key="o")) == "moon"
+    assert _orbital_body_type(_gen_event(obj, entity_id="x_1", description="a docking station",
+                                         object_key="o")) == "station"
+    assert _orbital_body_type(_gen_event(obj, entity_id="x_1", description="a green planet",
+                                         object_key="o")) == "planet"
+    assert _orbital_body_type(_gen_event(obj, entity_id="x_1", description="an asteroid",
+                                         object_key="o")) == "asteroid-belt"
+
+    # _trade_faction: trader / faction / colony fallback
+    assert _trade_faction(_gen_event(obj, entity_id="x_1", description="a trader caravan",
+                                     object_key="o")) == "generated-trader"
+    assert _trade_faction(_gen_event(obj, entity_id="x_1", description="a rival faction",
+                                     object_key="o")) == "generated-faction"
+    assert _trade_faction(_gen_event(obj, entity_id="x_1", description="a quiet hut",
+                                     object_key="o")) == "generated-colony"
+
+    # _animal_species: match, kind fallback, and generic "animal" fallback
+    assert _animal_species(_gen_event(obj, entity_id="x_1", description="a brown cow",
+                                      object_key="o")) == "cow"
+    assert _animal_species(_gen_event(obj, entity_id="x_1", description="a strange critter",
+                                      entity_kind="object", object_key="o")) == "animal"
+    assert _animal_species(_gen_event(obj, entity_id="x_1", description="a strange critter",
+                                      entity_kind="beast", object_key="o")) == "beast"
+
+    # _fish_type: match and trout fallback
+    assert _fish_type(_gen_event(obj, entity_id="x_1", description="a fat bass",
+                                 object_key="o")) == "bass"
+    assert _fish_type(_gen_event(obj, entity_id="x_1", description="a fish",
+                                 object_key="o")) == "trout"
+
+    # _season: match and spring fallback
+    assert _season(_gen_event(obj, entity_id="x_1", description="a winter scene",
+                              object_key="o")) == "winter"
+    assert _season(_gen_event(obj, entity_id="x_1", description="a timeless place",
+                              object_key="o")) == "spring"
+
+
+def test_enrichment_hooks_skip_missing_entities():
+    """Every hook handler must no-op when the referenced entity does not exist."""
+    from bunnyland.worldgen.enrichment import (
+        DaggerWorldgenHook,
+        GardenWorldgenHook,
+        LifeWorldgenHook,
+        NeonWorldgenHook,
+    )
+
+    actor = WorldActor()
+    bogus = "missing_999"
+
+    # LifeWorldgenHook._on_room and _on_character None-guards.
+    life = LifeWorldgenHook()
+    life.actor = actor
+    life._on_room(_gen_event(RoomGeneratedEvent, entity_id=bogus, room_key="r"))
+    life._on_character(_gen_event(CharacterGeneratedEvent, entity_id=bogus,
+                                  character_key="c", room_id="r_1"))
+
+    # GardenWorldgenHook._on_character None-guard.
+    garden = GardenWorldgenHook()
+    garden.actor = actor
+    garden._on_character(_gen_event(CharacterGeneratedEvent, entity_id=bogus,
+                                    character_key="c", room_id="r_1"))
+
+    # DaggerWorldgenHook._on_character None-guard.
+    dagger = DaggerWorldgenHook()
+    dagger.actor = actor
+    dagger._on_character(_gen_event(CharacterGeneratedEvent, entity_id=bogus,
+                                    character_key="c", room_id="r_1"))
+
+    # NeonWorldgenHook._on_entity and _on_character None-guards.
+    neon = NeonWorldgenHook()
+    neon.actor = actor
+    neon._on_entity(_gen_event(ObjectGeneratedEvent, entity_id=bogus, object_key="o"))
+    neon._on_character(_gen_event(CharacterGeneratedEvent, entity_id=bogus,
+                                  character_key="c", room_id="r_1"))
+
+
+def test_enrichment_object_only_component_branches():
+    """Cover wants-branches that only fire on objects/sites, not the rooms in the demo."""
+    from bunnyland.core.ecs import spawn_entity
+    from bunnyland.mechanics.daggersim import BankComponent
+    from bunnyland.mechanics.dragonsim import AncientBeastComponent
+    from bunnyland.mechanics.nukesim import MutationResistanceComponent
+    from bunnyland.mechanics.voidsim import (
+        EmergencyComponent,
+        GravityComponent,
+        MiningSiteComponent,
+        OrbitalBodyComponent,
+        SalvageClaimComponent,
+        SurveySiteComponent,
+    )
+    from bunnyland.worldgen.enrichment import (
+        DaggerWorldgenHook,
+        DragonWorldgenHook,
+        ExpansionHookComponent,
+        NukeWorldgenHook,
+        VoidWorldgenHook,
+    )
+
+    actor = WorldActor()
+
+    def fire(hook, handler_name, event_cls, *, wants, **extra):
+        entity = spawn_entity(actor.world)
+        hook.actor = actor
+        getattr(hook, handler_name)(
+            _gen_event(event_cls, entity_id=str(entity.id), wants=wants, **extra)
+        )
+        return entity
+
+    # VoidWorldgenHook._on_object: salvage-claim, emergency, gravity, survey-site,
+    # mining-site, orbital-body (these live on the room in the demo world).
+    void = VoidWorldgenHook()
+    obj = fire(void, "_on_object", ObjectGeneratedEvent, object_key="o",
+               wants=("salvage-claim", "emergency", "gravity", "survey-site",
+                      "mining-site", "orbital-body"))
+    assert obj.has_component(SalvageClaimComponent)
+    assert obj.has_component(EmergencyComponent)
+    assert obj.has_component(GravityComponent)
+    assert obj.has_component(SurveySiteComponent)
+    assert obj.has_component(MiningSiteComponent)
+    assert obj.has_component(OrbitalBodyComponent)
+
+    # DragonWorldgenHook._on_site: ancient-beast.
+    dragon = DragonWorldgenHook()
+    beast = fire(dragon, "_on_site", ObjectGeneratedEvent, object_key="o",
+                 wants=("ancient-beast",))
+    assert beast.has_component(AncientBeastComponent)
+
+    # DaggerWorldgenHook._on_object: expansion-hook and bank.
+    dagger = DaggerWorldgenHook()
+    dobj = fire(dagger, "_on_object", ObjectGeneratedEvent, object_key="o",
+                wants=("expansion-hook", "bank"))
+    assert dobj.has_component(ExpansionHookComponent)
+    assert dobj.has_component(BankComponent)
+
+    # NukeWorldgenHook._on_character: mutation-resistance.
+    nuke = NukeWorldgenHook()
+    mut = fire(nuke, "_on_character", CharacterGeneratedEvent, character_key="c",
+               room_id="r_1", wants=("mutation-resistance",))
+    assert mut.has_component(MutationResistanceComponent)
