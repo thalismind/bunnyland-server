@@ -6,9 +6,10 @@ can only ever go DOWN: recover a pragma'd path with a real test, delete the
 pragma, and lower ``MAX_PRAGMA_NO_COVER`` to match. Adding a new pragma (or
 recovering one without lowering the budget) fails this test on purpose.
 
-The current residual is the OpenTelemetry OTLP exporter wiring in
-``telemetry.py``, which needs the optional ``otel`` extra installed plus a live
-collector to exercise. When that is wired into CI (or mocked), drop the budget.
+The budget is currently zero: there is no ignored code in ``src/bunnyland``. The
+OpenTelemetry OTLP exporter wiring (previously the residual) is now exercised
+directly against the installed ``otel`` extra with in-process providers, so no
+``# pragma: no cover`` remains. Keep it that way -- recover, don't ignore.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 # Pin: only ever lower this. See module docstring.
-MAX_PRAGMA_NO_COVER = 6
+MAX_PRAGMA_NO_COVER = 0
 
 # The marker, assembled so this file does not match its own scan target.
 _MARKER = "# pragma:" + " no cover"

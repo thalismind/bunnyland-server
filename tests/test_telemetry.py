@@ -57,6 +57,35 @@ def test_init_is_a_no_op_when_disabled(monkeypatch):
     assert telemetry.init_telemetry() is False
 
 
+def test_otel_import_failure_marks_unavailable_and_no_ops(monkeypatch):
+    """Simulate the ``otel`` extra being absent: the module falls back to no-op state.
+
+    Reloads ``telemetry`` with the ``opentelemetry`` packages shimmed to ``None`` in
+    ``sys.modules`` (which makes the top-level imports raise ``ImportError``), exercising the
+    ``except ImportError`` fallback, then restores the real extra for the rest of the suite.
+    """
+    import importlib
+    import sys
+
+    monkeypatch.setitem(sys.modules, "opentelemetry", None)
+    monkeypatch.setitem(sys.modules, "opentelemetry.metrics", None)
+    monkeypatch.setitem(sys.modules, "opentelemetry.trace", None)
+    try:
+        importlib.reload(telemetry)
+        assert telemetry._OTEL_AVAILABLE is False
+        assert telemetry._otel_trace is None
+        assert telemetry._otel_metrics is None
+        # With the extra absent, init is a hard no-op even when the gate is on.
+        monkeypatch.setenv("BUNNYLAND_OTEL_ENABLED", "1")
+        assert telemetry.init_telemetry() is False
+        assert telemetry.enabled() is False
+    finally:
+        for name in ("opentelemetry", "opentelemetry.metrics", "opentelemetry.trace"):
+            sys.modules.pop(name, None)
+        importlib.reload(telemetry)
+    assert telemetry._OTEL_AVAILABLE is True
+
+
 def test_span_and_record_helpers_are_no_ops_when_disabled(monkeypatch):
     monkeypatch.delenv("BUNNYLAND_OTEL_ENABLED", raising=False)
     telemetry.init_telemetry()
@@ -623,3 +652,88 @@ async def test_controller_assign_endpoint_is_traced(otel_capture):
     span = _spans_by_name(span_exporter)["controller.assign"]
     assert span.attributes["character.id"] == str(scenario.character)
     assert span.attributes["controller.id"] == str(scenario.controller)
+
+
+@pytestmark_otel
+def test_build_otlp_providers_wires_real_otlp_exporters(monkeypatch):
+    """The production path (no trace file, metrics on) builds OTLP span + metric exporters.
+
+    No collector is contacted: the providers are constructed and immediately shut down, so
+    nothing is ever exported. This covers the real exporter wiring that production uses.
+    """
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.trace import TracerProvider
+
+    monkeypatch.delenv("BUNNYLAND_OTEL_TRACE_FILE", raising=False)
+    monkeypatch.delenv("OTEL_METRICS_EXPORTER", raising=False)
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "bunnyland-otlp-test")
+    # Bound the (doomed) shutdown export so it fails fast instead of retrying for seconds.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "1")
+
+    tracer_provider, meter_provider = telemetry._build_otlp_providers()
+    try:
+        assert isinstance(tracer_provider, TracerProvider)
+        assert isinstance(meter_provider, MeterProvider)
+        assert tracer_provider.resource.attributes["service.name"] == "bunnyland-otlp-test"
+        # A BatchSpanProcessor over the OTLP span exporter is attached (no JSONL file path).
+        assert tracer_provider._active_span_processor is not None
+        # A periodic OTLP metric reader is attached when metrics are not disabled.
+        readers = list(meter_provider._sdk_config.metric_readers)
+        assert readers
+        assert all(isinstance(reader, PeriodicExportingMetricReader) for reader in readers)
+    finally:
+        tracer_provider.shutdown()
+        meter_provider.shutdown()
+
+
+@pytestmark_otel
+def test_build_otlp_providers_drops_metrics_when_exporter_is_none(monkeypatch):
+    """``OTEL_METRICS_EXPORTER=none`` builds a meter provider with no readers (traces only)."""
+    monkeypatch.delenv("BUNNYLAND_OTEL_TRACE_FILE", raising=False)
+    monkeypatch.setenv("OTEL_METRICS_EXPORTER", "none")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "1")
+
+    tracer_provider, meter_provider = telemetry._build_otlp_providers()
+    try:
+        assert list(meter_provider._sdk_config.metric_readers) == []
+    finally:
+        tracer_provider.shutdown()
+        meter_provider.shutdown()
+
+
+@pytestmark_otel
+def test_init_telemetry_builds_real_providers_and_sets_globals(monkeypatch):
+    """With the gate on and no injected providers, init builds real OTLP wiring (providers=None).
+
+    This drives ``init_telemetry`` down the production branch that constructs the OTLP
+    exporters and publishes them as the process-global providers for auto-instrumentation.
+    """
+    monkeypatch.setenv("BUNNYLAND_OTEL_ENABLED", "1")
+    monkeypatch.delenv("BUNNYLAND_OTEL_TRACE_FILE", raising=False)
+    monkeypatch.setenv("OTEL_METRICS_EXPORTER", "none")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "1")
+
+    telemetry.reset_for_tests()
+    try:
+        assert telemetry.init_telemetry() is True
+        assert telemetry.enabled() is True
+        # A real span flows through the configured provider without raising.
+        with telemetry.span("init.smoke", {"k": 1}):
+            pass
+    finally:
+        telemetry.reset_for_tests()
+
+
+@pytestmark_otel
+def test_instrument_fastapi_attaches_when_enabled(otel_capture):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("opentelemetry.instrumentation.fastapi")
+    from fastapi import FastAPI
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    app = FastAPI()
+    telemetry.instrument_fastapi(app)
+    assert getattr(app, "_is_instrumented_by_opentelemetry", False) is True
+    # Leave no global instrumentation state behind for sibling tests.
+    FastAPIInstrumentor.uninstrument_app(app)

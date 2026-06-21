@@ -25,12 +25,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-try:  # pragma: no cover - import outcome depends on whether the extra is installed
+try:
     from opentelemetry import metrics as _otel_metrics
     from opentelemetry import trace as _otel_trace
 
     _OTEL_AVAILABLE = True
-except ImportError:  # pragma: no cover - default install has no extra
+except ImportError:  # the optional ``otel`` extra is not installed
     _otel_metrics = None
     _otel_trace = None
     _OTEL_AVAILABLE = False
@@ -197,7 +197,7 @@ def init_telemetry(*, providers: tuple[Any, Any] | None = None) -> bool:
     if not _OTEL_AVAILABLE or not _enabled_from_env():
         return False
 
-    if providers is None:  # pragma: no cover - real OTLP wiring, not exercised in tests
+    if providers is None:
         tracer_provider, meter_provider = _build_otlp_providers()
         # Set the process-global providers so auto-instrumentation (FastAPI) shares them.
         _otel_trace.set_tracer_provider(tracer_provider)
@@ -214,7 +214,7 @@ def init_telemetry(*, providers: tuple[Any, Any] | None = None) -> bool:
     return True
 
 
-def _build_otlp_providers() -> tuple[Any, Any]:  # pragma: no cover - real exporter wiring
+def _build_otlp_providers() -> tuple[Any, Any]:
     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.metrics import MeterProvider
@@ -475,11 +475,9 @@ def instrument_fastapi(app: Any) -> None:
     """Attach FastAPI request auto-instrumentation when telemetry is enabled."""
     if not _ENABLED:
         return
-    from opentelemetry.instrumentation.fastapi import (  # pragma: no cover - needs extra
-        FastAPIInstrumentor,
-    )
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-    FastAPIInstrumentor.instrument_app(app)  # pragma: no cover - needs extra
+    FastAPIInstrumentor.instrument_app(app)
 
 
 def reset_for_tests() -> None:
