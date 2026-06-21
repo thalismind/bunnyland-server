@@ -30,7 +30,11 @@ from bunnyland.imagegen.spec import (
     WorkflowTemplate,
     substitute,
 )
-from bunnyland.imagegen.store import WorkflowTemplateStore
+from bunnyland.imagegen.store import (
+    WorkflowTemplateStore,
+    available_families,
+    default_templates,
+)
 from bunnyland.mechanics.history import record_world_history
 
 pytestmark = pytest.mark.live_generation
@@ -205,3 +209,19 @@ async def test_live_scene_end_to_end(tmp_path):
     name = image.url.split("/")[-1]
     assert MediaStore(tmp_path).read(SEGMENT_EVENTS, name).startswith(_PNG_MAGIC)
     await service.aclose()
+
+
+@pytest.mark.parametrize("family", available_families())
+async def test_live_shipped_family_portrait(family):
+    config = _live_config()
+    template = next(t for t in default_templates(family) if t.name == "portrait")
+    graph = substitute(
+        template,
+        prompt="a friendly cartoon rabbit, masterpiece, best quality",
+        seed=5,
+        width=512,
+        height=512,
+    )
+    client = HttpComfyClient(config)
+    data = await client.generate(graph, output_node_id=template.output_node_id)
+    assert data.startswith(_PNG_MAGIC)
