@@ -1,0 +1,59 @@
+{
+  "name": "sprite",
+  "purpose": "sprite",
+  "prompt_style": "tag",
+  "media": "image",
+  "description": "Default toon-sprite render using WD14-style tags; pair with alpha post-process.",
+  "default_negative": "blurry, lowres, bad anatomy, text, watermark, busy background",
+  "width": 1024,
+  "height": 1024,
+  "output_node_id": "9",
+  "graph": {
+    "4": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {"ckpt_name": "model.safetensors"}
+    },
+    "5": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {"width": 1024, "height": 1024, "batch_size": 1}
+    },
+    "6": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {"text": "", "clip": ["4", 1]}
+    },
+    "7": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {"text": "", "clip": ["4", 1]}
+    },
+    "3": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 0,
+        "steps": 26,
+        "cfg": 6.0,
+        "sampler_name": "euler_ancestral",
+        "scheduler": "normal",
+        "denoise": 1.0,
+        "model": ["4", 0],
+        "positive": ["6", 0],
+        "negative": ["7", 0],
+        "latent_image": ["5", 0]
+      }
+    },
+    "8": {
+      "class_type": "VAEDecode",
+      "inputs": {"samples": ["3", 0], "vae": ["4", 2]}
+    },
+    "9": {
+      "class_type": "SaveImage",
+      "inputs": {"filename_prefix": "bunnyland_sprite", "images": ["8", 0]}
+    }
+  },
+  "slots": [
+    {"node_id": "6", "field_path": ["inputs", "text"], "token": "%PROMPT%"},
+    {"node_id": "7", "field_path": ["inputs", "text"], "token": "%NEGATIVE%"},
+    {"node_id": "3", "field_path": ["inputs", "seed"], "token": "%SEED%"},
+    {"node_id": "5", "field_path": ["inputs", "width"], "token": "%WIDTH%"},
+    {"node_id": "5", "field_path": ["inputs", "height"], "token": "%HEIGHT%"}
+  ]
+}

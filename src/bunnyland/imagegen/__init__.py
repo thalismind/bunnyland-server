@@ -18,6 +18,7 @@ from .spec import (
     WorkflowTemplate,
     substitute,
 )
+from .store import WorkflowTemplateStore, default_templates, load_templates_from
 
 __all__ = [
     "GeneratedPrompt",
@@ -26,5 +27,8 @@ __all__ = [
     "PromptStyle",
     "SubstitutionSlot",
     "WorkflowTemplate",
+    "WorkflowTemplateStore",
+    "default_templates",
+    "load_templates_from",
     "substitute",
 ]
