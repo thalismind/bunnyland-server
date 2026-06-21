@@ -1133,6 +1133,7 @@ class RecordingBackend(Backend):
         self.queued_requests: list[str] = []
         self.commands: list[dict] = []
         self.cancelled_commands: list[tuple[str, str, str, int]] = []
+        self.claims: list[str] = []
         self.label = "test"
 
     async def start(self) -> None: ...
@@ -1172,6 +1173,7 @@ class RecordingBackend(Backend):
         return copy.deepcopy(self.events)
 
     async def claim(self, player_id, world):
+        self.claims.append(player_id)
         return World.parse(self.snapshot).control(player_id)
 
 
@@ -1796,20 +1798,41 @@ async def test_app_covers_defensive_selection_and_action_branches(monkeypatch):
         await app._cancel_queued_command({"command_id": "cmd-1"})
 
 
-async def test_app_keeps_prior_control_when_projection_omits_controller():
-    from textual.widgets import OptionList
+async def test_app_clears_stale_control_when_projection_omits_controller():
+    from textual.widgets import Button, Select
 
-    # A projection without a controller block leaves the existing control tuple untouched
-    # while still rendering the player's room.
     projection = _client_view()
     del projection["controller"]
     app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=projection))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
-        # The claim still set control; the controller-less refresh did not clear it.
-        assert app.control == ("controller:1", 2)
-        members = app.query_one("#members", OptionList)
-        assert {o.id for o in members.options} == {PLAYER, MARLOW, APPLE}
+        assert app.player_id == PLAYER
+        assert app.control is None
+        assert app.query_one("#player", Select).value == PLAYER
+        assert str(app.query_one("#character-release", Button).label) == "Claim"
+
+
+async def test_app_clears_replaced_controller_and_can_reclaim():
+    from types import SimpleNamespace
+
+    projection = _client_view()
+    projection["controller"] = {"controller_id": "controller:other", "generation": 9}
+    backend = RecordingBackend(_snapshot(), character_projection=projection)
+    app = BunnylandTUI(backend)
+    async with app.run_test():
+        app.player_id = PLAYER
+        app.control = ("controller:1", 2)
+        await app.refresh_world()
+
+        assert app.player_id == PLAYER
+        assert app.control is None
+
+        backend.character_projection = _client_view()
+        await app._character_release_pressed(SimpleNamespace())
+
+        assert backend.claims == [PLAYER]
+        assert app.player_id == PLAYER
+        assert app.control == ("controller:1", 3)
 
 
 async def test_refresh_world_returns_quietly_when_status_widget_is_absent():

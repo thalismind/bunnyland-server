@@ -148,6 +148,12 @@ class BunnylandRepl:
             projection = await self.backend.fetch_character_projection(self.player_id)
             if projection and projection.get("character_id") == self.player_id:
                 self.world = World.parse(projection)
+                projected_control = self.world.control(self.player_id)
+                if self.control:
+                    if projected_control and projected_control[0] == self.control[0]:
+                        self.control = projected_control
+                    else:
+                        self.control = None
             else:
                 self.world = World()
         else:
@@ -223,7 +229,11 @@ class BunnylandRepl:
         if parsed is None:
             return Text(f"I don't understand {verb!r}. Type 'help'.")
         if not self.player_id or self.control is None:
-            return Text("Pick a player first: play <name>.")
+            if not self.player_id:
+                return Text("Pick a player first: play <name>.")
+            self.control = await self.backend.claim(self.player_id, self.world)
+            if self.control is None:
+                return Text(f"Could not claim {self.player_id}.")
         definition = self._defs[parsed.tool]
         candidates = reference_candidates(self.world, self.player_id)
 

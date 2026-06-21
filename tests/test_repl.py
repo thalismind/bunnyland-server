@@ -779,6 +779,40 @@ async def test_refresh_drops_missing_player():
     assert repl.player_id == "" and repl.control is None
 
 
+async def test_refresh_clears_stale_control_and_play_reclaims():
+    class ToggleControllerBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__(_snapshot())
+            self.include_controller = False
+            self.claims: list[str] = []
+
+        async def fetch_character_projection(self, character_id: str) -> dict | None:
+            projection = _client_view_from_snapshot(await self.fetch_snapshot(), character_id)
+            if projection and not self.include_controller:
+                projection["controller"] = None
+            return projection
+
+        async def claim(self, player_id, world):
+            self.claims.append(player_id)
+            return await super().claim(player_id, world)
+
+    backend = ToggleControllerBackend()
+    repl = BunnylandRepl(backend)
+    repl.character_list = _character_list_from_snapshot(_snapshot())
+    repl.player_id = PLAYER
+    repl.control = ("controller:1", 2)
+
+    await repl.refresh()
+    assert repl.player_id == PLAYER
+    assert repl.control is None
+
+    message = await repl.dispatch("wait")
+    assert message.plain.startswith("» wait")
+    assert backend.claims == [PLAYER]
+    assert repl.control == ("controller:1", 2)
+    assert backend.commands[-1]["controller_generation"] == 2
+
+
 # ── the Textual app ───────────────────────────────────────────────────────────
 def _log_text(app: BunnylandReplApp) -> str:
     from textual.widgets import RichLog

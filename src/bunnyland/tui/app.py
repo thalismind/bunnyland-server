@@ -401,11 +401,15 @@ class BunnylandTUI(App[None]):
             self.control = None
             projection = None
         if self.player_id and projection and projection.get("character_id") == self.player_id:
-            self.world = World.parse(projection)
+            projected_world = World.parse(projection)
+            projected_control = projected_world.control(self.player_id)
+            if self.control:
+                if projected_control and projected_control[0] == self.control[0]:
+                    self.control = projected_control
+                else:
+                    self.control = None
+            self.world = projected_world
             self.action_views = list(projection.get("actions") or [])
-            controller = projection.get("controller")
-            if controller:
-                self.control = (controller["controller_id"], int(controller.get("generation", 0)))
         else:
             self.world = World()
             self.action_views = []
@@ -464,7 +468,9 @@ class BunnylandTUI(App[None]):
 
     def _render_play_state(self) -> None:
         playing = bool(self.player_id)
-        self._main_query_one("#character-release", Button).disabled = not playing
+        release = self._main_query_one("#character-release", Button)
+        release.disabled = not playing
+        release.label = "Release" if not playing or self.control else "Claim"
         hint = self._main_query_one("#play-hint", Static)
         if playing:
             name = entity_name(self.world.get(self.player_id)) or self.player_id
@@ -677,6 +683,10 @@ class BunnylandTUI(App[None]):
     @on(Button.Pressed, "#character-release")
     async def _character_release_pressed(self, _event: Button.Pressed) -> None:
         if not self.player_id:
+            return
+        if self.control is None:
+            self.control = await self.backend.claim(self.player_id, self.world)
+            await self.refresh_world()
             return
         self.player_id = ""
         self.control = None
