@@ -9,6 +9,15 @@ never requires the ``imagegen`` extra.
 
 from __future__ import annotations
 
+from .client import (
+    ComfyClient,
+    ComfyError,
+    ComfyTimeoutError,
+    HttpComfyClient,
+    WebSocketComfyClient,
+    build_comfy_client,
+)
+from .config import ImageGenConfig
 from .prompt import (
     CatalogExampleSource,
     ImagePromptRequest,
@@ -31,7 +40,12 @@ from .store import WorkflowTemplateStore, default_templates, load_templates_from
 
 __all__ = [
     "CatalogExampleSource",
+    "ComfyClient",
+    "ComfyError",
+    "ComfyTimeoutError",
     "GeneratedPrompt",
+    "HttpComfyClient",
+    "ImageGenConfig",
     "ImagePromptRequest",
     "ImagePurpose",
     "LLMPromptEnhancer",
@@ -42,8 +56,10 @@ __all__ = [
     "StubPromptEnhancer",
     "SubstitutionSlot",
     "VectorExampleSource",
+    "WebSocketComfyClient",
     "WorkflowTemplate",
     "WorkflowTemplateStore",
+    "build_comfy_client",
     "default_templates",
     "load_templates_from",
     "substitute",
