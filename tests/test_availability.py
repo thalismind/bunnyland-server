@@ -16,6 +16,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DeadComponent,
+    DownedComponent,
     Lane,
     OnInsufficientPoints,
     SayHandler,
@@ -184,6 +185,25 @@ def test_requirement_met_via_reachable_component():
     assert meets_requirement(scenario.actor.world, character, requirement) is True
 
 
+def test_reachable_requirement_false_when_no_entity_has_component():
+    # A reachable entity exists (so the iteration runs and the character's own
+    # id is skipped), but none of them carry the required component, so the
+    # check falls through to ``return False``.
+    scenario = build_scenario()
+    character = _character(scenario)
+    requirement = ActionRequirement(reachable_components=("_Anvil",))
+
+    # Spawn an _Anvil somewhere unreachable so the component type is registered
+    # (otherwise the check short-circuits before scanning reachable entities).
+    spawn_entity(scenario.actor.world, [_Anvil()])
+    # A reachable bystander that does NOT carry the required component.
+    bystander = spawn_entity(scenario.actor.world, [_Spellbook()])
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bystander.id)
+
+    assert meets_requirement(scenario.actor.world, character, requirement) is False
+
+
 def test_can_act_reflects_lifecycle_gates():
     scenario = build_scenario()
     character = _character(scenario)
@@ -196,6 +216,19 @@ def test_can_act_reflects_lifecycle_gates():
     assert result.can_act is False
     assert result.available is False
     assert result.reason == "character is dead"
+
+
+def test_downed_character_cannot_act():
+    scenario = build_scenario()
+    character = _character(scenario)
+    character.add_component(DownedComponent(downed_at_epoch=0, cause="test"))
+
+    assert lifecycle_block_reason(character, "demo") == "character is downed"
+    result = evaluate_availability(
+        scenario.actor, character, _definition(), target_groups={}
+    )
+    assert result.can_act is False
+    assert result.reason == "character is downed"
 
 
 def test_sleeping_character_can_still_wake():

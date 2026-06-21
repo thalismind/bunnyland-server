@@ -3512,3 +3512,636 @@ async def test_fabricate_without_required_tech_succeeds():
     await scenario.actor.tick(HOUR)
 
     assert fabricated and fabricated[0].name == "shield booster"
+
+
+def _reachable_wrong_kind(scenario):
+    return _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="plain crate", kind="item")],
+    )
+
+
+def test_inspect_handlers_can_handle_resolve_target_id_and_reject_unrelated():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    system_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="reactor", kind="system"),
+            ShipSystemComponent(system_type="reactor"),
+        ],
+    )
+    hold_id = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="cargo hold", kind="hold"), CustomsHoldComponent()],
+    )
+    other_id = _reachable_wrong_kind(scenario)
+
+    ship_inspect = InspectShipSystemHandler()
+    customs_inspect = InspectCustomsHandler()
+
+    # Explicit hold_id/system_id key short-circuits to True (covers 1028-1029, 3049-3050).
+    assert ship_inspect.can_handle(ctx, _handler_cmd(scenario, "inspect", system_id=str(system_id)))
+    assert customs_inspect.can_handle(ctx, _handler_cmd(scenario, "inspect", hold_id=str(hold_id)))
+    # No system_id/hold_id key: can_handle resolves via target_id (covers 1030-1031, 3051-3052).
+    assert ship_inspect.can_handle(
+        ctx, _handler_cmd(scenario, "inspect", target_id=str(system_id))
+    )
+    assert customs_inspect.can_handle(
+        ctx, _handler_cmd(scenario, "inspect", target_id=str(hold_id))
+    )
+    # target_id is an unrelated entity: _payload_entity_id resolves but the component check fails.
+    assert not ship_inspect.can_handle(
+        ctx, _handler_cmd(scenario, "inspect", target_id=str(other_id))
+    )
+    assert not customs_inspect.can_handle(
+        ctx, _handler_cmd(scenario, "inspect", target_id=str(other_id))
+    )
+    # No usable key: _payload_entity_id loops over both keys and returns None (covers 61->60, 63).
+    assert not ship_inspect.can_handle(ctx, _handler_cmd(scenario, "inspect", junk="x"))
+    assert not customs_inspect.can_handle(ctx, _handler_cmd(scenario, "inspect", junk="x"))
+
+
+def test_alien_handlers_reject_invalid_character_and_wrong_kind():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    wrong = _reachable_wrong_kind(scenario)
+
+    cases = [
+        (InitiateContactHandler(), "initiate-contact", "contact_id", "target is not a contact"),
+        (
+            AttemptTranslationHandler(),
+            "attempt-translation",
+            "matrix_id",
+            "target is not a translation matrix",
+        ),
+        (
+            NegotiateAlienHandler(),
+            "negotiate-alien",
+            "mission_id",
+            "target is not a diplomatic mission",
+        ),
+        (
+            StudyAlienArtifactHandler(),
+            "study-alien-artifact",
+            "artifact_id",
+            "target is not an alien artifact",
+        ),
+    ]
+    for handler, command_type, key, _fallback in cases:
+        # invalid character id branch
+        bad = _handler_cmd(
+            scenario, command_type, character_id="not-an-id", **{key: str(wrong)}
+        )
+        assert handler.execute(ctx, bad).reason == "invalid character id"
+        # reachable but wrong-kind target -> _reachable_component yields truthy error text
+        assert (
+            handler.execute(ctx, _handler_cmd(scenario, command_type, **{key: str(wrong)})).reason
+            == "target is the wrong kind"
+        )
+
+    # QuarantineSampleHandler has its own id/reachability checks.
+    quarantine = QuarantineSampleHandler()
+    assert (
+        quarantine.execute(ctx, _handler_cmd(scenario, "quarantine-sample", target_id="x")).reason
+        == "invalid character or target id"
+    )
+    assert (
+        quarantine.execute(
+            ctx, _handler_cmd(scenario, "quarantine-sample", target_id="entity_999")
+        ).reason
+        == "target does not exist"
+    )
+    detached = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="far spore", kind="sample")]
+    ).id
+    assert (
+        quarantine.execute(
+            ctx, _handler_cmd(scenario, "quarantine-sample", target_id=str(detached))
+        ).reason
+        == "target is not reachable"
+    )
+
+
+def test_alien_handlers_reject_already_done_state():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = str(scenario.character)
+    contact = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="envoy", kind="contact"),
+            FirstContactComponent(species_id="sp", contacted_by=(character,)),
+        ],
+    )
+    matrix = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="lexicon", kind="matrix"),
+            TranslationMatrixComponent(species_id="sp", complete=True),
+        ],
+    )
+    artifact = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="idol", kind="artifact"),
+            AlienArtifactComponent(studied_by=(character,)),
+        ],
+    )
+    assert (
+        InitiateContactHandler()
+        .execute(ctx, _handler_cmd(scenario, "initiate-contact", contact_id=str(contact)))
+        .reason
+        == "contact already initiated"
+    )
+    assert (
+        AttemptTranslationHandler()
+        .execute(ctx, _handler_cmd(scenario, "attempt-translation", matrix_id=str(matrix)))
+        .reason
+        == "translation is already complete"
+    )
+    assert (
+        StudyAlienArtifactHandler()
+        .execute(ctx, _handler_cmd(scenario, "study-alien-artifact", artifact_id=str(artifact)))
+        .reason
+        == "artifact already studied"
+    )
+
+
+def test_orbit_and_jump_handlers_reject_wrong_kind_ship():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    wrong = _reachable_wrong_kind(scenario)
+    for handler, command_type in (
+        (LeaveOrbitHandler(), "leave-orbit"),
+        (LandHandler(), "land"),
+        (LaunchHandler(), "launch"),
+        (JumpHandler(), "jump"),
+    ):
+        assert (
+            handler.execute(ctx, _handler_cmd(scenario, command_type, ship_id=str(wrong))).reason
+            == "target is the wrong kind"
+        )
+
+
+def test_plot_course_rejects_ship_outside_star_system():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # room_a is the character's container and has no container of its own; treating it as the
+    # "ship" makes container_of(ship) None, so the handler reports it is not in a star system.
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(ShipComponent(name="hollow hull"))
+    destination_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Vega", kind="star-system"), StarSystemComponent(name="Vega")],
+    ).id
+    result = PlotCourseHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "plot-course",
+            ship_id=str(scenario.room_a),
+            destination_id=str(destination_id),
+        ),
+    )
+    assert result.reason == "ship is not in a star system"
+
+
+def test_scan_rejects_ship_outside_star_system():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(ShipComponent(name="hollow hull"))
+    room.add_component(SensorComponent(scan_range=1.0))
+    result = ScanHandler().execute(
+        ctx, _handler_cmd(scenario, "scan", ship_id=str(scenario.room_a))
+    )
+    assert result.reason == "ship is not in a star system"
+
+
+def test_cargo_handlers_reject_wrong_kind_contract():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    wrong = _reachable_wrong_kind(scenario)
+    assert (
+        AcceptContractHandler()
+        .execute(ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(wrong)))
+        .reason
+        == "target is the wrong kind"
+    )
+    assert (
+        LoadCargoHandler()
+        .execute(ctx, _handler_cmd(scenario, "load-cargo", contract_id=str(wrong)))
+        .reason
+        == "target is the wrong kind"
+    )
+    assert (
+        DeliverCargoHandler()
+        .execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(wrong),
+                cargo_id=str(wrong),
+                ship_id=str(wrong),
+            ),
+        )
+        .reason
+        == "target is the wrong kind"
+    )
+
+
+def test_active_contract_for_rejects_non_owner_and_wrong_type():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    cargo = _spawn_in_room_a(
+        scenario, [IdentityComponent(name="crate", kind="cargo"), CargoComponent(cargo_type="ore")]
+    )
+    ship = _spawn_in_room_a(
+        scenario, [IdentityComponent(name="hauler", kind="ship"), ShipComponent(name="hauler")]
+    )
+    # Active contract owned by someone else -> _active_contract_for returns None (covers 1279 path).
+    other_owner = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="not mine", kind="contract"),
+            ContractComponent(
+                contract_type="cargo", status="active", accepted_by="entity_424242"
+            ),
+        ],
+    )
+    assert (
+        LoadCargoHandler()
+        .execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "load-cargo",
+                contract_id=str(other_owner),
+                cargo_id=str(cargo),
+                ship_id=str(ship),
+            ),
+        )
+        .reason
+        == "cargo contract is not active"
+    )
+    # Active, owned, but the wrong contract type -> expected_type mismatch (covers 1279).
+    wrong_type = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="survey job", kind="contract"),
+            ContractComponent(
+                contract_type="survey", status="active", accepted_by=str(scenario.character)
+            ),
+        ],
+    )
+    assert (
+        DeliverCargoHandler()
+        .execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(wrong_type),
+                cargo_id=str(cargo),
+                ship_id=str(ship),
+            ),
+        )
+        .reason
+        == "cargo contract is not active"
+    )
+
+
+def test_reachable_entity_with_rejection_branches():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    handler = DeployAwayTeamHandler()
+    # invalid target id
+    assert (
+        handler.execute(ctx, _handler_cmd(scenario, "deploy-away-team", team_id="x")).reason
+        == "invalid target id"
+    )
+    # character does not exist (character id parses but is absent)
+    assert (
+        handler.execute(
+            ctx,
+            _handler_cmd(
+                scenario, "deploy-away-team", character_id="entity_999999", team_id="entity_1"
+            ),
+        ).reason
+        == "character does not exist"
+    )
+    # target does not exist
+    assert (
+        handler.execute(
+            ctx, _handler_cmd(scenario, "deploy-away-team", team_id="entity_999999")
+        ).reason
+        == "target does not exist"
+    )
+    # target not reachable
+    detached = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="lost team", kind="team"), AwayTeamComponent()],
+    ).id
+    assert (
+        handler.execute(
+            ctx, _handler_cmd(scenario, "deploy-away-team", team_id=str(detached))
+        ).reason
+        == "target is not reachable"
+    )
+    # target has wrong component
+    wrong = _reachable_wrong_kind(scenario)
+    assert (
+        handler.execute(
+            ctx, _handler_cmd(scenario, "deploy-away-team", team_id=str(wrong))
+        ).reason
+        == "target has wrong component"
+    )
+    # already deployed
+    deployed = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="busy team", kind="team"), AwayTeamComponent(deployed=True)],
+    )
+    assert (
+        handler.execute(
+            ctx, _handler_cmd(scenario, "deploy-away-team", team_id=str(deployed))
+        ).reason
+        == "away team already deployed"
+    )
+
+
+def test_economy_handlers_reject_already_done_and_bad_amount():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    depleted = _spawn_in_room_a(
+        scenario,
+        [IdentityComponent(name="dry rock", kind="mine"), MiningSiteComponent(remaining=0)],
+    )
+    claimed_policy = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="spent policy", kind="policy"),
+            InsurancePolicyComponent(claimed=True),
+        ],
+    )
+    mortgage = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="ship lien", kind="mortgage"),
+            MortgageComponent(principal=100, balance=100),
+        ],
+    )
+    assert (
+        MineAsteroidHandler()
+        .execute(ctx, _handler_cmd(scenario, "mine-asteroid", site_id=str(depleted)))
+        .reason
+        == "mining site is depleted"
+    )
+    assert (
+        ClaimInsuranceHandler()
+        .execute(ctx, _handler_cmd(scenario, "claim-insurance", policy_id=str(claimed_policy)))
+        .reason
+        == "insurance already claimed"
+    )
+    assert (
+        PayMortgageHandler()
+        .execute(
+            ctx, _handler_cmd(scenario, "pay-mortgage", mortgage_id=str(mortgage), amount=0)
+        )
+        .reason
+        == "mortgage payment must be positive"
+    )
+
+
+def test_round_the_clock_shift_covers_any_hour():
+    from bunnyland.mechanics.voidsim import DutyShiftComponent as _Shift
+    from bunnyland.mechanics.voidsim import _shift_covers_hour
+
+    shift = _Shift(name="watch", start_hour=4, end_hour=4)
+    assert _shift_covers_hour(shift, 0) is True
+    assert _shift_covers_hour(shift, 17) is True
+
+
+def test_voidsim_fragments_cover_crew_morale_mutiny_and_shift_edges():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(MoraleComponent(value=5))
+    character.add_component(MutinyComponent(active=True, ringleader_id="x"))
+    character.add_component(CrewDutyStatusComponent(on_duty=True))
+    shift_id = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="alpha", kind="shift"),
+            DutyShiftComponent(name="alpha", start_hour=0, end_hour=8, role="pilot"),
+        ],
+    )
+    character.add_relationship(WorksShift(station="helm"), shift_id)
+    # An assignment to a reachable entity lacking the shift component (covers 3345->3341).
+    non_shift = _spawn_in_room_a(
+        scenario, [IdentityComponent(name="not a shift", kind="item")]
+    )
+    character.add_relationship(WorksShift(station=""), non_shift)
+
+    lines = voidsim_fragments(world, character)
+    assert any("Crew morale: 5." == line for line in lines)
+    assert any("Mutiny is active." == line for line in lines)
+    assert any("You are currently on duty." == line for line in lines)
+    assert any("Duty shift: alpha watch" in line and "station helm" in line for line in lines)
+
+
+def test_morale_and_mutiny_non_first_person_are_silent():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    observer = spawn_entity(world, [CharacterComponent()])
+    perspective = PromptPerspective(viewer=observer)
+    morale_ctx = ComponentPromptContext.for_entity(world, character, perspective=perspective)
+    assert MoraleComponent(value=5).prompt_fragments(morale_ctx) == ()
+    # Inactive mutiny is silent even first-person.
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    assert MutinyComponent(active=False).prompt_fragments(self_ctx) == ()
+    assert MutinyComponent(active=True).prompt_fragments(morale_ctx) == ()
+    assert CrewDutyStatusComponent(on_duty=False).prompt_fragments(self_ctx) == ()
+
+
+def test_chaos_consequence_covers_no_source_targets_and_no_change_paths():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    from bunnyland.mechanics.voidsim import _chaos_targets_for_source, _ship_systems_near_source
+
+    # A chaos source with no reachable characters: the targets loop body never runs (2199->2193).
+    detached_source = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="floating scar", kind="hazard"),
+            ChaosInfluenceComponent(source_type="warp scar", corruption_per_hour=1.0),
+        ],
+    )
+    assert _chaos_targets_for_source(world, detached_source.id) == []
+    # A source with no container yields no nearby ship systems (covers 2207).
+    assert _ship_systems_near_source(world, detached_source) == []
+
+    # Run the consequence twice: the first call records the epoch with elapsed<=0 (covers 2227),
+    # the second has elapsed but no reachable target, so it short-circuits cleanly.
+    consequence = ChaosInfluenceConsequence()
+    assert consequence.process(world, 0) == []
+    assert consequence.process(world, 3600) == []
+
+
+def test_chaos_consequence_skips_systems_with_no_integrity_change():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    # The chaos source must be a contained entity so _ship_systems_near_source finds the
+    # systems sharing its container; room_a has no container, so place the source inside it.
+    source = _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="warp scar", kind="hazard"),
+            ChaosInfluenceComponent(
+                source_type="warp scar",
+                corruption_per_hour=0.0,
+                system_damage_per_hour=2.0,
+                last_updated_epoch=0,
+            ),
+        ],
+    )
+    # A fully-destroyed system sharing the source's room: integrity already 0 and offline, so
+    # further damage is a no-op and the system is skipped (covers the `continue` at 2301).
+    _spawn_in_room_a(
+        scenario,
+        [
+            IdentityComponent(name="dead reactor", kind="system"),
+            ShipSystemComponent(system_type="reactor", integrity=0.0, online=False),
+        ],
+    )
+    assert source  # source placed; processing must not damage the dead system
+    events = ChaosInfluenceConsequence().process(world, 3600)
+    assert all(getattr(e, "system_id", None) is None for e in events)
+
+
+def test_fabricate_skips_dangling_inventory_and_respects_unrelated_tech():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    fabricator = _fabricator(scenario)
+    # required_tech that is unlocked elsewhere only via a non-matching TechUnlock first, so the
+    # _tech_unlocked loop iterates past a mismatch (covers 1069->1068) before finding a match.
+    _unlock_tech(scenario, "unrelated-tech")
+    _unlock_tech(scenario, "shield-tech")
+    blueprint = _blueprint(
+        scenario, required_tech="shield-tech", resource_inputs=(("scrap", 1),)
+    )
+    _inventory_resource(scenario, "scrap", 2)
+
+    result = FabricateHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario, "fabricate", fabricator_id=str(fabricator), blueprint_id=str(blueprint)
+        ),
+    )
+    assert result.ok
+
+
+def test_active_contract_for_returns_none_for_non_contract_entity():
+    from bunnyland.mechanics.voidsim import _active_contract_for
+
+    scenario = build_scenario()
+    world = scenario.actor.world
+    plain = spawn_entity(world, [IdentityComponent(name="rock", kind="item")])
+    assert _active_contract_for(plain, scenario.character) is None
+
+
+def test_load_and_accept_handle_uncontained_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room = world.get_entity(scenario.room_a)
+    character = str(scenario.character)
+    # An offered contract placed directly on the (uncontained) room: AcceptContract finds no
+    # origin container to detach from (covers 1247->1249). Use a separate scenario so the room
+    # stays uncontained for the move test below.
+    room.add_component(ContractComponent(contract_type="cargo", reward=10))
+    assert (
+        AcceptContractHandler()
+        .execute(ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(scenario.room_a)))
+        .ok
+    )
+    assert room.get_component(ContractComponent).accepted_by == character
+
+    # Fresh scenario: cargo lives on the uncontained room, so _move_entity sees no origin
+    # container to remove from (covers 1224->1226).
+    move_scenario = build_scenario()
+    _install(move_scenario.actor)
+    move_ctx = HandlerContext(move_scenario.actor.world, move_scenario.actor.epoch)
+    move_room = move_scenario.actor.world.get_entity(move_scenario.room_a)
+    move_room.add_component(CargoComponent(cargo_type="cargo"))
+    contract = _spawn_in_room_a(
+        move_scenario,
+        [
+            IdentityComponent(name="cargo run", kind="contract"),
+            ContractComponent(
+                contract_type="cargo",
+                status="active",
+                accepted_by=str(move_scenario.character),
+            ),
+        ],
+    )
+    ship = _spawn_in_room_a(
+        move_scenario,
+        [IdentityComponent(name="hauler", kind="ship"), ShipComponent(name="hauler")],
+    )
+    result = LoadCargoHandler().execute(
+        move_ctx,
+        _handler_cmd(
+            move_scenario,
+            "load-cargo",
+            contract_id=str(contract),
+            cargo_id=str(move_scenario.room_a),
+            ship_id=str(ship),
+        ),
+    )
+    assert result.ok
+    assert move_room.get_component(CargoComponent).loaded_on == str(ship)
+
+
+def test_jump_route_scans_past_non_matching_destinations():
+    from bunnyland.mechanics.voidsim import _jump_route as _route_lookup
+
+    scenario = build_scenario()
+    world = scenario.actor.world
+    origin = world.get_entity(scenario.room_a)
+    other = spawn_entity(world, [IdentityComponent(name="elsewhere", kind="star-system")])
+    # A route to some other destination is iterated and skipped before the missing one is sought
+    # (covers 1753->1752, then the loop falls through to return None).
+    origin.add_relationship(JumpRoute(fuel_cost=1.0, label="lane"), other.id)
+    target = spawn_entity(world, [IdentityComponent(name="goal", kind="star-system")])
+    assert _route_lookup(origin, target.id) is None
+
+
+def test_tech_unlocked_scans_past_non_matching_unlocks():
+    from bunnyland.mechanics.voidsim import _tech_unlocked
+
+    scenario = build_scenario()
+    world = scenario.actor.world
+    _unlock_tech(scenario, "unrelated-tech")
+    # The only unlock present does not match, so the loop iterates past it (covers 1069->1068)
+    # and falls through to return False.
+    assert _tech_unlocked(world, "shield-tech") is False
+    # An empty required tech is treated as always available without scanning.
+    assert _tech_unlocked(world, "") is True

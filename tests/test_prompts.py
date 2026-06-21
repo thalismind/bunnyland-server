@@ -592,6 +592,74 @@ def test_component_prompt_context_lazy_room_siblings_and_inventory_helpers():
     assert fresh_ctx.inventory_items(PortableComponent) == (carried, later_carried)
 
 
+def test_prompt_perspective_choose_selects_by_person():
+    assert PromptPerspective(perspective="first-person").choose(
+        first="I", second="you", third="they"
+    ) == "I"
+    assert PromptPerspective(perspective="second-person").choose(
+        first="I", second="you", third="they"
+    ) == "you"
+    assert PromptPerspective(perspective="third-person").choose(
+        first="I", second="you", third="they"
+    ) == "they"
+
+
+def test_component_prompt_context_handles_missing_world_and_room():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    # No world: sibling/inventory lookups return empty and are cached.
+    no_world = ComponentPromptContext(
+        perspective=PromptPerspective(viewer=character),
+        entity=character,
+        room=world.get_entity(scenario.room_a),
+    )
+    assert no_world.room_siblings() == ()
+    assert no_world.inventory_items() == ()
+
+    # An explicitly supplied room skips the container lookup entirely (87->91).
+    explicit_room = world.get_entity(scenario.room_a)
+    with_room = ComponentPromptContext.for_entity(world, character, room=explicit_room)
+    assert with_room.room == explicit_room
+
+    # World present but the entity is in no room: the container lookup finds nothing and
+    # room stays None, so room_siblings short-circuits to empty.
+    roomless = spawn_entity(world, [IdentityComponent(name="floating mote", kind="item")])
+    no_room = ComponentPromptContext.for_entity(world, roomless)
+    assert no_room.room is None
+    assert no_room.room_siblings() == ()
+
+
+def test_component_prompt_context_skips_non_matching_siblings_and_inventory():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # A room sibling without the requested component is filtered out.
+    add_item(scenario, scenario.room_a, "plain berries")
+    plain_carried = spawn_entity(world, [IdentityComponent(name="plain note", kind="item")])
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), plain_carried.id)
+    portable_carried = spawn_entity(
+        world, [IdentityComponent(name="carried berries", kind="item"), PortableComponent()]
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), portable_carried.id)
+
+    # A room sibling that lacks the requested component (a non-portable fixture).
+    fixture = add_item(scenario, scenario.room_a, "stone fixture")
+    fixture.remove_component(PortableComponent)
+
+    ctx = ComponentPromptContext.for_entity(world, character)
+
+    # The non-portable note is excluded by the component filter (143->139 branch).
+    assert ctx.inventory_items(PortableComponent) == (portable_carried,)
+    # The character itself is skipped as a room sibling (self-skip continue).
+    assert character not in ctx.room_siblings()
+    # The non-portable fixture is excluded by the sibling component filter (126->122).
+    portable_siblings = ctx.room_siblings(PortableComponent)
+    assert fixture not in portable_siblings
+    assert all(sibling.has_component(PortableComponent) for sibling in portable_siblings)
+
+
 def test_perspective_phrase_supports_static_and_templated_lines():
     phrase = PerspectivePhrase(
         "I have {count} berry.",

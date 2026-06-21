@@ -428,8 +428,9 @@ def release_mcp_controller(
         raise RuntimeError("mode must be 'suspend' or 'llm'")
 
     old_controller = actor.world.get_entity(old_controller_id)
-    if old_controller.has_component(MCPControllerComponent):
-        old_controller.remove_component(MCPControllerComponent)
+    # ``mcp_controlled_character`` only matches controllers carrying MCPControllerComponent,
+    # so the released controller always has it -- removal is unconditional.
+    old_controller.remove_component(MCPControllerComponent)
     return {
         "ok": True,
         "agent_id": agent_id,

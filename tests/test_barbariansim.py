@@ -2052,3 +2052,342 @@ async def test_fragments_list_a_recruited_follower_for_the_master():
     assert any("follower" in line and "follow" in line for line in master_lines)
     follower_lines = barbariansim_fragments(world, world.get_entity(follower))
     assert any("follow a leader" in line for line in follower_lines)
+
+
+def test_status_component_fragments_are_hidden_from_external_viewers():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    owner = world.get_entity(scenario.character)
+    viewer = spawn_entity(world, [CharacterComponent()])
+    self_ctx = ComponentPromptContext.for_entity(world, owner)
+    external_ctx = ComponentPromptContext.for_entity(
+        world, owner, perspective=PromptPerspective(viewer=viewer)
+    )
+
+    # Components whose self-view emits a line but whose external-view is empty.
+    exposure = TemperatureExposureComponent(
+        heat=4.0, cold=2.0, heat_danger=True, cold_danger=True
+    )
+    self_exposure = exposure.prompt_fragments(self_ctx)
+    assert "Exposure: heat 4, cold 2." in self_exposure
+    assert "You are suffering dangerous heat exposure." in self_exposure
+    assert "You are suffering dangerous cold exposure." in self_exposure
+    assert exposure.prompt_fragments(external_ctx) == ()
+
+    assert PoisonComponent(severity=2.0).prompt_fragments(self_ctx) == (
+        "Poisoned: severity 2.",
+    )
+    assert PoisonComponent(severity=2.0).prompt_fragments(external_ctx) == ()
+
+    assert CorruptionComponent(amount=3.0).prompt_fragments(self_ctx) == (
+        "Corruption: 3.",
+    )
+    assert CorruptionComponent(amount=3.0).prompt_fragments(external_ctx) == ()
+
+    assert ArmorComponent(rating=2.0).prompt_fragments(self_ctx) == (
+        "Your armor rating is 2.0.",
+    )
+    assert ArmorComponent(rating=2.0).prompt_fragments(external_ctx) == ()
+
+    assert DefendingComponent(started_at_epoch=0).prompt_fragments(self_ctx) == (
+        "You are defending yourself.",
+    )
+    assert DefendingComponent(started_at_epoch=0).prompt_fragments(external_ctx) == ()
+
+    assert BlessingComponent(name="ember").prompt_fragments(self_ctx) == (
+        "Blessing: ember.",
+    )
+    assert BlessingComponent(name="ember").prompt_fragments(external_ctx) == ()
+
+    assert CurseComponent(name="ash").prompt_fragments(self_ctx) == (
+        "Curse: ash severity 1.",
+    )
+    assert CurseComponent(name="ash").prompt_fragments(external_ctx) == ()
+
+    assert ClimbingSkillComponent(level=3).prompt_fragments(self_ctx) == (
+        "Climbing skill: 3.",
+    )
+    assert ClimbingSkillComponent(level=3).prompt_fragments(external_ctx) == ()
+
+
+def test_follower_fragment_is_empty_for_unrelated_external_viewer():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    master = world.get_entity(scenario.character)
+    bystander = spawn_entity(world, [CharacterComponent()])
+    follower = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Recruit", kind="character"),
+            CharacterComponent(),
+            FollowerComponent(master_id=str(master.id), orders="scout"),
+        ],
+    )
+    # External viewer who is not the master, with the follower as the subject.
+    external_ctx = ComponentPromptContext.for_entity(
+        world,
+        follower,
+        perspective=PromptPerspective(viewer=bystander),
+        target=master,
+    )
+    assert follower.get_component(FollowerComponent).prompt_fragments(external_ctx) == ()
+
+
+def test_weapon_fragment_without_durability_omits_durability_clause():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    weapon = spawn_entity(world, [WeaponComponent(damage=5, damage_type="club")])
+    weapon_ctx = ComponentPromptContext.for_entity(world, weapon)
+    assert weapon.get_component(WeaponComponent).prompt_fragments(weapon_ctx) == (
+        "Reachable weapon: club (5.0 damage).",
+    )
+
+
+def test_attack_uses_requested_body_part_string():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = _target(scenario, health=20.0)
+    _weapon(scenario, damage=6.0)
+    result = AttackHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario, "attack", target_id=str(target), body_part="left arm"
+        ),
+    )
+    assert result.ok, result.reason
+    injuries = [
+        e
+        for e in result.events
+        if e.__class__.__name__ == "InjuryAddedEvent"
+    ]
+    assert injuries and injuries[0].body_part == "left arm"
+
+
+def test_place_trap_rejects_when_character_has_no_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A homeless character entity with no containing room.
+    loose = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Drifter", kind="character"), CharacterComponent()],
+    )
+    result = PlaceTrapHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "place-trap", character_id=str(loose.id)),
+    )
+    assert not result.ok
+    assert result.reason == "no room to place trap"
+
+
+def test_defend_rejects_when_stamina_is_insufficient():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(StaminaComponent(current=0.0, maximum=10.0))
+    result = DefendHandler().execute(ctx, _handler_cmd(scenario, "defend"))
+    assert not result.ok
+    assert "stamina" in (result.reason or "")
+
+
+def test_recruit_follower_rejects_nonexistent_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = RecruitFollowerHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "recruit-follower", target_id="entity_999999"),
+    )
+    assert not result.ok
+    assert result.reason == "target does not exist"
+
+
+def test_recruit_follower_rejects_target_in_another_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    distant = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Far One", kind="character"), CharacterComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant.id
+    )
+    result = RecruitFollowerHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "recruit-follower", target_id=str(distant.id)),
+    )
+    assert not result.ok
+    assert result.reason == "target is not present"
+
+
+def test_perform_ritual_without_blessing_curse_or_corruption():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    shrine = _room_entity(scenario, "plain shrine", "shrine", [ShrineComponent()])
+    ritual = _room_entity(
+        scenario,
+        "silent rite",
+        "ritual",
+        [RitualComponent(blessing="", curse="", corruption_cost=0.0)],
+    )
+    result = PerformRitualHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "perform-ritual",
+            shrine_id=str(shrine.id),
+            ritual_id=str(ritual.id),
+        ),
+    )
+    assert result.ok, result.reason
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(BlessingComponent)
+    assert not character.has_component(CurseComponent)
+    assert not character.has_component(CorruptionComponent)
+
+
+def test_parity_handlers_reject_targets_in_another_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room_b = scenario.actor.world.get_entity(scenario.room_b)
+
+    def _in_room_b(name, kind, components):
+        entity = spawn_entity(
+            scenario.actor.world,
+            [IdentityComponent(name=name, kind=kind), *components],
+        )
+        room_b.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+        return entity
+
+    building = _in_room_b(
+        "far wall", "building", [BuildingComponent(integrity=8.0, maximum_integrity=10.0)]
+    )
+    base = _in_room_b("far camp", "base", [])
+    treasure = _in_room_b(
+        "far hoard", "treasure", [TreasureComponent(treasure_type="hoard")]
+    )
+
+    cases = [
+        (
+            UpgradeBuildingHandler(),
+            "upgrade-building",
+            {"building_id": str(building.id), "integrity": 2},
+            "building is not reachable",
+        ),
+        (
+            DemolishBuildingHandler(),
+            "demolish-building",
+            {"building_id": str(building.id)},
+            "building is not reachable",
+        ),
+        (
+            PrepareSiegeHandler(),
+            "prepare-siege",
+            {"base_id": str(base.id), "score": 2},
+            "base is not reachable",
+        ),
+        (
+            StartPurgeWaveHandler(),
+            "start-purge-wave",
+            {"base_id": str(base.id)},
+            "base is not reachable",
+        ),
+        (
+            UnlockTreasureHandler(),
+            "unlock-treasure",
+            {"treasure_id": str(treasure.id)},
+            "treasure is not reachable",
+        ),
+        (
+            ClaimTreasureHandler(),
+            "claim-treasure",
+            {"treasure_id": str(treasure.id)},
+            "treasure is not reachable",
+        ),
+    ]
+    for handler, command_type, payload, reason in cases:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        assert not result.ok, command_type
+        assert result.reason == reason, command_type
+
+
+def test_unlock_treasure_with_locked_key_requirement_and_wrong_key():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    treasure = _room_entity(
+        scenario,
+        "keyed hoard",
+        "treasure",
+        [TreasureComponent(treasure_type="hoard", key_name="ruby")],
+    )
+    # No key carried at all.
+    no_key = UnlockTreasureHandler().execute(
+        ctx, _handler_cmd(scenario, "unlock-treasure", treasure_id=str(treasure.id))
+    )
+    assert not no_key.ok
+    assert no_key.reason == "required key is not carried"
+
+    # Carry a key with the wrong name.
+    wrong = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="brass key", kind="key"),
+            PortableComponent(can_pick_up=True),
+            KeyComponent(key_name="brass"),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), wrong.id)
+    wrong_key = UnlockTreasureHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "unlock-treasure",
+            treasure_id=str(treasure.id),
+            key_id=str(wrong.id),
+        ),
+    )
+    assert not wrong_key.ok
+    assert wrong_key.reason == "wrong key"
+
+
+async def test_temperature_exposure_skips_when_no_time_has_elapsed():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    await scenario.actor.tick(HOUR)
+    epoch = scenario.actor.epoch
+    character = scenario.actor.world.get_entity(scenario.character)
+    # last_updated_epoch in the future relative to the next tick -> elapsed <= 0.
+    character.add_component(
+        TemperatureExposureComponent(heat=5.0, last_updated_epoch=epoch + 10_000_000)
+    )
+    await scenario.actor.tick(HOUR)
+    exposure = character.get_component(TemperatureExposureComponent)
+    assert exposure.heat == 5.0
+
+
+def test_damage_item_noop_when_item_is_already_broken():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    weapon = _durable_weapon(scenario, durability=1.0)
+    replace_component(
+        scenario.actor.world.get_entity(weapon),
+        DurabilityComponent(current=0.0, maximum=1.0, broken=True),
+    )
+    target = _target(scenario)
+    result = AttackHandler().execute(
+        ctx, _handler_cmd(scenario, "attack", target_id=str(target))
+    )
+    assert result.ok, result.reason
+    # An already-broken weapon emits no further item damage/break events.
+    assert not any(
+        e.__class__.__name__ in {"ItemDamagedEvent", "ItemBrokenEvent"}
+        for e in result.events
+    )

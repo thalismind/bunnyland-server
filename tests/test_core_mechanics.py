@@ -50,6 +50,11 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.claim_timeout import normalize_claim_timeout
+from bunnyland.core.consequences import (
+    AttentionConsequence,
+    HearingConsequence,
+    InjuryConsequence,
+)
 from bunnyland.core.edges import ControlledBy
 from bunnyland.core.events import (
     ActionPointsChangedEvent,
@@ -832,3 +837,102 @@ async def test_stimulus_shifts_attention_then_decays_after_expiration():
     attention = character.get_component(AttentionComponent)
     assert attention.focus_entity_id == str(source.id)
     assert attention.score == pytest.approx(0.5)
+
+
+def test_injury_consequence_skips_non_injury_edges():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    # An injury edge pointing at an entity that carries no InjuryComponent.
+    non_injury = spawn_entity(world, [IdentityComponent(name="splinter", kind="item")])
+    character.add_relationship(HasInjury(), non_injury.id)
+
+    # The edge contributes no pain, so the character ends up with zero pain.
+    InjuryConsequence().process(world, epoch=0)
+
+    assert not character.has_component(PainComponent) or character.get_component(
+        PainComponent
+    ).current == pytest.approx(0.0)
+
+
+def test_hearing_consequence_clears_audible_when_perception_inactive():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(
+        PerceptionComponent(active=False, audible_entities=frozenset({"stale"}))
+    )
+    # A noise in the room would normally be audible, but perception is inactive.
+    spawn_entity(
+        world,
+        [
+            NoiseComponent(
+                loudness=5.0,
+                text="a loud crash",
+                source_entity_id=None,
+                room_id=str(scenario.room_a),
+                expires_at_epoch=int(HOUR),
+            )
+        ],
+    )
+
+    HearingConsequence().process(world, epoch=0)
+
+    assert (
+        world.get_entity(scenario.character)
+        .get_component(PerceptionComponent)
+        .audible_entities
+        == frozenset()
+    )
+
+
+def test_attention_consequence_skips_other_room_and_self_stimuli():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(AttentionComponent())
+
+    # Stimulus in a different room -> skipped on the room mismatch branch.
+    spawn_entity(
+        world,
+        [
+            StimulusComponent(
+                stimulus_type="sound",
+                source_entity_id="someone",
+                room_id=str(scenario.room_b),
+                intensity=1.0,
+                created_at_epoch=0,
+                expires_at_epoch=int(HOUR),
+                text="elsewhere",
+            )
+        ],
+    )
+    # Stimulus sourced by the character itself -> skipped on the self branch.
+    spawn_entity(
+        world,
+        [
+            StimulusComponent(
+                stimulus_type="sound",
+                source_entity_id=str(character.id),
+                room_id=str(scenario.room_a),
+                intensity=1.0,
+                created_at_epoch=0,
+                expires_at_epoch=int(HOUR),
+                text="own footsteps",
+            )
+        ],
+    )
+
+    AttentionConsequence().process(world, epoch=0)
+
+    # No valid candidate, so attention keeps no focus.
+    assert character.get_component(AttentionComponent).focus_entity_id is None
+
+
+def test_entity_id_from_string_rejects_unknown_id():
+    from bunnyland.core.consequences import _entity_id_from_string
+
+    scenario = build_scenario()
+    with pytest.raises(KeyError):
+        _entity_id_from_string(scenario.actor.world, "not-a-real-entity")

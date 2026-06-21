@@ -591,6 +591,114 @@ async def test_local_backend_claim_unsuspends_player():
         await backend.close()
 
 
+async def test_local_backend_autorun_starts_and_close_awaits_loop_task():
+    # A short tick keeps the live loop cheap; start() schedules it as a task and close()
+    # stops the loop and awaits the task to completion (covering the autorun + teardown path).
+    import asyncio
+
+    backend = LocalBackend(
+        generator="apartment-demo", autorun=True, tick_seconds=0.01, client_id="local-client"
+    )
+    await backend.start()
+    assert backend._task is not None
+    # Let the loop actually start running (it sets its own running flag on first schedule)
+    # before we ask it to stop, so close() exercises a genuinely live loop teardown.
+    for _ in range(5):
+        await asyncio.sleep(0.01)
+        if getattr(backend._loop, "running", False):
+            break
+    await backend.close()
+    assert backend._task.done()
+
+
+async def test_local_backend_projects_next_tick_when_loop_is_running():
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        # No live loop yet: the queued projection has no forward-looking tick.
+        assert (await backend.fetch_queued_commands(player))["next_tick_at_unix"] is None
+
+        # Mark the loop running (without starting the real cadence) so the projection computes
+        # the next tick from now + tick_seconds.
+        backend._loop._running = True
+        backend._loop._paused = False
+        queued = await backend.fetch_queued_commands(player)
+        assert queued["next_tick_at_unix"] is not None
+        assert queued["tick_seconds"] == backend.tick_seconds
+    finally:
+        backend._loop._running = False
+        await backend.close()
+
+
+async def test_local_backend_cancel_command_validates_ids_and_generation():
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        controller_id, generation = await backend.claim(
+            player, World.parse(await backend.fetch_snapshot())
+        )
+
+        # A live generation but an unknown command id resolves to no cancellation.
+        assert (
+            await backend.cancel_command(player, "no-such-cmd", controller_id, generation)
+            is False
+        )
+        # A mismatched generation short-circuits before reaching the actor.
+        assert (
+            await backend.cancel_command(player, "no-such-cmd", controller_id, generation + 99)
+            is False
+        )
+        # An unparseable controller id also returns False.
+        assert await backend.cancel_command(player, "no-such-cmd", "bogus", generation) is False
+    finally:
+        await backend.close()
+
+
+async def test_local_backend_reclaim_reuses_controller_and_skips_unsuspend():
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        controller_id, _generation = await backend.claim(
+            player, World.parse(await backend.fetch_snapshot())
+        )
+        first_controller = backend._controller
+
+        # A second claim reuses the existing controller (no second spawn) and is a no-op for
+        # the now-unsuspended character.
+        controller_id_again, _generation = await backend.claim(
+            player, World.parse(await backend.fetch_snapshot())
+        )
+        assert backend._controller is first_controller
+        assert controller_id_again == controller_id
+    finally:
+        await backend.close()
+
+
+async def test_local_backend_close_before_start_is_noop():
+    # Closing a backend that was never started has no loop or task to tear down.
+    backend = LocalBackend(generator="apartment-demo", autorun=False)
+    await backend.close()
+    assert backend._loop is None
+    assert backend._task is None
+
+
+async def test_remote_backend_cancel_command_returns_false_on_error():
+    class Response:
+        is_success = False
+
+    class Client:
+        async def delete(self, url, params):
+            return Response()
+
+    backend = RemoteBackend("http://server.example")
+    backend._client = Client()
+
+    assert await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 3) is False
+
+
 def test_persistent_client_id_reuses_config_file(tmp_path):
     path = tmp_path / "bunnyland" / "client-id"
 
@@ -895,6 +1003,32 @@ async def test_backend_default_queued_commands_response():
     assert isinstance(queued["generated_at_unix"], float)
 
 
+async def test_backend_base_defaults_are_empty():
+    """A backend that only implements the abstract surface falls back to the empty
+    defaults the base class provides for the optional projection/event/cancel hooks."""
+
+    class MinimalBackend(Backend):
+        async def start(self) -> None: ...
+        async def close(self) -> None: ...
+        async def fetch_snapshot(self) -> dict:
+            return {}
+
+        async def submit(self, command: dict) -> SubmitResult:
+            return SubmitResult(accepted=True)
+
+        async def claim(self, player_id: str, world: World):
+            return None
+
+    backend = MinimalBackend()
+    assert await backend.fetch_character_list() == []
+    assert await backend.fetch_character_projection(PLAYER) is None
+    assert await backend.fetch_room_projection(PARLOR) is None
+    assert (
+        await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 0) is False
+    )
+    assert await backend.recent_events() == []
+
+
 # ── the app (Textual pilot) ───────────────────────────────────────────────────
 def _character_list_from_snapshot(snapshot: dict) -> list:
     """The claim-lobby records the app's picker needs, derived from a snapshot fixture."""
@@ -1133,6 +1267,33 @@ async def test_intro_splash_fades_and_dismisses():
 
         await pilot.pause(1.0)
         assert not any(isinstance(screen, IntroSplash) for screen in app.screen_stack)
+
+
+def test_tui_main_module_exposes_app_main():
+    # Importing the ``python -m bunnyland.tui`` entrypoint binds the app's main(); the
+    # ``if __name__ == "__main__"`` guard itself is excluded from coverage by config.
+    import bunnyland.tui.__main__ as tui_main
+
+    assert tui_main.main is tui_app.main
+
+
+async def test_intro_splash_dismisses_when_panel_is_missing(monkeypatch):
+    from textual.css.query import NoMatches
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()), show_intro=True)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        splash = next(s for s in app.screen_stack if isinstance(s, IntroSplash))
+
+        # If the panel has vanished by the time the fade starts, the splash dismisses itself
+        # rather than animating a missing widget.
+        def raise_no_matches(*_args, **_kwargs):
+            raise NoMatches("#splash")
+
+        monkeypatch.setattr(splash, "query_one", raise_no_matches)
+        splash._start_fade()
+        await pilot.pause()
+        assert not any(isinstance(s, IntroSplash) for s in app.screen_stack)
 
 
 async def test_intro_splash_does_not_use_widget_animation_api(monkeypatch):

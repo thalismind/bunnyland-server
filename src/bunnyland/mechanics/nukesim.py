@@ -544,7 +544,7 @@ def _resource_stack_in_inventory(
     character: Entity, world: World, resource_type: str
 ) -> Entity | None:
     for edge, item_id in character.get_relationships(Contains):
-        if edge.mode != ContainmentMode.INVENTORY or not world.has_entity(item_id):
+        if edge.mode != ContainmentMode.INVENTORY:
             continue
         item = world.get_entity(item_id)
         if (

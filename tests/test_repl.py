@@ -1069,6 +1069,24 @@ def test_format_generator_lines_flags_seed_and_description():
     ]
 
 
+def test_format_generator_lines_omits_seed_footer_when_all_seeded():
+    from types import SimpleNamespace
+
+    generators = [
+        SimpleNamespace(
+            name="recursive",
+            uses_seed=True,
+            description="",
+            group="algorithmic",
+        ),
+    ]
+    # No seedless generator, so no "* ignores --seed" footer is appended.
+    assert format_generator_lines(generators) == [
+        "Algorithmic:",
+        "  recursive",
+    ]
+
+
 def test_main_lists_generators_and_exits(monkeypatch, capsys):
     from types import SimpleNamespace
 

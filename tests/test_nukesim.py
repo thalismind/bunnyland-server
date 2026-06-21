@@ -18,10 +18,14 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
+from bunnyland.core.components import CharacterComponent
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.barbariansim import DurabilityComponent
 from bunnyland.mechanics.colonysim import ResourceStackComponent
-from bunnyland.mechanics.mutation import RadiationMutationPressureComponent
+from bunnyland.mechanics.mutation import (
+    RadiationMutationPressureComponent,
+    RadiationShieldComponent,
+)
 from bunnyland.mechanics.nukesim import (
     ActivateBeaconHandler,
     AddictionComponent,
@@ -121,6 +125,7 @@ from bunnyland.mechanics.nukesim import (
     nukesim_fragments,
 )
 from bunnyland.prompts import ComponentPromptContext
+from bunnyland.prompts.context import PromptPerspective
 
 HOUR = 3600.0
 
@@ -1786,3 +1791,612 @@ def test_nukesim_fragments_show_chems_water_and_addiction():
     assert any("Addiction to stimulant" in line for line in lines)
     assert any("Chem available: stimulant" in line for line in lines)
     assert any("Water source" in line and "contaminated" in line for line in lines)
+
+
+def _third_person_ctx(world, entity):
+    other = spawn_entity(world, [IdentityComponent(name="onlooker", kind="character")])
+    return ComponentPromptContext.for_entity(
+        world, entity, perspective=PromptPerspective(viewer=other)
+    )
+
+
+def test_mutation_and_addiction_fragments_hide_for_non_first_person():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    mutation = MutationComponent(mutation_id="glow", label="Glow", stable=False)
+    addiction = AddictionComponent(levels={"stimulant": 0.6})
+    ctx = _third_person_ctx(world, character)
+
+    # Private state is suppressed when the viewer is not the entity itself.
+    assert mutation.prompt_fragments(ctx) == ()
+    assert addiction.prompt_fragments(ctx) == ()
+
+    # And surfaces when viewing one's own state.
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    assert mutation.prompt_fragments(self_ctx) == ("Mutation: Glow (unstable).",)
+    assert addiction.prompt_fragments(self_ctx) == ("Addiction to stimulant: 0.6.",)
+
+
+def test_resource_stack_helpers_merge_and_skip_missing_inventory_entities():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    # A non-inventory Contains edge on the character is skipped by the inventory scan.
+    worn = spawn_entity(world, [IdentityComponent(name="worn rag", kind="cloth")])
+    character.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), worn.id)
+
+    # Scrapping twice merges onto the same stack instead of creating a new one.
+    junk_a = _inventory_entity(
+        scenario, "junk a", "junk", [JunkComponent(outputs={"scrap": 2})]
+    )
+    junk_b = _inventory_entity(
+        scenario, "junk b", "junk", [JunkComponent(outputs={"scrap": 3})]
+    )
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    ScrapItemHandler().execute(ctx, _handler_cmd(scenario, "scrap-item", item_id=str(junk_a)))
+    ScrapItemHandler().execute(ctx, _handler_cmd(scenario, "scrap-item", item_id=str(junk_b)))
+
+    stacks = [
+        world.get_entity(item_id).get_component(ResourceStackComponent)
+        for _edge, item_id in character.get_relationships(Contains)
+        if world.has_entity(item_id)
+        and world.get_entity(item_id).has_component(ResourceStackComponent)
+    ]
+    assert [(s.resource_type, s.quantity) for s in stacks] == [("scrap", 5)]
+
+
+async def test_radiation_shield_component_reduces_exposure():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _room_entity(
+        scenario,
+        "hot cell",
+        "radiation-source",
+        [RadiationSourceComponent(rads_per_hour=4.0)],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        RadiationShieldComponent(strength=50.0)
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(RadiationDoseComponent).amount == 2.0
+
+
+async def test_radiation_only_affects_reachable_active_characters():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    source = _room_entity(
+        scenario,
+        "isotope case",
+        "radiation-source",
+        [RadiationSourceComponent(rads_per_hour=4.0)],
+    )
+    # A second character in a different room is not reachable from the source.
+    world = scenario.actor.world
+    bystander = spawn_entity(
+        world,
+        [IdentityComponent(name="bystander", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), bystander.id
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    assert not world.get_entity(bystander.id).has_component(RadiationDoseComponent)
+    assert world.get_entity(scenario.character).get_component(
+        RadiationDoseComponent
+    ).amount == 4.0
+    assert world.has_entity(source)
+
+
+async def test_apply_radiation_no_op_when_source_sealed_keeps_dose_zero():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _room_entity(
+        scenario,
+        "dead isotope",
+        "radiation-source",
+        [RadiationSourceComponent(rads_per_hour=0.0)],
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(RadiationDoseComponent)
+
+
+async def test_radiation_without_sickness_per_rad_emits_no_sickness_change():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    _room_entity(
+        scenario,
+        "mild isotope",
+        "radiation-source",
+        [RadiationSourceComponent(rads_per_hour=3.0, sickness_per_rad=0.0)],
+    )
+    from bunnyland.mechanics.nukesim import RadiationSicknessChangedEvent
+
+    changes: list[RadiationSicknessChangedEvent] = []
+    scenario.actor.bus.subscribe(RadiationSicknessChangedEvent, changes.append)
+
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert character.get_component(RadiationDoseComponent).amount == 3.0
+    # Sickness severity is unchanged (stays 0), so no sickness-change event fires.
+    assert character.get_component(RadiationSicknessComponent).severity == 0.0
+    assert changes == []
+
+
+def test_reduce_radiation_state_skips_absent_sickness_component():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    # Dose present, but no sickness component -> sickness branch is skipped.
+    character.add_component(RadiationDoseComponent(amount=5.0))
+    station = _room_entity(
+        scenario,
+        "decon arch",
+        "decontamination",
+        [DecontaminationComponent(dose_reduction=2.0, sickness_reduction=1.0)],
+    )
+
+    result = DecontaminateHandler().execute(
+        ctx, _handler_cmd(scenario, "decontaminate", station_id=str(station))
+    )
+
+    assert result.ok
+    assert character.get_component(RadiationDoseComponent).amount == 3.0
+    assert not character.has_component(RadiationSicknessComponent)
+
+
+def test_decontaminate_resolves_patient_and_item_target_keys():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    patient = _room_entity(
+        scenario,
+        "Clover",
+        "character",
+        [RadiationDoseComponent(amount=4.0)],
+    )
+    station = _room_entity(
+        scenario,
+        "decon arch",
+        "decontamination",
+        [DecontaminationComponent(dose_reduction=2.0)],
+    )
+
+    # patient_id is used when target_character_id is absent.
+    result = DecontaminateHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "decontaminate",
+            patient_id=str(patient),
+            station_id=str(station),
+        ),
+    )
+    assert result.ok
+    assert scenario.actor.world.get_entity(patient).get_component(
+        RadiationDoseComponent
+    ).amount == 2.0
+
+    # item_id present routes the fallback to target_id.
+    result = DecontaminateHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "decontaminate",
+            item_id="ignored",
+            target_id=str(patient),
+            station_id=str(station),
+        ),
+    )
+    assert result.ok
+    assert scenario.actor.world.get_entity(patient).get_component(
+        RadiationDoseComponent
+    ).amount == 0.0
+
+
+def test_decontaminate_rejects_nonexistent_resolved_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = DecontaminateHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "decontaminate", patient_id="entity_999999"),
+    )
+    assert result.ok is False
+    assert result.reason == "target does not exist"
+
+
+def test_decontaminate_rejects_unreachable_resolved_patient():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    distant = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="far medic", kind="character")],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant.id
+    )
+    result = DecontaminateHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "decontaminate", patient_id=str(distant.id)),
+    )
+    assert result.ok is False
+    assert result.reason == "target is not reachable"
+
+
+def test_use_rad_medicine_can_handle_and_multi_use_decrement():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    handler = UseRadMedicineHandler()
+
+    # can_handle returns True purely on payload key when item is missing.
+    cmd_missing = _handler_cmd(scenario, "use", item_id="entity_999999")
+    assert handler.can_handle(ctx, cmd_missing) is True
+
+    # A multi-use kit decrements rather than being consumed.
+    meds = _inventory_entity(
+        scenario,
+        "rad-away pack",
+        "medicine",
+        [RadMedicineComponent(dose_reduction=1.0, uses=2)],
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(RadiationDoseComponent(amount=3.0))
+    result = handler.execute(ctx, _handler_cmd(scenario, "use", item_id=str(meds)))
+    assert result.ok
+    assert scenario.actor.world.get_entity(meds).get_component(RadMedicineComponent).uses == 1
+
+
+def test_take_chem_without_relief_and_with_existing_addiction():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(AddictionComponent(levels={"stimulant": 0.2}))
+    chem = _inventory_entity(
+        scenario,
+        "pure stimpak",
+        "chem",
+        [ChemComponent(chem_type="stimulant", addiction_per_dose=0.3)],
+    )
+
+    result = TakeChemHandler().execute(
+        ctx, _handler_cmd(scenario, "take-chem", chem_id=str(chem))
+    )
+
+    assert result.ok
+    assert character.get_component(AddictionComponent).levels["stimulant"] == 0.5
+
+
+def test_drink_water_can_handle_falls_through_to_component_check():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    water = _room_entity(
+        scenario, "rad puddle", "water", [WaterPurityComponent(rads_per_drink=2.0)]
+    )
+    handler = DrinkContaminatedWaterHandler()
+
+    # No water_id key -> falls through to source_id/target_id component check.
+    assert handler.can_handle(ctx, _handler_cmd(scenario, "drink", source_id=str(water))) is True
+    assert handler.can_handle(ctx, _handler_cmd(scenario, "drink", source_id="entity_999")) is False
+
+
+async def test_scavenge_skips_empty_outputs_and_no_hazard_site():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    site = _room_entity(
+        scenario,
+        "dry cache",
+        "scavenge-site",
+        [
+            ScavengeSiteComponent(site_type="ruin", charges=1, hazard_rads=0.0),
+            LootTableComponent(outputs={"scrap": 2, "cloth": 0}),
+        ],
+    )
+    found: list[LootFoundEvent] = []
+    scenario.actor.bus.subscribe(LootFoundEvent, found.append)
+
+    await scenario.actor.submit(_cmd(scenario, "scavenge", site_id=str(site)))
+    await scenario.actor.tick(HOUR)
+
+    # cloth (quantity 0) is skipped; only scrap is produced.
+    assert {event.resource_type for event in found} == {"scrap"}
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(RadiationDoseComponent)
+
+
+async def test_scrap_item_without_contamination_emits_no_radiation():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    junk = _inventory_entity(
+        scenario,
+        "clean panel",
+        "junk",
+        [JunkComponent(outputs={"scrap": 1}, contaminated_rads=0.0)],
+    )
+
+    await scenario.actor.submit(_cmd(scenario, "scrap-item", item_id=str(junk)))
+    await scenario.actor.tick(HOUR)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(RadiationDoseComponent)
+
+
+def test_harvest_can_handle_branches():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    handler = HarvestSampleHandler()
+
+    assert handler.can_handle(ctx, _handler_cmd(scenario, "harvest", sample_type="moss")) is True
+    # A target-bearing harvest belongs to a different handler.
+    assert handler.can_handle(ctx, _handler_cmd(scenario, "harvest", creature_id="x")) is False
+    # product_type or an empty payload is accepted.
+    assert handler.can_handle(ctx, _handler_cmd(scenario, "harvest", product_type="tissue")) is True
+    assert handler.can_handle(ctx, _handler_cmd(scenario, "harvest")) is True
+
+
+def test_unlock_crate_can_handle_and_already_unlocked():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    handler = UnlockCrateHandler()
+    crate = _room_entity(
+        scenario,
+        "opened crate",
+        "crate",
+        [LockedCrateComponent(locked=False)],
+    )
+
+    # can_handle resolves via target_id when crate_id is absent.
+    assert handler.can_handle(ctx, _handler_cmd(scenario, "unlock", target_id=str(crate))) is True
+    assert (
+        handler.can_handle(ctx, _handler_cmd(scenario, "unlock", target_id="entity_999")) is False
+    )
+
+    result = handler.execute(ctx, _handler_cmd(scenario, "unlock", crate_id=str(crate)))
+    assert result.ok is False
+    assert result.reason == "crate is already unlocked"
+
+
+def test_claim_faction_salvage_rejects_already_claimed():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    salvage = _room_entity(
+        scenario,
+        "claimed cache",
+        "salvage",
+        [FactionSalvageComponent(faction_id="minutemen", claimed_by="someone")],
+    )
+    result = ClaimFactionSalvageHandler().execute(
+        ctx, _handler_cmd(scenario, "claim-faction-salvage", salvage_id=str(salvage))
+    )
+    assert result.ok is False
+    assert result.reason == "faction salvage already claimed"
+
+
+def test_install_mod_rejects_unreachable_item_and_missing_schematic():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    distant_item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far rifle", kind="weapon"),
+            DurabilityComponent(current=1, maximum=5),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant_item.id
+    )
+    unreachable = InstallModHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "install-mod",
+            item_id=str(distant_item.id),
+            schematic_id="entity_999",
+        ),
+    )
+    assert unreachable.reason == "item is not reachable"
+
+    item = _inventory_entity(
+        scenario, "rifle", "weapon", [DurabilityComponent(current=1, maximum=5)]
+    )
+    bad_schematic = InstallModHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "install-mod",
+            item_id=str(item),
+            schematic_id="entity_999",
+        ),
+    )
+    assert bad_schematic.reason == "target does not exist"
+
+
+def test_field_repair_rejects_no_durability_and_missing_kit():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    no_durability = _inventory_entity(scenario, "rag", "cloth", [])
+    no_dur_result = FieldRepairHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "field-repair",
+            item_id=str(no_durability),
+            kit_id="entity_999",
+        ),
+    )
+    assert no_dur_result.reason == "target has no durability"
+
+    item = _inventory_entity(
+        scenario, "rifle", "weapon", [DurabilityComponent(current=1, maximum=5)]
+    )
+    bad_kit = FieldRepairHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "field-repair",
+            item_id=str(item),
+            kit_id="entity_999",
+        ),
+    )
+    assert bad_kit.reason == "target does not exist"
+
+
+def test_brew_chem_rejects_missing_ingredients():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    recipe = _room_entity(
+        scenario,
+        "rad tonic recipe",
+        "recipe",
+        [ChemRecipeComponent(chem_type="rad tonic", resource_inputs=(("scrap", 2),))],
+    )
+    result = BrewChemHandler().execute(
+        ctx, _handler_cmd(scenario, "brew-chem", recipe_id=str(recipe))
+    )
+    assert result.ok is False
+    assert result.reason == "missing chem ingredients"
+
+    # With the ingredients on hand, the brew succeeds and consumes them.
+    _scrap(scenario, 2)
+    ok_result = BrewChemHandler().execute(
+        ctx, _handler_cmd(scenario, "brew-chem", recipe_id=str(recipe))
+    )
+    assert ok_result.ok
+
+
+def test_identify_and_restore_tech_can_handle_and_invalid_paths():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    tech = _room_entity(
+        scenario,
+        "scorched device",
+        "item",
+        [OldWorldTechComponent(tech_name="laser rifle")],
+    )
+    identify = IdentifyTechHandler()
+
+    # can_handle resolves via target_id when tech_id is absent.
+    assert identify.can_handle(ctx, _handler_cmd(scenario, "identify", target_id=str(tech))) is True
+    assert (
+        identify.can_handle(ctx, _handler_cmd(scenario, "identify", target_id="entity_9")) is False
+    )
+
+    restore = RestoreTechHandler()
+    assert restore.execute(
+        ctx, _handler_cmd(scenario, "restore-tech", character_id="not-an-id", tech_id=str(tech))
+    ).reason == "invalid character id"
+    assert restore.execute(
+        ctx, _handler_cmd(scenario, "restore-tech", tech_id="entity_999")
+    ).reason == "target does not exist"
+
+
+async def test_addiction_withdrawal_no_change_when_level_already_zero():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        AddictionComponent(levels={"stimulant": 0.0}, last_updated_epoch=0)
+    )
+    withdrawals: list[WithdrawalProgressedEvent] = []
+    scenario.actor.bus.subscribe(WithdrawalProgressedEvent, withdrawals.append)
+
+    await scenario.actor.tick(HOUR)
+
+    # A level already at zero does not change, so the component is retained (its
+    # last_updated_epoch is bumped) without emitting a withdrawal event.
+    addiction = scenario.actor.world.get_entity(scenario.character).get_component(
+        AddictionComponent
+    )
+    assert addiction.levels == {"stimulant": 0.0}
+    assert addiction.last_updated_epoch > 0
+    assert withdrawals == []
+
+
+def test_decontaminate_with_explicit_target_and_limited_uses():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(RadiationDoseComponent(amount=4.0))
+    station = _room_entity(
+        scenario,
+        "metered decon arch",
+        "decontamination",
+        [DecontaminationComponent(dose_reduction=2.0, uses=2)],
+    )
+
+    # target_character_id is honored directly (skips the patient_id fallback) and a
+    # finite-use station decrements its charges.
+    result = DecontaminateHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "decontaminate",
+            target_character_id=str(scenario.character),
+            station_id=str(station),
+        ),
+    )
+    assert result.ok
+    assert character.get_component(RadiationDoseComponent).amount == 2.0
+    assert scenario.actor.world.get_entity(station).get_component(
+        DecontaminationComponent
+    ).uses == 1
+
+
+def test_purify_water_rejects_wrong_kind_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    rock = _room_entity(scenario, "rock", "prop", [])
+    result = PurifyWaterHandler().execute(
+        ctx, _handler_cmd(scenario, "purify-water", water_id=str(rock))
+    )
+    assert result.ok is False
+    assert result.reason == "target is the wrong kind"
+
+
+def test_can_handle_short_circuits_on_primary_payload_key():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    # Each can_handle takes its early "key present" return True path.
+    assert UnlockCrateHandler().can_handle(
+        ctx, _handler_cmd(scenario, "unlock", crate_id="anything")
+    ) is True
+    assert IdentifyTechHandler().can_handle(
+        ctx, _handler_cmd(scenario, "identify", tech_id="anything")
+    ) is True
+    assert UseRadMedicineHandler().can_handle(
+        ctx, _handler_cmd(scenario, "use", item_id="anything")
+    ) is True
+
+    # And a payload carrying none of the candidate keys yields a None id, which all
+    # the can_handle guards reject.
+    assert UnlockCrateHandler().can_handle(ctx, _handler_cmd(scenario, "unlock")) is False
+    assert IdentifyTechHandler().can_handle(ctx, _handler_cmd(scenario, "identify")) is False
+    assert DrinkContaminatedWaterHandler().can_handle(
+        ctx, _handler_cmd(scenario, "drink")
+    ) is False

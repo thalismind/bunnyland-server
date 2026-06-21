@@ -138,9 +138,16 @@ from bunnyland.mechanics.lifesim import (
     WorkShiftCompletedEvent,
     _first_business,
     _lifesim_aging_policy,
+    _living_character,
+    _optional_bool,
+    _optional_int,
+    _parse_text_tuple,
+    _participant_ids,
     _partner_edge,
     _routine_for_activity,
     _status_edge,
+    _transfer_colony_ownership,
+    _transfer_property_deeds,
     children_of,
     configure_lifesim_aging,
     inheritance_record_for_event,
@@ -3330,3 +3337,369 @@ def test_lifesim_catalogue_handlers_reject_bad_state_directly():
     )
     assert result.ok is True
     assert len(result.events) == 1
+
+
+def test_lifesim_component_prompt_fragments_external_viewer_returns_nothing():
+    """Components hidden from external/private-blind viewers return no fragments."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    viewer = spawn_entity(world, [CharacterComponent()])
+    external = ComponentPromptContext.for_entity(
+        world, character, perspective=PromptPerspective(viewer=viewer)
+    )
+
+    # `is_first_person`-gated components return () for an external viewer.
+    assert AspirationComponent(name="Cozy Life").prompt_fragments(external) == ()
+    assert HouseholdFundsComponent(balance=10).prompt_fragments(external) == ()
+    assert HouseholdComponent(household_id="moss").prompt_fragments(external) == ()
+    assert WellRestedComponent(expires_at_epoch=99).prompt_fragments(external) == ()
+    assert SkillSetComponent(levels={"cooking": 1}).prompt_fragments(external) == ()
+    assert CharacterProfileComponent(traits=("tidy",)).prompt_fragments(external) == ()
+    pregnancy = PregnancyComponent(started_at_epoch=0, due_at_epoch=5, co_parent_ids=())
+    assert pregnancy.prompt_fragments(external) == ()
+
+    # First-person profile with empty fields exercises the skip arcs (305->307 etc.).
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    assert CharacterProfileComponent().prompt_fragments(self_ctx) == ()
+    assert CharacterProfileComponent(interests=("birding",)).prompt_fragments(self_ctx) == (
+        "Your interests: birding.",
+    )
+    assert CharacterProfileComponent(preferred_routine="tea").prompt_fragments(self_ctx) == (
+        "Your preferred routine is tea.",
+    )
+
+    # `can_view_private_state`-gated room components return () with no target.
+    room = world.get_entity(scenario.room_a)
+    room.add_component(HomeComponent(owner_id=str(character.id)))
+    room.add_component(RoomClaimComponent(claimed_by_id=str(character.id), claimed_at_epoch=1))
+    no_target = ComponentPromptContext.for_entity(world, room)
+    assert room.get_component(HomeComponent).prompt_fragments(no_target) == ()
+    assert room.get_component(RoomClaimComponent).prompt_fragments(no_target) == ()
+
+    # An external viewer with no matching target fails the private-state gate (lines 204, 220).
+    external_room = ComponentPromptContext.for_entity(
+        world, room, perspective=PromptPerspective(viewer=viewer)
+    )
+    assert room.get_component(HomeComponent).prompt_fragments(external_room) == ()
+    assert room.get_component(RoomClaimComponent).prompt_fragments(external_room) == ()
+
+
+def test_home_and_room_claim_fragments_require_room_component_on_entity():
+    """Home/claim fragments bail when the target entity is not a room (lines 208, 224)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    self_ctx = ComponentPromptContext.for_entity(world, character)
+    # A non-room entity carrying the components, viewed by the owner.
+    bare = spawn_entity(world, [])
+    home_ctx = ComponentPromptContext.for_entity(
+        world, bare, perspective=self_ctx.perspective, target=character
+    )
+    assert HomeComponent(owner_id=str(character.id)).prompt_fragments(home_ctx) == ()
+    claim = RoomClaimComponent(claimed_by_id=str(character.id), claimed_at_epoch=1)
+    assert claim.prompt_fragments(home_ctx) == ()
+
+
+def test_partner_and_relationship_edge_fragments_cover_negative_branches():
+    """Edge prompt_fragments early returns (lines 427, 429, 440, 442)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    other = spawn_entity(world, [CharacterComponent()])
+    viewer = spawn_entity(world, [CharacterComponent()])
+
+    external = ComponentPromptContext.for_entity(
+        world, character, perspective=PromptPerspective(viewer=viewer), target=other
+    )
+    self_no_target = ComponentPromptContext.for_entity(world, character)
+
+    # Not first person -> ().
+    assert PartnerOf(since_epoch=1).prompt_fragments(external) == ()
+    assert RelationshipStatus(status="friend", since_epoch=1).prompt_fragments(external) == ()
+    # First person but status not "together" or no target -> ().
+    assert PartnerOf(since_epoch=1, status="apart").prompt_fragments(self_no_target) == ()
+    assert PartnerOf(since_epoch=1).prompt_fragments(self_no_target) == ()
+    # First person but no target -> ().
+    status_edge = RelationshipStatus(status="friend", since_epoch=1)
+    assert status_edge.prompt_fragments(self_no_target) == ()
+
+
+def test_lifesim_text_and_optional_parsers_cover_all_branches():
+    """_parse_text_tuple, _optional_bool, _optional_int branches (lines 733-759)."""
+    assert _parse_text_tuple(None) == ()
+    assert _parse_text_tuple("a, b, a") == ("a", "b")
+    assert _parse_text_tuple(["x", "y"]) == ("x", "y")
+    assert _parse_text_tuple(42) == ("42",)
+
+    assert _optional_bool(None) is None
+    assert _optional_bool(True) is True
+    assert _optional_bool("yes") is True
+    assert _optional_bool("off") is False
+    assert _optional_bool("maybe") is None
+
+    assert _optional_int(None) is None
+    assert _optional_int("7") == 7
+
+
+def test_participant_ids_skips_missing_payload_keys():
+    """_participant_ids skips keys whose payload value is None (branch 726->724)."""
+    scenario = build_scenario()
+    command = _cmd(scenario, "noop", target_id=None)
+    assert _participant_ids(command, "target_id", "missing") == [str(scenario.character)]
+
+
+def test_partner_edge_and_first_business_skip_non_matching_relations():
+    """_partner_edge loop continue (822->821) and _first_business skip arcs (921/923/925)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    # Two partner edges: the first doesn't match the requested target id.
+    other = spawn_entity(world, [CharacterComponent()])
+    target = spawn_entity(world, [CharacterComponent()])
+    character.add_relationship(PartnerOf(since_epoch=1), other.id)
+    character.add_relationship(PartnerOf(since_epoch=1), target.id)
+    assert _partner_edge(character, target.id) is not None
+
+    # _first_business with a business_id filter skips the non-matching decoy (921).
+    wanted = spawn_entity(world, [BusinessOwnerComponent(name="Wanted")])
+    decoy = spawn_entity(world, [BusinessOwnerComponent(name="Decoy")])
+    character.add_relationship(OwnsBusiness(), decoy.id)
+    character.add_relationship(OwnsBusiness(), wanted.id)
+    assert _first_business(world, character, wanted.id).id == wanted.id
+
+    # An entity without the component is ignored (925->919) before a valid one is found.
+    shopkeeper = spawn_entity(world, [CharacterComponent()])
+    not_a_business = spawn_entity(world, [IdentityComponent(name="ledger", kind="item")])
+    real = spawn_entity(world, [BusinessOwnerComponent(name="Real")])
+    shopkeeper.add_relationship(OwnsBusiness(), not_a_business.id)
+    shopkeeper.add_relationship(OwnsBusiness(), real.id)
+    assert _first_business(world, shopkeeper).id == real.id
+
+    # A relationship pointing only at a nonexistent id hits the has_entity skip (923)
+    # and then falls through to return None.
+    loner = spawn_entity(world, [CharacterComponent()])
+    world._relationships.setdefault(loner.id, {}).setdefault(OwnsBusiness, {})[
+        parse_entity_id("entity_991")
+    ] = OwnsBusiness()
+    assert _first_business(world, loner) is None
+
+
+def test_inheritance_record_lookup_skips_non_matching_records():
+    """inheritance_record_for_event iterates past a non-matching record (981->979)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    spawn_entity(world, [InheritanceRecordComponent(
+        decedent_id="a", heir_id="b", source_event_id="other", created_at_epoch=1
+    )])
+    match = spawn_entity(world, [InheritanceRecordComponent(
+        decedent_id="a", heir_id="b", source_event_id="wanted", created_at_epoch=1
+    )])
+    assert inheritance_record_for_event(world, "wanted").id == match.id
+    assert inheritance_record_for_event(world, "absent") is None
+
+
+def test_select_heir_skips_dead_partner_and_dead_household_member():
+    """_select_heir partner/household skip arcs (1051->1049, 1060->1057)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    decedent = world.get_entity(scenario.character)
+    decedent.add_component(HouseholdComponent(household_id="moss"))
+
+    # A dead partner must be skipped so the household fallback is reached.
+    dead_partner = _co_parent(scenario)
+    world.get_entity(dead_partner).add_component(DeadComponent(died_at_epoch=1, cause="loss"))
+    decedent.add_relationship(PartnerOf(since_epoch=1), dead_partner)
+    world.get_entity(dead_partner).add_relationship(PartnerOf(since_epoch=1), decedent.id)
+
+    # A living member of a *different* household fails the household-id check (1060->1057).
+    spawn_entity(world, [CharacterComponent(), HouseholdComponent(household_id="other")])
+    # The valid household heir.
+    housemate = _co_parent(scenario)
+    world.get_entity(housemate).add_component(HouseholdComponent(household_id="moss"))
+
+    event = CharacterDiedEvent(
+        **event_base(
+            80,
+            actor_id=str(decedent.id),
+            target_ids=(str(decedent.id),),
+            cause="winter fever",
+        )
+    )
+    record = project_inheritance_for_death(world, event)
+    assert record is not None
+    assert record.get_component(InheritanceRecordComponent).heir_id == str(housemate)
+    assert record.get_component(InheritanceRecordComponent).relationship == "household"
+
+
+def test_select_heir_returns_none_when_household_has_no_other_members():
+    """_select_heir with a household but no eligible members returns None (1062->1064)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    decedent = world.get_entity(scenario.character)
+    decedent.add_component(HouseholdComponent(household_id="solitary"))
+    # An outsider in a different household must not be chosen.
+    spawn_entity(world, [CharacterComponent(), HouseholdComponent(household_id="elsewhere")])
+
+    event = CharacterDiedEvent(
+        **event_base(
+            90,
+            actor_id=str(decedent.id),
+            target_ids=(str(decedent.id),),
+            cause="winter fever",
+        )
+    )
+    assert project_inheritance_for_death(world, event) is None
+
+
+def test_inheritance_skips_stale_property_deed_relationship():
+    """_transfer_property_deeds skips OwnsProperty edges to missing entities (line 1149)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    decedent = world.get_entity(scenario.character)
+    heir_id = _child(scenario)
+    decedent.add_relationship(ParentOf(), heir_id)
+
+    # A stale OwnsProperty edge pointing at a nonexistent property entity.
+    world._relationships.setdefault(decedent.id, {}).setdefault(OwnsProperty, {})[
+        parse_entity_id("entity_980")
+    ] = OwnsProperty(deed_id="ghost", purchased_at_epoch=1)
+
+    event = CharacterDiedEvent(
+        **event_base(
+            95,
+            actor_id=str(decedent.id),
+            target_ids=(str(decedent.id),),
+            cause="winter fever",
+        )
+    )
+    record = project_inheritance_for_death(world, event)
+    assert record is not None
+    # The stale property was skipped, so nothing is recorded as inherited property.
+    assert record.get_component(InheritanceRecordComponent).inherited_property_ids == ()
+
+
+def test_optional_sim_transfers_fall_back_when_modules_unavailable(monkeypatch):
+    """Property/colony transfers no-op when the optional sims can't import (1143, 1172)."""
+    import sys
+
+    scenario = build_scenario()
+    world = scenario.actor.world
+    decedent = world.get_entity(scenario.character)
+    heir = world.get_entity(scenario.room_b)  # any entity works as the heir handle
+
+    # Force the lazy in-function imports to fail, simulating the sims being absent.
+    monkeypatch.setitem(sys.modules, "bunnyland.mechanics.daggersim", None)
+    monkeypatch.setitem(sys.modules, "bunnyland.mechanics.colonysim", None)
+
+    assert _transfer_property_deeds(world, decedent, heir, inherited_at_epoch=1) == ()
+    assert _transfer_colony_ownership(decedent, heir, inherited_at_epoch=1) == ()
+
+
+def test_living_character_false_for_missing_entity():
+    """_living_character returns False when the entity is absent (line 1069)."""
+    scenario = build_scenario()
+    missing = parse_entity_id("entity_9999")
+    assert _living_character(scenario.actor.world, missing) is False
+
+
+def test_maintain_home_object_rejects_invalid_object_id():
+    """MaintainHomeObjectHandler rejects when object id is invalid (line 1524)."""
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = MaintainHomeObjectHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "maintain-home-object", object_id="not-an-id", action="clean"),
+    )
+    assert result.ok is False
+    assert result.reason == "invalid character or object id"
+
+
+def test_invite_over_defaults_to_current_room_when_room_id_missing():
+    """InviteOverHandler falls back to the actor's container room (line 1578)."""
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    guest_id = _co_parent(scenario)
+    result = InviteOverHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "invite-over", guest_id=str(guest_id)),
+    )
+    assert result.ok is True
+    event = result.events[0]
+    assert isinstance(event, InvitationSentEvent)
+    assert event.room_id_invited == str(scenario.room_a)
+
+
+def test_end_partnership_when_target_has_no_reverse_edge():
+    """EndPartnershipHandler tolerates a one-sided partner edge (branch 2436->2438)."""
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    actor = scenario.actor.world.get_entity(scenario.character)
+    target_id = _co_parent(scenario)
+    # Only the actor holds the edge; the target has no reverse PartnerOf.
+    actor.add_relationship(PartnerOf(since_epoch=1), target_id)
+
+    result = EndPartnershipHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "end-partnership", target_id=str(target_id)),
+    )
+    assert result.ok is True
+    assert isinstance(result.events[0], PartnershipEndedEvent)
+    assert _partner_edge(actor, target_id) is None
+
+
+def test_restful_sleep_drops_expired_well_rested_buff():
+    """RestfulSleepConsequence removes a buff once its window has elapsed (line 2790)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(WellRestedComponent(expires_at_epoch=10))
+
+    RestfulSleepConsequence().process(world, epoch=20)
+
+    assert not character.has_component(WellRestedComponent)
+
+
+def test_lifesim_fragments_skip_stale_and_componentless_whims():
+    """lifesim_fragments skips whim relations to missing/non-whim entities (2853, 2856)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    world._relationships.setdefault(character.id, {}).setdefault(HasWhim, {})[
+        parse_entity_id("entity_990")
+    ] = HasWhim()
+
+    not_a_whim = spawn_entity(world, [IdentityComponent(name="note", kind="item")])
+    character.add_relationship(HasWhim(), not_a_whim.id)
+
+    real_whim = spawn_entity(world, [WhimComponent(want="garden")])
+    character.add_relationship(HasWhim(), real_whim.id)
+
+    fragments = lifesim_fragments(world, character)
+    assert "Current whim: garden." in fragments
+
+
+def test_lifesim_fragments_inheritance_record_without_component_uses_fallback():
+    """A record entity missing its component falls through to the prose line (2922->2927)."""
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    decedent = spawn_entity(world, [IdentityComponent(name="Maple", kind="character")])
+    # The record entity exists but carries no InheritanceRecordComponent.
+    record = spawn_entity(world, [IdentityComponent(name="stub record", kind="inheritance")])
+    character.add_relationship(
+        InheritedFrom(
+            source_event_id="evt",
+            inherited_at_epoch=5,
+            relationship="child",
+            record_id=str(record.id),
+        ),
+        decedent.id,
+    )
+
+    fragments = lifesim_fragments(world, character)
+    assert any("You inherited child legacy from Maple." in line for line in fragments)

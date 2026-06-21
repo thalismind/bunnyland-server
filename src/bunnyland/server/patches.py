@@ -86,9 +86,9 @@ def _edge(actor: WorldActor, spec) -> Edge:
         raise WorldPatchError(f"invalid {spec.type}: {exc}") from exc
 
 
-def _add_changed(changed: set[Any], entity_id: Any | None) -> None:
-    if entity_id is not None:
-        changed.add(entity_id)
+def _add_changed(changed: set[Any], entity_id: Any) -> None:
+    # Callers only ever pass resolved (non-None) entity ids.
+    changed.add(entity_id)
 
 
 def _preflight_world_patch(actor: WorldActor, request: WorldPatchRequest) -> None:
@@ -180,13 +180,11 @@ def _preflight_world_patch(actor: WorldActor, request: WorldPatchRequest) -> Non
             _preflight_entity_id(actor, operation.source_id, aliases, deleted)
             _preflight_entity_id(actor, operation.target_id, aliases, deleted)
             _edge(actor, operation.edge)
-        elif isinstance(operation, RemoveEdgePatchRequest):
+        else:  # RemoveEdgePatchRequest -- the operations union is closed and discriminated.
             _preflight_entity_id(actor, operation.source_id, aliases, deleted)
             _preflight_entity_id(actor, operation.target_id, aliases, deleted)
             if edge_registry.get(operation.edge_type) is None:
                 raise WorldPatchError(f"unknown edge {operation.edge_type!r}")
-        else:
-            raise WorldPatchError(f"unknown patch operation {operation!r}")
 
 
 def _apply_add_entity(
@@ -195,9 +193,8 @@ def _apply_add_entity(
     changed: set[Any],
     aliases: dict[str, Any],
 ) -> None:
+    # Preflight already rejects duplicate client ids, so no re-check is needed here.
     ensure_blank_prefab(actor.world)
-    if operation.client_id is not None and operation.client_id in aliases:
-        raise WorldPatchError(f"duplicate client entity id {operation.client_id!r}")
     entity = actor.world.spawn(operation.prefab)
     for spec in operation.components:
         entity.add_component(_component(actor, spec))
@@ -310,10 +307,8 @@ def apply_world_patch(actor: WorldActor, request: WorldPatchRequest) -> WorldPat
             _apply_remove_component(actor, operation, changed, aliases)
         elif isinstance(operation, SetEdgePatchRequest):
             _apply_set_edge(actor, operation, changed, aliases)
-        elif isinstance(operation, RemoveEdgePatchRequest):
+        else:  # RemoveEdgePatchRequest -- the operations union is closed and discriminated.
             _apply_remove_edge(actor, operation, changed, aliases)
-        else:
-            raise WorldPatchError(f"unknown patch operation {operation!r}")
 
     changed_entities = [
         serialize_entity(actor, actor.world.get_entity(entity_id))

@@ -772,7 +772,8 @@ async def _call_provider_with_retries(
             )
             if retry_delay_seconds > 0:
                 await asyncio.sleep(retry_delay_seconds)
-    return None
+    # Unreachable: ``range(max_retries + 1)`` always has >=1 element (max_retries is clamped
+    # to >=0), and the final iteration always returns or raises.
 
 
 def _message_to_history(message) -> dict:

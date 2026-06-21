@@ -2389,3 +2389,522 @@ def test_fragments_show_bounty_for_unknown_faction_key():
 
     lines = dragonsim_fragments(scenario.actor.world, character)
     assert any("Bounty of 5 with lost_77" in line for line in lines)
+
+
+def test_payload_entity_id_returns_none_when_no_keys_present():
+    # _payload_entity_id falls through to None when none of the keys are in the payload.
+    # BribeGuardHandler.can_handle is the public path that calls it with no guard id.
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    assert BribeGuardHandler().can_handle(ctx, _handler_cmd(scenario, "bribe")) is False
+
+
+def test_spell_component_first_person_fragment_hidden_without_private_state():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    spell = spawn_entity(world, [SpellComponent(name="Oakflesh")])
+    observer = spawn_entity(world, [CharacterComponent()])
+    # target=None path: not the learner's own private view -> empty.
+    ctx = ComponentPromptContext.for_entity(
+        world, spell, perspective=PromptPerspective(viewer=observer)
+    )
+    assert spell.get_component(SpellComponent).prompt_fragments(ctx) == ()
+
+
+def test_quest_track_decline_branch_rejections_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    unaccepted = spawn_entity(
+        world, [QuestComponent(quest_id="unaccepted", title="Unaccepted")]
+    )
+    completed = spawn_entity(
+        world,
+        [QuestComponent(quest_id="done", title="Done", status="completed")],
+    )
+    accepted = spawn_entity(
+        world,
+        [
+            QuestComponent(
+                quest_id="taken",
+                title="Taken",
+                status="active",
+                accepted_by=(str(scenario.character),),
+            )
+        ],
+    )
+    assert unaccepted and completed and accepted
+    cases = [
+        (
+            TrackQuestHandler(),
+            _handler_cmd(scenario, "track-quest", quest_id="unaccepted"),
+            "quest is not accepted",
+        ),
+        (
+            ChooseQuestBranchHandler(),
+            _handler_cmd(
+                scenario, "choose-quest-branch", quest_id="unaccepted", branch="left"
+            ),
+            "quest is not accepted",
+        ),
+        (
+            DeclineQuestHandler(),
+            _handler_cmd(scenario, "decline-quest", quest_id="done"),
+            "quest is already complete",
+        ),
+        (
+            DeclineQuestHandler(),
+            _handler_cmd(scenario, "decline-quest", quest_id="taken"),
+            "accepted quest cannot be declined",
+        ),
+    ]
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False
+        assert result.reason == reason
+
+
+def test_adventure_handlers_reject_missing_and_unreachable_ids_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    missing = "entity_999999"
+
+    # Out-of-room (unreachable) entities of each kind.
+    distant_guard = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="far guard", kind="character"),
+            CharacterComponent(),
+            GuardComponent(faction_id="f1", bribe_amount=5),
+        ],
+    )
+    distant_lock = spawn_entity(
+        world,
+        [IdentityComponent(name="far chest", kind="container"), LockDifficultyComponent()],
+    )
+    distant_spell = spawn_entity(
+        world, [IdentityComponent(name="far spell", kind="spell"), SpellComponent(name="Far")]
+    )
+    distant_recipe = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="far recipe", kind="recipe"),
+            PotionRecipeComponent(name="far recipe", potion_name="Far Tonic"),
+        ],
+    )
+    distant_artifact = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="far mirror", kind="artifact"),
+            ArtifactComponent(name="Far Mirror", charges=1),
+        ],
+    )
+    distant_beast = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="far wyrm", kind="character"),
+            AncientBeastComponent(name="far wyrm"),
+        ],
+    )
+    distant_slate = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="far slate", kind="prop"),
+            VoiceInscriptionComponent(word_id="x"),
+        ],
+    )
+    word = _word(scenario, min_souls=0)
+
+    cases = [
+        # invalid character/id, missing-entity, and unreachable paths per handler.
+        (
+            ChangeFactionRankHandler(),
+            _handler_cmd(scenario, "change-faction-rank", character_id="x", faction_id="y"),
+            "invalid character, faction, or rank",
+        ),
+        (
+            ChangeFactionRankHandler(),
+            _handler_cmd(scenario, "change-faction-rank", faction_id=missing, rank="warden"),
+            "faction does not exist",
+        ),
+        (
+            BribeGuardHandler(),
+            _handler_cmd(scenario, "bribe", guard_id="x"),
+            "invalid character or guard id",
+        ),
+        (
+            BribeGuardHandler(),
+            _handler_cmd(scenario, "bribe", guard_id=missing),
+            "guard does not exist",
+        ),
+        (
+            ServeJailTimeHandler(),
+            _handler_cmd(scenario, "serve-jail-time", character_id="x"),
+            "invalid character id",
+        ),
+        (
+            PickLockHandler(),
+            _handler_cmd(scenario, "pick-lock", lock_id="x"),
+            "invalid character or lock id",
+        ),
+        (
+            PickLockHandler(),
+            _handler_cmd(scenario, "pick-lock", lock_id=missing),
+            "lock does not exist",
+        ),
+        (
+            PickLockHandler(),
+            _handler_cmd(scenario, "pick-lock", lock_id=str(distant_lock.id)),
+            "lock is not reachable",
+        ),
+        (
+            LearnSpellHandler(),
+            _handler_cmd(scenario, "learn-spell", spell_id="x"),
+            "invalid character or spell id",
+        ),
+        (
+            LearnSpellHandler(),
+            _handler_cmd(scenario, "learn-spell", spell_id=missing),
+            "spell does not exist",
+        ),
+        (
+            CastDragonSpellHandler(),
+            _handler_cmd(scenario, "cast-dragon-spell", spell_id="x"),
+            "invalid character or spell id",
+        ),
+        (
+            CastDragonSpellHandler(),
+            _handler_cmd(scenario, "cast-dragon-spell", spell_id=missing),
+            "spell does not exist",
+        ),
+        (
+            CastDragonSpellHandler(),
+            _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(distant_spell.id)),
+            "spell is not learned",
+        ),
+        (
+            BrewPotionHandler(),
+            _handler_cmd(scenario, "brew-potion", recipe_id="x"),
+            "invalid character or recipe id",
+        ),
+        (
+            BrewPotionHandler(),
+            _handler_cmd(scenario, "brew-potion", recipe_id=missing),
+            "recipe does not exist",
+        ),
+        (
+            BrewPotionHandler(),
+            _handler_cmd(scenario, "brew-potion", recipe_id=str(distant_recipe.id)),
+            "recipe is not reachable",
+        ),
+        (
+            UseArtifactHandler(),
+            _handler_cmd(scenario, "use", artifact_id="x"),
+            "invalid character or artifact id",
+        ),
+        (
+            UseArtifactHandler(),
+            _handler_cmd(scenario, "use", artifact_id=missing),
+            "artifact does not exist",
+        ),
+        (
+            UseArtifactHandler(),
+            _handler_cmd(scenario, "use", artifact_id=str(distant_artifact.id)),
+            "artifact is not reachable",
+        ),
+        (
+            IdentifyArtifactHandler(),
+            _handler_cmd(scenario, "identify", artifact_id=str(distant_artifact.id)),
+            "artifact is not reachable",
+        ),
+        (
+            AppeaseAncientBeastHandler(),
+            _handler_cmd(scenario, "appease-ancient-beast", beast_id=str(distant_beast.id)),
+            "ancient beast is not reachable",
+        ),
+        (
+            InscribeVoicePhraseHandler(),
+            _handler_cmd(scenario, "inscribe-voice-phrase", target_id="x", word_id="y"),
+            "invalid character, target, or word id",
+        ),
+        (
+            InscribeVoicePhraseHandler(),
+            _handler_cmd(
+                scenario,
+                "inscribe-voice-phrase",
+                target_id=missing,
+                word_id=str(word),
+                phrase="ok",
+            ),
+            "target does not exist",
+        ),
+        (
+            InscribeVoicePhraseHandler(),
+            _handler_cmd(
+                scenario,
+                "inscribe-voice-phrase",
+                target_id=str(distant_slate.id),
+                word_id=missing,
+                phrase="ok",
+            ),
+            "word does not exist",
+        ),
+        (
+            InscribeVoicePhraseHandler(),
+            _handler_cmd(
+                scenario,
+                "inscribe-voice-phrase",
+                target_id=str(distant_slate.id),
+                word_id=str(word),
+                phrase="ok",
+            ),
+            "target is not reachable",
+        ),
+        (
+            StudyVoiceInscriptionHandler(),
+            _handler_cmd(scenario, "study-voice-inscription", target_id="x"),
+            "invalid character or target id",
+        ),
+        (
+            StudyVoiceInscriptionHandler(),
+            _handler_cmd(scenario, "study-voice-inscription", target_id=missing),
+            "target does not exist",
+        ),
+        (
+            StudyVoiceInscriptionHandler(),
+            _handler_cmd(scenario, "study-voice-inscription", target_id=str(distant_slate.id)),
+            "target is not reachable",
+        ),
+    ]
+    assert distant_guard
+    for handler, command, reason in cases:
+        result = handler.execute(ctx, command)
+        assert result.ok is False, (reason, result.ok)
+        assert result.reason == reason
+
+
+def test_learn_and_cast_spell_extra_state_branches_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    character.add_component(MagicComponent(current=5, maximum=5))
+
+    spell = spawn_entity(
+        world,
+        [IdentityComponent(name="No Skill Spark", kind="spell"), SpellComponent(name="No Skill")],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), spell.id)
+
+    learn = LearnSpellHandler()
+    assert learn.execute(ctx, _handler_cmd(scenario, "learn-spell", spell_id=str(spell.id))).ok
+    # Already learned -> rejected (line 1906).
+    assert (
+        learn.execute(ctx, _handler_cmd(scenario, "learn-spell", spell_id=str(spell.id))).reason
+        == "spell already learned"
+    )
+
+    # Cast a learned spell with no skill_name -> no XP branch (1975 false).
+    cast = CastDragonSpellHandler()
+    result = cast.execute(ctx, _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id)))
+    assert result.ok
+    assert character.get_component(MagicComponent).current == 4  # default magic_cost of 1
+
+
+def test_cast_spell_with_cooldown_sets_ready_epoch_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    character.add_component(MagicComponent(current=5, maximum=5))
+    spell = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Cooldown Spark", kind="spell"),
+            SpellComponent(name="Cooldown", magic_cost=1),
+            SpellCooldownComponent(cooldown_seconds=20, ready_at_epoch=0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), spell.id)
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), spell.id)
+
+    result = CastDragonSpellHandler().execute(
+        ctx, _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id))
+    )
+    assert result.ok
+    cooldown = world.get_entity(spell.id).get_component(SpellCooldownComponent)
+    assert cooldown.ready_at_epoch == ctx.epoch + 20
+
+
+def test_brew_potion_without_skill_name_skips_xp_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    recipe = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="plain recipe", kind="recipe"),
+            PotionRecipeComponent(
+                name="plain recipe", potion_name="Plain Tonic", skill_name=""
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), recipe.id)
+
+    result = BrewPotionHandler().execute(
+        ctx, _handler_cmd(scenario, "brew-potion", recipe_id=str(recipe.id))
+    )
+    assert result.ok
+    character = world.get_entity(scenario.character)
+    assert not character.has_component(SkillSetComponent)
+
+
+def test_bribe_guard_branches_no_wanted_and_full_clear_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    faction = _faction(scenario)
+    guard = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Moss Guard", kind="character"),
+            CharacterComponent(species="bunny"),
+            GuardComponent(faction_id=str(faction), bribe_amount=10),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), guard.id)
+    bribe = BribeGuardHandler()
+
+    # No WantedComponent at all (branch 1613 false -> 1622).
+    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
+    assert not character.has_component(WantedComponent)
+
+    # Wanted but for a different faction (branch 1615 false -> 1622).
+    character.add_component(WantedComponent(amounts={"other_5": 7}))
+    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
+    assert character.get_component(WantedComponent).amounts == {"other_5": 7}
+
+    # Bribe exactly clears the bounty to 0 -> key removed (line 1620).
+    character.remove_component(WantedComponent)
+    character.add_component(WantedComponent(amounts={str(faction): 10}))
+    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
+    assert str(faction) not in character.get_component(WantedComponent).amounts
+
+
+def test_serve_jail_time_branches_directly():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    # Sentence not complete (line 1649).
+    character.add_component(
+        JailComponent(faction_id="f1", release_epoch=ctx.epoch + 1000)
+    )
+    assert (
+        ServeJailTimeHandler()
+        .execute(ctx, _handler_cmd(scenario, "serve-jail-time"))
+        .reason
+        == "sentence is not complete"
+    )
+
+    # Complete sentence, no WantedComponent (branch 1651 false -> 1655).
+    character.remove_component(JailComponent)
+    character.add_component(JailComponent(faction_id="f1", release_epoch=0))
+    assert ServeJailTimeHandler().execute(
+        ctx, _handler_cmd(scenario, "serve-jail-time")
+    ).ok
+    assert not character.has_component(JailComponent)
+
+
+def test_study_voice_inscription_when_word_already_known_skips_relationship():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    word = _word(scenario, name="Known Word", min_souls=0)
+    # Character already knows the word (branch 2326 false).
+    character.add_relationship(KnowsWord(learned_at_epoch=0), parse_entity_id(str(word)))
+    slate = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="known slate", kind="prop"),
+            VoiceInscriptionComponent(word_id=str(word)),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), slate.id)
+
+    result = StudyVoiceInscriptionHandler().execute(
+        ctx, _handler_cmd(scenario, "study-voice-inscription", target_id=str(slate.id))
+    )
+    assert result.ok
+    assert str(scenario.character) in slate.get_component(
+        VoiceInscriptionComponent
+    ).studied_by
+
+
+def test_dragonsim_fragments_skip_missing_and_componentless_relationships():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    # MemberOf points at a now-deleted faction (line 2347 continue).
+    ghost_faction = spawn_entity(world, [IdentityComponent(name="ghost", kind="faction")])
+    character.add_relationship(MemberOf(rank="member", since_epoch=0), ghost_faction.id)
+    world.remove(ghost_faction.id)
+
+    # HasPerk/KnowsWord/KnowsSpell targets that are deleted (2367/2379/2388 continue).
+    ghost_perk = spawn_entity(world, [PerkComponent(name="Gone", skill_name="blade")])
+    character.add_relationship(HasPerk(unlocked_at_epoch=0), ghost_perk.id)
+    world.remove(ghost_perk.id)
+    ghost_word = spawn_entity(world, [WordOfPowerComponent(name="Gone")])
+    character.add_relationship(KnowsWord(learned_at_epoch=0), ghost_word.id)
+    world.remove(ghost_word.id)
+    ghost_spell = spawn_entity(world, [SpellComponent(name="Gone")])
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), ghost_spell.id)
+    world.remove(ghost_spell.id)
+
+    # HasPerk/KnowsWord/KnowsSpell targets that exist but lack the component
+    # (branches 2370/2382/2391 false).
+    bare_perk = spawn_entity(world, [IdentityComponent(name="bare", kind="prop")])
+    character.add_relationship(HasPerk(unlocked_at_epoch=0), bare_perk.id)
+    bare_word = spawn_entity(world, [IdentityComponent(name="bare", kind="prop")])
+    character.add_relationship(KnowsWord(learned_at_epoch=0), bare_word.id)
+    bare_spell = spawn_entity(world, [IdentityComponent(name="bare", kind="prop")])
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), bare_spell.id)
+
+    # Should not raise and should produce a list.
+    assert isinstance(dragonsim_fragments(world, character), list)
+
+
+def test_dragonsim_fragments_show_known_spell_and_jail():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    # A known spell not present in the room (fragments lines 2390-2395).
+    spell = spawn_entity(world, [SpellComponent(name="Firebolt")])
+    character.add_relationship(KnowsSpell(learned_at_epoch=0), spell.id)
+    # Jail fragment (line 2401).
+    character.add_component(JailComponent(faction_id="f1", release_epoch=99))
+
+    lines = dragonsim_fragments(world, character)
+    assert any("Spell learned: Firebolt" in line for line in lines)
+    assert any("Serving jail time for f1" in line for line in lines)

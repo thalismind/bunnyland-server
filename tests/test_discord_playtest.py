@@ -61,6 +61,8 @@ from bunnyland.discord.playtest import (
     DiscordPlaytest,
     DiscordPlaytestHarness,
     PlaytestInput,
+    _expect_tuple,
+    _jsonable,
     load_discord_playtest,
     run_discord_playtest,
 )
@@ -1102,6 +1104,69 @@ async def test_discord_playtest_schedules_inputs_by_tick(scenario):
     assert scenario.character_room() == scenario.room_b
     assert result.inputs[1].reactions
     assert "You are now in North Tunnel" in result.inputs[1].messages[0]
+
+
+def test_playtest_jsonable_converts_pydantic_models_and_expect_tuple():
+    from pydantic import BaseModel
+
+    class _Tip(BaseModel):
+        text: str
+
+    assert _jsonable(_Tip(text="hi")) == {"text": "hi"}
+    assert _expect_tuple("just-one") == ("just-one",)
+
+
+def test_playtest_schedule_label_describes_tick_and_epoch_keyed_inputs():
+    assert DiscordPlaytestHarness._schedule_label(PlaytestInput(tick=2, content="wait")) == "tick 2"
+    assert (
+        DiscordPlaytestHarness._schedule_label(PlaytestInput(epoch=3600, content="wait"))
+        == "epoch 3600"
+    )
+
+
+async def test_discord_playtest_skips_paused_ticks_and_autosaves(scenario, monkeypatch):
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("bunnyland.discord.playtest.asyncio.sleep", fake_sleep)
+
+    saved: list[int] = []
+    loop = GameLoop(
+        scenario.actor,
+        ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])),
+        tick_seconds=1.0,
+        time_scale=3600.0,
+        autosave=saved.append,
+        autosave_every=1,
+        paused=True,
+    )
+    spec = DiscordPlaytest(ticks=2, inputs=())
+
+    result = await run_discord_playtest(loop, spec)
+
+    assert result.ticks == 2
+    # Both ticks were paused, so the loop slept once per tick and never autosaved.
+    assert sleeps.count(loop.tick_seconds) == 2
+    assert saved == []
+
+
+async def test_discord_playtest_autosaves_running_ticks(scenario):
+    saved: list[int] = []
+    loop = GameLoop(
+        scenario.actor,
+        ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])),
+        tick_seconds=1.0,
+        time_scale=3600.0,
+        autosave=saved.append,
+        autosave_every=1,
+    )
+    spec = DiscordPlaytest(ticks=2, inputs=())
+
+    await run_discord_playtest(loop, spec)
+
+    assert saved == [1, 2]
 
 
 async def test_discord_playtest_motd_plugin_sends_claim_message(scenario):

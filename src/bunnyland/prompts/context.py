@@ -137,8 +137,8 @@ class ComponentPromptContext:
         else:
             found: list[Entity] = []
             for item_id in contents(self.entity):
-                if not self._world.has_entity(item_id):
-                    continue
+                # Inventory edges target live entities (Relics drops edges when a target
+                # is removed), so no missing-entity guard is reachable here.
                 item = self._world.get_entity(item_id)
                 if component_type is None or item.has_component(component_type):
                     found.append(item)

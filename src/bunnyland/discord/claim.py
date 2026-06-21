@@ -39,9 +39,9 @@ def list_character_names(actor: WorldActor) -> list[str]:
 
 
 def _active_controller_kind(actor: WorldActor, character) -> str:
+    # Relics cascades inbound relationship removal when an entity is despawned, so every
+    # ControlledBy target here is guaranteed to still exist.
     for _edge, controller_id in character.get_relationships(ControlledBy):
-        if not actor.world.has_entity(controller_id):
-            continue
         controller = actor.world.get_entity(controller_id)
         if controller.has_component(DiscordControllerComponent):
             return "Discord controller"

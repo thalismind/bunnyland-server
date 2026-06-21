@@ -21,11 +21,13 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics import storyteller as story
-from bunnyland.mechanics.colonysim import PrisonerComponent
+from bunnyland.mechanics.barbariansim import BarbarianSimPolicyComponent
+from bunnyland.mechanics.colonysim import ColonySimComponent, PrisonerComponent
 from bunnyland.mechanics.daggersim import GeneratedQuestComponent, PacifiedComponent
 from bunnyland.mechanics.dinosim import (
     ApexPredatorComponent,
     CompanionComponent,
+    DinosimPolicyComponent,
     EnclosureComponent,
     GateComponent,
     KaijuComponent,
@@ -452,6 +454,205 @@ def test_storyteller_fragments_ignore_missing_room_contents_and_resolved_inciden
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), resolved.id)
     assert storyteller_fragments(world, character) == []
+
+
+def test_incident_generated_event_exposes_generation_properties():
+    generation = story.GenerationIntentComponent(
+        description="a custom incident",
+        tags=("incident", "custom"),
+        wants=("loot",),
+        needs=("dinosim",),
+        source_key="custom",
+        entity_kind="incident",
+    )
+    event = IncidentGeneratedEvent(
+        **story._event_base(
+            0,
+            seed="custom:0:1",
+            incident_id="entity_1",
+            incident_key="custom",
+            kind="custom",
+            budget_spent=1.0,
+            generation=generation,
+        )
+    )
+    assert event.intent == "a custom incident"  # 117
+    assert event.tags == ("incident", "custom")
+    assert event.wants == ("loot",)
+    assert event.needs == ("dinosim",)  # 129
+
+
+def test_choose_incident_selects_kaiju_attack_when_colony_and_dino_enabled(scenario):
+    world = scenario.actor.world
+    spawn_entity(world, [ColonySimComponent(enabled=True)])
+    spawn_entity(world, [DinosimPolicyComponent(kaiju_storyteller_incidents=True)])
+    kind, spent = story._choose_incident(world, 16.0)  # 147-155, 172
+    assert kind == "kaiju_attack"
+    assert spent == 15.0
+    generation = story._incident_generation("kaiju_attack", 15.0)  # line 200
+    assert "kaiju" in generation.tags
+    assert generation.needs == ("dinosim",)
+
+
+def test_choose_incident_selects_barbarian_raid_when_colony_and_barbarian_enabled(scenario):
+    world = scenario.actor.world
+    spawn_entity(world, [ColonySimComponent(enabled=True)])
+    spawn_entity(world, [BarbarianSimPolicyComponent(raid_storyteller_incidents=True)])
+    kind, spent = story._choose_incident(world, 13.0)  # 159-167, 174
+    assert kind == "barbarian_raid"
+    assert spent == 12.0
+    generation = story._incident_generation("barbarian_raid", 12.0)  # line 212
+    assert "raid" in generation.tags
+    assert generation.needs == ("barbariansim",)
+
+
+def test_disabled_storyteller_accrues_points_without_spawning(scenario):
+    world = scenario.actor.world
+    teller = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="idle storyteller", kind="controller"),
+            StorytellerComponent(enabled=False, interval_seconds=int(HOUR)),
+            IncidentBudgetComponent(points=4.0, points_per_day=6.0),
+        ],
+    )
+    events = StorytellerConsequence().process(world, story.SECONDS_PER_DAY)  # 421-422
+    assert events == []
+    budget = teller.get_component(IncidentBudgetComponent)
+    assert budget.points > 4.0  # points accrued
+    assert not list(world.query().with_all([IncidentComponent]).execute_entities())
+
+
+def test_enrichment_spawns_hostile_for_hostile_encounter(scenario):
+    world = scenario.actor.world
+    enrichment = story.StorytellerIncidentEnrichment(world)
+    incident = story._spawn_incident(
+        world, 0, world.get_entity(scenario.room_a), "hostile_encounter", 10.0
+    )
+    generation = incident.get_component(story.GenerationIntentComponent)
+    event = IncidentGeneratedEvent(
+        **story._event_base(
+            0,
+            room_id=str(scenario.room_a),
+            seed="hostile_encounter:0:10",
+            incident_id=str(incident.id),
+            incident_key="hostile_encounter",
+            kind="hostile_encounter",
+            budget_spent=10.0,
+            generation=generation,
+        )
+    )
+    enrichment._on_incident(event)  # 282->exit (elif branch taken)
+    spawned = list(incident.get_relationships(IncidentSpawned))
+    assert spawned and spawned[0][0].kind == "monster"
+
+
+def test_enrichment_ignores_kinds_without_builtin_handling(scenario):
+    world = scenario.actor.world
+    enrichment = story.StorytellerIncidentEnrichment(world)
+    incident = story._spawn_incident(
+        world, 0, world.get_entity(scenario.room_a), "trader_arrival", 5.0
+    )
+    generation = incident.get_component(story.GenerationIntentComponent)
+    event = IncidentGeneratedEvent(
+        **story._event_base(
+            0,
+            room_id=str(scenario.room_a),
+            seed="trader_arrival:0:5",
+            incident_id=str(incident.id),
+            incident_key="trader_arrival",
+            kind="trader_arrival",  # neither resource_drop nor hostile -> 282->exit
+            budget_spent=5.0,
+            generation=generation,
+        )
+    )
+    enrichment._on_incident(event)
+    assert not list(incident.get_relationships(IncidentSpawned))
+
+
+def test_choose_incident_selects_trader_arrival_at_mid_budget(scenario):
+    # 5 <= points < 10 with no special sims -> trader arrival (line 178)
+    kind, spent = story._choose_incident(scenario.actor.world, 6.0)
+    assert kind == "trader_arrival"
+    assert spent == 5.0
+
+
+def test_incident_generation_falls_back_to_generic_intent():
+    generation = story._incident_generation("trader_arrival", 5.0)  # line 223
+    assert generation.description == "a trader arrival incident"
+    assert generation.tags == ("incident", "trader_arrival")
+    assert generation.source_key == "trader_arrival"
+
+
+def test_target_room_skips_character_without_valid_room(scenario):
+    world = scenario.actor.world
+    # the only character is not contained in any room -> the loop body continues (140->136)
+    loose = spawn_entity(
+        world,
+        [IdentityComponent(name="Drifter", kind="character"), CharacterComponent()],
+    )
+    detached_world = type(world)()
+    spawn_entity(
+        detached_world,
+        [IdentityComponent(name="Floater", kind="character"), CharacterComponent()],
+    )
+    room = spawn_entity(detached_world, [RoomComponent(title="Hall")])
+    # character has no container, so _target_room falls through to the first room
+    assert _target_room(detached_world) == room
+    assert loose is not None
+
+
+def test_spawn_incident_without_room_leaves_room_id_unset(scenario):
+    world = scenario.actor.world
+    incident = story._spawn_incident(world, 0, None, "resource_drop", 2.0)  # 246->248
+    assert incident.get_component(IncidentComponent).room_id is None
+
+
+def test_incident_enrichment_ignores_events_with_missing_entities(scenario):
+    world = scenario.actor.world
+    enrichment = story.StorytellerIncidentEnrichment(world)
+    generation = story._incident_generation("resource_drop", 2.0)
+    event = IncidentGeneratedEvent(
+        **story._event_base(
+            0,
+            room_id="entity_999999",  # missing room -> early return (line 269)
+            seed="resource_drop:0:2",
+            incident_id="entity_999999",
+            incident_key="resource_drop",
+            kind="resource_drop",
+            budget_spent=2.0,
+            generation=generation,
+        )
+    )
+    # should simply return without raising or spawning anything
+    enrichment._on_incident(event)
+
+
+def test_monster_neutralized_with_unlocked_enclosure_gate_is_not_done(scenario):
+    world = scenario.actor.world
+    incident = IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0)
+    pen = spawn_entity(world, [EnclosureComponent(), GateComponent(locked=False)])
+    beast = spawn_entity(
+        world,
+        [IdentityComponent(name="loose beast", kind="character"), CharacterComponent()],
+    )
+    pen.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), beast.id)
+    # gate unlocked -> not neutralized by containment (331->333)
+    assert story._spawned_requirement_done(world, incident, "monster", beast.id) is False
+
+
+def test_quest_done_false_without_quest_components(scenario):
+    world = scenario.actor.world
+    plain = spawn_entity(world, [IdentityComponent(name="not a quest", kind="prop")])
+    assert story._quest_done(plain) is False  # line 351
+
+
+def test_spawned_requirement_done_true_when_target_missing(scenario):
+    world = scenario.actor.world
+    incident = IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0)
+    missing_id = parse_entity_id("entity_999999")
+    # absent target counts as handled (line 365)
+    assert story._spawned_requirement_done(world, incident, "loot", missing_id) is True
 
 
 def test_incident_component_prompt_fragments_describe_active_incidents(scenario):

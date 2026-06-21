@@ -682,3 +682,63 @@ def test_chroma_store_delete_removes_existing_note():
     assert store.delete("c", entry.id) is True
     assert store.search("c", mode="recent") == []
     assert store.delete("c", entry.id) is False
+
+
+def test_chroma_store_vector_keyword_and_embedding_paths():
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.rows: list[tuple[str, str, dict]] = []
+
+        def add(self, *, ids, documents, metadatas):
+            self.rows.extend(zip(ids, documents, metadatas, strict=False))
+
+        def get(self, ids=None, include=None):
+            del ids, include
+            return {
+                "ids": [row[0] for row in self.rows],
+                "documents": [row[1] for row in self.rows],
+                # exercise the meta-is-None branch in _entries_from_get
+                "metadatas": [None for _ in self.rows],
+            }
+
+        def query(self, *, query_texts, n_results):
+            del query_texts
+            rows = self.rows[:n_results]
+            return {
+                "ids": [[row[0] for row in rows]],
+                "documents": [[row[1] for row in rows]],
+                "metadatas": [[row[2] for row in rows]],
+            }
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.collection = FakeCollection()
+            self.kwargs: dict = {}
+
+        def get_or_create_collection(self, *, name, **kwargs):
+            del name
+            self.kwargs = kwargs
+            return self.collection
+
+    embed = object()
+    client = FakeClient()
+    store = ChromaMemoryStore(client=client, embedding_function=embed)
+    store.add("c", text="the basin water is unsafe", created_at_epoch=1)
+    store.add("c", text="berries grow north", created_at_epoch=2)
+
+    # embedding_function is forwarded to the collection.
+    assert client.kwargs.get("embedding_function") is embed
+
+    # vector mode goes through col.query() and _entries_from_query's nested unwrap.
+    vector = store.search("c", query="water", mode="vector", limit=5)
+    assert {entry.text for entry in vector} == {
+        "the basin water is unsafe",
+        "berries grow north",
+    }
+    # metadata was None, so tags/source fall back to defaults.
+    assert vector[0].tags == ()
+    assert vector[0].source == "manual"
+
+    # keyword mode filters by shared tokens.
+    keyword = store.search("c", query="water", mode="keyword", limit=5)
+    assert [entry.text for entry in keyword] == ["the basin water is unsafe"]

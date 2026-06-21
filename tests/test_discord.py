@@ -72,7 +72,11 @@ from bunnyland.discord.bot import (
     _require_discord,
     _split,
 )
-from bunnyland.discord.claim import _match_character, discord_controlled_character
+from bunnyland.discord.claim import (
+    _match_character,
+    _retire_discord_controller,
+    discord_controlled_character,
+)
 from bunnyland.memory import InMemoryStore, install_memory
 
 
@@ -274,6 +278,19 @@ def test_did_you_mean_is_the_shared_resolver_helper():
     assert did_you_mean is shared
 
 
+def test_discord_package_lazily_exposes_discord_bot():
+    import bunnyland.discord as discord_package
+
+    assert discord_package.DiscordBot is DiscordBot
+
+
+def test_discord_package_getattr_rejects_unknown_names():
+    import bunnyland.discord as discord_package
+
+    with pytest.raises(AttributeError, match="nope"):
+        discord_package.__getattr__("nope")
+
+
 def test_render_character_list_includes_controller_statuses(scenario):
     assign_discord_controller(
         scenario.actor,
@@ -308,6 +325,107 @@ def test_render_character_list_includes_controller_statuses(scenario):
     assert "- Clover - free" in text
 
 
+def test_render_character_list_reports_web_suspended_and_stale_controllers(scenario):
+    from bunnyland.core import WebControllerComponent
+
+    web_character = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    web_controller = spawn_entity(
+        scenario.actor.world,
+        [WebControllerComponent(session_id="s-1")],
+    )
+    scenario.actor.assign_controller(web_character.id, web_controller.id)
+
+    suspended_character = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Clover", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    suspended_controller = spawn_entity(
+        scenario.actor.world,
+        [SuspendedControllerComponent(reason="resting")],
+    )
+    scenario.actor.suspend(suspended_character.id, suspended_controller.id, reason="resting")
+
+    # Juniper is controlled by an unrecognized controller (no Discord/LLM/Web/Suspended
+    # component), exercising the "fall through to next edge" branch.
+    juniper = scenario.actor.world.get_entity(scenario.character)
+    bare_controller = spawn_entity(scenario.actor.world, [IdentityComponent(name="bare", kind="x")])
+    scenario.actor.assign_controller(juniper.id, bare_controller.id)
+
+    statuses = dict(
+        line[2:].split(" - ", 1)
+        for line in render_character_list(scenario.actor).splitlines()[1:]
+    )
+
+    assert statuses["Hazel"] == "player"
+    assert statuses["Clover"] == "suspended"
+    assert statuses["Juniper"] == "free"
+
+
+def test_render_character_list_reports_empty_world():
+    from bunnyland.core.world_actor import WorldActor
+
+    actor = WorldActor()
+
+    assert render_character_list(actor) == "There are no characters in this world."
+
+
+def test_assign_discord_controller_rejects_missing_character_name(scenario):
+    with pytest.raises(RuntimeError, match="no character named 'Nobody' exists"):
+        assign_discord_controller(
+            scenario.actor,
+            discord_user_id=123,
+            character_name="Nobody",
+        )
+
+
+def test_assign_discord_controller_rejects_child_character(scenario):
+    from bunnyland.mechanics.lifesim import LifeStageComponent
+
+    juniper = scenario.actor.world.get_entity(scenario.character)
+    juniper.add_component(LifeStageComponent(stage="child"))
+
+    with pytest.raises(RuntimeError, match="Juniper is a child character"):
+        assign_discord_controller(
+            scenario.actor,
+            discord_user_id=123,
+            character_name="Juniper",
+        )
+
+
+def test_assign_discord_controller_without_name_requires_suspended_character(scenario):
+    with pytest.raises(RuntimeError, match="no suspended claimable character"):
+        assign_discord_controller(scenario.actor, discord_user_id=123)
+
+
+def test_assign_discord_controller_without_name_claims_first_suspended(scenario):
+    # Add a suspended character so an unnamed claim can pick it up.
+    suspended = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="resting"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), suspended.id
+    )
+
+    name = assign_discord_controller(scenario.actor, discord_user_id=123)
+
+    assert name == "Hazel"
+    assert not suspended.has_component(SuspendedComponent)
+
+
 def test_assign_discord_controller_reuses_existing_user_channel_controller(scenario):
     assigned = assign_discord_controller(
         scenario.actor,
@@ -338,6 +456,48 @@ def test_assign_discord_controller_reuses_existing_user_channel_controller(scena
     assert second_controller_id == first_controller_id
     assert second_edge.generation == first_edge.generation
     assert matching_controllers == [first_controller_id]
+
+
+def test_assign_discord_controller_reuses_controller_for_a_different_character(scenario):
+    # Claim Juniper so user 123 owns a Discord controller bound to that character.
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    juniper = scenario.actor.world.get_entity(scenario.character)
+    _edge, controller_id = juniper.get_relationships(ControlledBy)[0]
+
+    hazel = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    # Hazel is already controlled by some other (LLM) controller, so the reuse loop iterates
+    # an edge whose controller_id does not match and falls through to reassignment.
+    other_controller = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="default", model="deepseek-v4-flash")],
+    )
+    scenario.actor.assign_controller(hazel.id, other_controller.id)
+
+    # Reuse the same Discord controller but claim a different character.
+    name = assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Hazel",
+    )
+
+    assert name == "Hazel"
+    hazel_controller_ids = {cid for _edge, cid in hazel.get_relationships(ControlledBy)}
+    assert controller_id in hazel_controller_ids
 
 
 def test_assign_discord_controller_stores_claim_timeout_preferences(scenario):
@@ -597,6 +757,34 @@ def test_release_discord_character_reassigns_to_llm_controller(scenario):
         for entity in controllers.execute_entities()
         if entity.get_component(DiscordControllerComponent).discord_user_id == 123
     ] == []
+
+
+def test_release_discord_character_clears_suspended_marker(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        character_name="Juniper",
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(SuspendedComponent(reason="resting"))
+
+    released = release_discord_character_to_llm(scenario.actor, discord_user_id=123)
+
+    assert released == "Juniper"
+    assert not character.has_component(SuspendedComponent)
+
+
+def test_retire_discord_controller_ignores_non_discord_controllers(scenario):
+    # Defensive branch: retiring a controller that is not a Discord controller is a no-op.
+    controller = spawn_entity(
+        scenario.actor.world,
+        [SuspendedControllerComponent(reason="resting")],
+    )
+
+    _retire_discord_controller(scenario.actor, controller.id)
+
+    assert controller.has_component(SuspendedControllerComponent)
+    assert not controller.has_component(DiscordControllerComponent)
 
 
 def test_suspend_discord_character_reassigns_to_suspended_controller(scenario):

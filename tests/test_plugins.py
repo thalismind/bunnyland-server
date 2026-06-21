@@ -1269,6 +1269,100 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     } <= {event.__name__ for event in neon.commands.typed_events}
 
 
+def test_worldgen_hook_with_bus_subscribe_signature_receives_bus():
+    captured = {}
+
+    class BusHook:
+        def subscribe(self, bus):
+            captured["bus"] = bus
+
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="bus-hook",
+                name="Bus Hook",
+                content=ContentContribution(worldgen_hooks=(BusHook,)),
+            )
+        ],
+        actor,
+    )
+
+    assert captured["bus"] is actor.bus
+
+
+def test_callable_worldgen_hook_is_subscribed_to_generated_entity_event():
+    from bunnyland.core.events import GeneratedEntityEvent
+
+    seen = []
+
+    def hook(event):
+        seen.append(event)
+
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="callable-hook",
+                name="Callable Hook",
+                content=ContentContribution(worldgen_hooks=(hook,)),
+            )
+        ],
+        actor,
+    )
+
+    # The bare callable was wired as a GeneratedEntityEvent subscriber.
+    assert hook in actor.bus._handlers[GeneratedEntityEvent]
+
+
+def test_non_callable_worldgen_hook_without_subscribe_raises():
+    actor = WorldActor()
+    with pytest.raises(PluginError, match="is not callable and has no subscribe"):
+        apply_plugins(
+            [
+                Plugin(
+                    id="bad-hook",
+                    name="Bad Hook",
+                    content=ContentContribution(worldgen_hooks=(object(),)),
+                )
+            ],
+            actor,
+        )
+
+
+def test_plugin_observers_are_registered_with_the_world():
+    from relics import Component, OnComponentAdded
+
+    class MarkerComponent(Component):
+        pass
+
+    added = []
+
+    class MarkerObserver(OnComponentAdded):
+        component_type = MarkerComponent
+
+        def on_component_added(self, entity, component):
+            added.append(entity.id)
+
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="observer",
+                name="Observer",
+                ecs=EcsContribution(observers=(MarkerObserver,)),
+            )
+        ],
+        actor,
+    )
+
+    entity = spawn_entity(actor.world, [])
+    entity.add_component(MarkerComponent())
+    # Observers are queued and run when the world processes its observer queue.
+    actor.world._process_observer_queue()
+    assert entity.id in added
+
+
 def test_ecs_systems_can_be_instances_or_classes():
     # apply should accept a system instance as well as a class.
     from bunnyland.mechanics.needs import HungerSystem

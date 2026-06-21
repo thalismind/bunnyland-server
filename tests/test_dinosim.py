@@ -184,6 +184,7 @@ from bunnyland.mechanics.dinosim import (
     StudyWaterCreatureHandler,
     SurveyFossilHandler,
     TameCreatureHandler,
+    TamingComponent,
     TamingProgressedEvent,
     TargetWeakPointHandler,
     TerritoryComponent,
@@ -205,7 +206,13 @@ from bunnyland.mechanics.dinosim import (
     WeakPointComponent,
     WeakPointHitEvent,
     _consume_inventory_resource,
+    _entity_name,
     _entity_room_id,
+    _hatch_room_id,
+    _payload_entity_id,
+    _reachable_creature,
+    _region_for_room,
+    _region_rooms,
     _species_name,
     dinosim_fragments,
     generate_kaiju_spawn_specs,
@@ -3264,6 +3271,14 @@ def test_dinosim_consume_inventory_resource_helper_covers_edge_cases():
     character = world.get_entity(scenario.character)
     rock = spawn_entity(world, [IdentityComponent(name="rock", kind="prop")])
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), rock.id)
+    # A non-inventory containment edge holding a resource must be skipped.
+    held = spawn_entity(
+        world,
+        [IdentityComponent(name="held hay", kind="resource"), ResourceStackComponent(
+            resource_type="hay", quantity=9
+        )],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), held.id)
     hay = _inventory_resource(scenario, "hay", 4)
 
     assert _consume_inventory_resource(character, world, "berries", 1) is False
@@ -3461,3 +3476,654 @@ def test_dinosim_fragments_show_creature_needs():
         scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
     )
     assert any("Creature raptor" in line and "hungry" in line for line in lines)
+
+
+def _reachable_creature_entity(scenario, *, components=(), name="rex", in_room=None):
+    creature = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name=name, kind="creature"),
+            DinosaurComponent(species_name=name),
+            *components,
+        ],
+    )
+    room_id = in_room if in_room is not None else scenario.room_a
+    scenario.actor.world.get_entity(room_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), creature.id
+    )
+    return creature
+
+
+def test_payload_entity_id_returns_none_when_no_keys_present():
+    command = build_submitted_command(
+        character_id="entity_1",
+        controller_id="entity_2",
+        controller_generation=0,
+        command_type="noop",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={},
+    )
+    assert _payload_entity_id(command, "missing", "also_missing") is None
+
+
+def test_entity_name_falls_back_to_entity_id():
+    scenario = build_scenario()
+    bare = spawn_entity(scenario.actor.world, [])
+    assert _entity_name(scenario.actor.world.get_entity(bare.id)) == str(bare.id)
+
+
+def test_reachable_creature_reports_invalid_and_unreachable():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character_id = parse_entity_id(str(scenario.character))
+
+    creature, error = _reachable_creature(ctx, character_id, "not-an-id")
+    assert creature is None
+    assert error == "invalid creature id"
+
+    distant = _reachable_creature_entity(scenario, in_room=scenario.room_b)
+    creature, error = _reachable_creature(ctx, character_id, str(distant.id))
+    assert creature is None
+    assert error == "creature is not reachable"
+
+
+def test_region_helpers_walk_nested_regions_and_skip_non_region_edges():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    region = spawn_entity(world, [RegionComponent(name="valley")])
+    subregion = spawn_entity(world, [RegionComponent(name="glade")])
+    inner_room = spawn_entity(world, [RoomComponent(title="inner")])
+    region.add_relationship(Contains(mode=ContainmentMode.REGION), subregion.id)
+    subregion.add_relationship(Contains(mode=ContainmentMode.REGION), inner_room.id)
+    # A non-region containment edge that must be ignored by the region walk.
+    loose = spawn_entity(world, [IdentityComponent(name="prop", kind="prop")])
+    region.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), loose.id)
+
+    rooms = _region_rooms(world, region)
+    assert [room.id for room in rooms] == [inner_room.id]
+
+    # The inner room's region lookup ignores non-region incoming edges.
+    plain_room = world.get_entity(scenario.room_a)
+    assert _region_for_room(world, plain_room) is None
+    found = _region_for_room(world, world.get_entity(inner_room.id))
+    assert found is not None and found.id == subregion.id
+
+
+def test_hatch_room_id_uses_actor_room_when_egg_has_no_room_container():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    actor = world.get_entity(scenario.character)
+    # Egg with no containing room at all.
+    egg = spawn_entity(world, [EggComponent(species_name="raptor", laid_at_epoch=0)])
+    assert _hatch_room_id(world, actor, egg) == scenario.room_a
+
+
+def test_companion_fragment_is_empty_without_owner_target():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    companion = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Echo", kind="character"),
+            CompanionComponent(owner_id=str(character.id), role="companion"),
+        ],
+    )
+    no_target_ctx = ComponentPromptContext.for_entity(world, companion)
+    assert companion.get_component(CompanionComponent).prompt_fragments(no_target_ctx) == ()
+
+
+def test_creature_action_handlers_reject_invalid_character():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    handlers = [
+        (SetBaitHandler(), "set-bait"),
+        (TranquilizeCreatureHandler(), "tranquilize-creature"),
+        (ApproachCreatureHandler(), "approach-creature"),
+        (TameCreatureHandler(), "tame-creature"),
+        (TrainCommandHandler(), "train-command"),
+        (MountCreatureHandler(), "mount-creature"),
+        (CommandCompanionHandler(), "command-companion"),
+        (RepairFenceHandler(), "repair-fence"),
+        (ReinforceGateHandler(), "reinforce-gate"),
+        (LockPenHandler(), "lock-pen"),
+        (OpenPenHandler(), "open-pen"),
+        (TriggerContainmentHandler(), "trigger-containment"),
+        (RecaptureCreatureHandler(), "recapture-creature"),
+        (HideFromCreatureHandler(), "hide-from-creature"),
+        (DodgeCreatureHandler(), "dodge-creature"),
+        (FightCreatureHandler(), "fight-creature"),
+        (TargetWeakPointHandler(), "target-weak-point"),
+        (DriveOffPredatorHandler(), "drive-off-predator"),
+        (SignalArmyHandler(), "signal-army"),
+        (RepairDamageHandler(), "repair-damage"),
+        (EvacuateRoomHandler(), "evacuate-room"),
+    ]
+    for handler, command_type in handlers:
+        result = handler.execute(
+            ctx, _handler_cmd(scenario, command_type, character_id="not-an-id")
+        )
+        assert not result.ok, command_type
+        assert result.reason == "invalid character id", command_type
+
+
+def test_creature_handlers_reject_missing_creature_or_item():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    creature = _reachable_creature_entity(
+        scenario,
+        components=[CompanionComponent(owner_id=str(scenario.character))],
+    )
+
+    # Handlers that require a creature: none supplied -> "invalid creature id".
+    creature_handlers = [
+        (TranquilizeCreatureHandler(), "tranquilize-creature"),
+        (ApproachCreatureHandler(), "approach-creature"),
+        (TameCreatureHandler(), "tame-creature"),
+        (TrainCommandHandler(), "train-command"),
+        (MountCreatureHandler(), "mount-creature"),
+        (CommandCompanionHandler(), "command-companion"),
+        (RecaptureCreatureHandler(), "recapture-creature"),
+        (HideFromCreatureHandler(), "hide-from-creature"),
+        (DodgeCreatureHandler(), "dodge-creature"),
+        (FightCreatureHandler(), "fight-creature"),
+        (TargetWeakPointHandler(), "target-weak-point"),
+        (DriveOffPredatorHandler(), "drive-off-predator"),
+    ]
+    for handler, command_type in creature_handlers:
+        result = handler.execute(ctx, _handler_cmd(scenario, command_type))
+        assert not result.ok, command_type
+        assert result.reason == "invalid creature id", command_type
+
+    # set-bait requires a reachable item.
+    bait = SetBaitHandler().execute(ctx, _handler_cmd(scenario, "set-bait"))
+    assert not bait.ok
+    assert bait.reason == "invalid item id"
+
+    # tranquilize requires a tranquilizer item once the creature resolves.
+    no_item = TranquilizeCreatureHandler().execute(
+        ctx, _handler_cmd(scenario, "tranquilize-creature", creature_id=str(creature.id))
+    )
+    assert not no_item.ok
+    assert no_item.reason == "invalid item id"
+
+
+def test_mount_and_command_require_a_companion_relationship():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A reachable creature that is NOT this character's companion.
+    creature = _reachable_creature_entity(scenario)
+
+    mount = MountCreatureHandler().execute(
+        ctx, _handler_cmd(scenario, "mount-creature", creature_id=str(creature.id))
+    )
+    assert not mount.ok
+    assert mount.reason == "creature is not your companion"
+
+    command = CommandCompanionHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "command-companion",
+            creature_id=str(creature.id),
+            command_name="sit",
+        ),
+    )
+    assert not command.ok
+    assert command.reason == "creature is not your companion"
+
+
+def test_tame_creature_progresses_without_taming_when_below_required():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    creature = _reachable_creature_entity(
+        scenario, components=[TamingComponent(progress=0.0, required=100.0)]
+    )
+    result = TameCreatureHandler().execute(
+        ctx, _handler_cmd(scenario, "tame-creature", creature_id=str(creature.id))
+    )
+    assert result.ok, result.reason
+    # Progress is still far below required, so no CreatureTamedEvent and no companion.
+    assert not any(e.__class__.__name__ == "CreatureTamedEvent" for e in result.events)
+    assert not creature.has_component(CompanionComponent)
+
+
+def test_recapture_requires_a_target_enclosure():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    creature = _reachable_creature_entity(scenario)
+    result = RecaptureCreatureHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "recapture-creature", creature_id=str(creature.id)),
+    )
+    assert not result.ok
+    assert "enclosure" in (result.reason or "")
+
+
+def test_target_weak_point_reduces_only_present_threat_components():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A creature with a weak point but neither apex nor kaiju threat components.
+    creature = _reachable_creature_entity(
+        scenario, components=[WeakPointComponent(label="soft belly", exposed=True)]
+    )
+    result = TargetWeakPointHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario, "target-weak-point", creature_id=str(creature.id), damage=2.0
+        ),
+    )
+    assert result.ok, result.reason
+    assert not creature.has_component(ApexPredatorComponent)
+    assert not creature.has_component(KaijuComponent)
+
+
+def test_signal_army_skips_non_creature_and_kaiju_only_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    # A reachable, existing entity that is not a creature: army still called, no PredatorDrivenOff.
+    prop = spawn_entity(scenario.actor.world, [IdentityComponent(name="cart", kind="prop")])
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), prop.id
+    )
+    result = SignalArmyHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "signal-army",
+            room_id=str(scenario.room_a),
+            creature_id=str(prop.id),
+        ),
+    )
+    assert result.ok, result.reason
+    assert not any(e.__class__.__name__ == "PredatorDrivenOffEvent" for e in result.events)
+
+    # An apex-only creature (no kaiju component) exercises the kaiju-skip branch.
+    apex = _reachable_creature_entity(
+        scenario,
+        components=[ApexPredatorComponent(threat_level=8)],
+        name="alpha",
+    )
+    apex_result = SignalArmyHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "signal-army",
+            room_id=str(scenario.room_a),
+            creature_id=str(apex.id),
+            strength=3.0,
+        ),
+    )
+    assert apex_result.ok, apex_result.reason
+    assert apex.get_component(ApexPredatorComponent).threat_level == 5
+
+
+def test_repair_damage_defaults_to_current_room_and_rejects_unreachable():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # No damage_id supplied -> defaults to the character's room, which lacks damage.
+    default_room = RepairDamageHandler().execute(
+        ctx, _handler_cmd(scenario, "repair-damage")
+    )
+    assert not default_room.ok
+    assert default_room.reason == "target has no settlement damage"
+
+    # A damaged target in another room is not reachable.
+    distant = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="ruins", kind="prop"), SettlementDamageComponent(severity=3)],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant.id
+    )
+    unreachable = RepairDamageHandler().execute(
+        ctx, _handler_cmd(scenario, "repair-damage", damage_id=str(distant.id))
+    )
+    assert not unreachable.ok
+    assert unreachable.reason == "damage target is not reachable"
+
+
+def test_fight_creature_grapples_an_unbound_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    creature = _reachable_creature_entity(
+        scenario, components=[GrappleComponent(target_id="", active=True)]
+    )
+    result = FightCreatureHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "fight-creature", creature_id=str(creature.id), damage=2.0),
+    )
+    assert result.ok, result.reason
+    grapple = creature.get_component(GrappleComponent)
+    assert grapple.target_id == str(scenario.character)
+    assert grapple.active is False
+
+
+def test_build_enclosure_without_optional_pens():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = BuildEnclosureHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "build-enclosure",
+            room_id=str(scenario.room_a),
+            name="Plain Pen",
+        ),
+    )
+    assert result.ok, result.reason
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    assert not room.has_component(FeedingPenComponent)
+    assert not room.has_component(QuarantinePenComponent)
+
+
+def test_brood_egg_without_incubation_component():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="cool egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), egg.id
+    )
+    result = BroodEggHandler().execute(
+        ctx, _handler_cmd(scenario, "brood-egg", egg_id=str(egg.id))
+    )
+    assert result.ok, result.reason
+    assert egg.has_component(BroodingComponent)
+
+
+def test_extract_and_hatch_reject_wrong_kind_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    not_fossil = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="rock", kind="prop")]
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), not_fossil.id
+    )
+    extract = ExtractAncientSampleHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "extract-ancient-sample", fossil_id=str(not_fossil.id)),
+    )
+    assert not extract.ok
+    assert extract.reason == "target is not a fossil"
+
+    not_egg = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="pebble", kind="prop")]
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), not_egg.id
+    )
+    hatch = HatchEggHandler().execute(
+        ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(not_egg.id))
+    )
+    assert not hatch.ok
+    assert hatch.reason == "target is not an egg"
+
+
+def test_evacuate_room_requires_a_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A character with no containing room and no room_id payload.
+    loose = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Drifter", kind="character"), CharacterComponent()],
+    )
+    result = EvacuateRoomHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "evacuate-room",
+            character_id=str(loose.id),
+            destination_id=str(scenario.room_b),
+        ),
+    )
+    assert not result.ok
+    assert result.reason == "room is required"
+
+
+def test_enclosure_handlers_reject_non_enclosure_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A plain room (no EnclosureComponent) is reachable but not an enclosure.
+    plain = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="open field", kind="room"), RoomComponent(title="field")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), plain.id
+    )
+    handlers = [
+        (RepairFenceHandler(), "repair-fence"),
+        (ReinforceGateHandler(), "reinforce-gate"),
+        (LockPenHandler(), "lock-pen"),
+        (OpenPenHandler(), "open-pen"),
+        (TriggerContainmentHandler(), "trigger-containment"),
+    ]
+    for handler, command_type in handlers:
+        result = handler.execute(
+            ctx, _handler_cmd(scenario, command_type, enclosure_id=str(plain.id))
+        )
+        assert not result.ok, command_type
+        assert result.reason == "target is not an enclosure", command_type
+
+
+def test_extract_ancient_sample_rejects_missing_fossil():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    result = ExtractAncientSampleHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "extract-ancient-sample", fossil_id="entity_999999"),
+    )
+    assert not result.ok
+    assert result.reason == "fossil does not exist"
+
+
+def test_can_handle_resolves_target_id_alias():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    fossil = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="bone", kind="fossil"), FossilFragmentComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), fossil.id
+    )
+    # target_id (not fossil_id) should still let IdentifyFossilHandler claim the command.
+    assert IdentifyFossilHandler().can_handle(
+        ctx, _handler_cmd(scenario, "identify", target_id=str(fossil.id))
+    )
+
+    creature = _reachable_creature_entity(
+        scenario, components=[CreatureProductComponent(product_type="egg")]
+    )
+    assert HarvestProductHandler().can_handle(
+        ctx, _handler_cmd(scenario, "harvest", target_id=str(creature.id))
+    )
+
+
+def test_repair_damage_rejects_when_no_room_and_no_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # A homeless character with no damage_id falls through to "damage target does not exist".
+    loose = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Wanderer", kind="character"), CharacterComponent()],
+    )
+    result = RepairDamageHandler().execute(
+        ctx, _handler_cmd(scenario, "repair-damage", character_id=str(loose.id))
+    )
+    assert not result.ok
+    assert result.reason == "damage target does not exist"
+
+
+def test_kaiju_specs_use_two_groups_for_mid_budget():
+    specs = generate_kaiju_spawn_specs(12, "mid")
+    assert len(specs) == 2
+
+
+def test_selected_kaiju_rooms_falls_back_to_target_when_region_empty():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    # A region that contains the target room but yields no rooms via the walk is
+    # avoided here; instead use a target room with no region so the fallback list is used.
+    target = world.get_entity(scenario.room_a)
+    rooms = selected_kaiju_rooms(world, target.id, 3, seed="seed")
+    # Fewer rooms than requested -> the selection pads by repeating.
+    assert len(rooms) == 3
+    assert all(room.id == target.id for room in rooms)
+
+
+def test_lay_egg_places_egg_in_actor_room_when_parent_has_no_room():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # Parent creature carried in the character's inventory (no room of its own).
+    parent = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="brooder", kind="creature"),
+            DinosaurComponent(species_name="raptor"),
+            ReptileProcreationComponent(),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), parent.id
+    )
+    result = LayEggHandler().execute(
+        ctx, _handler_cmd(scenario, "lay-egg", parent_id=str(parent.id))
+    )
+    assert result.ok, result.reason
+    laid = [e for e in result.events if e.__class__.__name__ == "EggLaidEvent"]
+    assert laid and laid[0].room_id is not None
+
+
+def test_incubate_and_fertilize_reject_non_egg_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    not_egg = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="stone", kind="prop")]
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), not_egg.id
+    )
+    incubate = IncubateEggHandler().execute(
+        ctx, _handler_cmd(scenario, "incubate-egg", egg_id=str(not_egg.id))
+    )
+    assert not incubate.ok
+    assert incubate.reason == "target is not an egg"
+
+
+def test_fight_creature_leaves_grapple_bound_to_other_target():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    creature = _reachable_creature_entity(
+        scenario,
+        components=[GrappleComponent(target_id="entity_424242", active=True)],
+    )
+    result = FightCreatureHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "fight-creature", creature_id=str(creature.id), damage=1.0),
+    )
+    assert result.ok, result.reason
+    # Grapple already bound to a different target stays untouched.
+    grapple = creature.get_component(GrappleComponent)
+    assert grapple.target_id == "entity_424242"
+    assert grapple.active is True
+
+
+def test_signal_army_reduces_kaiju_only_threat():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    kaiju = _reachable_creature_entity(
+        scenario,
+        components=[KaijuComponent(threat_level=9, difficulty="epic")],
+        name="titan",
+    )
+    result = SignalArmyHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "signal-army",
+            room_id=str(scenario.room_a),
+            creature_id=str(kaiju.id),
+            strength=4.0,
+        ),
+    )
+    assert result.ok, result.reason
+    assert kaiju.get_component(KaijuComponent).threat_level == 5
+    assert not kaiju.has_component(ApexPredatorComponent)
+
+
+def test_tame_with_nonmatching_bait_in_reach():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    creature = _reachable_creature_entity(scenario, name="rex")
+    # Bait targeting a different species should not contribute a bonus.
+    bait = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="lure", kind="item"),
+            BaitComponent(target_species="triceratops", potency=5.0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), bait.id
+    )
+    result = ApproachCreatureHandler().execute(
+        ctx, _handler_cmd(scenario, "approach-creature", creature_id=str(creature.id))
+    )
+    assert result.ok, result.reason
+
+
+def test_hatch_egg_with_egg_having_no_room_container():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    # Egg carried in the character's inventory and ready to hatch.
+    egg = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="ready egg", kind="egg"),
+            EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True),
+            IncubationComponent(started_at_epoch=0, ready=True),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), egg.id
+    )
+    result = HatchEggHandler().execute(
+        ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(egg.id))
+    )
+    assert result.ok, result.reason
+    hatched = [e for e in result.events if e.__class__.__name__ == "EggHatchedEvent"]
+    assert hatched

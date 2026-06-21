@@ -49,9 +49,11 @@ from bunnyland.llm_agents import (
 from bunnyland.llm_agents.agent import (
     DEFAULT_MODEL,
     OllamaAgent,
+    _AutonomySignals,
     _call_provider_with_retries,
     _message_to_history,
     _openrouter_arguments,
+    _tool_call_history,
     normalize_model,
 )
 from bunnyland.mechanics.persona import GoalComponent
@@ -710,6 +712,88 @@ def test_behavior_profile_agent_relationship_resentment_prefers_cold_warning():
         "say",
         {"text": "Hazel, keep your distance.", "intent": "threat", "approach": "cold"},
     )
+
+
+def test_behavior_profile_agent_relationship_fear_falls_back_to_request_speech():
+    scenario = build_scenario()
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=("Hazel",),
+        persona=("You fear Hazel.",),
+        exits=("north (locked)",),  # no unlocked exit -> cannot flee
+        commands=("say something to the room",),
+    )
+
+    assert BehaviorProfileAgent("social").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall(
+        "say",
+        {
+            "text": "Hazel, I need space.",
+            "intent": "request",
+            "approach": "cautious",
+        },
+    )
+
+
+def test_behavior_profile_agent_fear_without_exit_or_speech_falls_through():
+    scenario = build_scenario()
+    # Fear line matches, but there is no unlocked exit and no speech command, so the fear
+    # branch returns nothing (298->307) and the profile fallback runs.
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=("Hazel",),
+        persona=("You fear Hazel.",),
+        visible_objects=("work crate",),
+        exits=("north (locked)",),
+        commands=("take work crate",),
+    )
+
+    assert BehaviorProfileAgent("worker").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall("take", {"item_id": "work crate"})
+
+
+def test_behavior_profile_agent_relationship_lines_without_speech_command_fall_through():
+    scenario = build_scenario()
+    # Fond and resentment lines both match the visible character, but no speech command is
+    # available, so neither relationship branch returns; the profile fallback runs instead.
+    context = replace(
+        PromptBuilder(scenario.actor.world).build(scenario.character),
+        visible_characters=("Hazel",),
+        persona=("You are fond of Hazel.", "You resent Hazel."),
+        visible_objects=("work crate",),
+        commands=("take work crate",),
+    )
+
+    assert BehaviorProfileAgent("worker").decide(
+        "", context, character_id=str(scenario.character)
+    ) == ToolCall("take", {"item_id": "work crate"})
+
+
+def test_autonomy_signals_note_text_defaults_without_recall_or_goal():
+    signals = _AutonomySignals(
+        goals=(),
+        recall=(),
+        conditions=("You are tired.",),
+        recent=(),
+        notes=(),
+    )
+
+    assert signals.note_text() == "Something nearby may matter."
+
+
+def test_autonomy_signals_speech_skips_lines_not_mentioning_name():
+    signals = _AutonomySignals(
+        goals=(),
+        recall=("Hazel guards the gate.", "Briar tends the garden."),
+        conditions=(),
+        recent=(),
+        notes=(),
+    )
+
+    # First recall line does not mention Briar (476->475 continue), second does.
+    assert signals.speech_for("Briar") == "Briar, I remember Briar tends the garden"
 
 
 def test_behavior_profile_agent_timid_leaves_when_someone_is_nearby():
@@ -1539,6 +1623,64 @@ async def test_dispatch_flags_persona_contradiction_without_blocking_valid_actio
     assert decisions[0].tool == "say"
     assert decisions[0].persona_issues == ("name contradiction: claimed to be Hazel",)
     assert not scenario.actor._inbox.empty()
+
+
+async def test_openrouter_agent_passes_server_url_to_client(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(
+        model="openai/gpt-4.1-mini",
+        api_key="key",
+        server_url="https://router.example",
+    )
+
+    assert agent._client.kwargs == {
+        "api_key": "key",
+        "server_url": "https://router.example",
+    }
+
+
+def test_provider_router_raises_for_unknown_provider():
+    router = ProviderRouterAgent({"ollama": _RecordingAgent([])})
+
+    with pytest.raises(RuntimeError, match="no LLM agent configured for provider 'mystery'"):
+        router.decide("prompt", None, character_id="hazel", provider="mystery")
+
+
+async def test_provider_retry_helper_sleeps_between_retries(monkeypatch):
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    attempts = 0
+
+    async def request():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TimeoutError("transient")
+        return "ok"
+
+    result = await _call_provider_with_retries(
+        "test-provider", request, max_retries=2, retry_delay_seconds=0.25
+    )
+
+    assert result == "ok"
+    assert sleeps == [0.25]
+
+
+def test_tool_call_history_falls_back_to_string_for_unencodable_arguments():
+    encoded = _tool_call_history({"name": "take", "arguments": {"item": {1, 2, 3}}})
+
+    assert encoded["role"] == "assistant"
+    assert encoded["content"].startswith("Selected tool take with arguments ")
+    # A set is not JSON-serializable, so the helper stringifies it instead.
+    assert "take" in encoded["content"]
 
 
 async def test_provider_router_uses_selected_agent():
