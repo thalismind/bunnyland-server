@@ -18,6 +18,9 @@ artifacts/coverage/
 dist/
 build/
 
+# generated media
+media/
+
 # secrets
 .env
 compose.user.yml
