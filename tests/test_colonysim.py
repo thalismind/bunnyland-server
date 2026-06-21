@@ -2785,6 +2785,24 @@ def test_faction_relation_reuses_existing_record_on_trade():
     assert len(relations) == 2
 
 
+def test_faction_relation_spawns_record_after_scanning_non_matches():
+    # When no existing relation matches, the lookup loop must skip past every record
+    # before spawning a new one. Querying for a faction absent from several existing
+    # records forces the skip arm deterministically, regardless of query iteration
+    # order (a single matching record can otherwise be yielded first, hiding it).
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    spawn_entity(world, [FactionRelationComponent(faction_id="raiders", goodwill=-1.0)])
+    spawn_entity(world, [FactionRelationComponent(faction_id="traders", goodwill=2.0)])
+
+    created = colonysim._faction_relation(world, "newcomers")
+
+    assert created.get_component(FactionRelationComponent).faction_id == "newcomers"
+    relations = list(world.query().with_all([FactionRelationComponent]).execute_entities())
+    assert len(relations) == 3
+
+
 def test_body_part_entity_matches_existing_part_during_surgery():
     scenario = build_scenario()
     _install(scenario.actor)
