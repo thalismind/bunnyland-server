@@ -47,6 +47,8 @@ def test_config_from_env_reads_all_fields():
             "BUNNYLAND_MEDIA_DIR": "/srv/media",
             "BUNNYLAND_PUBLIC_BASE_URL": "https://play.example/",
             "BUNNYLAND_IMAGE_TEMPLATES": "/srv/templates.json",
+            "BUNNYLAND_IMAGE_WORKFLOWS": "anima-my-server",
+            "BUNNYLAND_IMAGE_PROMPT_STYLE": "tag",
             "BUNNYLAND_IMAGE_ENHANCER": "llm",
             "BUNNYLAND_IMAGE_MODEL": "flux",
             "OLLAMA_HOST": "https://ollama.com",
@@ -60,6 +62,8 @@ def test_config_from_env_reads_all_fields():
     assert config.timeout_seconds == 30.0
     assert config.media_root == "/srv/media"
     assert config.public_base_url == "https://play.example"
+    assert config.workflows == "anima-my-server"
+    assert config.prompt_style == "tag"
     assert config.enhancer == "llm"
     assert config.model == "flux"
     assert config.api_key == "secret"
@@ -71,6 +75,8 @@ def test_config_from_env_defaults():
     assert config.poll_interval_seconds == 1.0
     assert config.media_root == "media"
     assert config.public_base_url == ""
+    assert config.workflows == "anima"
+    assert config.prompt_style == ""
 
 
 # --- fakes --------------------------------------------------------------------------

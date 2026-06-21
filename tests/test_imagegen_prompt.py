@@ -90,11 +90,23 @@ def test_catalog_example_source_exact_match_and_limit():
 
 
 def test_catalog_example_source_style_fallback():
-    # No tag/portrait file ships, so it falls back to other TAG-style examples.
-    source = CatalogExampleSource()
+    # A catalog with no exact (style, purpose) entry falls back to other examples of the style.
+    catalog = {
+        (PromptStyle.TAG, ImagePurpose.SPRITE): [
+            GeneratedPrompt(style=PromptStyle.TAG, prompt="1girl, rabbit")
+        ]
+    }
+    source = CatalogExampleSource(catalog)
     examples = source.examples_for(PromptStyle.TAG, ImagePurpose.PORTRAIT, "anything")
     assert examples
     assert all(e.style is PromptStyle.TAG for e in examples)
+
+
+def test_default_catalog_covers_both_styles_for_every_purpose():
+    catalog = CatalogExampleSource()
+    for purpose in ImagePurpose:
+        for style in (PromptStyle.TAG, PromptStyle.NATURAL):
+            assert catalog.examples_for(style, purpose, "x"), (style, purpose)
 
 
 def test_catalog_example_source_empty_when_no_style():

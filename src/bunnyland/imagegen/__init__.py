@@ -59,7 +59,13 @@ from .spec import (
     WorkflowTemplate,
     substitute,
 )
-from .store import WorkflowTemplateStore, default_templates, load_templates_from
+from .store import (
+    WorkflowTemplateStore,
+    available_families,
+    default_templates,
+    load_templates_from,
+    resolve_family,
+)
 from .wiring import build_image_service, select_enhancer
 
 __all__ = [
@@ -101,10 +107,12 @@ __all__ = [
     "WebSocketComfyClient",
     "WorkflowTemplate",
     "WorkflowTemplateStore",
+    "available_families",
     "build_comfy_client",
     "build_image_service",
     "default_templates",
     "load_templates_from",
+    "resolve_family",
     "remove_edge_background",
     "request_scene_image",
     "select_enhancer",

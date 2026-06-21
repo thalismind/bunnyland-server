@@ -49,7 +49,7 @@ from .media import (
     MediaStore,
 )
 from .prompt import ImagePromptRequest, PromptEnhancer, PromptExampleSource
-from .spec import GeneratedPrompt, ImagePurpose, WorkflowTemplate, substitute
+from .spec import GeneratedPrompt, ImagePurpose, PromptStyle, WorkflowTemplate, substitute
 from .store import WorkflowTemplateStore
 from .subject import subject_for_entity, subject_for_event
 
@@ -348,10 +348,14 @@ class ImageGenService:
     async def _enhance(
         self, subject: str, template: WorkflowTemplate, purpose: ImagePurpose, extra: str
     ) -> GeneratedPrompt:
-        examples = self._examples.examples_for(template.prompt_style, purpose, subject)
+        # An admin-configured prompt style overrides the template's own style.
+        style = template.prompt_style
+        if self._config.prompt_style:
+            style = PromptStyle(self._config.prompt_style)
+        examples = self._examples.examples_for(style, purpose, subject)
         request = ImagePromptRequest(
             subject=subject,
-            style=template.prompt_style,
+            style=style,
             purpose=purpose,
             media=template.media,
             extra=extra,

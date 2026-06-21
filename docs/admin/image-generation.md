@@ -13,12 +13,14 @@ Image generation is **off** until you point Bunnyland at a ComfyUI server.
 Set `COMFYUI_SERVER_URL` (the rest are optional):
 
 ```bash
-COMFYUI_SERVER_URL=http://localhost:8188   # your ComfyUI server
+COMFYUI_SERVER_URL=http://localhost:8188   # WHERE your ComfyUI server is
 COMFYUI_USE_WEBSOCKET=1                     # watch progress over /ws (HTTP polling fallback)
 COMFYUI_POLL_INTERVAL_SECONDS=1
 COMFYUI_TIMEOUT_SECONDS=120
 BUNNYLAND_MEDIA_DIR=/data/media             # where generated images are written
-BUNNYLAND_IMAGE_TEMPLATES=/data/image-workflows.json  # optional player/admin workflows
+BUNNYLAND_IMAGE_WORKFLOWS=sdxl             # WHICH workflow family (model) to use for images
+BUNNYLAND_IMAGE_PROMPT_STYLE=              # force "tag" or "natural" (blank = family default)
+BUNNYLAND_IMAGE_TEMPLATES=/data/image-workflows.json  # optional per-template overrides
 BUNNYLAND_IMAGE_ENHANCER=stub              # "stub" (offline) or "llm" (uses OLLAMA_*)
 BUNNYLAND_IMAGE_BACKFILL_SECONDS=5         # cadence of the portrait/sprite backfill
 ```
@@ -53,47 +55,86 @@ uv sync --extra imagegen
 Generated images **persist**: the reference is saved with the world, and nothing is
 regenerated once an entity or event has an image.
 
-## Workflows
+## Choosing a model family
 
-A workflow is a ComfyUI graph (the API-format JSON) plus a small map of where to inject the
-prompt, seed, and dimensions. Bunnyland ships a default workflow for each purpose
-(`portrait`, `entity`, `sprite`, `event`). To use your own models or graphs, provide a
-templates file at `BUNNYLAND_IMAGE_TEMPLATES`:
+A *workflow family* is a set of ComfyUI graphs (one per purpose: `portrait`, `entity`,
+`sprite`, `event`) built around one base model. Pick the family with `BUNNYLAND_IMAGE_WORKFLOWS`
+to match your GPU and quality target:
+
+| Family (`BUNNYLAND_IMAGE_WORKFLOWS`) | Base model | Prompt style | VRAM | Notes |
+|---|---|---|---|---|
+| `anima` *(default)* | Anima (Qwen-CLIP + UNET) | tag / score | lowest | best for small GPUs |
+| `sdxl` | SDXL / Illustrious / Pony | tag | low–mid | two-pass + latent upscale |
+| `klein` | Flux 2 Klein 9B | natural language | mid–high | |
+| `flux2dev` | Flux.2 Dev | natural language | highest | best quality; optional Turbo LoRA |
+
+A family label may carry your own suffix — the base is the **first keyword** before the
+first `-`. So `BUNNYLAND_IMAGE_WORKFLOWS=anima-my-server` still uses the `anima` base graphs;
+the suffix is just a label for templates you override (below).
+
+The enhancer formats prompts to the family's style (tag vs natural) automatically. To force
+a style regardless of family, set `BUNNYLAND_IMAGE_PROMPT_STYLE=tag` or `natural`.
+
+## Changing the model
+
+Each family is a directory of JSON files shipped inside the package at
+`bunnyland/imagegen/workflows/<family>/{portrait,entity,sprite,event}.json`. The simplest
+customization is to keep a family but point it at a different checkpoint — copy the template
+you want to change, edit the model field, and load it through `BUNNYLAND_IMAGE_TEMPLATES`
+(a `{"templates": [...]}` file whose entries **shadow** the shipped defaults by `name`):
+
+- **SDXL/Illustrious/Pony**: change `ckpt_name` in the `CheckpointLoaderSimple` node (`10`).
+  Any SDXL-architecture checkpoint works with the same graph.
+- **Anima / Klein / Flux.2 Dev**: change `unet_name` in the `UNETLoader` node (and, if you
+  switch CLIP/VAE, `clip_name`/`vae_name`).
+
+A template is a ComfyUI API-format graph plus a small map of where to inject the prompt,
+seed, and size. Values are filled two ways: literal tokens inside a string field
+(`%PROMPT%`, `%NEGATIVE%`), and numeric-safe `slots` that set a node field by path
+(`%SEED%`, `%WIDTH%`, `%HEIGHT%`). Example (SDXL):
 
 ```json
 {
   "templates": [
     {
-      "name": "portrait",
-      "purpose": "portrait",
-      "prompt_style": "natural",
-      "width": 832,
-      "height": 1216,
-      "output_node_id": "9",
-      "graph": { "...": "your ComfyUI API graph..." },
+      "name": "portrait", "purpose": "portrait", "prompt_style": "tag",
+      "width": 832, "height": 1216, "output_node_id": "84",
+      "graph": { "10": {"inputs": {"ckpt_name": "your-model.safetensors"}, "...": "..." } },
       "slots": [
-        {"node_id": "6", "field_path": ["inputs", "text"], "token": "%PROMPT%"},
-        {"node_id": "7", "field_path": ["inputs", "text"], "token": "%NEGATIVE%"},
-        {"node_id": "3", "field_path": ["inputs", "seed"], "token": "%SEED%"},
-        {"node_id": "5", "field_path": ["inputs", "width"], "token": "%WIDTH%"},
-        {"node_id": "5", "field_path": ["inputs", "height"], "token": "%HEIGHT%"}
+        {"node_id": "87", "field_path": ["inputs", "noise_seed"], "token": "%SEED%"},
+        {"node_id": "30", "field_path": ["inputs", "width"], "token": "%WIDTH%"},
+        {"node_id": "30", "field_path": ["inputs", "height"], "token": "%HEIGHT%"}
       ]
     }
   ]
 }
 ```
 
-- `prompt_style` is `tag` (comma-separated WD14/danbooru tags, for SDXL-era models) or
-  `natural` (a sentence, for Flux/Qwen-era models). The enhancer formats its output to
-  match, using a few catalogued examples so the format stays correct.
-- A `slot` writes a value into one node field by path (kept numeric-safe for seed/size).
-  You can also embed the literal tokens (`%PROMPT%`, `%NEGATIVE%`, `%SEED%`, `%WIDTH%`,
-  `%HEIGHT%`) directly in a node's text field.
-- A user template **shadows** the shipped default of the same name; only your templates are
-  written back to the file.
+To export a graph from ComfyUI, enable **Settings → Enable dev mode options** and use
+**Save (API Format)** — that JSON goes under `graph`. Keep one `SaveImage` node and point
+`output_node_id` at it.
 
-To export a workflow from ComfyUI, enable **Settings → Enable dev mode options** and use
-**Save (API Format)**; that JSON is what goes under `graph`.
+## Adding LoRAs
+
+A LoRA is an extra node inserted between the model loader and the samplers, with the model
+(and, for SDXL, the CLIP) rewired through it:
+
+- **SDXL** — add a `LoraLoader` that takes `model` and `clip` from the checkpoint (`10`),
+  then point the samplers' `model` and the text-encoders' `clip` at the LoRA node instead:
+
+  ```json
+  "11": {"class_type": "LoraLoader",
+         "inputs": {"lora_name": "my_style.safetensors", "strength_model": 0.8,
+                    "strength_clip": 0.8, "model": ["10", 0], "clip": ["10", 1]}}
+  ```
+  Then change `KSampler` `model` inputs to `["11", 0]` and `CLIPTextEncode` `clip` inputs to
+  `["11", 1]`. Stack multiple LoRAs by chaining `LoraLoader` nodes.
+
+- **Flux / UNET families** — use `LoraLoaderModelOnly` (model only). The shipped `flux2dev`
+  family already includes a Turbo LoRA wired through a switch: node `98:101`
+  (`LoraLoaderModelOnly`) is toggled by the `Enable Turbo LoRA` boolean (`98:104`). Set its
+  `value` to `true` (and the steps switch picks the 8-step turbo schedule) to enable it, or
+  add your own `LoraLoaderModelOnly` before the guider.
 
 ## Admin controls
 

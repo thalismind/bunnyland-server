@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "1girl, rabbit girl, animal ears, portrait, upper body, looking at viewer, detailed face, soft lighting, simple background, masterpiece, best quality",
+    "negative": "worst quality, low quality, blurry, bad anatomy, text, watermark",
+    "tags": ["1girl", "rabbit girl", "animal ears", "portrait", "upper body", "detailed face"]
+  },
+  {
+    "prompt": "1boy, fox, animal ears, portrait, three-quarter view, leather armor, stern expression, rim light, plain background, masterpiece, best quality",
+    "negative": "worst quality, low quality, blurry, bad anatomy, text, watermark",
+    "tags": ["1boy", "fox", "portrait", "armor", "rim light", "plain background"]
+  }
+]

@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "no humans, treasure chest, oak wood, iron bands, centered, simple background, still life, studio lighting, masterpiece, best quality",
+    "negative": "worst quality, low quality, blurry, text, watermark, busy background",
+    "tags": ["no humans", "treasure chest", "still life", "simple background"]
+  },
+  {
+    "prompt": "no humans, lantern, brass, glowing, isolated, plain background, product shot, sharp focus, masterpiece, best quality",
+    "negative": "worst quality, low quality, blurry, text, watermark, busy background",
+    "tags": ["no humans", "lantern", "glowing", "plain background"]
+  }
+]

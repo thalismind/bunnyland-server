@@ -60,6 +60,27 @@ def _service(actor, tmp_path, *, client=None) -> ImageGenService:
     )
 
 
+async def test_config_prompt_style_overrides_template(tmp_path):
+    scenario = build_scenario()
+    # klein templates are natural; the config override forces tag output.
+    service = ImageGenService(
+        scenario.actor,
+        ImageGenConfig(server_url="http://comfy.local", prompt_style="tag"),
+        client=_FakeClient(),
+        templates=WorkflowTemplateStore(defaults=default_templates("klein")),
+        enhancer=StubPromptEnhancer(),
+        examples=CatalogExampleSource(),
+        media=MediaStore(tmp_path),
+    )
+    await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    await service.wait_idle()
+    portrait = scenario.actor.world.get_entity(scenario.character).get_component(
+        PortraitImageComponent
+    )
+    assert portrait.prompt.startswith("portrait")  # tag-formatted, not a sentence
+    await service.aclose()
+
+
 def _capture(actor) -> list[DomainEvent]:
     events: list[DomainEvent] = []
     actor.bus.subscribe(DomainEvent, events.append)

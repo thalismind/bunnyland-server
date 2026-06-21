@@ -1,0 +1,210 @@
+{
+  "name": "event",
+  "purpose": "event",
+  "prompt_style": "tag",
+  "media": "image",
+  "description": "SDXL two-pass for Illustrious/Pony/SDXL checkpoints; tag-based prompts.",
+  "default_negative": "worst quality, low quality, blurry, bad anatomy, extra limbs",
+  "width": 1216,
+  "height": 832,
+  "output_node_id": "84",
+  "graph": {
+    "10": {
+      "inputs": {
+        "ckpt_name": "illustrious/lox_prisma_v6_0.safetensors"
+      },
+      "class_type": "CheckpointLoaderSimple",
+      "_meta": {
+        "title": "Load Checkpoint"
+      }
+    },
+    "30": {
+      "inputs": {
+        "width": 1216,
+        "height": 832,
+        "batch_size": 1
+      },
+      "class_type": "EmptyLatentImage",
+      "_meta": {
+        "title": "Empty Latent Image"
+      }
+    },
+    "50": {
+      "inputs": {
+        "text": "%PROMPT%, masterpiece, best quality, highly detailed",
+        "clip": [
+          "10",
+          1
+        ]
+      },
+      "class_type": "CLIPTextEncode",
+      "_meta": {
+        "title": "CLIP Text Encode (Prompt)"
+      }
+    },
+    "55": {
+      "inputs": {
+        "text": "%NEGATIVE%",
+        "clip": [
+          "10",
+          1
+        ]
+      },
+      "class_type": "CLIPTextEncode",
+      "_meta": {
+        "title": "CLIP Text Encode (Negative)"
+      }
+    },
+    "70": {
+      "inputs": {
+        "samples": [
+          "87",
+          0
+        ],
+        "vae": [
+          "10",
+          2
+        ]
+      },
+      "class_type": "VAEDecode",
+      "_meta": {
+        "title": "VAE Decode"
+      }
+    },
+    "83": {
+      "inputs": {
+        "samples": [
+          "88",
+          0
+        ],
+        "vae": [
+          "10",
+          2
+        ]
+      },
+      "class_type": "VAEDecode",
+      "_meta": {
+        "title": "VAE Decode"
+      }
+    },
+    "84": {
+      "inputs": {
+        "filename_prefix": "bunnyland",
+        "images": [
+          "83",
+          0
+        ]
+      },
+      "class_type": "SaveImage",
+      "_meta": {
+        "title": "Save Image"
+      }
+    },
+    "86": {
+      "inputs": {
+        "upscale_method": "bicubic",
+        "scale_by": 1.5,
+        "samples": [
+          "87",
+          0
+        ]
+      },
+      "class_type": "LatentUpscaleBy",
+      "_meta": {
+        "title": "Upscale Latent By"
+      }
+    },
+    "87": {
+      "inputs": {
+        "add_noise": "enable",
+        "noise_seed": 0,
+        "steps": 30,
+        "cfg": 6,
+        "sampler_name": "euler_ancestral",
+        "scheduler": "simple",
+        "start_at_step": 0,
+        "end_at_step": 5,
+        "return_with_leftover_noise": "enable",
+        "model": [
+          "10",
+          0
+        ],
+        "positive": [
+          "50",
+          0
+        ],
+        "negative": [
+          "55",
+          0
+        ],
+        "latent_image": [
+          "30",
+          0
+        ]
+      },
+      "class_type": "KSamplerAdvanced",
+      "_meta": {
+        "title": "KSampler (base pass)"
+      }
+    },
+    "88": {
+      "inputs": {
+        "add_noise": "disable",
+        "noise_seed": 985243962079549,
+        "steps": 30,
+        "cfg": 6,
+        "sampler_name": "euler_ancestral",
+        "scheduler": "simple",
+        "start_at_step": 5,
+        "end_at_step": 30,
+        "return_with_leftover_noise": "disable",
+        "model": [
+          "10",
+          0
+        ],
+        "positive": [
+          "50",
+          0
+        ],
+        "negative": [
+          "55",
+          0
+        ],
+        "latent_image": [
+          "86",
+          0
+        ]
+      },
+      "class_type": "KSamplerAdvanced",
+      "_meta": {
+        "title": "KSampler (refine pass)"
+      }
+    }
+  },
+  "slots": [
+    {
+      "node_id": "87",
+      "field_path": [
+        "inputs",
+        "noise_seed"
+      ],
+      "token": "%SEED%"
+    },
+    {
+      "node_id": "30",
+      "field_path": [
+        "inputs",
+        "width"
+      ],
+      "token": "%WIDTH%"
+    },
+    {
+      "node_id": "30",
+      "field_path": [
+        "inputs",
+        "height"
+      ],
+      "token": "%HEIGHT%"
+    }
+  ]
+}

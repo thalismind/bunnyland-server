@@ -1,0 +1,165 @@
+{
+  "name": "portrait",
+  "purpose": "portrait",
+  "prompt_style": "tag",
+  "media": "image",
+  "description": "Anima (Qwen-CLIP + UNET); lowest VRAM; tag/score-based prompts.",
+  "default_negative": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia",
+  "width": 832,
+  "height": 1216,
+  "output_node_id": "46",
+  "graph": {
+    "46": {
+      "inputs": {
+        "filename_prefix": "bunnyland",
+        "images": [
+          "63",
+          0
+        ]
+      },
+      "class_type": "SaveImage",
+      "_meta": {
+        "title": "Save Image"
+      }
+    },
+    "61": {
+      "inputs": {
+        "clip_name": "qwen_3_06b_base.safetensors",
+        "type": "stable_diffusion",
+        "device": "default"
+      },
+      "class_type": "CLIPLoader",
+      "_meta": {
+        "title": "Load CLIP"
+      }
+    },
+    "62": {
+      "inputs": {
+        "vae_name": "qwen_image_vae.safetensors"
+      },
+      "class_type": "VAELoader",
+      "_meta": {
+        "title": "Load VAE"
+      }
+    },
+    "63": {
+      "inputs": {
+        "samples": [
+          "66",
+          0
+        ],
+        "vae": [
+          "62",
+          0
+        ]
+      },
+      "class_type": "VAEDecode",
+      "_meta": {
+        "title": "VAE Decode"
+      }
+    },
+    "64": {
+      "inputs": {
+        "width": 832,
+        "height": 1216,
+        "batch_size": 1
+      },
+      "class_type": "EmptyLatentImage",
+      "_meta": {
+        "title": "Empty Latent Image"
+      }
+    },
+    "65": {
+      "inputs": {
+        "text": "%NEGATIVE%",
+        "clip": [
+          "61",
+          0
+        ]
+      },
+      "class_type": "CLIPTextEncode",
+      "_meta": {
+        "title": "CLIP Text Encode (Negative)"
+      }
+    },
+    "66": {
+      "inputs": {
+        "seed": 0,
+        "steps": 30,
+        "cfg": 4,
+        "sampler_name": "er_sde",
+        "scheduler": "simple",
+        "denoise": 1,
+        "model": [
+          "68",
+          0
+        ],
+        "positive": [
+          "67",
+          0
+        ],
+        "negative": [
+          "65",
+          0
+        ],
+        "latent_image": [
+          "64",
+          0
+        ]
+      },
+      "class_type": "KSampler",
+      "_meta": {
+        "title": "KSampler"
+      }
+    },
+    "67": {
+      "inputs": {
+        "text": "%PROMPT%, masterpiece, best quality, score_7",
+        "clip": [
+          "61",
+          0
+        ]
+      },
+      "class_type": "CLIPTextEncode",
+      "_meta": {
+        "title": "CLIP Text Encode (Positive)"
+      }
+    },
+    "68": {
+      "inputs": {
+        "unet_name": "anima-base-v1.0.safetensors",
+        "weight_dtype": "default"
+      },
+      "class_type": "UNETLoader",
+      "_meta": {
+        "title": "Load Diffusion Model"
+      }
+    }
+  },
+  "slots": [
+    {
+      "node_id": "66",
+      "field_path": [
+        "inputs",
+        "seed"
+      ],
+      "token": "%SEED%"
+    },
+    {
+      "node_id": "64",
+      "field_path": [
+        "inputs",
+        "width"
+      ],
+      "token": "%WIDTH%"
+    },
+    {
+      "node_id": "64",
+      "field_path": [
+        "inputs",
+        "height"
+      ],
+      "token": "%HEIGHT%"
+    }
+  ]
+}

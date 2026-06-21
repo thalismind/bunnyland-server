@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "multiple characters, tavern interior, night, 2girls, 1boy, sitting, mugs, hearth, candlelight, wide shot, detailed background, masterpiece, best quality",
+    "negative": "worst quality, low quality, blurry, bad anatomy, text, watermark",
+    "tags": ["multiple characters", "tavern", "night", "candlelight", "wide shot"]
+  },
+  {
+    "prompt": "multiple characters, courtyard, moonlight, guards, confrontation, stone well, dramatic shadows, cinematic, detailed background, masterpiece, best quality",
+    "negative": "worst quality, low quality, blurry, bad anatomy, text, watermark",
+    "tags": ["multiple characters", "courtyard", "moonlight", "cinematic"]
+  }
+]

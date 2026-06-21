@@ -15,6 +15,7 @@ from bunnyland.imagegen.config import ImageGenConfig
 from bunnyland.imagegen.media import SEGMENT_PORTRAITS, MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
+from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.wiring import build_image_service, select_enhancer
 from bunnyland.mechanics.history import record_world_history
@@ -357,6 +358,24 @@ def test_build_image_service_from_config(tmp_path):
     config = ImageGenConfig(server_url="http://comfy.local", media_root=str(tmp_path))
     service = build_image_service(scenario.actor, config)
     assert isinstance(service, ImageGenService)
+
+
+def test_build_image_service_selects_family(tmp_path):
+    scenario = build_scenario()
+    config = ImageGenConfig(
+        server_url="http://comfy.local", media_root=str(tmp_path), workflows="anima-house"
+    )
+    service = build_image_service(scenario.actor, config)
+    assert service._templates.for_purpose(ImagePurpose.PORTRAIT).default_negative.startswith(
+        "worst quality, low quality, score_1"
+    )
+
+
+def test_build_image_service_unknown_family():
+    scenario = build_scenario()
+    config = ImageGenConfig(server_url="http://comfy.local", workflows="bogus")
+    with pytest.raises(ValueError, match="unknown workflow family"):
+        build_image_service(scenario.actor, config)
 
 
 def test_select_enhancer_stub():

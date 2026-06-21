@@ -306,9 +306,11 @@ if confirm "Enable the HTTP MCP endpoint for agentic clients?" "n"; then
 fi
 
 comfyui_server_url=""
+image_workflows=""
 image_public_base_url=""
 if confirm "Enable image generation via a ComfyUI server?" "n"; then
   comfyui_server_url="$(prompt "ComfyUI server URL (e.g. http://localhost:8188)")"
+  image_workflows="$(prompt "Workflow family [anima|sdxl|klein|flux2dev] (blank for anima)")"
   image_public_base_url="$(prompt "Public base URL for Discord avatars (blank to skip)")"
 fi
 
@@ -332,6 +334,9 @@ if [[ "$enable_mcp" == "1" ]]; then
 fi
 if [[ -n "$comfyui_server_url" ]]; then
   write_env COMFYUI_SERVER_URL "$comfyui_server_url"
+  if [[ -n "$image_workflows" ]]; then
+    write_env BUNNYLAND_IMAGE_WORKFLOWS "$image_workflows"
+  fi
   if [[ -n "$image_public_base_url" ]]; then
     write_env BUNNYLAND_PUBLIC_BASE_URL "$image_public_base_url"
   fi

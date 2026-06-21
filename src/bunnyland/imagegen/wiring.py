@@ -52,7 +52,7 @@ def build_image_service(
 ) -> ImageGenService:
     """Assemble the full image generation service from config and plugins."""
     templates = WorkflowTemplateStore(
-        config.templates_path or None, defaults=default_templates()
+        config.templates_path or None, defaults=default_templates(config.workflows)
     )
     templates.load()
     return ImageGenService(

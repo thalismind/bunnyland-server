@@ -32,9 +32,33 @@ def load_templates_from(directory: Any) -> list[WorkflowTemplate]:
     return templates
 
 
-def default_templates() -> list[WorkflowTemplate]:
-    """The built-in templates shipped as package data (one per purpose)."""
-    return load_templates_from(resources.files("bunnyland.imagegen").joinpath("workflows"))
+def _workflows_root() -> Any:
+    return resources.files("bunnyland.imagegen").joinpath("workflows")
+
+
+def available_families() -> list[str]:
+    """The shipped workflow family names (subdirectories of ``imagegen/workflows/``)."""
+    return sorted(entry.name for entry in _workflows_root().iterdir() if entry.is_dir())
+
+
+def resolve_family(name: str) -> str:
+    """Resolve a configured family label to a shipped base family by its first keyword.
+
+    The base is the keyword before the first ``-`` so a server can use its own label, e.g.
+    ``anima-my-server`` resolves to ``anima``. Raises ``ValueError`` for an unknown base.
+    """
+    base = (name or "").split("-", 1)[0]
+    families = available_families()
+    if base not in families:
+        raise ValueError(
+            f"unknown workflow family {name!r}; available: {', '.join(families)}"
+        )
+    return base
+
+
+def default_templates(family: str = "anima") -> list[WorkflowTemplate]:
+    """The built-in templates for a workflow family (one per purpose), package data."""
+    return load_templates_from(_workflows_root().joinpath(resolve_family(family)))
 
 
 class WorkflowTemplateStore:
@@ -111,6 +135,8 @@ class WorkflowTemplateStore:
 
 __all__ = [
     "WorkflowTemplateStore",
+    "available_families",
     "default_templates",
     "load_templates_from",
+    "resolve_family",
 ]

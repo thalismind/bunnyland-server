@@ -1,0 +1,10 @@
+[
+  {
+    "prompt": "a full-body game sprite of a rabbit ranger standing, facing forward, flat cel-shaded style, centered on a plain white background, clean edges",
+    "negative": "blurry, lowres, bad anatomy, text, watermark, busy background, drop shadow"
+  },
+  {
+    "prompt": "a full-body game sprite of a fox merchant walking, simple flat colors, centered on a plain white background, clean edges",
+    "negative": "blurry, lowres, bad anatomy, text, watermark, busy background, drop shadow"
+  }
+]

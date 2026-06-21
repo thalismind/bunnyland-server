@@ -41,6 +41,13 @@ class ImageGenConfig:
     media_root: str = "media"
     public_base_url: str = ""
     templates_path: str = ""
+    #: Workflow family to use for images. The base is the first keyword (before the first
+    #: "-"): "anima" (default, lowest VRAM), "sdxl", "klein", or "flux2dev" (highest
+    #: quality). A suffix is allowed for a server's own label, e.g. "anima-my-server".
+    workflows: str = "anima"
+    #: Override the prompt style for every job ("tag" or "natural"); empty uses each
+    #: template's own style.
+    prompt_style: str = ""
     enhancer: str = ""
     model: str = DEFAULT_MODEL
     host: str = ""
@@ -64,6 +71,8 @@ class ImageGenConfig:
             media_root=environ.get("BUNNYLAND_MEDIA_DIR", "media").strip(),
             public_base_url=environ.get("BUNNYLAND_PUBLIC_BASE_URL", "").strip().rstrip("/"),
             templates_path=environ.get("BUNNYLAND_IMAGE_TEMPLATES", "").strip(),
+            workflows=environ.get("BUNNYLAND_IMAGE_WORKFLOWS", "anima").strip() or "anima",
+            prompt_style=environ.get("BUNNYLAND_IMAGE_PROMPT_STYLE", "").strip(),
             enhancer=environ.get("BUNNYLAND_IMAGE_ENHANCER", "").strip(),
             model=environ.get("BUNNYLAND_IMAGE_MODEL", DEFAULT_MODEL).strip(),
             host=environ.get("OLLAMA_HOST", "").strip(),

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 
-from bunnyland.imagegen.spec import ImagePurpose, WorkflowTemplate, substitute
+import pytest
+
+from bunnyland.imagegen.spec import ImagePurpose, PromptStyle, WorkflowTemplate, substitute
 from bunnyland.imagegen.store import (
     WorkflowTemplateStore,
+    available_families,
     default_templates,
     load_templates_from,
+    resolve_family,
 )
 
 
@@ -21,14 +25,42 @@ def _template(name: str, purpose: ImagePurpose = ImagePurpose.PORTRAIT) -> Workf
 
 
 def test_default_templates_ship_one_per_purpose():
-    templates = default_templates()
+    templates = default_templates()  # the default family (anima)
     by_name = {t.name: t for t in templates}
     assert set(by_name) == {"portrait", "entity", "sprite", "event"}
     assert {t.purpose for t in templates} == set(ImagePurpose)
-    # The shipped graphs are real and substitutable end-to-end.
-    graph = substitute(by_name["portrait"], prompt="a brave rabbit", seed=7)
-    assert graph["6"]["inputs"]["text"] == "a brave rabbit"
-    assert graph["3"]["inputs"]["seed"] == 7
+
+
+def test_sdxl_family_substitutes_prompt_and_seed():
+    portrait = next(t for t in default_templates("sdxl") if t.name == "portrait")
+    graph = substitute(portrait, prompt="a brave rabbit", seed=7)
+    assert "a brave rabbit" in graph["50"]["inputs"]["text"]
+    assert graph["87"]["inputs"]["noise_seed"] == 7
+
+
+def test_every_family_ships_four_substitutable_purposes():
+    for family in available_families():
+        templates = default_templates(family)
+        assert {t.name for t in templates} == {"portrait", "entity", "sprite", "event"}
+        for template in templates:
+            graph = substitute(template, prompt="a fox", seed=3)
+            # Every family's output node exists in its substituted graph.
+            assert template.output_node_id in graph
+
+
+def test_available_families_and_resolution():
+    families = available_families()
+    assert {"anima", "sdxl", "klein", "flux2dev"} <= set(families)
+    # A server's own label resolves to the base family by its first keyword.
+    assert resolve_family("anima-my-server-foo") == "anima"
+    assert resolve_family("flux2dev") == "flux2dev"
+    with pytest.raises(ValueError, match="unknown workflow family"):
+        resolve_family("bogus")
+
+
+def test_default_templates_prompt_styles_match_family():
+    assert all(t.prompt_style is PromptStyle.TAG for t in default_templates("anima"))
+    assert all(t.prompt_style is PromptStyle.NATURAL for t in default_templates("klein"))
 
 
 def test_load_templates_from_skips_non_json(tmp_path):
