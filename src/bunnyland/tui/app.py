@@ -297,6 +297,7 @@ class BunnylandTUI(App[None]):
     BINDINGS = [
         ("r", "refresh", "Refresh"),
         ("i", "request_image", f"{REQUEST_EMOJI} Image"),
+        ("s", "open_sheet", "Open Sheet"),
         ("q", "quit", "Quit"),
     ]
 
@@ -348,7 +349,10 @@ class BunnylandTUI(App[None]):
                         id="player",
                     )
                     yield Button("Release", id="character-release", disabled=True)
-                    yield Button(f"{REQUEST_EMOJI} Image", id="request-image")
+                    if self.backend.supports_image_requests:
+                        yield Button(f"{REQUEST_EMOJI} Image", id="request-image")
+                    if self.backend.supports_character_sheets:
+                        yield Button("▣ Sheet", id="open-sheet")
                 yield Static("Select a character to play as.", id="play-hint")
                 yield Static("", id="points")
                 with Horizontal(id="action-filter-row"):
@@ -724,10 +728,17 @@ class BunnylandTUI(App[None]):
     async def _request_image_pressed(self, _event: Button.Pressed) -> None:
         await self.action_request_image()
 
+    @on(Button.Pressed, "#open-sheet")
+    async def _open_sheet_pressed(self, _event: Button.Pressed) -> None:
+        await self.action_open_sheet()
+
     async def action_request_image(self) -> None:
-        """Request an image of the player's current scene (the 📷 camera affordance)."""
+        """Request an image of the player's current scene when the backend supports it."""
         if not self.player_id:
             self._append_activity(Text("Select a character before requesting an image."))
+            return
+        if not self.backend.supports_image_requests:
+            self._append_activity(Text("Image requests are not available for this session."))
             return
         result = await self.backend.request_image(self.player_id)
         if result.ok:
@@ -735,6 +746,27 @@ class BunnylandTUI(App[None]):
             self._append_activity(Text(f"{REQUEST_EMOJI} {note}.", style="cyan"))
         else:
             self._append_activity(Text(f"{REQUEST_EMOJI} {result.reason}", style="yellow"))
+
+    async def action_open_sheet(self) -> None:
+        """Open the selected or current character's browser sheet."""
+        if not self.player_id:
+            self._append_activity(Text("Select a character before opening a sheet."))
+            return
+        if not self.backend.supports_character_sheets:
+            self._append_activity(Text("Character sheets require a remote server URL."))
+            return
+        character_id = self.player_id
+        if self.selected_id:
+            selected = self.world.get(self.selected_id)
+            if selected is None or not has(selected, "CharacterComponent"):
+                self._append_activity(Text("Select a visible character or clear the selection."))
+                return
+            character_id = self.selected_id
+        result = await self.backend.open_character_sheet(character_id)
+        if result.ok:
+            self._append_activity(Text(f"Opened sheet: {result.url}", style="cyan"))
+        else:
+            self._append_activity(Text(result.reason, style="yellow"))
 
     @on(OptionList.OptionSelected, "#members")
     def _member_selected(self, event: OptionList.OptionSelected) -> None:

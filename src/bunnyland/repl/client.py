@@ -39,8 +39,10 @@ from ..tui.model import KIND_ICON, World, entity_icon, entity_name, fmt_points, 
 from .completion import complete_line, reference_candidates
 
 META_COMMANDS = (
-    "help", "who", "look", "inventory", "points", "play", "image", "refresh", "quit", "exit"
+    "help", "who", "look", "inventory", "points", "play", "refresh", "quit", "exit"
 )
+IMAGE_COMMANDS = ("image", "img")
+SHEET_COMMANDS = ("sheet", "profile")
 
 
 def _humanize_event_type(event_type: str) -> str:
@@ -225,18 +227,51 @@ class BunnylandRepl:
             if not rest:
                 return Text("Usage: play <player name>")
             return Text(await self.select_player(rest))
-        if verb in {"image", "img"}:
+        if verb in IMAGE_COMMANDS:
             return await self._request_image()
+        if verb in SHEET_COMMANDS:
+            return await self._open_sheet(rest)
         return await self._act(line, verb)
 
     async def _request_image(self) -> Text:
         if not self.player_id:
             return Text("Pick a player first: play <name>.")
+        if not self.backend.supports_image_requests:
+            return Text("Image requests are not available for this session.", style="yellow")
         result = await self.backend.request_image(self.player_id)
         if result.ok:
             note = "image ready" if result.status == "skipped" else "image requested"
             return Text(f"{REQUEST_EMOJI} {note}.", style="cyan")
         return Text(f"{REQUEST_EMOJI} {result.reason}", style="yellow")
+
+    def _sheet_target(self, name: str) -> str | None:
+        query = name.strip()
+        if not query:
+            return self.player_id or None
+        if query.lower() in {"me", "self", "player", "current", "you"}:
+            return self.player_id or None
+        if any(summary.character_id == query for summary in self.character_list):
+            return query
+        candidates = [(summary.name, summary.character_id) for summary in self.character_list]
+        for entity in self.world.characters():
+            candidates.append((entity_name(entity), entity["id"]))
+        resolved = resolve_name(query, self.world, candidates)
+        ids = {summary.character_id for summary in self.character_list}
+        ids.update(entity["id"] for entity in self.world.characters())
+        return resolved if resolved in ids else None
+
+    async def _open_sheet(self, name: str = "") -> Text:
+        if not self.backend.supports_character_sheets:
+            return Text("Character sheets require a remote server URL.", style="yellow")
+        character_id = self._sheet_target(name)
+        if character_id is None:
+            if name.strip():
+                return Text(f"No character sheet target: {name!r}. Try 'who'.")
+            return Text("Pick a player first: play <name>.")
+        result = await self.backend.open_character_sheet(character_id)
+        if result.ok:
+            return Text(f"Opened sheet: {result.url}", style="cyan")
+        return Text(result.reason, style="yellow")
 
     async def _act(self, line: str, verb: str) -> Text:
         parsed = parse_line(line, self._defs)
@@ -409,7 +444,7 @@ class BunnylandRepl:
 
         available = [label(tool) for tool in tools if is_available(tool)]
         unavailable = [label(tool) for tool in tools if not is_available(tool)]
-        meta = ", ".join(m for m in META_COMMANDS if m != "exit")
+        meta = ", ".join(m for m in self.meta_commands() if m != "exit")
         out = Text("Commands (try 'help <command>' for parameters):\n")
         out.append(f"  {', '.join(available)}\n")
         if unavailable:
@@ -422,12 +457,20 @@ class BunnylandRepl:
         return out
 
     # ── completion ────────────────────────────────────────────────────────────
+    def meta_commands(self) -> tuple[str, ...]:
+        commands = list(META_COMMANDS)
+        if self.backend.supports_image_requests:
+            commands.extend(IMAGE_COMMANDS)
+        if self.backend.supports_character_sheets:
+            commands.extend(SHEET_COMMANDS)
+        return tuple(commands)
+
     def complete(self, line: str) -> list[str]:
         return complete_line(
             line,
             definitions=self._defs,
             # ``look``/``inventory`` are both tools and meta commands; list each word once.
-            commands=tuple(dict.fromkeys((*self._defs, *META_COMMANDS))),
+            commands=tuple(dict.fromkeys((*self._defs, *self.meta_commands()))),
             entity_names=[name for name, _ in reference_candidates(self.world, self.player_id)],
             players=[summary.name for summary in self.character_list],
         )

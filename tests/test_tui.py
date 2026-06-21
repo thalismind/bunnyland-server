@@ -396,6 +396,49 @@ def test_control_and_points():
     assert world.control(MARLOW) is None  # no ControlledBy edge
 
 
+def test_character_sheet_url_derives_frontend_from_api_base():
+    from bunnyland.tui.backend import character_sheet_url, frontend_base_for_api
+
+    assert frontend_base_for_api("https://play.test/api") == "https://play.test"
+    assert frontend_base_for_api("https://play.test/prefix/api/") == "https://play.test/prefix"
+    assert character_sheet_url("https://play.test/api", PLAYER) == (
+        "https://play.test/character-sheet.html?server=https%3A%2F%2Fplay.test%2Fapi"
+        "#character:1"
+    )
+
+
+async def test_remote_backend_opens_character_sheet(monkeypatch):
+    from bunnyland.tui.backend import RemoteBackend
+
+    opened: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        "bunnyland.tui.backend.webbrowser.open",
+        lambda url, new=0: opened.append((url, new)) or True,
+    )
+
+    backend = RemoteBackend("https://play.test/api/")
+    result = await backend.open_character_sheet(PLAYER)
+
+    assert result.ok is True
+    assert result.url.endswith(
+        "/character-sheet.html?server=https%3A%2F%2Fplay.test%2Fapi#character:1"
+    )
+    assert opened == [(result.url, 2)]
+
+
+async def test_remote_backend_reports_browser_open_failure(monkeypatch):
+    from bunnyland.tui.backend import RemoteBackend
+
+    monkeypatch.setattr("bunnyland.tui.backend.webbrowser.open", lambda url, new=0: False)
+
+    backend = RemoteBackend("https://play.test/api")
+    result = await backend.open_character_sheet(PLAYER)
+
+    assert result.ok is False
+    assert result.reason == "could not open browser"
+    assert "character-sheet.html" in result.url
+
+
 def test_parse_client_view_supports_filtered_structured_surface():
     world = World.parse(_client_view())
 
@@ -2462,11 +2505,28 @@ def _activity_prompts(activity):
     return [str(activity.get_option_at_index(i).prompt) for i in range(activity.option_count)]
 
 
-# --- image request (camera affordance) -----------------------------------------------
+# --- character sheet deep links ------------------------------------------------------
+
+
+class _SheetBackend(RecordingBackend):
+    """Records sheet opens and returns a scripted result."""
+
+    supports_character_sheets = True
+
+    def __init__(self, snapshot, result):
+        super().__init__(snapshot)
+        self._result = result
+        self.sheet_requests: list[str] = []
+
+    async def open_character_sheet(self, character_id):
+        self.sheet_requests.append(character_id)
+        return self._result
 
 
 class _ImageBackend(RecordingBackend):
     """Records image requests and returns a scripted result."""
+
+    supports_image_requests = True
 
     def __init__(self, snapshot, result):
         super().__init__(snapshot)
@@ -2478,56 +2538,28 @@ class _ImageBackend(RecordingBackend):
         return self._result
 
 
-async def test_app_request_image_without_player():
-    from textual.widgets import OptionList
-
+async def test_app_hides_terminal_affordance_buttons_when_unsupported():
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test():
-        await app.action_request_image()
-        activity = app.query_one("#activity", OptionList)
-        prompts = _activity_prompts(activity)
-        assert any("Select a character" in p for p in prompts)
+        assert not app.query("#request-image")
+        assert not app.query("#open-sheet")
 
 
-async def test_app_request_image_unavailable():
-    from textual.widgets import OptionList
-
-    # RecordingBackend inherits the base default -> unavailable.
-    app = BunnylandTUI(RecordingBackend(_snapshot()))
-    async with app.run_test() as pilot:
-        await _select_player(app, pilot)
-        await app.action_request_image()
-        activity = app.query_one("#activity", OptionList)
-        prompts = _activity_prompts(activity)
-        assert any("not available" in p for p in prompts)
-
-
-async def test_app_request_image_queued_and_ready():
+async def test_app_request_image_without_player():
     from textual.widgets import OptionList
 
     from bunnyland.tui.backend import ImageRequestResult
 
-    queued = ImageRequestResult(ok=True, status="queued", url="/media/events/x.png")
-    app = BunnylandTUI(_ImageBackend(_snapshot(), queued))
-    async with app.run_test() as pilot:
-        await _select_player(app, pilot)
+    app = BunnylandTUI(_ImageBackend(_snapshot(), ImageRequestResult(ok=True, status="queued")))
+    async with app.run_test():
+        assert app.query("#request-image")
         await app.action_request_image()
         activity = app.query_one("#activity", OptionList)
         prompts = _activity_prompts(activity)
-        assert any("image requested" in p for p in prompts)
-        assert app.backend.image_requests == [PLAYER]
-
-    ready = ImageRequestResult(ok=True, status="skipped", url="/media/events/x.png")
-    app2 = BunnylandTUI(_ImageBackend(_snapshot(), ready))
-    async with app2.run_test() as pilot:
-        await _select_player(app2, pilot)
-        await app2.action_request_image()
-        activity = app2.query_one("#activity", OptionList)
-        prompts = _activity_prompts(activity)
-        assert any("image ready" in p for p in prompts)
+        assert any("Select a character before requesting an image" in p for p in prompts)
 
 
-async def test_app_request_image_button_press():
+async def test_app_request_image_when_supported():
     from textual.widgets import OptionList
 
     from bunnyland.tui.backend import ImageRequestResult
@@ -2542,3 +2574,91 @@ async def test_app_request_image_button_press():
         prompts = _activity_prompts(activity)
         assert any("image requested" in p for p in prompts)
         assert backend.image_requests == [PLAYER]
+
+
+async def test_app_open_sheet_without_player():
+    from textual.widgets import OptionList
+
+    from bunnyland.tui.backend import SheetOpenResult
+
+    app = BunnylandTUI(_SheetBackend(_snapshot(), SheetOpenResult(ok=True, url="http://web.test")))
+    async with app.run_test():
+        assert app.query("#open-sheet")
+        await app.action_open_sheet()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("Select a character before opening a sheet" in p for p in prompts)
+
+
+async def test_app_open_sheet_unavailable_for_local_backend():
+    from textual.widgets import OptionList
+
+    # RecordingBackend inherits the base default -> unavailable.
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app.action_open_sheet()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("Character sheets require a remote server URL" in p for p in prompts)
+
+
+async def test_app_open_sheet_current_and_selected_character():
+    from textual.widgets import OptionList
+
+    from bunnyland.tui.backend import SheetOpenResult
+
+    opened = SheetOpenResult(ok=True, url="http://web.test/character-sheet.html#character:1")
+    app = BunnylandTUI(_SheetBackend(_snapshot(), opened))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app.action_open_sheet()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("Opened sheet" in p for p in prompts)
+        assert app.backend.sheet_requests == [PLAYER]
+
+    app2 = BunnylandTUI(_SheetBackend(_snapshot(), opened))
+    async with app2.run_test() as pilot:
+        await _select_player(app2, pilot)
+        app2.selected_id = MARLOW
+        await app2.action_open_sheet()
+        activity = app2.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("Opened sheet" in p for p in prompts)
+        assert app2.backend.sheet_requests == [MARLOW]
+
+
+async def test_app_open_sheet_rejects_non_character_selection():
+    from textual.widgets import OptionList
+
+    from bunnyland.tui.backend import SheetOpenResult
+
+    app = BunnylandTUI(_SheetBackend(_snapshot(), SheetOpenResult(ok=True, url="http://web.test")))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        app.selected_id = APPLE
+        await app.action_open_sheet()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("Select a visible character" in p for p in prompts)
+
+
+async def test_app_open_sheet_button_press():
+    from textual.widgets import OptionList
+
+    from bunnyland.tui.backend import SheetOpenResult
+
+    backend = _SheetBackend(
+        _snapshot(),
+        SheetOpenResult(ok=True, url="http://web.test/character-sheet.html#character:1"),
+    )
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await pilot.click("#open-sheet")
+        await pilot.pause()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("Opened sheet" in p for p in prompts)
+        assert backend.sheet_requests == [PLAYER]

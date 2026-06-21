@@ -1303,47 +1303,105 @@ def test_main_no_icons_disables_repl_icons(monkeypatch):
     assert apps[0].repl.show_icons is False
 
 
-# ── image request (camera affordance) ────────────────────────────────────────────────
+# ── character sheet deep links ───────────────────────────────────────────────────────
 
 
-async def test_dispatch_image_requires_player():
-    repl = _repl(player=False)
-    message = await repl.dispatch("image")
+async def test_dispatch_sheet_requires_player():
+    class _SheetBackend(RecordingBackend):
+        supports_character_sheets = True
+
+    repl = BunnylandRepl(_SheetBackend(_snapshot()))
+    repl.character_list = _character_list_from_snapshot(_snapshot())
+    message = await repl.dispatch("sheet")
     assert "Pick a player first" in message.plain
 
 
-async def test_dispatch_image_unavailable():
+async def test_dispatch_sheet_unavailable_for_local_backend():
     # RecordingBackend inherits the base default -> unavailable.
     repl = _repl()
-    message = await repl.dispatch("image")
-    assert "not available" in message.plain
+    message = await repl.dispatch("sheet")
+    assert "Character sheets require a remote server URL" in message.plain
 
 
-async def test_dispatch_image_queued_and_ready():
+async def test_dispatch_sheet_opens_current_and_named_character():
+    from bunnyland.tui.backend import SheetOpenResult
+
+    class _SheetBackend(RecordingBackend):
+        supports_character_sheets = True
+
+        def __init__(self, snapshot):
+            super().__init__(snapshot)
+            self.opened: list[str] = []
+
+        async def open_character_sheet(self, character_id):
+            self.opened.append(character_id)
+            return SheetOpenResult(ok=True, url=f"http://web.test/character-sheet.html#{character_id}")
+
+    repl = BunnylandRepl(_SheetBackend(_snapshot()))
+    repl.world = World.parse(_snapshot())
+    repl.character_list = _character_list_from_snapshot(_snapshot())
+    repl.player_id = PLAYER
+
+    current = await repl.dispatch("sheet")
+    assert "Opened sheet" in current.plain
+    assert repl.backend.opened[-1] == PLAYER
+
+    named = await repl.dispatch("profile Marlow")
+    assert "Opened sheet" in named.plain
+    assert repl.backend.opened[-1] == MARLOW
+
+
+async def test_dispatch_image_when_supported():
     from bunnyland.tui.backend import ImageRequestResult
 
     class _ImageBackend(RecordingBackend):
-        def __init__(self, snapshot, result):
+        supports_image_requests = True
+
+        def __init__(self, snapshot):
             super().__init__(snapshot)
-            self.result = result
             self.requested: list[str] = []
 
         async def request_image(self, character_id):
             self.requested.append(character_id)
-            return self.result
+            return ImageRequestResult(ok=True, status="queued")
 
-    queued = BunnylandRepl(_ImageBackend(_snapshot(), ImageRequestResult(ok=True, status="queued")))
-    queued.player_id = PLAYER
-    message = await queued.dispatch("image")
+    repl = BunnylandRepl(_ImageBackend(_snapshot()))
+    repl.world = World.parse(_snapshot())
+    repl.character_list = _character_list_from_snapshot(_snapshot())
+    repl.player_id = PLAYER
+
+    message = await repl.dispatch("image")
+
     assert "image requested" in message.plain
-    assert queued.backend.requested == [PLAYER]
-
-    ready = BunnylandRepl(_ImageBackend(_snapshot(), ImageRequestResult(ok=True, status="skipped")))
-    ready.player_id = PLAYER
-    assert "image ready" in (await ready.dispatch("img")).plain
+    assert repl.backend.requested == [PLAYER]
 
 
-def test_image_is_a_meta_command():
-    from bunnyland.repl.client import META_COMMANDS
+async def test_dispatch_image_unavailable_when_not_supported():
+    repl = _repl()
+    message = await repl.dispatch("image")
+    assert "Image requests are not available" in message.plain
 
-    assert "image" in META_COMMANDS
+
+async def test_dispatch_open_remains_world_action():
+    repl = _repl()
+    message = await repl.dispatch("open target_id=an apple")
+
+    assert "Opened sheet" not in message.plain
+    assert repl.backend.commands[-1]["command_type"] == "open"
+
+
+def test_terminal_repl_meta_commands_follow_backend_capabilities():
+    class _BothBackend(RecordingBackend):
+        supports_character_sheets = True
+        supports_image_requests = True
+
+    local = _repl()
+    remote = BunnylandRepl(_BothBackend(_snapshot()))
+
+    assert "sheet" not in local.meta_commands()
+    assert "image" not in local.meta_commands()
+    assert "sheet" in remote.meta_commands()
+    assert "profile" in remote.meta_commands()
+    assert "image" in remote.meta_commands()
+    assert "img" in remote.meta_commands()
+    assert "open" not in remote.meta_commands()

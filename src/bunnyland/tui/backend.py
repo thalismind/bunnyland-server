@@ -10,6 +10,8 @@ import asyncio
 import logging
 import os
 import time
+import urllib.parse
+import webbrowser
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +80,15 @@ class ImageRequestResult:
 
 
 @dataclass(frozen=True)
+class SheetOpenResult:
+    """Outcome of opening a browser character sheet from a terminal client."""
+
+    ok: bool
+    url: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class SubmitResult:
     """Outcome of submitting a command: accepted for queuing, or rejected at submit.
 
@@ -96,6 +107,8 @@ class Backend(ABC):
     """A source of world snapshots that also accepts player commands."""
 
     label: str = ""
+    supports_character_sheets: bool = False
+    supports_image_requests: bool = False
 
     @abstractmethod
     async def start(self) -> None: ...
@@ -158,6 +171,33 @@ class Backend(ABC):
         """Request an image of the character's current scene (the 📷 camera affordance)."""
         return ImageRequestResult(ok=False, status="unavailable", reason="not available")
 
+    async def open_character_sheet(self, character_id: str) -> SheetOpenResult:
+        """Open the web character-sheet deep link for a character."""
+        return SheetOpenResult(ok=False, reason="Character sheets require a remote server URL")
+
+
+def frontend_base_for_api(api_base: str) -> str:
+    """Best-effort frontend origin for an API base URL.
+
+    Deployed Bunnyland serves the web bundle at the same origin as ``/api``. Raw server
+    URLs without an ``/api`` path still produce a stable same-origin deep link.
+    """
+    parsed = urllib.parse.urlparse(api_base.rstrip("/"))
+    path = parsed.path.rstrip("/")
+    if path == "/api":
+        path = ""
+    elif path.endswith("/api"):
+        path = path[: -len("/api")]
+    stripped = parsed._replace(path=path or "", params="", query="", fragment="")
+    return urllib.parse.urlunparse(stripped).rstrip("/")
+
+
+def character_sheet_url(api_base: str, character_id: str) -> str:
+    frontend = frontend_base_for_api(api_base)
+    query = urllib.parse.urlencode({"server": api_base.rstrip("/")})
+    fragment = urllib.parse.quote(character_id, safe=":")
+    return f"{frontend}/character-sheet.html?{query}#{fragment}"
+
 
 class LocalBackend(Backend):
     """Generate an offline world and tick it in-process, the TUI as a real player."""
@@ -190,6 +230,10 @@ class LocalBackend(Backend):
         self.fallback_controller = fallback_controller
         self.timeout_seconds = timeout_seconds
         self.imagegen = None
+
+    @property
+    def supports_image_requests(self) -> bool:
+        return self.imagegen is not None
 
     async def start(self) -> None:
         # Imported here so the optional server/llm wiring is only pulled when hosting.
@@ -361,6 +405,9 @@ class LocalBackend(Backend):
 class RemoteBackend(Backend):
     """Poll a running server over HTTP for snapshots and post commands to it."""
 
+    supports_character_sheets = True
+    supports_image_requests = True
+
     def __init__(
         self,
         base_url: str,
@@ -465,6 +512,13 @@ class RemoteBackend(Backend):
             )
         body = res.json()
         return ImageRequestResult(ok=True, status=body.get("status", ""), url=body.get("url", ""))
+
+    async def open_character_sheet(self, character_id: str) -> SheetOpenResult:
+        url = character_sheet_url(self.base, character_id)
+        opened = webbrowser.open(url, new=2)
+        if not opened:
+            return SheetOpenResult(ok=False, url=url, reason="could not open browser")
+        return SheetOpenResult(ok=True, url=url)
 
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
         res = await self._client.post(
