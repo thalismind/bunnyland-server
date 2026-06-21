@@ -655,6 +655,35 @@ async def test_controller_assign_endpoint_is_traced(otel_capture):
 
 
 @pytestmark_otel
+async def test_web_controller_claim_endpoint_reports_client_id_in_trace(otel_capture):
+    pytest.importorskip("fastapi")
+    from bunnyland.server.app import create_app
+    from bunnyland.server.models import WebControllerClaimRequest
+
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    app = create_app(scenario.actor)
+    route = next(
+        route for route in app.routes
+        if getattr(route, "path", None) == "/world/controllers/web/claim"
+    )
+    response = await route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+
+    span = _spans_by_name(span_exporter)["controller.web_claim"]
+    assert span.attributes["character.id"] == str(scenario.character)
+    assert span.attributes["client.id"] == "client-a"
+    assert span.attributes["client.label"] == "toon"
+    assert span.attributes["controller.id"] == response.controller_id
+    assert span.attributes["controller.generation"] == response.controller_generation
+
+
+@pytestmark_otel
 def test_build_otlp_providers_wires_real_otlp_exporters(monkeypatch):
     """The production path (no trace file, metrics on) builds OTLP span + metric exporters.
 

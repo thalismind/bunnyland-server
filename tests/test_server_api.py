@@ -1645,8 +1645,9 @@ async def test_run_loop_with_api_stops_game_when_server_finishes(monkeypatch, sc
 
 
 async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
-    scenario,
+    scenario, caplog,
 ):
+    caplog.set_level("INFO", logger="bunnyland.server")
     app = create_app(scenario.actor)
     route = next(route for route in app.routes if route.path == "/world/controllers/web/claim")
 
@@ -1680,6 +1681,10 @@ async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
     edge, controller_id = character.get_relationships(ControlledBy)[0]
     assert str(controller_id) == first.controller_id
     assert edge.generation == first.controller_generation
+    log_text = caplog.text
+    assert f"character={scenario.character}" in log_text
+    assert f"controller={first.controller_id}" in log_text
+    assert "client_id=client-a" in log_text
 
 
 async def test_web_controller_claim_unsuspends_character(scenario):

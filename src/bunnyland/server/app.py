@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -118,6 +119,7 @@ except ImportError:
 
 
 ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
+logger = logging.getLogger("bunnyland.server")
 GIT_HASH_ENV = "BUNNYLAND_GIT_HASH"
 
 
@@ -395,55 +397,85 @@ def create_app(
             raise HTTPException(status_code=400, detail="client_id must not be blank")
         label = request.label.strip() or "web"
 
-        async with actor._lock:
-            controller = _web_controller_for_client(client_id)
-            if controller is None:
-                controller = spawn_entity(
-                    actor.world,
-                    [WebControllerComponent(client_id=client_id, label=label)],
+        with telemetry.span(
+            "controller.web_claim",
+            {
+                "character.id": request.character_id,
+                "client.id": client_id,
+                "client.label": label,
+            },
+        ) as span:
+            created = False
+            async with actor._lock:
+                controller = _web_controller_for_client(client_id)
+                if controller is None:
+                    created = True
+                    controller = spawn_entity(
+                        actor.world,
+                        [WebControllerComponent(client_id=client_id, label=label)],
+                    )
+                apply_claim_timeout_settings(
+                    controller,
+                    now_unix=int(time.time()),
+                    fallback_controller=request.fallback_controller,
+                    fallback_reason=request.fallback_reason,
+                    llm_profile_name=request.llm_profile_name,
+                    llm_model=request.llm_model,
+                    llm_provider=request.llm_provider,
+                    timeout_seconds=request.timeout_seconds,
+                    reset_activity=True,
                 )
-            apply_claim_timeout_settings(
-                controller,
-                now_unix=int(time.time()),
-                fallback_controller=request.fallback_controller,
-                fallback_reason=request.fallback_reason,
-                llm_profile_name=request.llm_profile_name,
-                llm_model=request.llm_model,
-                llm_provider=request.llm_provider,
-                timeout_seconds=request.timeout_seconds,
-                reset_activity=True,
+
+                generation = actor.current_generation(character_id, controller.id)
+                assigned = generation is None
+                if generation is None:
+                    generation = actor.assign_controller(character_id, controller.id)
+                    if character.has_component(SuspendedComponent):
+                        character.remove_component(SuspendedComponent)
+                    await actor.bus.publish(
+                        ControllerChangedEvent(
+                            **actor._event_base(
+                                actor_id=str(character_id),
+                                generation=generation,
+                                controller_kind="web",
+                            )
+                        )
+                    )
+                    await actor.bus.publish(
+                        CharacterClaimedEvent(
+                            **actor._event_base(
+                                actor_id=str(character_id),
+                                character_id=str(character_id),
+                                controller_id=str(controller.id),
+                                generation=generation,
+                            )
+                        )
+                    )
+
+            claim = controller.get_component(ClaimTimeoutComponent)
+            span.set_attribute("controller.id", str(controller.id))
+            span.set_attribute("controller.generation", generation)
+            span.set_attribute("controller.created", created)
+            span.set_attribute("controller.assigned", assigned)
+            span.set_attribute("claim.fallback_controller", claim.fallback_controller)
+            span.set_attribute("claim.timeout_seconds", claim.timeout_seconds)
+            logger.info(
+                "web claim character=%s controller=%s generation=%s "
+                "client_id=%s label=%s assigned=%s created=%s",
+                character_id,
+                controller.id,
+                generation,
+                client_id,
+                label,
+                assigned,
+                created,
             )
 
-            generation = actor.current_generation(character_id, controller.id)
-            if generation is None:
-                generation = actor.assign_controller(character_id, controller.id)
-                if character.has_component(SuspendedComponent):
-                    character.remove_component(SuspendedComponent)
-                await actor.bus.publish(
-                    ControllerChangedEvent(
-                        **actor._event_base(
-                            actor_id=str(character_id),
-                            generation=generation,
-                            controller_kind="web",
-                        )
-                    )
-                )
-                await actor.bus.publish(
-                    CharacterClaimedEvent(
-                        **actor._event_base(
-                            actor_id=str(character_id),
-                            character_id=str(character_id),
-                            controller_id=str(controller.id),
-                            generation=generation,
-                        )
-                    )
-                )
-
-        stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
-        response = _web_claim_response(
-            request, controller=controller, generation=generation
-        )
-        return WebControllerClaimResponse(**response.model_dump())
+            stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
+            response = _web_claim_response(
+                request, controller=controller, generation=generation
+            )
+            return WebControllerClaimResponse(**response.model_dump())
 
     async def _web_controller_fallback_request(
         request: WebControllerFallbackRequest,
@@ -455,28 +487,49 @@ def create_app(
         if not client_id:
             raise HTTPException(status_code=400, detail="client_id must not be blank")
 
-        async with actor._lock:
-            controller = _web_controller_for_client(client_id)
-            if controller is None:
-                raise HTTPException(status_code=404, detail="web controller does not exist")
-            generation = actor.current_generation(character_id, controller.id)
-            if generation is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="web controller is not controlling this character",
+        with telemetry.span(
+            "controller.web_fallback",
+            {"character.id": request.character_id, "client.id": client_id},
+        ) as span:
+            async with actor._lock:
+                controller = _web_controller_for_client(client_id)
+                if controller is None:
+                    raise HTTPException(status_code=404, detail="web controller does not exist")
+                generation = actor.current_generation(character_id, controller.id)
+                if generation is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="web controller is not controlling this character",
+                    )
+                apply_claim_timeout_settings(
+                    controller,
+                    now_unix=int(time.time()),
+                    fallback_controller=request.fallback_controller,
+                    fallback_reason=request.fallback_reason,
+                    llm_profile_name=request.llm_profile_name,
+                    llm_model=request.llm_model,
+                    llm_provider=request.llm_provider,
+                    timeout_seconds=request.timeout_seconds,
+                    reset_activity=False,
                 )
-            apply_claim_timeout_settings(
-                controller,
-                now_unix=int(time.time()),
-                fallback_controller=request.fallback_controller,
-                fallback_reason=request.fallback_reason,
-                llm_profile_name=request.llm_profile_name,
-                llm_model=request.llm_model,
-                llm_provider=request.llm_provider,
-                timeout_seconds=request.timeout_seconds,
-                reset_activity=False,
-            )
-            return _web_claim_response(request, controller=controller, generation=generation)
+                claim = controller.get_component(ClaimTimeoutComponent)
+                span.set_attribute("controller.id", str(controller.id))
+                span.set_attribute("controller.generation", generation)
+                span.set_attribute("claim.fallback_controller", claim.fallback_controller)
+                span.set_attribute("claim.timeout_seconds", claim.timeout_seconds)
+                logger.info(
+                    "web claim fallback character=%s controller=%s generation=%s "
+                    "client_id=%s fallback=%s timeout_seconds=%s",
+                    character_id,
+                    controller.id,
+                    generation,
+                    client_id,
+                    claim.fallback_controller,
+                    claim.timeout_seconds,
+                )
+                return _web_claim_response(
+                    request, controller=controller, generation=generation
+                )
 
     async def _patch_world_request(request: WorldPatchRequest) -> WorldPatchResponse:
         try:

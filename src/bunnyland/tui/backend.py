@@ -42,7 +42,13 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / 
 CLIENT_ID_PATH = CONFIG_DIR / "client-id"
 
 
-def persistent_client_id(path: Path = CLIENT_ID_PATH) -> str:
+def _client_id_path() -> Path:
+    base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / "bunnyland" / "client-id"
+
+
+def persistent_client_id(path: Path | None = None) -> str:
+    path = path or _client_id_path()
     if path.exists():
         try:
             value = path.read_text(encoding="utf-8").strip()

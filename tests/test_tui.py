@@ -766,6 +766,18 @@ def test_persistent_client_id_reuses_config_file(tmp_path):
     assert path.read_text(encoding="utf-8").strip() == first
 
 
+def test_terminal_backends_share_default_persistent_client_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    local = LocalBackend(generator="apartment-demo", autorun=False)
+    remote = RemoteBackend("http://server.example")
+
+    assert local.client_id == remote.client_id
+    assert (tmp_path / "bunnyland" / "client-id").read_text(encoding="utf-8").strip() == (
+        local.client_id
+    )
+
+
 def test_persistent_client_id_recovers_from_invalid_or_unreadable_config(tmp_path):
     invalid = tmp_path / "invalid-client-id"
     invalid.write_text("not-a-uuid\n", encoding="utf-8")
