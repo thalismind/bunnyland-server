@@ -422,8 +422,14 @@ async def test_ollama_world_agent_preserves_history(monkeypatch):
 class _FakeOpenRouterChat:
     def __init__(self):
         self.calls: list[dict] = []
+        self.sync_send_called = False
 
     def send(self, *, model, messages, response_format):
+        del model, messages, response_format
+        self.sync_send_called = True
+        raise AssertionError("OpenRouter worldgen must use send_async")
+
+    async def send_async(self, *, model, messages, response_format):
         self.calls.append(
             {
                 "model": model,
@@ -461,6 +467,7 @@ async def test_openrouter_world_agent_parses_json_response(monkeypatch):
     assert agent._client.kwargs == {"api_key": "key"}
     assert agent._client.chat.calls[0]["model"] == "openai/gpt-4.1"
     assert agent._client.chat.calls[0]["response_format"] == {"type": "json_object"}
+    assert agent._client.chat.sync_send_called is False
 
 
 async def test_openrouter_world_agent_forwards_server_url(monkeypatch):
@@ -492,6 +499,24 @@ async def test_openrouter_world_agent_preserves_history(monkeypatch):
     assert second[1]["role"] == "user"
     assert second[2]["role"] == "assistant"
     assert second[3]["role"] == "user"
+
+
+def test_room_node_proposal_repairs_common_live_numeric_labels():
+    room = RoomNodeProposal.model_validate(
+        {
+            "title": "Fluorescent Annex",
+            "light": "fluorescent",
+            "celsius": "room temperature",
+        }
+    )
+    unknown = RoomNodeProposal.model_validate(
+        {"title": "Weird Annex", "light": "glowing-ish", "celsius": "nice"}
+    )
+
+    assert room.light == 0.7
+    assert room.celsius == 21.0
+    assert unknown.light is None
+    assert unknown.celsius is None
 
 
 async def test_ollama_world_agent_builds_each_proposal_from_json(monkeypatch):

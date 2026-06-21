@@ -879,15 +879,28 @@ async def test_app_runs_meta_and_action_commands():
 async def test_intro_splash_fades_and_dismisses():
     app = BunnylandReplApp(RecordingBackend(), show_intro=True)
     async with app.run_test() as pilot:
-        await pilot.pause(0.1)
+        await pilot.pause()
         assert any(isinstance(screen, IntroSplash) for screen in app.screen_stack)
 
-        await pilot.pause(1.1)
         splash = next(screen for screen in app.screen_stack if isinstance(screen, IntroSplash))
         panel = splash.query_one("#splash")
+        timers = []
+
+        def capture_timer(delay, callback):
+            timers.append((delay, callback))
+
+        splash.set_timer = capture_timer
+        splash._start_fade()
+
+        fade_delay, fade_callback = timers[0]
+        assert fade_delay > 0
+        fade_callback()
         assert 0 < panel.styles.opacity <= 1
 
-        await pilot.pause(1.0)
+        finish_delay, finish_callback = timers[-1]
+        assert finish_delay > fade_delay
+        finish_callback()
+        await pilot.pause()
         assert not any(isinstance(screen, IntroSplash) for screen in app.screen_stack)
 
 

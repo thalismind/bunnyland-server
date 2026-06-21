@@ -12,13 +12,17 @@ worker thread).
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Mapping
 from typing import Protocol
 
 from .. import telemetry
-from ..llm_agents.agent import _ollama_token_usage, _openrouter_token_usage
+from ..llm_agents.agent import (
+    _llm_request_attrs,
+    _ollama_usage,
+    _openrouter_enriched_usage,
+    _record_llm_usage,
+)
 from .defaults import DEFAULT_WORLDGEN_MODEL
 from .proposal import (
     CharacterProposal,
@@ -291,15 +295,23 @@ class OllamaWorldAgent:
         with telemetry.record_duration(
             telemetry.record_worldgen_request, attrs
         ), telemetry.span(
-            "worldgen.llm.request", {**attrs, "instruction.chars": len(instruction)}
+            "worldgen.llm.request",
+            {
+                **attrs,
+                **_llm_request_attrs(
+                    "worldgen",
+                    self._model,
+                    self._history,
+                    None,
+                    system_prompt=_SYSTEM_PROMPT,
+                ),
+                "instruction.chars": len(instruction),
+            },
         ) as request_span:
             response = await self._client.chat(
                 model=self._model, format="json", messages=self._history
             )
-            prompt_tokens, completion_tokens = _ollama_token_usage(response)
-            _annotate_worldgen_tokens(
-                request_span, "ollama", self._model, prompt_tokens, completion_tokens
-            )
+            _annotate_worldgen_usage(request_span, "ollama", self._model, _ollama_usage(response))
         message = response["message"]
         self._history.append(dict(message))
         return json.loads(message["content"])
@@ -468,8 +480,8 @@ class OllamaWorldAgent:
 class OpenRouterWorldAgent(OllamaWorldAgent):
     """Prompts OpenRouter node-by-node on the same ``WorldAgent`` proposal surface.
 
-    The ``openrouter`` client is synchronous, so its ``chat.send`` call runs in a worker
-    thread to keep the event loop unblocked.
+    Uses the OpenRouter SDK's async chat call so world generation does not block the event
+    loop.
     """
 
     def __init__(
@@ -498,17 +510,29 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
         with telemetry.record_duration(
             telemetry.record_worldgen_request, attrs
         ), telemetry.span(
-            "worldgen.llm.request", {**attrs, "instruction.chars": len(instruction)}
+            "worldgen.llm.request",
+            {
+                **attrs,
+                **_llm_request_attrs(
+                    "worldgen",
+                    self._model,
+                    self._history,
+                    None,
+                    system_prompt=_SYSTEM_PROMPT,
+                ),
+                "instruction.chars": len(instruction),
+            },
         ) as request_span:
-            response = await asyncio.to_thread(
-                self._client.chat.send,
+            response = await self._client.chat.send_async(
                 model=self._model,
                 messages=self._history,
                 response_format={"type": "json_object"},
             )
-            prompt_tokens, completion_tokens = _openrouter_token_usage(response)
-            _annotate_worldgen_tokens(
-                request_span, "openrouter", self._model, prompt_tokens, completion_tokens
+            _annotate_worldgen_usage(
+                request_span,
+                "openrouter",
+                self._model,
+                await _openrouter_enriched_usage(self._client, response),
             )
         message = response.choices[0].message
         self._history.append(_message_to_history(message))
@@ -516,13 +540,18 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
         return json.loads(content)
 
 
-def _annotate_worldgen_tokens(
-    request_span, provider: str, model: str, prompt_tokens: int, completion_tokens: int
+def _annotate_worldgen_usage(
+    request_span, provider: str, model: str, usage
 ) -> None:
     """Record a worldgen LLM call's token counts to both the metric and the active span."""
-    telemetry.record_llm_tokens(provider, model, prompt_tokens, completion_tokens)
-    request_span.set_attribute("llm.tokens.prompt", prompt_tokens)
-    request_span.set_attribute("llm.tokens.completion", completion_tokens)
+    _record_llm_usage(provider, model, usage)
+    request_span.set_attribute("llm.tokens.available", usage.tokens_available)
+    request_span.set_attribute("llm.tokens.prompt", usage.prompt_tokens)
+    request_span.set_attribute("llm.tokens.completion", usage.completion_tokens)
+    request_span.set_attribute("llm.tokens.total", usage.total_tokens)
+    request_span.set_attribute("llm.cost.available", usage.cost_available)
+    if usage.cost:
+        request_span.set_attribute("llm.cost", usage.cost)
 
 
 def _message_to_history(message) -> dict:

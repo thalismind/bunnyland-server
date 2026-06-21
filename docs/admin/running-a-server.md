@@ -244,7 +244,8 @@ is safe to leave the instrumentation in place in production and flip the gate on
 | `bunnyland.commands.rejected` | counter | `command_type`, `reject_reason` (bucketed) |
 | `bunnyland.command.handler.duration` | histogram (s) | `command_type` |
 | `bunnyland.llm.decision.duration` | histogram (s) | `provider`, `model` |
-| `bunnyland.llm.tokens.prompt` / `.completion` | counter | `provider`, `model` |
+| `bunnyland.llm.tokens.prompt` / `.completion` / `.total` | counter | `provider`, `model` |
+| `bunnyland.llm.cost` | counter (USD) | `provider`, `model` |
 | `bunnyland.world.entities` / `.characters` / `.rooms` | observable gauge | — |
 | `bunnyland.worldgen.duration` | histogram (s) | `generator`, `llm` |
 
@@ -264,10 +265,15 @@ controller turn hanging off it:
   `agent.prompt.build` and `agent.decide` (with `provider`, `model`, `agent.kind`,
   `character.id`, `decision.tool`, `decision.arguments`, and — for LLM-controlled
   characters — `decision.prompted`, `decision.prompt`, `decision.prompt_chars`; live LLM
-  calls also add `llm.tokens.prompt`/`.completion`).
+  calls also add `llm.request.kind`, `llm.tools.count`, `llm.history.messages`,
+  `llm.system_prompt_chars`, `llm.tokens.available`, input/output token counts as
+  `llm.tokens.prompt`/`.completion`, `llm.tokens.total`, and `llm.cost.available`.
+  Provider-reported `llm.cost` is attached when the SDK/API exposes cost metadata.
 - `command.submit` at the single submission chokepoint, so every queued command (API,
   MCP, Discord, or autonomous dispatch) is tied back to its originating trace.
-- `world.generate` at startup.
+- `world.generate` at startup, with child `worldgen.llm.request` spans when recursive
+  LLM generation asks Ollama or OpenRouter for a room, door, content, character, item, or
+  event proposal.
 
 Unlike metric attributes, span attributes carry richer, higher-cardinality context (entity
 ids, the rendered prompt, the chosen arguments) since each span is a discrete event. Long

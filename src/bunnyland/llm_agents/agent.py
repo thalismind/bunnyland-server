@@ -16,6 +16,7 @@ import logging
 import re
 from collections.abc import Awaitable, Iterable
 from collections.abc import Mapping as MappingABC
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from .. import telemetry
@@ -28,27 +29,160 @@ LEGACY_DEFAULT_MODEL = "llama3"
 DEFAULT_PROVIDER_RETRIES = 2
 DEFAULT_RETRY_DELAY_SECONDS = 1.0
 TRANSIENT_STATUS_CODES = frozenset({408, 409, 425, 429})
+CHARACTER_SYSTEM_PROMPT = (
+    "You are an autonomous character in Bunnyland, an asynchronous social sandbox. "
+    "Choose exactly one available tool call that fits your prompt context, or wait."
+)
 
 logger = logging.getLogger("bunnyland.llm")
 
 
+@dataclass(frozen=True)
+class LLMUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0
+
+    @property
+    def tokens_available(self) -> bool:
+        return bool(self.prompt_tokens or self.completion_tokens or self.total_tokens)
+
+    @property
+    def cost_available(self) -> bool:
+        return bool(self.cost)
+
+
+def _int_field(source: object, *names: str) -> int:
+    for name in names:
+        if isinstance(source, MappingABC):
+            value = source.get(name)
+        else:
+            value = getattr(source, name, None)
+        if value is not None:
+            return int(value or 0)
+    return 0
+
+
+def _float_field(source: object, *names: str) -> float:
+    for name in names:
+        if isinstance(source, MappingABC):
+            value = source.get(name)
+        else:
+            value = getattr(source, name, None)
+        if value is not None:
+            return float(value or 0.0)
+    return 0.0
+
+
+def _usage_total(prompt_tokens: int, completion_tokens: int, explicit_total: int) -> int:
+    if explicit_total:
+        return explicit_total
+    if prompt_tokens or completion_tokens:
+        return prompt_tokens + completion_tokens
+    return 0
+
+
+def _ollama_usage(response: object) -> LLMUsage:
+    """Pull token counts from an Ollama chat response, defensively."""
+    prompt_tokens = _int_field(response, "prompt_eval_count", "prompt_tokens")
+    completion_tokens = _int_field(response, "eval_count", "completion_tokens")
+    total_tokens = _usage_total(
+        prompt_tokens, completion_tokens, _int_field(response, "total_tokens")
+    )
+    return LLMUsage(prompt_tokens, completion_tokens, total_tokens)
+
+
+def _openrouter_usage(response: object) -> LLMUsage:
+    """Pull token and provider-reported cost fields from an OpenRouter response."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return LLMUsage()
+    prompt_tokens = _int_field(usage, "prompt_tokens")
+    completion_tokens = _int_field(usage, "completion_tokens")
+    total_tokens = _usage_total(
+        prompt_tokens, completion_tokens, _int_field(usage, "total_tokens")
+    )
+    cost = _float_field(usage, "cost", "total_cost", "estimated_cost")
+    return LLMUsage(prompt_tokens, completion_tokens, total_tokens, cost)
+
+
+async def _openrouter_enriched_usage(client: object, response: object) -> LLMUsage:
+    usage = _openrouter_usage(response)
+    if usage.cost:
+        return usage
+    generation_id = getattr(response, "id", None)
+    generations = getattr(client, "generations", None)
+    get_generation = getattr(generations, "get_generation_async", None)
+    if not generation_id or get_generation is None:
+        return usage
+
+    async def lookup(attempt: int) -> LLMUsage:
+        try:
+            with telemetry.span(
+                "llm.provider.usage",
+                {
+                    "provider": "openrouter",
+                    "llm.generation.id": generation_id,
+                    "llm.attempt": attempt,
+                },
+            ):
+                generation = await get_generation(id=generation_id)
+            data = getattr(generation, "data", None)
+            if data is None:
+                return usage
+            prompt_tokens = usage.prompt_tokens or _int_field(data, "tokens_prompt")
+            completion_tokens = usage.completion_tokens or _int_field(
+                data, "tokens_completion"
+            )
+            total_tokens = _usage_total(prompt_tokens, completion_tokens, usage.total_tokens)
+            cost = _float_field(data, "total_cost", "usage", "upstream_inference_cost")
+            return LLMUsage(prompt_tokens, completion_tokens, total_tokens, cost)
+        except Exception as exc:
+            if attempt >= 2:
+                logger.debug(
+                    "OpenRouter generation usage lookup failed for %s: %s",
+                    generation_id,
+                    exc,
+                )
+                return usage
+            await asyncio.sleep(0.25)
+            return await lookup(attempt + 1)
+
+    return await lookup(0)
+
+
 def _ollama_token_usage(response: object) -> tuple[int, int]:
     """Pull (prompt, completion) token counts from an Ollama chat response, defensively."""
-    if not isinstance(response, MappingABC):
-        return 0, 0
-    return int(response.get("prompt_eval_count", 0) or 0), int(
-        response.get("eval_count", 0) or 0
-    )
+    usage = _ollama_usage(response)
+    return usage.prompt_tokens, usage.completion_tokens
 
 
 def _openrouter_token_usage(response: object) -> tuple[int, int]:
     """Pull (prompt, completion) token counts from an OpenRouter response, defensively."""
-    usage = getattr(response, "usage", None)
-    if usage is None:
-        return 0, 0
-    return int(getattr(usage, "prompt_tokens", 0) or 0), int(
-        getattr(usage, "completion_tokens", 0) or 0
+    usage = _openrouter_usage(response)
+    return usage.prompt_tokens, usage.completion_tokens
+
+
+def _record_llm_usage(provider: str, model: str, usage: LLMUsage) -> None:
+    telemetry.record_llm_usage(
+        provider,
+        model,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        cost=usage.cost,
     )
+    attrs = {
+        "llm.tokens.available": usage.tokens_available,
+        "llm.tokens.prompt": usage.prompt_tokens,
+        "llm.tokens.completion": usage.completion_tokens,
+        "llm.tokens.total": usage.total_tokens,
+        "llm.cost.available": usage.cost_available,
+    }
+    if usage.cost:
+        attrs["llm.cost"] = usage.cost
+    telemetry.set_span_attributes(attrs)
 
 
 def normalize_model(model: str | None) -> str:
@@ -533,13 +667,22 @@ class OllamaAgent:
         del context, provider
         history = self._history.setdefault(character_id, [])
         user_message = {"role": "user", "content": prompt}
-        messages = [*history, user_message]
+        messages = [_character_system_message(), *history, user_message]
+        resolved_model = normalize_model(model or self._model)
+        resolved_tools = tools or tool_schemas()
+        request_attrs = _llm_request_attrs(
+            "character",
+            resolved_model,
+            messages,
+            resolved_tools,
+            system_prompt=CHARACTER_SYSTEM_PROMPT,
+        )
 
         async def request():
             return await self._client.chat(
-                model=normalize_model(model or self._model),
+                model=resolved_model,
                 messages=messages,
-                tools=tools or tool_schemas(),
+                tools=resolved_tools,
             )
 
         response = await _call_provider_with_retries(
@@ -547,19 +690,11 @@ class OllamaAgent:
             request,
             max_retries=self._max_retries,
             retry_delay_seconds=self._retry_delay_seconds,
+            attributes=request_attrs,
         )
         if response is None:
             return None
-        prompt_tokens, completion_tokens = _ollama_token_usage(response)
-        telemetry.record_llm_tokens(
-            "ollama", normalize_model(model or self._model), prompt_tokens, completion_tokens
-        )
-        telemetry.set_span_attributes(
-            {
-                "llm.tokens.prompt": prompt_tokens,
-                "llm.tokens.completion": completion_tokens,
-            }
-        )
+        _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
         message = response["message"]
         tool_calls = message.get("tool_calls") or []
         history.append(user_message)
@@ -623,13 +758,22 @@ class OpenRouterAgent:
         del context, provider
         history = self._history.setdefault(character_id, [])
         user_message = {"role": "user", "content": prompt}
-        messages = [*history, user_message]
+        messages = [_character_system_message(), *history, user_message]
+        resolved_model = normalize_model(model or self._model)
+        resolved_tools = tools or tool_schemas()
+        request_attrs = _llm_request_attrs(
+            "character",
+            resolved_model,
+            messages,
+            resolved_tools,
+            system_prompt=CHARACTER_SYSTEM_PROMPT,
+        )
 
         async def request():
             return await self._client.chat.send_async(
-                model=normalize_model(model or self._model),
+                model=resolved_model,
                 messages=messages,
-                tools=tools or tool_schemas(),
+                tools=resolved_tools,
             )
 
         response = await _call_provider_with_retries(
@@ -637,18 +781,14 @@ class OpenRouterAgent:
             request,
             max_retries=self._max_retries,
             retry_delay_seconds=self._retry_delay_seconds,
+            attributes=request_attrs,
         )
         if response is None:
             return None
-        prompt_tokens, completion_tokens = _openrouter_token_usage(response)
-        telemetry.record_llm_tokens(
-            "openrouter", normalize_model(model or self._model), prompt_tokens, completion_tokens
-        )
-        telemetry.set_span_attributes(
-            {
-                "llm.tokens.prompt": prompt_tokens,
-                "llm.tokens.completion": completion_tokens,
-            }
+        _record_llm_usage(
+            "openrouter",
+            resolved_model,
+            await _openrouter_enriched_usage(self._client, response),
         )
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
@@ -744,12 +884,14 @@ async def _call_provider_with_retries(
     *,
     max_retries: int,
     retry_delay_seconds: float,
+    attributes: MappingABC[str, object] | None = None,
 ):
     last_exc: Exception | None = None
+    base_attrs = {"provider": provider, **dict(attributes or {})}
     for attempt in range(max_retries + 1):
         try:
             with telemetry.span(
-                "llm.provider.attempt", {"provider": provider, "llm.attempt": attempt}
+                "llm.provider.attempt", {**base_attrs, "llm.attempt": attempt}
             ):
                 return await request()
         except Exception as exc:
@@ -789,6 +931,27 @@ def _message_to_history(message) -> dict:
     return result
 
 
+def _character_system_message() -> dict:
+    return {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
+
+
+def _llm_request_attrs(
+    request_kind: str,
+    model: str,
+    messages: list[dict],
+    tools: list[dict] | None,
+    *,
+    system_prompt: str,
+) -> dict[str, object]:
+    return {
+        "model": model,
+        "llm.request.kind": request_kind,
+        "llm.tools.count": len(tools or []),
+        "llm.history.messages": len(messages),
+        "llm.system_prompt_chars": len(system_prompt),
+    }
+
+
 def _tool_call_history(function: MappingABC[str, object]) -> dict:
     name = str(function.get("name", "unknown"))
     arguments = function.get("arguments", {})
@@ -816,6 +979,7 @@ Agent = CharacterAgent
 __all__ = [
     "DEFAULT_MODEL",
     "LEGACY_DEFAULT_MODEL",
+    "CHARACTER_SYSTEM_PROMPT",
     "Agent",
     "BACKGROUND_PROFILES",
     "BackgroundProfile",
