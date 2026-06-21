@@ -120,6 +120,11 @@ def collect_persona_fragments(plugins: Sequence[Plugin]) -> list:
     return list(collect_content_items(plugins, "persona_fragments"))
 
 
+def collect_prompt_enhancers(plugins: Sequence[Plugin]) -> list:
+    """Gather image-prompt enhancers contributed by the given plugins (spec 27)."""
+    return list(collect_content_items(plugins, "prompt_enhancers"))
+
+
 def _instantiate(item):
     """Allow contributions to be classes (instantiated) or ready instances."""
     return item() if isinstance(item, type) else item
@@ -193,6 +198,7 @@ __all__ = [
     "apply_plugin",
     "apply_plugins",
     "collect_persona_fragments",
+    "collect_prompt_enhancers",
     "collect_prompt_fragments",
     "load_and_apply",
     "load_modules",

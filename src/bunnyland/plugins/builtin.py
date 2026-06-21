@@ -59,6 +59,16 @@ from ..core.handlers import (
     WearHandler,
     WriteHandler,
 )
+from ..imagegen.components import (
+    EventImageComponent,
+    ImageRequestComponent,
+    PortraitImageComponent,
+)
+from ..imagegen.events import (
+    ImageGenerationCompletedEvent,
+    ImageGenerationFailedEvent,
+    ImageGenerationStartedEvent,
+)
 from ..mechanics.affect import AffectAggregation, AffectReactor
 from ..mechanics.barbariansim import (
     ArmorComponent,
@@ -1580,6 +1590,7 @@ NUKESIM = "bunnyland.nukesim"
 NEONSIM = "bunnyland.neonsim"
 TOONSIM = "bunnyland.toonsim"
 STORYTELLER = "bunnyland.storyteller"
+IMAGEGEN = "bunnyland.imagegen"
 MCP = "bunnyland.mcp"
 
 
@@ -3488,6 +3499,27 @@ def mcp_plugin() -> Plugin:
     )
 
 
+def imagegen_plugin() -> Plugin:
+    return Plugin(
+        id=IMAGEGEN,
+        name="Image Generation",
+        ecs=EcsContribution(
+            components=(
+                PortraitImageComponent,
+                EventImageComponent,
+                ImageRequestComponent,
+            ),
+        ),
+        commands=CommandContribution(
+            typed_events=(
+                ImageGenerationStartedEvent,
+                ImageGenerationCompletedEvent,
+                ImageGenerationFailedEvent,
+            ),
+        ),
+    )
+
+
 def bunnyland_plugins() -> list[Plugin]:
     return [
         core_verbs_plugin(),
@@ -3511,6 +3543,7 @@ def bunnyland_plugins() -> list[Plugin]:
         nukesim_plugin(),
         neonsim_plugin(),
         storyteller_plugin(),
+        imagegen_plugin(),
         mcp_plugin(),
     ]
 
@@ -3525,6 +3558,7 @@ __all__ = [
     "ENVIRONMENT",
     "GARDENSIM",
     "HISTORY",
+    "IMAGEGEN",
     "LIFESIM",
     "MCP",
     "MECHANISMS",
@@ -3548,6 +3582,7 @@ __all__ = [
     "environment_plugin",
     "gardensim_plugin",
     "history_plugin",
+    "imagegen_plugin",
     "storyteller_plugin",
     "lifesim_plugin",
     "mechanisms_plugin",

@@ -56,6 +56,7 @@ from bunnyland.plugins.builtin import (
     ENVIRONMENT,
     GARDENSIM,
     HISTORY,
+    IMAGEGEN,
     LIFESIM,
     MCP,
     MECHANISMS,
@@ -100,12 +101,13 @@ def test_builtin_plugins_declared():
         NEONSIM,
         TOONSIM,
         STORYTELLER,
+        IMAGEGEN,
     }
 
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 21
+    assert len(select(plugins, None)) == 22
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
 
 

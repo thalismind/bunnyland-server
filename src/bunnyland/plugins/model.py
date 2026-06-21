@@ -68,6 +68,8 @@ class ContentContribution(BaseModel):
     prompt_fragments: tuple[Any, ...] = ()
     #: Stable persona fragment providers for identity, role, bonds, and boundaries.
     persona_fragments: tuple[Any, ...] = ()
+    #: Image-prompt enhancers (``PromptEnhancer`` instances) for image generation (spec 27).
+    prompt_enhancers: tuple[Any, ...] = ()
 
 
 class PolicyContribution(BaseModel):
