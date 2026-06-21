@@ -1350,6 +1350,31 @@ async def test_dispatch_sheet_opens_current_and_named_character():
     assert "Opened sheet" in named.plain
     assert repl.backend.opened[-1] == MARLOW
 
+    direct_id = await repl.dispatch(f"sheet {MARLOW}")
+    assert "Opened sheet" in direct_id.plain
+    assert repl.backend.opened[-1] == MARLOW
+
+
+async def test_dispatch_sheet_handles_me_missing_and_backend_failure():
+    from bunnyland.tui.backend import SheetOpenResult
+
+    class _SheetBackend(RecordingBackend):
+        supports_character_sheets = True
+
+        async def open_character_sheet(self, character_id):
+            return SheetOpenResult(ok=False, reason=f"no browser for {character_id}")
+
+    repl = BunnylandRepl(_SheetBackend(_snapshot()))
+    repl.world = World.parse(_snapshot())
+    repl.character_list = _character_list_from_snapshot(_snapshot())
+    repl.player_id = PLAYER
+
+    me = await repl.dispatch("sheet me")
+    assert f"no browser for {PLAYER}" in me.plain
+
+    missing = await repl.dispatch("profile Nobody")
+    assert "No character sheet target" in missing.plain
+
 
 async def test_dispatch_image_when_supported():
     from bunnyland.tui.backend import ImageRequestResult
@@ -1374,6 +1399,29 @@ async def test_dispatch_image_when_supported():
 
     assert "image requested" in message.plain
     assert repl.backend.requested == [PLAYER]
+
+
+async def test_dispatch_image_requires_player_and_surfaces_failure():
+    from bunnyland.tui.backend import ImageRequestResult
+
+    class _ImageBackend(RecordingBackend):
+        supports_image_requests = True
+
+        async def request_image(self, character_id):
+            return ImageRequestResult(
+                ok=False,
+                status="failed",
+                reason=f"camera offline for {character_id}",
+            )
+
+    repl = BunnylandRepl(_ImageBackend(_snapshot()))
+
+    no_player = await repl.dispatch("img")
+    assert "Pick a player first" in no_player.plain
+
+    repl.player_id = PLAYER
+    failed = await repl.dispatch("image")
+    assert f"camera offline for {PLAYER}" in failed.plain
 
 
 async def test_dispatch_image_unavailable_when_not_supported():

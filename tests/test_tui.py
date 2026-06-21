@@ -401,6 +401,7 @@ def test_character_sheet_url_derives_frontend_from_api_base():
 
     assert frontend_base_for_api("https://play.test/api") == "https://play.test"
     assert frontend_base_for_api("https://play.test/prefix/api/") == "https://play.test/prefix"
+    assert frontend_base_for_api("https://play.test/raw") == "https://play.test/raw"
     assert character_sheet_url("https://play.test/api", PLAYER) == (
         "https://play.test/character-sheet.html?server=https%3A%2F%2Fplay.test%2Fapi"
         "#character:1"
@@ -437,6 +438,35 @@ async def test_remote_backend_reports_browser_open_failure(monkeypatch):
     assert result.ok is False
     assert result.reason == "could not open browser"
     assert "character-sheet.html" in result.url
+
+
+async def test_backend_base_open_character_sheet_default():
+    from bunnyland.tui.backend import Backend
+
+    class _Stub(Backend):
+        async def start(self): ...
+        async def close(self): ...
+        async def fetch_snapshot(self):
+            return {}
+
+        async def submit(self, command):
+            raise NotImplementedError
+
+        async def claim(self, player_id, world):
+            return None
+
+    result = await _Stub().open_character_sheet(PLAYER)
+    assert result.ok is False
+    assert "remote server URL" in result.reason
+
+
+def test_local_backend_image_capability_reflects_service():
+    from bunnyland.tui.backend import LocalBackend
+
+    backend = LocalBackend(autorun=False)
+    assert backend.supports_image_requests is False
+    backend.imagegen = object()
+    assert backend.supports_image_requests is True
 
 
 def test_parse_client_view_supports_filtered_structured_surface():
@@ -2576,6 +2606,32 @@ async def test_app_request_image_when_supported():
         assert backend.image_requests == [PLAYER]
 
 
+async def test_app_request_image_unavailable_and_failure_paths():
+    from textual.widgets import OptionList
+
+    from bunnyland.tui.backend import ImageRequestResult
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app.action_request_image()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("Image requests are not available" in p for p in prompts)
+
+    backend = _ImageBackend(
+        _snapshot(),
+        ImageRequestResult(ok=False, status="unavailable", reason="camera offline"),
+    )
+    app2 = BunnylandTUI(backend)
+    async with app2.run_test() as pilot:
+        await _select_player(app2, pilot)
+        await app2.action_request_image()
+        activity = app2.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("camera offline" in p for p in prompts)
+
+
 async def test_app_open_sheet_without_player():
     from textual.widgets import OptionList
 
@@ -2627,6 +2683,20 @@ async def test_app_open_sheet_current_and_selected_character():
         prompts = _activity_prompts(activity)
         assert any("Opened sheet" in p for p in prompts)
         assert app2.backend.sheet_requests == [MARLOW]
+
+
+async def test_app_open_sheet_surfaces_backend_failure():
+    from textual.widgets import OptionList
+
+    from bunnyland.tui.backend import SheetOpenResult
+
+    app = BunnylandTUI(_SheetBackend(_snapshot(), SheetOpenResult(ok=False, reason="no browser")))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app.action_open_sheet()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("no browser" in p for p in prompts)
 
 
 async def test_app_open_sheet_rejects_non_character_selection():
