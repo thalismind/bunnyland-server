@@ -412,6 +412,27 @@ async def test_dispatch_action_with_string_argument_passes_through():
     assert repl.backend.commands[-1]["payload"] == {"text": "hello there"}
 
 
+async def test_dispatch_action_reports_failed_lazy_claim():
+    # A player is chosen but not yet controlling (control is None), so _act lazily
+    # claims before acting. When that claim fails, dispatch reports it and submits
+    # nothing. This pins the "Could not claim" branch (client.py:236), which was only
+    # covered incidentally by other suites under some test orderings.
+    class NoClaimBackend(RecordingBackend):
+        async def claim(self, player_id, world):
+            return None
+
+    repl = BunnylandRepl(NoClaimBackend(_snapshot()))
+    repl.world = World.parse(_snapshot())
+    repl.character_list = _character_list_from_snapshot(_snapshot())
+    repl.player_id = PLAYER
+    repl.control = None
+
+    message = await repl.dispatch("wait")
+
+    assert "Could not claim" in message.plain
+    assert repl.backend.commands == []
+
+
 async def test_dispatch_action_surfaces_submit_rejection_reason():
     class RejectingBackend(RecordingBackend):
         async def submit(self, command: dict) -> SubmitResult:

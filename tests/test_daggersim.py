@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from conftest import build_scenario
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from bunnyland.core import (
     CommandCost,
@@ -5653,16 +5655,54 @@ def test_daggersim_selected_rumor_skips_already_heard():
     _install(scenario.actor)
     world = scenario.actor.world
     ctx = HandlerContext(world, scenario.actor.epoch)
-    # A reachable rumor already heard by the character is skipped (3609->3604).
+    room = world.get_entity(scenario.room_a)
+    # When every reachable rumor is already heard, auto-select skips them all and
+    # returns None. With nothing to match, every iteration takes the skip back-edge
+    # (3609->3604) regardless of the reachable-set iteration order — this pins the
+    # branch that otherwise only flaked when a heard rumor happened to precede a fresh
+    # one in set order (see PYTHONHASHSEED-sensitive coverage).
     heard = spawn_entity(
         world, [RumorComponent(text="old news", heard_by=(str(scenario.character),))]
     )
-    fresh = spawn_entity(world, [RumorComponent(text="fresh tip")])
-    room = world.get_entity(scenario.room_a)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), heard.id)
+    assert _selected_rumor_id(ctx, scenario.character, None) is None
+
+    # Adding a fresh rumor makes auto-select return it (the match return, 3609->3610).
+    fresh = spawn_entity(world, [RumorComponent(text="fresh tip")])
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), fresh.id)
+    assert _selected_rumor_id(ctx, scenario.character, None) == fresh.id
+
+
+@settings(max_examples=50, deadline=None, derandomize=True)
+@given(heard_flags=st.lists(st.booleans(), min_size=1, max_size=6))
+def test_daggersim_selected_rumor_is_order_independent(heard_flags):
+    # Property: auto-select returns some unheard reachable rumor when one exists, else
+    # None — no matter how many already-heard rumors are present or what order the
+    # reachable set yields them in. The all-heard examples drive the skip back-edge and
+    # the mixed examples drive the match return across many set orderings, generalizing
+    # the single hand-built case above (this is the "seed testing" hypothesis covers).
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room = world.get_entity(scenario.room_a)
+    character_key = str(scenario.character)
+    unheard_ids = set()
+    for index, already_heard in enumerate(heard_flags):
+        heard_by = (character_key,) if already_heard else ()
+        rumor = spawn_entity(
+            world, [RumorComponent(text=f"rumor-{index}", heard_by=heard_by)]
+        )
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), rumor.id)
+        if not already_heard:
+            unheard_ids.add(rumor.id)
+
     selected = _selected_rumor_id(ctx, scenario.character, None)
-    assert selected == fresh.id
+
+    if unheard_ids:
+        assert selected in unheard_ids
+    else:
+        assert selected is None
 
 
 def test_daggersim_use_recall_from_roomless_character():
