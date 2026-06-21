@@ -24,6 +24,7 @@ from bunnyland.imagegen.service import (
     ImageGenService,
     _clear_request,
     _existing_image_url,
+    _first_missing_portrait,
     _first_missing_sprite,
     _seed_for,
 )
@@ -296,6 +297,23 @@ async def test_failed_generation_emits_event_and_clears_request(tmp_path):
     assert not entity.has_component(ImageRequestComponent)
     failed = [e for e in events if isinstance(e, ImageGenerationFailedEvent)]
     assert failed and failed[0].reason == "boom"
+    # The failed character is parked so the backfill won't retry it forever.
+    assert str(scenario.character) in service._failed
+    assert await service.enqueue_one_missing() is None
+    await service.aclose()
+
+
+async def test_backfill_recovers_after_failure_clears(tmp_path):
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path)
+    service._failed.add(str(scenario.character))  # previously failed -> parked
+    assert await service.enqueue_one_missing() is None
+    # A successful generation discards the entity from the failed set.
+    service._failed.discard(str(scenario.character))
+    job = await service.enqueue_one_missing()
+    assert job is not None
+    await service.wait_idle()
+    assert str(scenario.character) not in service._failed
     await service.aclose()
 
 
@@ -470,4 +488,18 @@ def test_first_missing_sprite_skips_filled_sprites():
     entity = scenario.actor.world.get_entity(scenario.character)
     entity.add_component(SpriteImage(url="/media/sprites/done.png"))
     # Only character already has a sprite url, so nothing is missing.
-    assert _first_missing_sprite(scenario.actor) is None
+    assert _first_missing_sprite(scenario.actor, set()) is None
+
+
+def test_first_missing_portrait_skips_failed_set():
+    scenario = build_scenario()
+    # The only character is in the skip set, so the picker finds nothing.
+    assert _first_missing_portrait(scenario.actor, {str(scenario.character)}) is None
+    assert _first_missing_portrait(scenario.actor, set()) is not None
+
+
+def test_first_missing_sprite_skips_failed_set():
+    scenario = build_scenario()
+    entity = scenario.actor.world.get_entity(scenario.character)
+    entity.add_component(SpriteImage())  # empty url -> needs a sprite
+    assert _first_missing_sprite(scenario.actor, {str(scenario.character)}) is None

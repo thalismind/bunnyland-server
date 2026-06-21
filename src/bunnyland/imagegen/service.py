@@ -122,6 +122,9 @@ class ImageGenService:
         self._jobs: dict[str, ImageGenJob] = {}
         self._extras: dict[str, str] = {}
         self._alpha_jobs: set[str] = set()
+        #: Entity ids whose generation failed; the backfill skips them so a broken workflow
+        #: parks failures and keeps making progress instead of retrying one forever.
+        self._failed: set[str] = set()
         self._worker: asyncio.Task | None = None
         self._backfill: asyncio.Task | None = None
         self._busy = False
@@ -203,7 +206,9 @@ class ImageGenService:
         if not self.idle:
             return None
         async with self._actor._lock:
-            target = _first_missing_portrait(self._actor) or _first_missing_sprite(self._actor)
+            target = _first_missing_portrait(
+                self._actor, self._failed
+            ) or _first_missing_sprite(self._actor, self._failed)
         if target is None:
             return None
         entity_id, purpose = target
@@ -289,11 +294,13 @@ class ImageGenService:
             job.status = "succeeded"
             job.url = url
             job.alpha_url = alpha_url
+            self._failed.discard(job.entity_id)
             await self._publish_completed(job, template.name)
         except Exception as exc:  # noqa: BLE001 - any failure becomes a failed job + event
             logger.warning("image generation failed for %s: %s", job.entity_id, exc)
             job.status = "failed"
             job.error = str(exc)
+            self._failed.add(job.entity_id)
             if parsed is not None and self._actor.world.has_entity(parsed):
                 async with self._actor._lock:
                     _clear_request(self._actor.world.get_entity(parsed))
@@ -449,25 +456,30 @@ def _clear_request(entity: Entity) -> None:
         entity.remove_component(ImageRequestComponent)
 
 
-def _first_missing_portrait(actor: WorldActor) -> tuple[str, ImagePurpose] | None:
+def _first_missing_portrait(
+    actor: WorldActor, skip: set[str]
+) -> tuple[str, ImagePurpose] | None:
     for entity in (
         actor.world.query()
         .with_all([CharacterComponent])
         .with_none([PortraitImageComponent, ImageRequestComponent])
         .execute_entities()
     ):
-        return (str(entity.id), ImagePurpose.PORTRAIT)
+        if str(entity.id) not in skip:
+            return (str(entity.id), ImagePurpose.PORTRAIT)
     return None
 
 
-def _first_missing_sprite(actor: WorldActor) -> tuple[str, ImagePurpose] | None:
+def _first_missing_sprite(
+    actor: WorldActor, skip: set[str]
+) -> tuple[str, ImagePurpose] | None:
     for entity in (
         actor.world.query()
         .with_all([CharacterComponent, SpriteImage])
         .with_none([ImageRequestComponent])
         .execute_entities()
     ):
-        if not entity.get_component(SpriteImage).url:
+        if str(entity.id) not in skip and not entity.get_component(SpriteImage).url:
             return (str(entity.id), ImagePurpose.SPRITE)
     return None
 
