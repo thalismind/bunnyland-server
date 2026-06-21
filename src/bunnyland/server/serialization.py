@@ -40,6 +40,7 @@ from ..core.ecs import contents, entity_name, parse_entity_id
 from ..core.edges import Contains, ControlledBy, ExitTo, Holding, Wearing
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
+from ..imagegen.components import PortraitImageComponent
 from ..mechanics.consumables import DrinkableComponent, FoodComponent
 from ..mechanics.needs import FatigueComponent, HungerComponent, ThirstComponent
 from ..mechanics.toonsim import (
@@ -68,6 +69,7 @@ from .models import (
     ClientControllerView,
     ClientEntityView,
     ClientExitView,
+    ClientImageView,
     ClientPointsView,
     ClientRoomView,
     ClientSpriteBoundsView,
@@ -320,6 +322,13 @@ def _sprite_view(entity) -> ClientSpriteView:
     )
 
 
+def _portrait_view(entity) -> ClientImageView:
+    if entity.has_component(PortraitImageComponent):
+        portrait = entity.get_component(PortraitImageComponent)
+        return ClientImageView(url=portrait.url, alpha_url=portrait.alpha_url)
+    return ClientImageView()
+
+
 def _room_projection_entity(entity) -> RoomProjectionEntityView:
     return RoomProjectionEntityView(
         id=str(entity.id),
@@ -327,6 +336,7 @@ def _room_projection_entity(entity) -> RoomProjectionEntityView:
         kind=_entity_kind(entity),
         is_character=entity.has_component(CharacterComponent),
         sprite=_sprite_view(entity),
+        portrait=_portrait_view(entity),
     )
 
 
@@ -689,6 +699,7 @@ def serialize_character_projection(
         character_id=str(character.id),
         character_name=entity_name(character),
         can_perceive=perception.can_perceive,
+        portrait=_portrait_view(character),
         room=room,
         inventory=groups["inventory"],
         points=_points_view(character),

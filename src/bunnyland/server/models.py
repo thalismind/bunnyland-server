@@ -201,12 +201,18 @@ class ClientSpriteView(BaseModel):
     emoji: str = ""
 
 
+class ClientImageView(BaseModel):
+    url: str = ""
+    alpha_url: str = ""
+
+
 class RoomProjectionEntityView(BaseModel):
     id: str
     name: str
     kind: str = "other"
     is_character: bool = False
     sprite: ClientSpriteView = Field(default_factory=ClientSpriteView)
+    portrait: ClientImageView = Field(default_factory=ClientImageView)
 
 
 class RoomProjectionRoomView(BaseModel):
@@ -277,6 +283,7 @@ class CharacterProjectionResponse(BaseModel):
     character_id: str
     character_name: str
     can_perceive: bool
+    portrait: ClientImageView = Field(default_factory=ClientImageView)
     room: ClientRoomView = Field(default_factory=ClientRoomView)
     inventory: list[ClientTargetView] = Field(default_factory=list)
     points: ClientPointsView = Field(default_factory=ClientPointsView)
@@ -607,6 +614,7 @@ __all__ = [
     "ClientControllerView",
     "ClientEntityView",
     "ClientExitView",
+    "ClientImageView",
     "ClientPointsView",
     "ClientRoomView",
     "ClientSpriteBoundsView",

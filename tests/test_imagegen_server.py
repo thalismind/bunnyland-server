@@ -129,6 +129,34 @@ def test_request_event_image_and_dedup(tmp_path):
     world.get_entity(record.id)  # still present
 
 
+# --- projection portrait fields ------------------------------------------------------
+
+
+def test_character_projection_includes_portrait(tmp_path):
+    scenario = build_scenario()
+    entity = scenario.actor.world.get_entity(scenario.character)
+    entity.add_component(
+        PortraitImageComponent(url="/media/portraits/p.png", alpha_url="/media/alpha/p.png")
+    )
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    client = testclient.TestClient(app)
+    body = client.get(f"/world/character/{scenario.character}").json()
+    assert body["portrait"]["url"] == "/media/portraits/p.png"
+    assert body["portrait"]["alpha_url"] == "/media/alpha/p.png"
+
+
+def test_room_projection_entity_portrait_default_empty(tmp_path):
+    scenario = build_scenario()
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    client = testclient.TestClient(app)
+    room = scenario.character_room()
+    body = client.get(f"/world/room/{room}").json()
+    members = body["room"]["entities"]
+    assert members  # the character is in the room
+    assert all("portrait" in member for member in members)
+    assert members[0]["portrait"]["url"] == ""  # no portrait generated yet
+
+
 # --- media route ---------------------------------------------------------------------
 
 
