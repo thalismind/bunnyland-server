@@ -159,6 +159,16 @@ async def test_offline_life_is_bounded_by_max_ticks(tmp_path):
     assert actor.epoch == 3 * 3600
 
 
+async def test_offline_life_returns_zero_for_nonpositive_elapsed():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+
+    # Non-positive elapsed time short-circuits before any tick runs.
+    assert await advance_offline_life(actor, 0.0) == 0
+    assert await advance_offline_life(actor, -5.0) == 0
+    assert actor.epoch == 0
+
+
 async def test_save_file_embeds_ecs_and_provenance(tmp_path):
     actor, _result = await _build_and_play()
     path = tmp_path / "world.json"

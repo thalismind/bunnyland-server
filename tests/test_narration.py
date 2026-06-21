@@ -34,12 +34,23 @@ from bunnyland.core.events import (
     event_base,
 )
 from bunnyland.narration import (
+    DEFAULT_VOICE,
     NarrationProjection,
     NarrationVoiceRegistry,
+    SceneEvent,
     SceneInput,
     check_grounding,
     evaluate_narration_quality,
     render_scene,
+)
+from bunnyland.narration.projection import (
+    _event_rooms,
+    _event_salience,
+    _event_summary,
+    _event_visible_to,
+    _name,
+    _render_perceived_room_summary,
+    _room_title,
 )
 
 
@@ -614,6 +625,288 @@ def test_narration_non_blocking_without_running_loop_uses_fallback_and_capacity(
     assert len(narrations) == 1
     assert narrations[0].epoch == 8
     assert 'You said, "Hello."' in narrations[0].text
+
+
+def test_narration_voice_registry_falls_back_when_no_tag_matches():
+    registry = NarrationVoiceRegistry()
+    assert registry.for_tags(("unknown-style",)) is DEFAULT_VOICE
+
+
+def test_name_and_room_title_fall_back_for_unknown_entities(scenario):
+    world = scenario.actor.world
+    # A spawned entity with no IdentityComponent / RoomComponent resolves to defaults.
+    bare = spawn_entity(world, [CharacterComponent()])
+
+    assert _name(world, None) == "someone"
+    assert _name(world, "entity_99999") == "someone"
+    assert _name(world, str(bare.id)) == "someone"
+    assert _room_title(world, None) == "somewhere"
+    assert _room_title(world, "entity_99999") == "somewhere"
+    assert _room_title(world, str(bare.id)) == "somewhere"
+
+
+def test_event_rooms_resolves_actor_room_and_handles_missing_locations(scenario):
+    world = scenario.actor.world
+    # Actor in a room but the event carries no room_id: room is taken from the actor.
+    via_actor = CommandSubmittedEvent(
+        **event_base(
+            1,
+            actor_id=str(scenario.character),
+            command_id="cmd",
+            command_type="wait",
+        )
+    )
+    assert _event_rooms(world, via_actor) == (str(scenario.room_a),)
+
+    # Actor exists but is in no room: nothing resolves (178->180).
+    roomless = spawn_entity(world, [CharacterComponent()])
+    no_room = CommandSubmittedEvent(
+        **event_base(
+            1,
+            actor_id=str(roomless.id),
+            command_id="cmd2",
+            command_type="wait",
+        )
+    )
+    assert _event_rooms(world, no_room) == ()
+
+    # Actor id does not resolve to an entity (176->180).
+    missing_actor = CommandSubmittedEvent(
+        **event_base(
+            1,
+            actor_id="entity_99999",
+            command_id="cmd3",
+            command_type="wait",
+        )
+    )
+    assert _event_rooms(world, missing_actor) == ()
+
+    # No room_id and no actor_id at all (174->180).
+    anonymous = CommandSubmittedEvent(
+        **event_base(1, actor_id=None, command_id="cmd4", command_type="wait")
+    )
+    assert _event_rooms(world, anonymous) == ()
+
+
+def test_event_salience_defaults_to_zero_for_unscored_events(scenario):
+    event = CommandSubmittedEvent(
+        **event_base(1, actor_id=str(scenario.character), command_id="c", command_type="wait")
+    )
+    assert _event_salience(event) == 0
+
+
+def test_event_summary_describes_other_actors_movement_drop_and_third_party_tell(scenario):
+    world = scenario.actor.world
+    viewer = world.get_entity(scenario.character)
+    hazel = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    clover = spawn_entity(
+        world,
+        [IdentityComponent(name="Clover", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), clover.id
+    )
+    pebble = spawn_entity(world, [IdentityComponent(name="smooth pebble", kind="item")])
+
+    # Another actor leaving the viewer's room (227-230, the "left" branch).
+    left = ActorMovedEvent(
+        **event_base(
+            1,
+            actor_id=str(hazel.id),
+            room_id=str(scenario.room_a),
+            from_room_id=str(scenario.room_a),
+            to_room_id=str(scenario.room_b),
+            direction="north",
+        )
+    )
+    assert _event_summary(world, viewer, left) == "Hazel left north."
+
+    # Another actor arriving from elsewhere (231, the "arrived" branch).
+    arrived = ActorMovedEvent(
+        **event_base(
+            1,
+            actor_id=str(hazel.id),
+            room_id=str(scenario.room_a),
+            from_room_id=str(scenario.room_b),
+            to_room_id=str(scenario.room_a),
+            direction="south",
+        )
+    )
+    assert _event_summary(world, viewer, arrived) == "Hazel arrived."
+
+    # A tell between two other characters, overheard by the viewer (240).
+    told = SpeechToldEvent(
+        **event_base(
+            1,
+            visibility=EventVisibility.DIRECTED,
+            actor_id=str(hazel.id),
+            room_id=str(scenario.room_a),
+            target_ids=(str(clover.id),),
+            overhearer_ids=(str(scenario.character),),
+            text="Meet me later.",
+        )
+    )
+    assert _event_summary(world, viewer, told) == 'Hazel told Clover, "Meet me later."'
+
+    # An item drop by another actor (244).
+    dropped = ItemDroppedEvent(
+        **event_base(
+            1,
+            actor_id=str(hazel.id),
+            room_id=str(scenario.room_a),
+            target_ids=(str(pebble.id),),
+            item_id=str(pebble.id),
+            room_id_dropped=str(scenario.room_a),
+        )
+    )
+    assert _event_summary(world, viewer, dropped) == "Hazel dropped smooth pebble."
+
+
+def test_render_perceived_room_summary_emits_bands_and_skips_empty_sections():
+    with_bands = _render_perceived_room_summary(
+        title="Mosslit Burrow",
+        bands={"light": "dim", "temperature": "warm"},
+        visible_characters=("Hazel",),
+        visible_objects=(),
+        exits=("north",),
+    )
+    assert "It is dim, warm." in with_bands
+    assert "Here: Hazel." in with_bands
+    assert "Exits: north." in with_bands
+    assert "You see:" not in with_bands
+
+    # No bands and no exits: those sections are skipped (371-372 not taken, 377->379).
+    bare = _render_perceived_room_summary(
+        title="Mosslit Burrow",
+        bands={},
+        visible_characters=(),
+        visible_objects=("a pebble",),
+        exits=(),
+    )
+    assert bare == "Mosslit Burrow\nYou see: a pebble."
+
+
+def test_check_grounding_passes_when_scene_has_no_events():
+    scene = SceneInput(
+        viewer_id="entity_1",
+        room_id="entity_2",
+        location_title="Mosslit Burrow",
+        room_summary="",
+    )
+    # No events and no hidden names: grounding has nothing to flag (280->290).
+    assert check_grounding(scene, "anything at all") == ()
+
+
+def test_render_scene_renders_event_summaries_without_clusters():
+    scene = SceneInput(
+        viewer_id="entity_1",
+        room_id="entity_2",
+        location_title="Mosslit Burrow",
+        room_summary="",
+        events=(
+            SceneEvent(
+                event_id="e1",
+                event_type="SpeechSaidEvent",
+                summary='You said, "Hi."',
+                salience=80,
+            ),
+        ),
+    )
+    # clusters is empty, so the elif scene.events branch renders (350).
+    assert render_scene(scene) == 'Mosslit Burrow: You said, "Hi."'
+
+
+def test_compress_visible_events_returns_input_when_only_high_salience_overflow(scenario):
+    world = scenario.actor.world
+    # Three high-salience events over a budget of 2: there is no routine event to drop,
+    # so the compressed bucket is empty and the full tuple is returned uncompressed (451).
+    events = tuple(
+        SpeechSaidEvent(
+            **event_base(
+                1,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+                text=f"line {index}",
+            )
+        )
+        for index in range(3)
+    )
+    projection = NarrationProjection(world, max_scene_events=2)
+    scene = projection.assemble(world.get_entity(scenario.character), events)
+    assert scene.compressed_event_ids == ()
+    assert scene.compression_notes == ()
+    assert len(scene.events) == 3
+
+
+def test_event_visible_to_includes_acting_viewer_outside_event_room(scenario):
+    world = scenario.actor.world
+    viewer = world.get_entity(scenario.character)  # located in room_a
+    # A ROOM-visibility event tagged to room_b: the viewer is not in that room, but is the
+    # actor, so it is still visible to them (line 216).
+    event = SpeechSaidEvent(
+        **event_base(
+            1,
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_b),
+            text="An aside from afar.",
+        )
+    )
+    assert _event_visible_to(world, viewer, event) is True
+
+
+def test_after_tick_skips_viewers_with_no_visible_events(scenario):
+    world = scenario.actor.world
+    # A second character in a different room cannot see Juniper's room-scoped speech, so
+    # after_tick skips them via the `continue` branch (line 617).
+    rowan = spawn_entity(
+        world,
+        [IdentityComponent(name="Rowan", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), rowan.id
+    )
+    projection = NarrationProjection(world)
+    projection._on_event(
+        SpeechSaidEvent(
+            **event_base(
+                1,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(scenario.character),
+                room_id=str(scenario.room_a),
+                text="Only here.",
+            )
+        )
+    )
+
+    projection.after_tick(scenario.actor)
+
+    assert projection.latest(str(scenario.character)) is not None
+    assert projection.latest(str(rowan.id)) is None
+
+
+def test_invisible_names_skips_entities_without_a_name(scenario):
+    world = scenario.actor.world
+    # An out-of-room entity carrying an IdentityComponent with an empty name is skipped
+    # by the `if name:` guard (687->683).
+    spawn_entity(world, [IdentityComponent(name="", kind="item")])
+    named = spawn_entity(world, [IdentityComponent(name="Distant Bell", kind="item")])
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), named.id
+    )
+
+    projection = NarrationProjection(world)
+    scene = projection.assemble(world.get_entity(scenario.character), ())
+
+    assert "Distant Bell" in scene.invisible_names
+    assert "" not in scene.invisible_names
 
 
 async def test_narration_after_tick_records_presentation_without_mutating_world(scenario):

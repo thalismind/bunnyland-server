@@ -47,7 +47,8 @@ def format_generator_lines(generators: Iterable[WorldGenerator]) -> list[str]:
             if generator.description:
                 lines.append(f"      {generator.description}")
     if seedless:
-        if lines:
-            lines.append("")
+        # ``seedless`` is only set while appending generator lines, so ``lines``
+        # is always non-empty here; the blank separator is unconditional.
+        lines.append("")
         lines.append("* ignores --seed")
     return lines

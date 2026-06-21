@@ -20,7 +20,10 @@ from bunnyland.core.events import CommandRejectedEvent, SpeechToldEvent
 from bunnyland.mechanics.policy import (
     BoundaryTag,
     CharacterBoundaryComponent,
+    WorldPolicyComponent,
+    boundary_fragments,
     evaluate,
+    flirt_classifier,
     install_policy,
 )
 
@@ -89,6 +92,106 @@ def test_unenabled_tag_with_no_opt_in_is_denied():
     install_policy(actor)
     a, b = _two_characters(actor)
     assert evaluate(actor.world, BoundaryTag.PVP, [a, b])[0] is False
+
+
+def test_unknown_participant_id_is_treated_as_unconsented():
+    actor = WorldActor()
+    install_policy(actor, enabled=frozenset())  # nothing globally enabled
+    # an unparseable / missing id yields (raw_id, None) so it cannot opt in (line 70)
+    assert evaluate(actor.world, FLIRTING, ["not-an-id"])[0] is False
+
+
+def test_evaluate_without_any_world_policy_denies_unenabled_tag():
+    actor = WorldActor()  # no install_policy -> no WorldPolicyComponent (line 64)
+    a = spawn_entity(actor.world, [IdentityComponent(name="A", kind="character")])
+    assert evaluate(actor.world, FLIRTING, [str(a.id)])[0] is False
+
+
+def test_boundary_fragments_empty_when_nothing_configured():
+    actor = WorldActor()
+    install_policy(actor, enabled=frozenset(), disabled=frozenset())
+    plain = spawn_entity(actor.world, [IdentityComponent(name="P", kind="character")])
+    assert boundary_fragments(actor.world, plain) == []
+
+
+def test_boundary_fragments_with_empty_character_boundary_adds_no_lines():
+    actor = WorldActor()
+    install_policy(actor, enabled=frozenset(), disabled=frozenset())
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="C", kind="character"),
+            CharacterBoundaryComponent(),  # neither allowed nor denied (120->123, 123->126)
+        ],
+    )
+    assert boundary_fragments(actor.world, character) == []
+
+
+def test_flirt_classifier_ignores_non_speech_commands():
+    command = build_submitted_command(
+        character_id="entity_1",
+        controller_id="entity_1",
+        controller_generation=0,
+        command_type="move",  # not say/tell (line 132)
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"intent": "flirt"},
+    )
+    assert flirt_classifier(command) is None
+
+
+def test_boundary_fragments_describe_world_and_character_boundaries():
+    actor = WorldActor()
+    install_policy(
+        actor,
+        enabled=frozenset({FLIRTING}),
+        disabled=frozenset({BoundaryTag.PVP}),
+    )
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="C", kind="character"),
+            CharacterBoundaryComponent(
+                allowed=frozenset({BoundaryTag.ROMANCE}),
+                denied=frozenset({BoundaryTag.THEFT}),
+            ),
+        ],
+    )
+    lines = boundary_fragments(actor.world, character)
+    assert "World boundaries enabled: flirting." in lines
+    assert "World boundaries disabled: pvp." in lines  # 116-117
+    assert "Your allowed boundaries: romance." in lines  # 121-122
+    assert "Your denied boundaries: theft." in lines  # 123->126
+
+
+def test_flirt_classifier_without_target_uses_speaker_only():
+    actor = WorldActor()
+    speaker = spawn_entity(actor.world, [IdentityComponent(name="S", kind="character")])
+    command = build_submitted_command(
+        character_id=str(speaker.id),
+        controller_id=str(speaker.id),
+        controller_generation=0,
+        command_type="say",
+        cost=CommandCost(action=1),
+        lane=Lane.WORLD,
+        payload={"intent": "flirt"},  # no target_id (137->139)
+    )
+    tag, participants = flirt_classifier(command)
+    assert tag is FLIRTING
+    assert participants == [str(speaker.id)]
+
+
+def test_install_policy_keeps_existing_world_policy():
+    actor = WorldActor()
+    target = spawn_entity(
+        actor.world,
+        [WorldPolicyComponent(enabled=frozenset({BoundaryTag.ROMANCE}))],
+    )
+    install_policy(actor, enabled=frozenset({FLIRTING}))  # 173->178: skip spawning
+    # the pre-existing policy is left untouched
+    assert target.get_component(WorldPolicyComponent).enabled == frozenset(
+        {BoundaryTag.ROMANCE}
+    )
 
 
 # -- gate in the command pipeline ------------------------------------------------------

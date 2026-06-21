@@ -450,18 +450,14 @@ def _target_for_perceived(entity: PerceivedEntity) -> ClientTargetView:
 def _inventory_targets(actor: WorldActor, character) -> list[ClientTargetView]:
     seen: set[str] = set()
     targets: list[ClientTargetView] = []
+    # ``contents`` returns each Contains target once (the ECS keys relationships by target and
+    # drops them when the target is removed), so no dangling/duplicate guard is needed here.
     for item_id in contents(character):
-        if not actor.world.has_entity(item_id):
-            continue
         item_key = str(item_id)
-        if item_key in seen:
-            continue
         seen.add(item_key)
         targets.append(_target_for_entity(actor.world.get_entity(item_id)))
     for edge_type in (Holding, Wearing):
         for _edge, item_id in character.get_relationships(edge_type):
-            if not actor.world.has_entity(item_id):
-                continue
             item_key = str(item_id)
             if item_key in seen:
                 continue
@@ -515,10 +511,9 @@ def _target_groups(
     carried_by_id = {target.id: target for target in inventory}
     room_items: list[ClientTargetView] = []
     for target in visible:
-        parsed = parse_entity_id(target.id)
-        if parsed is None or not actor.world.has_entity(parsed):
-            continue
-        entity = actor.world.get_entity(parsed)
+        # Perceived ids come from the perception projection, so they always resolve to a
+        # live entity; only the kind/portable test gates whether it is a room item.
+        entity = actor.world.get_entity(parse_entity_id(target.id))
         if target.kind != "character" and entity.has_component(PortableComponent):
             room_items.append(target)
     characters = [target for target in visible if target.kind == "character"]

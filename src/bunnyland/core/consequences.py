@@ -211,8 +211,8 @@ class InjuryConsequence:
         pain_total = 0.0
         bleeding_rate = 0.0
         for _edge, injury_id in character.get_relationships(HasInjury):
-            if not world.has_entity(injury_id):
-                continue
+            # No dangling-entity guard needed: removing an injury entity cascades
+            # and drops its HasInjury edge, so every related id resolves here.
             injury_entity = world.get_entity(injury_id)
             if not injury_entity.has_component(InjuryComponent):
                 continue

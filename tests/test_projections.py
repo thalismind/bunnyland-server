@@ -456,6 +456,51 @@ def test_recent_context_records_inventory_and_lifecycle_fallbacks():
     assert recent.recent(scenario.room_a) == ("Juniper collapsed.", "someone died.")
 
 
+def test_recent_context_handles_unnamed_actors_and_roomless_lifecycle_events():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    recent = RecentContextProjection(world)
+
+    # An entity that exists but has no IdentityComponent falls back to "someone" (65->67).
+    nameless = spawn_entity(world, [CharacterComponent()])
+
+    # A died event with no room and an actor that cannot be located resolves to no room,
+    # so _append is called with None and stores nothing (76, 98->exit).
+    recent._on_event(
+        CharacterDiedEvent(
+            **event_base(event_id="lost", actor_id=str(nameless.id), room_id=None),
+            cause="test",
+        )
+    )
+    # A downed event with a well-formed but non-existent actor id makes _room_of_actor
+    # return None (76), so _append is skipped (70->exit).
+    recent._on_event(
+        CharacterDownedEvent(
+            **event_base(event_id="lost-downed", actor_id="entity_999", room_id=None),
+            cause="test",
+        )
+    )
+
+    # An event type the projection does not special-case falls off the dispatch chain
+    # without appending anything (98->exit).
+    from bunnyland.core.events import SpeechToldEvent
+
+    recent._on_event(
+        SpeechToldEvent(
+            event_id="aside",
+            world_epoch=0,
+            created_at=datetime.now(UTC),
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            target_ids=(str(nameless.id),),
+            text="ignored",
+        )
+    )
+
+    assert recent.recent(str(scenario.room_a)) == ()
+    assert recent.recent(str(scenario.room_b)) == ()
+
+
 def test_recent_context_records_eating_and_drinking():
     from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
 

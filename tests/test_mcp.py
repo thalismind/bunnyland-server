@@ -887,6 +887,394 @@ async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
     assert isinstance(lane_error.value.__cause__, ValueError)
 
 
+def test_mcp_release_to_llm_clears_resuspended_character(monkeypatch):
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
+    # Claiming clears suspension; re-add it so the LLM release path removes it (line 425).
+    character.add_component(SuspendedComponent(reason="napping"))
+
+    released = release_mcp_controller(actor, agent_id="agent-a", mode="llm")
+
+    assert released["controller_kind"] == "llm"
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_mcp_event_bridge_skips_events_from_other_actors(scenario):
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    assign_mcp_controller(scenario.actor, agent_id="agent-a", character_name="Juniper")
+    bridge = mcp_server.MCPEventBridge(scenario.actor)
+    try:
+        # An event by another actor must be skipped (190->188 continue path).
+        await bridge.record(
+            ActorMovedEvent(
+                event_id="other-move",
+                world_epoch=0,
+                created_at=datetime.now(UTC),
+                actor_id=str(other.id),
+                from_room_id=str(scenario.room_a),
+                to_room_id=str(scenario.room_b),
+            )
+        )
+        await bridge.record(
+            ActorMovedEvent(
+                event_id="own-move",
+                world_epoch=0,
+                created_at=datetime.now(UTC),
+                actor_id=str(scenario.character),
+                from_room_id=str(scenario.room_a),
+                to_room_id=str(scenario.room_b),
+            )
+        )
+
+        agent_events = bridge.recent_for_agent("agent-a")
+        assert len(agent_events) == 1
+        assert agent_events[0]["data"]["event"]["event_id"] == "own-move"
+    finally:
+        bridge.close()
+
+
+def test_mcp_event_bridge_unsubscribe_keeps_uri_with_remaining_sessions(scenario):
+    bridge = mcp_server.MCPEventBridge(scenario.actor)
+    try:
+        first = object()
+        second = object()
+        bridge.subscribe(EVENTS_RESOURCE_URI, first)
+        bridge.subscribe(EVENTS_RESOURCE_URI, second)
+
+        # Removing one session leaves the other, so the uri is not popped (243->exit).
+        bridge.unsubscribe(EVENTS_RESOURCE_URI, first)
+        assert EVENTS_RESOURCE_URI in bridge._subscriptions
+
+        # Unsubscribing an unknown uri is a no-op.
+        bridge.unsubscribe("bunnyland://agents/none/events", first)
+    finally:
+        bridge.close()
+
+
+def _install_fake_fastmcp(monkeypatch, *, registered_tools, low_server, get_context=None):
+    class FakeFastMCP:
+        def __init__(self, *_args, **_kwargs):
+            self._mcp_server = low_server
+
+        def tool(self):
+            def decorate(func):
+                registered_tools[func.__name__] = func
+                return func
+
+            return decorate
+
+        def resource(self, _uri, **_kwargs):
+            def decorate(func):
+                return func
+
+            return decorate
+
+        def get_context(self):
+            if get_context is None:
+                raise LookupError("no context")
+            return get_context()
+
+        def streamable_http_app(self):
+            return SimpleNamespace()
+
+    mcp_module = ModuleType("mcp")
+    server_module = ModuleType("mcp.server")
+    fastmcp_module = ModuleType("mcp.server.fastmcp")
+    exceptions_module = ModuleType("mcp.server.fastmcp.exceptions")
+    fastmcp_module.FastMCP = FakeFastMCP
+    exceptions_module.ToolError = RuntimeError
+    monkeypatch.setitem(sys.modules, "mcp", mcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.server", server_module)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
+
+
+async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(
+    monkeypatch, scenario
+):
+    from bunnyland.server.models import ControllerDefinitionListResponse
+
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            # resources is None so the capabilities patch takes the 575->578 skip branch.
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(resources=None)
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    low_server = FakeLowServer()
+    _install_fake_fastmcp(
+        monkeypatch, registered_tools=registered_tools, low_server=low_server
+    )
+
+    async def boom(_request):
+        raise ValueError("generator unavailable")
+
+    async def boom_status():
+        raise ValueError("status unavailable")
+
+    register_calls = {}
+
+    async def register_script(spec):
+        register_calls["script"] = spec
+        return ControllerDefinitionListResponse(scripts=[spec.name])
+
+    async def register_behavior(spec):
+        register_calls["behavior"] = spec
+        return ControllerDefinitionListResponse(behaviors=[spec.name])
+
+    def list_controller_definitions():
+        return ControllerDefinitionListResponse(scripts=["existing"])
+
+    monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "secret")
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        admin_token="secret",
+        patch_world=boom,
+        generate_world=boom,
+        generation_status=boom_status,
+        generate_room=boom,
+        generate_character=boom,
+        generate_item=boom,
+        generate_event=boom,
+        register_script=register_script,
+        register_behavior=register_behavior,
+        list_controller_definitions=list_controller_definitions,
+    )
+
+    # Calling get_capabilities exercises the resources-is-None skip branch (575->578).
+    assert low_server.get_capabilities(None, None).resources is None
+
+    # Each admin generator wraps its underlying ValueError in a ToolError.
+    for tool_name, kwargs in [
+        ("patch_world_admin", {"operations": []}),
+        ("generate_world_admin", {}),
+        ("generate_room_patch_admin", {"door_entity_id": "door-1"}),
+        ("generate_character_patch_admin", {"room_entity_id": str(scenario.room_a)}),
+        ("generate_item_patch_admin", {"container_entity_id": str(scenario.room_a)}),
+        ("generate_event_patch_admin", {"room_entity_id": str(scenario.room_a)}),
+    ]:
+        with pytest.raises(RuntimeError, match="generator unavailable"):
+            await registered_tools[tool_name](admin_token="secret", **kwargs)
+
+    # Controller-definition tools succeed and a registration failure wraps as ToolError.
+    listed = registered_tools["list_controller_definitions_admin"](admin_token="secret")
+    assert listed["scripts"] == ["existing"]
+
+    script = await registered_tools["register_script_admin"](
+        admin_token="secret",
+        name="patrol",
+        calls=[{"name": "wait", "arguments": {}}],
+    )
+    assert script["scripts"] == ["patrol"]
+
+    behavior = await registered_tools["register_behavior_admin"](
+        admin_token="secret",
+        name="guard",
+        root={"kind": "action", "ref": "wait"},
+    )
+    assert behavior["behaviors"] == ["guard"]
+
+    with pytest.raises(RuntimeError):
+        await registered_tools["register_script_admin"](
+            admin_token="secret",
+            name="bad",
+            calls="not-a-list",
+        )
+
+    # An invalid behavior tree root fails validation and wraps as ToolError (1081-1082).
+    with pytest.raises(RuntimeError):
+        await registered_tools["register_behavior_admin"](
+            admin_token="secret",
+            name="bad",
+            root="not-a-node",
+        )
+
+    with pytest.raises(RuntimeError, match="not controlling"):
+        await registered_tools["character_commands"](agent_id="missing")
+
+
+async def test_mcp_controller_definition_tools_report_when_unconfigured(monkeypatch, scenario):
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(
+                resources=SimpleNamespace(subscribe=False, listChanged=False)
+            )
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    _install_fake_fastmcp(
+        monkeypatch, registered_tools=registered_tools, low_server=FakeLowServer()
+    )
+
+    async def boom(_request):
+        raise AssertionError("unused")
+
+    monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "secret")
+    # register_script / register_behavior / list_controller_definitions default to None.
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        admin_token="secret",
+        patch_world=boom,
+        generate_world=boom,
+        generation_status=boom,
+        generate_room=boom,
+        generate_character=boom,
+        generate_item=boom,
+        generate_event=boom,
+    )
+
+    with pytest.raises(RuntimeError, match="not configured"):
+        registered_tools["list_controller_definitions_admin"](admin_token="secret")
+    with pytest.raises(RuntimeError, match="not configured"):
+        await registered_tools["register_script_admin"](
+            admin_token="secret", name="x", calls=[]
+        )
+    with pytest.raises(RuntimeError, match="not configured"):
+        await registered_tools["register_behavior_admin"](
+            admin_token="secret", name="x", root={"kind": "action", "ref": "wait"}
+        )
+
+
+async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenario):
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(
+                resources=SimpleNamespace(subscribe=False, listChanged=False)
+            )
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    _install_fake_fastmcp(
+        monkeypatch, registered_tools=registered_tools, low_server=FakeLowServer()
+    )
+
+    async def boom(_request):
+        raise AssertionError("unused")
+
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        admin_token="secret",
+        patch_world=boom,
+        generate_world=boom,
+        generation_status=boom,
+        generate_room=boom,
+        generate_character=boom,
+        generate_item=boom,
+        generate_event=boom,
+    )
+
+    await registered_tools["claim_character"](agent_id="agent-a", character_name="Juniper")
+
+    # An unaffordable command under DENY is rejected synchronously (line 977 path) instead
+    # of being queued.
+    result = await registered_tools["send_command"](
+        agent_id="agent-a",
+        command_type="move",
+        payload={"direction": "north"},
+        cost_action=100,
+        on_insufficient_points="deny",
+    )
+
+    assert result["ok"] is False
+    assert result["queued"] is False
+    assert result["reason"]
+
+    # A valid move queues successfully (the accepted branch).
+    queued = await registered_tools["send_command"](
+        agent_id="agent-a",
+        command_type="move",
+        payload={"direction": "north"},
+    )
+    assert queued["ok"] is True
+    assert queued["queued"] is True
+
+
+async def test_mcp_admin_header_fallback_when_request_is_absent(monkeypatch, scenario):
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(
+                resources=SimpleNamespace(subscribe=False, listChanged=False)
+            )
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    def context_with_no_request():
+        return SimpleNamespace(
+            request_context=SimpleNamespace(request=None), session=object()
+        )
+
+    _install_fake_fastmcp(
+        monkeypatch,
+        registered_tools=registered_tools,
+        low_server=FakeLowServer(),
+        get_context=context_with_no_request,
+    )
+
+    async def boom(_request):
+        raise AssertionError("unused")
+
+    monkeypatch.delenv(mcp_server.ADMIN_TOKEN_ENV, raising=False)
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        admin_token="secret",
+        patch_world=boom,
+        generate_world=boom,
+        generation_status=boom,
+        generate_room=boom,
+        generate_character=boom,
+        generate_item=boom,
+        generate_event=boom,
+    )
+
+    # supplied=None forces the header fallback, whose request is None (line 600 return None);
+    # with no header the configured token still rejects the call.
+    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+        await registered_tools["patch_world_admin"](operations=[])
+
+
 async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(scenario):
     import uvicorn
     from mcp import ClientSession

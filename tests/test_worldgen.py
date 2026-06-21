@@ -369,6 +369,32 @@ def test_repair_world_proposal_leaves_empty_proposals_unchanged():
     assert repair_world_proposal(proposal) is proposal
 
 
+def test_repair_world_proposal_keeps_valid_references_without_warning(caplog):
+    proposal = WorldProposal.model_validate(
+        {
+            "seed": "valid",
+            "rooms": [
+                {"key": "meadow", "title": "Meadow"},
+                {"key": "burrow", "title": "Burrow"},
+            ],
+            "exits": [{"from_key": "meadow", "direction": "east", "to_key": "burrow"}],
+            "objects": [
+                {"key": "apple", "room_key": "meadow", "name": "an apple", "kind": "food"}
+            ],
+            "characters": [{"key": "helper", "name": "Helper", "room_key": "burrow"}],
+        }
+    )
+
+    with caplog.at_level("WARNING"):
+        repaired = repair_world_proposal(proposal)
+
+    # Nothing was repaired: every reference is already valid, so no warning is logged.
+    assert repaired.objects[0].room_key == "meadow"
+    assert repaired.characters[0].room_key == "burrow"
+    assert [exit_.to_key for exit_ in repaired.exits] == ["burrow"]
+    assert "repaired live world proposal references" not in caplog.text
+
+
 def test_generation_options_default_to_pro_worldgen_model():
     assert GenOptions(llm=True).model == "deepseek-v4-pro"
     assert GenOptions(llm=True).provider == "ollama"

@@ -75,6 +75,35 @@ def test_persona_component_fragments_support_perspective_styles():
     )
 
 
+def test_persona_component_fragments_skip_empty_fields():
+    world = WorldActor().world
+    character = spawn_entity(world, [])
+    ctx = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=character, perspective="first-person"),
+    )
+
+    # voice empty / role set -> only role line (30->32, 32->34)
+    assert PersonaProfileComponent(role="scout").prompt_fragments(ctx) == (
+        "Your current role: scout.",
+    )
+    # voice set / role empty -> only voice line
+    assert PersonaProfileComponent(voice="gruff").prompt_fragments(ctx) == (
+        "Your voice: gruff.",
+    )
+    # empty traits -> no fragments (45)
+    assert TraitSetComponent().prompt_fragments(ctx) == ()
+    # dislikes only, no likes (65->74)
+    assert PreferenceComponent(dislikes=("noise",)).prompt_fragments(ctx) == (
+        "I dislike noise.",
+    )
+    # likes only, no dislikes (74->83)
+    assert PreferenceComponent(likes=("sun",)).prompt_fragments(ctx) == ("I like sun.",)
+    # empty goals -> no fragments (94)
+    assert GoalComponent().prompt_fragments(ctx) == ()
+
+
 def test_persona_component_fragments_are_self_view_only():
     world = WorldActor().world
     viewer = spawn_entity(world, [])

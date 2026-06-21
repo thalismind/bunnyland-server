@@ -41,7 +41,11 @@ from bunnyland.core.claim_timeout import (
     record_claim_activity,
 )
 from bunnyland.core.controllers import (
+    BehaviorControllerComponent,
+    DiscordControllerComponent,
     LLMControllerComponent,
+    MCPControllerComponent,
+    ScriptedControllerComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
 )
@@ -222,6 +226,174 @@ async def test_claim_timeout_can_fall_back_to_llm():
     assert not character.has_component(SuspendedComponent)
     assert llm.model == "claim-model"
     assert llm.provider == "openrouter"
+
+
+async def test_claim_timeout_llm_fallback_clears_suspended_component():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+    # Character is already suspended when the LLM fallback fires (line 180 path).
+    character.add_component(SuspendedComponent(reason="afk"))
+    apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller="llm",
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(default_timeout_seconds=1800, now=lambda: 301)
+    )
+
+    await scenario.actor.tick(0)
+
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_claim_timeout_noops_without_controller_kinds():
+    scenario = build_scenario()
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+    apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller="suspend",
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(controller_kinds=(), now=lambda: 999999)
+    )
+
+    await scenario.actor.tick(0)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_claim_timeout_skips_dangling_unmatched_and_untracked_controllers(monkeypatch):
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    # A web controller of the wrong kind for a discord-only timeout (kind mismatch path).
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+
+    # Make the controller look dangling: has_entity reports False for the edge target
+    # while the relationship still exists (line 153 continue path).
+    original_has_entity = scenario.actor.world.has_entity
+
+    def has_entity(entity_id):
+        if entity_id == web.id:
+            return False
+        return original_has_entity(entity_id)
+
+    monkeypatch.setattr(scenario.actor.world, "has_entity", has_entity)
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(controller_kinds=("discord",), now=lambda: 999999)
+    )
+
+    await scenario.actor.tick(0)
+
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_claim_timeout_skips_controller_of_unconfigured_kind():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+    apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller="suspend",
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    # The web controller's kind is not in the configured discord-only set (line 157 skip).
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(controller_kinds=("discord",), now=lambda: 999999)
+    )
+
+    await scenario.actor.tick(0)
+
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_claim_timeout_skips_matching_controller_without_claim_component():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+    # Matching kind but no ClaimTimeoutComponent -> skipped (line 159).
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(controller_kinds=("web",), now=lambda: 999999)
+    )
+
+    await scenario.actor.tick(0)
+
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_claim_timeout_leaves_active_controller_untouched():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+    apply_claim_timeout_settings(
+        web,
+        now_unix=300,
+        fallback_controller="suspend",
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    # now - last_active = 0 < timeout, so the claim has not expired (163->151 branch).
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(default_timeout_seconds=1800, now=lambda: 300)
+    )
+
+    await scenario.actor.tick(0)
+
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_action_focus_regen_handles_focus_only_entity():
+    scenario = build_scenario()
+    # Entity with only FocusPoints exercises the 96->103 skip branch.
+    focus_only = spawn_entity(
+        scenario.actor.world,
+        [FocusPointsComponent(current=0.0, maximum=3.0, regen_per_hour=0.5)],
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    assert focus_only.get_component(FocusPointsComponent).current == pytest.approx(0.5)
+
+
+def test_claim_timeout_controller_kind_classifies_every_controller():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    classify = ClaimTimeoutSystem._controller_kind
+
+    discord = spawn_entity(
+        world, [DiscordControllerComponent(discord_user_id=1, default_channel_id=2)]
+    )
+    web = spawn_entity(world, [WebControllerComponent(client_id="c")])
+    mcp = spawn_entity(world, [MCPControllerComponent(agent_id="a")])
+    llm = spawn_entity(world, [LLMControllerComponent(profile_name="default", model="m")])
+    behavior = spawn_entity(world, [BehaviorControllerComponent(behavior_name="b")])
+    scripted = spawn_entity(world, [ScriptedControllerComponent(script_name="s")])
+    suspended = spawn_entity(world, [SuspendedControllerComponent(reason="r")])
+    unknown = spawn_entity(world)
+
+    assert classify(discord) == "discord"
+    assert classify(web) == "web"
+    assert classify(mcp) == "mcp"
+    assert classify(llm) == "llm"
+    assert classify(behavior) == "behavioral"
+    assert classify(scripted) == "scripted"
+    assert classify(suspended) == "suspended"
+    assert classify(unknown) == "unknown"
 
 
 async def test_claim_timeout_uses_player_timeout_before_server_default():

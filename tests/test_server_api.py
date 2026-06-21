@@ -54,6 +54,7 @@ from bunnyland.core.events import (
 from bunnyland.core.handlers import ok
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
+from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
 from bunnyland.mechanics.lifesim import SkillSetComponent
 from bunnyland.mechanics.storyteller import IncidentComponent
 from bunnyland.mechanics.toonsim import (
@@ -100,7 +101,7 @@ from bunnyland.server.models import (
 from bunnyland.server.patches import WorldPatchError, apply_world_patch
 from bunnyland.server.runtime import run_loop_with_api
 from bunnyland.server.schema import _type_schema, world_schema
-from bunnyland.server.serialization import jsonable
+from bunnyland.server.serialization import jsonable, serialize_world_overview
 from bunnyland.server.worldgen import (
     _room_description,
     build_character_generation_response,
@@ -666,6 +667,153 @@ def test_event_stream_broadcast_drops_oldest_when_queue_is_full(scenario):
         assert subscription.queue.empty()
     finally:
         subscription.close()
+
+
+def test_event_stream_broadcast_tolerates_concurrently_drained_full_queue(scenario):
+    # Defensive path: ``full()`` reports True but a concurrent consumer has already drained
+    # the queue, so ``get_nowait()`` raises QueueEmpty. The broadcast must swallow it and
+    # still enqueue the new message instead of crashing the fan-out loop.
+    class RacyQueue(asyncio.Queue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.delivered: list[dict] = []
+
+        def full(self) -> bool:  # type: ignore[override]
+            return True
+
+        def get_nowait(self):  # type: ignore[override]
+            raise asyncio.QueueEmpty
+
+        def put_nowait(self, item) -> None:  # type: ignore[override]
+            self.delivered.append(item)
+
+    racy = RacyQueue()
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe()
+    object.__setattr__(subscription, "queue", racy)
+    stream._subscribers = {subscription}
+    try:
+        stream.broadcast({"type": "racy"})
+        assert racy.delivered == [{"type": "racy"}]
+    finally:
+        stream._subscribers = set()
+
+
+def test_character_projection_skips_dangling_inventory_and_duplicate_holds(scenario):
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    held = spawn_entity(world, [IdentityComponent(name="lamp", kind="item"), PortableComponent()])
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), held.id)
+    # Holding the same item again must be de-duplicated against the Contains listing.
+    character.add_relationship(Holding(), held.id)
+
+    # A dangling inventory edge to a removed entity must be skipped, not crash.
+    ghost = spawn_entity(world, [PortableComponent()])
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), ghost.id)
+    worn_ghost = spawn_entity(world, [IdentityComponent(name="rag", kind="item")])
+    character.add_relationship(Wearing(), worn_ghost.id)
+    world.remove(ghost.id)
+    world.remove(worn_ghost.id)
+
+    view = serialize_character_projection(scenario.actor, str(scenario.character)).model_dump(
+        mode="json"
+    )
+
+    inventory_ids = [target["id"] for target in view["inventory"]]
+    assert inventory_ids.count(str(held.id)) == 1
+    assert str(ghost.id) not in inventory_ids
+    assert str(worn_ghost.id) not in inventory_ids
+
+
+def test_room_projection_and_overview_skip_hidden_and_dangling_contents(scenario):
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+
+    hidden = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="ghost", kind="item"),
+            StealthComponent(hiding=True, visibility_level=0.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), hidden.id)
+
+    item = spawn_entity(world, [IdentityComponent(name="pebble", kind="item"), PortableComponent()])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), item.id)
+
+    # A visible, non-portable, non-character fixture: counted as neither occupant nor item.
+    fixture = spawn_entity(world, [IdentityComponent(name="statue", kind="decor")])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), fixture.id)
+
+    invisible = spawn_entity(world, [IdentityComponent(name="mote", kind="item")])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT, visible=False), invisible.id)
+
+    dangling = spawn_entity(world, [IdentityComponent(name="dust", kind="item")])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), dangling.id)
+    world.remove(dangling.id)
+
+    room_view = serialize_room_projection(scenario.actor, str(scenario.room_a)).model_dump(
+        mode="json"
+    )
+    listed = {entity["id"] for entity in room_view["room"]["entities"]}
+    assert str(item.id) in listed
+    assert str(hidden.id) not in listed
+    assert str(invisible.id) not in listed
+    assert str(dangling.id) not in listed
+
+    overview = serialize_world_overview(scenario.actor).model_dump(mode="json")
+    room_overview = next(r for r in overview["rooms"] if r["id"] == str(scenario.room_a))
+    # Character (occupant) + pebble (portable item); hidden/invisible/dangling all excluded.
+    assert room_overview["item_count"] == 1
+    assert room_overview["occupant_count"] == 1
+
+
+def test_target_groups_separate_perceived_characters_from_room_items(scenario):
+    # A perceived character must land in "characters" (not roomItems); a perceived portable
+    # item must land in roomItems. This exercises the character/non-character split in
+    # _target_groups (the kind=="character" branch that skips the room-items append).
+    world = scenario.actor.world
+    other = spawn_entity(
+        world, [CharacterComponent(), IdentityComponent(name="Bramble", kind="character")]
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
+    )
+    stone = spawn_entity(
+        world, [IdentityComponent(name="rock", kind="item"), PortableComponent()]
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), stone.id
+    )
+
+    groups = serialize_character_projection(
+        scenario.actor, str(scenario.character)
+    ).model_dump(mode="json")["target_groups"]
+
+    assert "Bramble" in [target["label"] for target in groups["characters"]]
+    assert "Bramble" not in [target["label"] for target in groups["roomItems"]]
+    assert "rock" in [target["label"] for target in groups["roomItems"]]
+
+
+def test_sprite_bounds_view_falls_back_to_default_when_no_bounds(scenario):
+    # An entity with neither explicit SpriteBounds nor a kind that maps to default bounds
+    # forces the ``bounds = SpriteBounds()`` fallback in ``_sprite_bounds_view``.
+    world = scenario.actor.world
+    # kind="trinket" maps to no default footprint and the entity carries no PortableComponent,
+    # so default_bounds_for returns None and _sprite_bounds_view falls back to SpriteBounds().
+    plain = spawn_entity(world, [IdentityComponent(name="speck", kind="trinket")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), plain.id
+    )
+
+    view = serialize_room_projection(scenario.actor, str(scenario.room_a)).model_dump(mode="json")
+    speck = next(e for e in view["room"]["entities"] if e["id"] == str(plain.id))
+    assert speck["sprite"]["bounds"] == {
+        "width": SpriteBounds().width,
+        "height": SpriteBounds().height,
+        "solid": SpriteBounds().solid,
+    }
 
 
 def test_type_schema_reports_adapter_errors(monkeypatch):
@@ -1777,6 +1925,78 @@ async def test_admin_world_generation_job_starts_and_publishes_completion(scenar
     assert job.status_response(scenario.actor).status == "succeeded"
 
 
+async def test_start_world_generation_requires_save_path_when_saving(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+
+    with pytest.raises(RuntimeError, match="server was not started with --save"):
+        await start_world_generation(
+            scenario.actor,
+            plugins=plugins,
+            generator=registry["empty"],
+            seed="blank",
+            options=GenOptions(),
+            meta=WorldMeta(),
+            save=True,
+        )
+
+
+async def test_start_world_generation_saves_when_requested(scenario, tmp_path):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+    path = tmp_path / "job-save.json"
+
+    job = await start_world_generation(
+        scenario.actor,
+        plugins=plugins,
+        generator=registry["recursive"],
+        seed="moss job",
+        options=GenOptions(max_rooms=2),
+        meta=WorldMeta(),
+        save_path=path,
+        save=True,
+    )
+    assert job.task is not None
+    await job.task
+
+    assert job.status == "succeeded"
+    assert job.saved is not None
+    assert job.saved.path == str(path)
+    reloaded, saved_meta = load_world(path)
+    assert reloaded.epoch == scenario.actor.epoch
+    assert saved_meta.seed == "moss job"
+
+
+async def test_start_world_generation_publishes_failure_when_generation_raises(
+    scenario, monkeypatch
+):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    registry = collect_generators(plugins)
+    failures: list[WorldGenerationFailedEvent] = []
+    scenario.actor.bus.subscribe(WorldGenerationFailedEvent, failures.append)
+
+    async def explode(*args, **kwargs):
+        raise RuntimeError("generation boom")
+
+    monkeypatch.setattr(server_admin, "traced_generate", explode)
+
+    job = await start_world_generation(
+        scenario.actor,
+        plugins=plugins,
+        generator=registry["recursive"],
+        seed="ill-fated",
+        options=GenOptions(),
+        meta=WorldMeta(),
+    )
+    assert job.task is not None
+    await job.task
+
+    assert job.status == "failed"
+    assert job.error == "generation boom"
+    assert failures and failures[-1].job_id == job.job_id
+    assert failures[-1].error == "generation boom"
+
+
 def test_admin_world_generators_lists_enabled_generators(scenario):
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
     registry = collect_generators(plugins)
@@ -1849,6 +2069,281 @@ async def test_admin_patch_endpoint_translates_patch_errors_to_http_400(scenario
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "entity 'entity_999' does not exist"
+
+
+def test_fastapi_list_controller_definitions_endpoint(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    response = client.get("/admin/controllers/definitions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "scripts" in body
+    assert "behaviors" in body
+    assert "stored" in body
+
+
+async def test_admin_controller_assign_to_unsuspended_character(scenario):
+    # The character starts unsuspended, so the assign path skips the SuspendedComponent
+    # removal branch entirely (the False side of that guard).
+    controller = spawn_entity(
+        scenario.actor.world,
+        [WebControllerComponent(client_id="op2", label="graph")],
+    )
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(
+        SuspendedComponent
+    )
+
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
+    response = await route.endpoint(
+        ControllerAssignmentRequest(
+            character_id=str(scenario.character),
+            controller_id=str(controller.id),
+        )
+    )
+
+    assert response.ok is True
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert not character.has_component(SuspendedComponent)
+    _edge, target = character.get_relationships(ControlledBy)[0]
+    assert target == controller.id
+
+
+def test_create_app_requires_fastapi(scenario, monkeypatch):
+    monkeypatch.setattr(server_app, "FastAPI", None)
+    with pytest.raises(RuntimeError, match="requires FastAPI"):
+        create_app(scenario.actor)
+
+
+def test_fastapi_dm_projection_translates_value_errors_to_400(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor, admin_token="secret")
+    client = testclient.TestClient(app)
+
+    # A whitespace-only dm id strips to empty and raises ValueError from the serializer.
+    response = client.get(
+        "/world/dm/%20", headers={"X-Bunnyland-Admin-Token": "secret"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "dm id must not be blank"
+
+
+def test_runtime_timing_projects_next_tick_for_running_loop(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+
+    class RunningLoop:
+        paused = False
+        running = True
+        tick_seconds = 4.0
+        time_scale = 60.0
+        next_tick_at_unix = None
+
+    app = create_app(scenario.actor, loop=RunningLoop())
+    client = testclient.TestClient(app)
+
+    body = client.get(f"/world/character/{scenario.character}/commands").json()
+
+    # A running, unpaused loop with no explicit next_tick computes one from now + tick_seconds.
+    assert body["next_tick_at_unix"] is not None
+    assert body["next_tick_at_unix"] > body["generated_at_unix"]
+
+
+def test_fastapi_cancel_command_rejects_missing_and_non_character(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    non_character = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="boulder", kind="object")]
+    )
+
+    missing = client.delete(
+        "/world/character/entity_999/commands/cmd-x",
+        params={
+            "controller_id": str(scenario.controller),
+            "controller_generation": scenario.generation,
+        },
+    )
+    not_character = client.delete(
+        f"/world/character/{non_character.id}/commands/cmd-x",
+        params={
+            "controller_id": str(scenario.controller),
+            "controller_generation": scenario.generation,
+        },
+    )
+
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "character does not exist"
+    assert not_character.status_code == 400
+    assert not_character.json()["detail"] == "entity is not a character"
+
+
+def test_fastapi_cancel_command_reports_not_found_when_command_absent(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    # Valid character + generation but no such queued command -> ok=False, "command not found".
+    response = client.delete(
+        f"/world/character/{scenario.character}/commands/never-queued",
+        params={
+            "controller_id": str(scenario.controller),
+            "controller_generation": scenario.generation,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": False,
+        "command_id": "never-queued",
+        "cancelled": False,
+        "reason": "command not found",
+    }
+
+
+async def test_admin_patch_endpoint_translates_unexpected_errors_to_400(scenario, monkeypatch):
+    def boom(actor, request):
+        raise RuntimeError("ecs exploded")
+
+    monkeypatch.setattr(server_app, "apply_world_patch", boom)
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/admin/world")
+
+    with pytest.raises(Exception) as exc:
+        await route.endpoint(WorldPatchRequest.model_validate({"operations": []}))
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "ecs exploded"
+
+
+async def test_register_script_endpoint_persists_valid_spec(scenario, tmp_path):
+    app = create_app(scenario.actor, definitions_path=tmp_path / "definitions.json")
+    route = next(
+        route for route in app.routes if route.path == "/admin/controllers/scripts"
+    )
+
+    response = await route.endpoint(
+        ScriptSpec(name="greeter", calls=(ToolCallSpec(name="wait", arguments={}),))
+    )
+
+    assert "greeter" in response.stored.scripts
+
+
+async def test_register_behavior_endpoint_persists_valid_spec(scenario, tmp_path):
+    app = create_app(scenario.actor, definitions_path=tmp_path / "definitions.json")
+    route = next(
+        route for route in app.routes if route.path == "/admin/controllers/behaviors"
+    )
+
+    response = await route.endpoint(
+        BehaviorTreeSpec(
+            name="waiter",
+            root=BehaviorNodeSpec(kind="action", ref="take_first_item"),
+        )
+    )
+
+    assert "waiter" in response.stored.behaviors
+
+
+async def test_register_behavior_endpoint_translates_value_errors(scenario):
+    app = create_app(scenario.actor)
+    route = next(
+        route for route in app.routes if route.path == "/admin/controllers/behaviors"
+    )
+
+    # A behavior leaf referencing an unknown condition fails to compile -> ValueError -> 400.
+    bad = BehaviorTreeSpec(
+        name="broken",
+        root=BehaviorNodeSpec(kind="condition", ref="definitely_not_a_real_condition"),
+    )
+    with pytest.raises(Exception) as exc:
+        await route.endpoint(bad)
+
+    assert exc.value.status_code == 400
+
+
+async def test_world_generation_status_endpoint_reports_running_job(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    app = create_app(scenario.actor, plugins=plugins)
+    generate = next(route for route in app.routes if route.path == "/admin/world/generate")
+    status = next(
+        route for route in app.routes if route.path == "/admin/world/generation"
+    )
+
+    started = await generate.endpoint(
+        WorldGenerateRequest(confirm_reset=True, generator="recursive", max_rooms=2)
+    )
+
+    # While the background job exists, status reflects it (not the idle response).
+    running = await status.endpoint()
+    assert running.job_id == started.job_id
+
+    # A second generate while running is rejected with a conflict.
+    with pytest.raises(Exception) as conflict:
+        await generate.endpoint(
+            WorldGenerateRequest(confirm_reset=True, generator="recursive")
+        )
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail == "world generation is already running"
+
+
+async def test_admin_world_generate_uses_generator_name_for_seedless_generators(scenario):
+    plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
+    app = create_app(scenario.actor, plugins=plugins)
+    route = next(route for route in app.routes if route.path == "/admin/world/generate")
+
+    # "empty" reports uses_seed=False, so the seed must be the generator name, not the request.
+    response = await route.endpoint(
+        WorldGenerateRequest(confirm_reset=True, generator="empty", seed="ignored")
+    )
+
+    assert response.generator == "empty"
+    assert response.seed == "empty"
+
+
+def test_pause_and_resume_tolerate_loops_without_publish(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+
+    class QuietLoop:
+        paused = False
+        running = True
+
+        def pause(self):
+            self.paused = True
+            return None
+
+        def resume(self):
+            self.paused = False
+            return None
+
+    app = create_app(scenario.actor, loop=QuietLoop())
+    client = testclient.TestClient(app)
+
+    paused = client.post("/admin/pause")
+    resumed = client.post("/admin/resume")
+
+    assert paused.status_code == 200
+    assert paused.json()["paused"] is True
+    assert resumed.status_code == 200
+    assert resumed.json()["paused"] is False
+
+
+def test_fastapi_world_updates_websocket_handles_client_disconnect(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    client = testclient.TestClient(app)
+
+    with client.websocket_connect(
+        "/world/updates", headers={"X-Bunnyland-Admin-Token": "secret"}
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "snapshot"
+        # Queue another message so the handler's next send races the client close, then
+        # close from the client side to drive the WebSocketDisconnect cleanup path.
+        app.state  # noqa: B018 - touch state to ensure app is live before closing
+        websocket.close()
 
 
 async def test_admin_controller_assign_endpoint_uses_controller_handoff(scenario):
@@ -2609,6 +3104,185 @@ def test_world_patch_preflight_allows_pending_component_add_then_remove(scenario
     assert not scenario.actor.world.get_entity(scenario.character).has_component(
         SuspendedComponent
     )
+
+
+def test_world_patch_set_component_on_new_alias_entity(scenario):
+    # set_component targeting a client alias exercises the alias branch of preflight
+    # (alias_components.setdefault) and the apply path that has no existing fallback.
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {"op": "add_entity", "client_id": "$thing"},
+                    {
+                        "op": "set_component",
+                        "entity_id": "$thing",
+                        "component": {
+                            "type": "IdentityComponent",
+                            "fields": {"name": "Sprig", "kind": "item"},
+                        },
+                    },
+                ]
+            }
+        ),
+    )
+
+    assert response.ok is True
+    entity_id = response.changed_entities[0]["id"]
+    entity = scenario.actor.world.get_entity(parse_entity_id(entity_id))
+    assert entity.get_component(IdentityComponent).name == "Sprig"
+
+
+def test_world_patch_set_component_adds_new_type_to_existing_entity(scenario):
+    # The character has no SuspendedComponent, so set_component takes the no-fallback path
+    # (component_type registered but entity lacks it) and adds it fresh.
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "set_component",
+                        "entity_id": str(scenario.character),
+                        "component": {
+                            "type": "SuspendedComponent",
+                            "fields": {"reason": "editor"},
+                        },
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert response.ok is True
+    assert scenario.actor.world.get_entity(scenario.character).get_component(
+        SuspendedComponent
+    ).reason == "editor"
+
+
+def test_world_patch_remove_component_from_new_alias_entity(scenario):
+    # remove_component on a client alias that DID receive the component (via add_component)
+    # exercises the alias-remove preflight branch (alias_components.remove).
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {"op": "add_entity", "client_id": "$thing"},
+                    {
+                        "op": "add_component",
+                        "entity_id": "$thing",
+                        "component": {
+                            "type": "IdentityComponent",
+                            "fields": {"name": "Sprig", "kind": "item"},
+                        },
+                    },
+                    {
+                        "op": "remove_component",
+                        "entity_id": "$thing",
+                        "component_type": "IdentityComponent",
+                    },
+                ]
+            }
+        ),
+    )
+
+    assert response.ok is True
+    entity_id = response.changed_entities[0]["id"]
+    entity = scenario.actor.world.get_entity(parse_entity_id(entity_id))
+    assert not entity.has_component(IdentityComponent)
+
+
+def test_world_patch_remove_component_rejects_pending_missing_on_existing_entity(scenario):
+    # The character lacks SuspendedComponent; removing it must fail in preflight via the
+    # pending-component "does not have component" branch, leaving the world untouched.
+    with pytest.raises(
+        WorldPatchError, match="does not have component SuspendedComponent"
+    ):
+        apply_world_patch(
+            scenario.actor,
+            WorldPatchRequest.model_validate(
+                {
+                    "operations": [
+                        {
+                            "op": "remove_component",
+                            "entity_id": str(scenario.character),
+                            "component_type": "SuspendedComponent",
+                        }
+                    ]
+                }
+            ),
+        )
+
+
+def test_world_patch_removes_existing_component_from_existing_entity(scenario):
+    # The character genuinely has an IdentityComponent, so preflight takes the "entity already
+    # has the component" branch (it is removable) and apply strips it.
+    assert scenario.actor.world.get_entity(scenario.character).has_component(IdentityComponent)
+
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "remove_component",
+                        "entity_id": str(scenario.character),
+                        "component_type": "IdentityComponent",
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert response.ok is True
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(
+        IdentityComponent
+    )
+
+
+def test_world_patch_removes_existing_edge(scenario):
+    # room_a has an ExitTo room_b from the scenario fixture; removing it passes the
+    # valid-edge preflight branch and exercises _apply_remove_edge end to end.
+    before = scenario.actor.world.get_entity(scenario.room_a).get_relationships(ExitTo)
+    assert any(target == scenario.room_b for _edge, target in before)
+
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "remove_edge",
+                        "source_id": str(scenario.room_a),
+                        "target_id": str(scenario.room_b),
+                        "edge_type": "ExitTo",
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert response.ok is True
+    after = scenario.actor.world.get_entity(scenario.room_a).get_relationships(ExitTo)
+    assert not any(target == scenario.room_b for _edge, target in after)
+    assert str(scenario.room_a) in {e["id"] for e in response.changed_entities}
+
+
+def test_world_patch_delete_entity_marks_incoming_relationship_sources(scenario):
+    # room_b holds an ExitTo back to room_a (the south exit). Deleting room_a must report
+    # room_b as changed because its incoming relationship source list is walked.
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {"operations": [{"op": "delete_entity", "entity_id": str(scenario.room_a)}]}
+        ),
+    )
+
+    assert response.ok is True
+    assert str(scenario.room_a) in response.deleted_entities
+    assert str(scenario.room_b) in {e["id"] for e in response.changed_entities}
 
 
 async def test_worldgen_room_patch_expands_selected_door(scenario):
