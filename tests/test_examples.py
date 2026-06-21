@@ -576,3 +576,54 @@ def test_every_demo_is_registered_under_its_plugin():
     registry = collect_generators(bunnyland_plugins())
     for demo in ALL_DEMOS:
         assert registry.get(demo.name) is demo
+
+
+# Demos whose builders set the scene's time/weather behind an ``if clock:`` guard. The guard
+# is normally true (``instantiate`` lays down a world clock), so its false arm -- the world
+# somehow having no clock -- is otherwise unreachable from these tests.
+CLOCK_GUARDED_DEMOS = [
+    MAPLE_FARM_DEMO,
+    MIDNIGHT_BURGER_DEMO,
+    STORM_LIGHTHOUSE_DEMO,
+    VACANCY_MOTEL_DEMO,
+    FROZEN_GREENHOUSE_DEMO,
+    STUCK_SUBWAY_DEMO,
+    MIDNIGHT_LAUNDROMAT_DEMO,
+    COUNTY_FAIR_DEMO,
+]
+
+
+@pytest.mark.parametrize("demo", CLOCK_GUARDED_DEMOS, ids=lambda d: d.name)
+async def test_demo_builds_without_a_world_clock(demo, monkeypatch):
+    """The scene builders guard their time/weather setup with ``if clock:``; prove the false
+    arm is safe.
+
+    Each builder does ``world = await instantiate(...)`` and *then* re-takes ``actor._lock`` to
+    query the clock. We splice a wrapper around ``instantiate`` that, once the real call has
+    returned (and released the lock), takes the lock itself and deletes the world clock. By the
+    time the builder re-acquires the lock and queries, the clock is gone, so the guard takes its
+    false branch -- and the world must still build with rooms and characters.
+    """
+    from bunnyland.core.components import WorldClockComponent
+    from bunnyland.worldgen import examples
+
+    real_instantiate = examples.instantiate
+
+    async def instantiate_then_drop_clock(actor, *args, **kwargs):
+        world = await real_instantiate(actor, *args, **kwargs)
+        async with actor._lock:
+            for clock in list(
+                actor.world.query().with_all([WorldClockComponent]).execute_entities()
+            ):
+                actor.world.remove(clock.id)
+        return world
+
+    monkeypatch.setattr(examples, "instantiate", instantiate_then_drop_clock)
+
+    actor = WorldActor()
+    world = await demo.generate(actor, demo.name, GenOptions())
+
+    # The guard's false arm ran: the world built fine and still has no clock to set the time on.
+    assert world.rooms
+    assert world.characters
+    assert not _has(actor, WorldClockComponent)
