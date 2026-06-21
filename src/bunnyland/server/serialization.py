@@ -20,6 +20,8 @@ from ..core.commands import Lane, SubmittedCommand
 from ..core.components import (
     ActionPointsComponent,
     AffectComponent,
+    BleedingComponent,
+    BodyPlanComponent,
     CharacterComponent,
     ContainerComponent,
     DeadComponent,
@@ -27,22 +29,59 @@ from ..core.components import (
     DoorComponent,
     DownedComponent,
     EditorDisplayComponent,
+    EncumbranceComponent,
     FocusPointsComponent,
+    HealthComponent,
     IdentityComponent,
+    InitiativeComponent,
+    InjuryComponent,
     LightComponent,
+    PainComponent,
     PortableComponent,
     RoomComponent,
     SleepingComponent,
     StealthComponent,
     SuspendedComponent,
+    ThoughtComponent,
+    WeightComponent,
 )
 from ..core.ecs import contents, entity_name, parse_entity_id
-from ..core.edges import Contains, ControlledBy, ExitTo, Holding, Wearing
+from ..core.edges import Contains, ControlledBy, ExitTo, HasInjury, HasThought, Holding, Wearing
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
 from ..imagegen.components import PortraitImageComponent
 from ..mechanics.consumables import DrinkableComponent, FoodComponent
-from ..mechanics.needs import FatigueComponent, HungerComponent, ThirstComponent
+from ..mechanics.lifesim import (
+    AgeComponent,
+    AspirationComponent,
+    CareerComponent,
+    CharacterProfileComponent,
+    HouseholdComponent,
+    LifeStageComponent,
+    PregnancyComponent,
+    ReputationComponent,
+    SkillSetComponent,
+    WellRestedComponent,
+    WhimComponent,
+)
+from ..mechanics.meter import band as meter_band
+from ..mechanics.needs import (
+    ComfortNeedComponent,
+    FatigueComponent,
+    FunNeedComponent,
+    HungerComponent,
+    HygieneComponent,
+    PrivacyNeedComponent,
+    SafetyNeedComponent,
+    SocialNeedComponent,
+    ThirstComponent,
+)
+from ..mechanics.persona import (
+    GoalComponent,
+    PersonaProfileComponent,
+    PreferenceComponent,
+    TraitSetComponent,
+)
 from ..mechanics.toonsim import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
@@ -66,12 +105,15 @@ from .models import (
     CharacterSummaryView,
     ClientActionArgumentView,
     ClientActionView,
+    ClientCharacterSheetView,
     ClientControllerView,
     ClientEntityView,
     ClientExitView,
     ClientImageView,
     ClientPointsView,
     ClientRoomView,
+    ClientSheetEntryView,
+    ClientSheetMetricView,
     ClientSpriteBoundsView,
     ClientSpritePositionView,
     ClientSpriteView,
@@ -544,6 +586,316 @@ def _target_groups(
     }
 
 
+def _component(entity, component_type):
+    return entity.get_component(component_type) if entity.has_component(component_type) else None
+
+
+def _metric(
+    label: str,
+    value: float,
+    maximum: float | None = None,
+    *,
+    text: str = "",
+    band: str = "",
+) -> ClientSheetMetricView:
+    return ClientSheetMetricView(
+        label=label,
+        value=round(value, 2),
+        maximum=round(maximum, 2) if maximum is not None else None,
+        text=text,
+        band=band,
+    )
+
+
+def _entry(label: str, value: object = "", detail: str = "") -> ClientSheetEntryView:
+    return ClientSheetEntryView(label=label, value=str(value), detail=detail)
+
+
+def _humanize_token(value: str) -> str:
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
+    return spaced.replace("_", " ").replace("-", " ").strip()
+
+
+def _meter_metric(label: str, component) -> ClientSheetMetricView:
+    meter = component.meter
+    return _metric(
+        label,
+        meter.value,
+        meter.maximum,
+        text=f"{meter.value:g} / {meter.maximum:g}",
+        band=meter_band(meter),
+    )
+
+
+def _sheet_vitals(character) -> list[ClientSheetMetricView]:
+    vitals: list[ClientSheetMetricView] = []
+    if health := _component(character, HealthComponent):
+        vitals.append(
+            _metric(
+                "Health",
+                health.current,
+                health.maximum,
+                text=f"{health.current:g} / {health.maximum:g}",
+            )
+        )
+    if pain := _component(character, PainComponent):
+        vitals.append(_metric("Pain", pain.current, 100.0, text=f"{pain.current:g}"))
+    if bleeding := _component(character, BleedingComponent):
+        vitals.append(
+            _metric(
+                "Bleeding",
+                bleeding.rate,
+                10.0,
+                text=f"{bleeding.rate:g}/tick",
+                band="urgent" if bleeding.rate > 0 else "calm",
+            )
+        )
+    if encumbrance := _component(character, EncumbranceComponent):
+        vitals.append(
+            _metric(
+                "Load",
+                encumbrance.current_load,
+                encumbrance.capacity,
+                text=f"{encumbrance.current_load:g} / {encumbrance.capacity:g}",
+                band="urgent" if encumbrance.overburdened else "calm",
+            )
+        )
+    if initiative := _component(character, InitiativeComponent):
+        vitals.append(_metric("Initiative", initiative.score, text=f"{initiative.score:g}"))
+    return vitals
+
+
+def _sheet_needs(character) -> list[ClientSheetMetricView]:
+    rows: list[ClientSheetMetricView] = []
+    for label, component_type in (
+        ("Hunger", HungerComponent),
+        ("Thirst", ThirstComponent),
+        ("Fatigue", FatigueComponent),
+        ("Hygiene", HygieneComponent),
+        ("Comfort", ComfortNeedComponent),
+        ("Fun", FunNeedComponent),
+        ("Social", SocialNeedComponent),
+        ("Privacy", PrivacyNeedComponent),
+        ("Safety", SafetyNeedComponent),
+    ):
+        if component := _component(character, component_type):
+            rows.append(_meter_metric(label, component))
+    return rows
+
+
+def _sheet_affect(character) -> list[ClientSheetMetricView]:
+    affect = _component(character, AffectComponent)
+    if affect is None:
+        return []
+    return [
+        _metric(_humanize_token(name).title(), value, text=f"{value:g}")
+        for name, value in jsonable(affect.current).items()
+        if value
+    ]
+
+
+def _sheet_status(character) -> list[str]:
+    status: list[str] = []
+    if character.has_component(DeadComponent):
+        status.append("dead")
+    if character.has_component(DownedComponent):
+        downed = character.get_component(DownedComponent)
+        status.append("downed" + (" (stable)" if downed.stable else ""))
+    if character.has_component(SleepingComponent):
+        status.append("sleeping")
+    if character.has_component(SuspendedComponent):
+        status.append("suspended")
+    if character.has_component(PregnancyComponent):
+        status.append("pregnant")
+    if character.has_component(WellRestedComponent):
+        status.append("well rested")
+    if bleeding := _component(character, BleedingComponent):
+        if bleeding.rate > 0:
+            status.append("bleeding")
+    if character.has_component(InjuryComponent) or character.get_relationships(HasInjury):
+        status.append("injured")
+    if affect := _component(character, AffectComponent):
+        status.extend(affect.labels)
+    return status or ["active"]
+
+
+def _sheet_profile(actor: WorldActor, character) -> list[ClientSheetEntryView]:
+    rows: list[ClientSheetEntryView] = []
+    identity = _component(character, IdentityComponent)
+    rows.append(
+        _entry("Kind", identity.kind if identity is not None and identity.kind else "character")
+    )
+    if stage := _component(character, LifeStageComponent):
+        rows.append(_entry("Life Stage", stage.stage))
+    if age := _component(character, AgeComponent):
+        seconds = max(0, actor.epoch - age.born_at_epoch)
+        years = seconds // (365 * 24 * 60 * 60)
+        rows.append(_entry("Age", f"{years} years", f"born at epoch {age.born_at_epoch}"))
+    if career := _component(character, CareerComponent):
+        state = "active" if career.active else "inactive"
+        rows.append(_entry("Career", career.title, f"level {career.level}, {state}"))
+    if aspiration := _component(character, AspirationComponent):
+        detail = ", ".join(aspiration.completed) if aspiration.completed else "in progress"
+        rows.append(_entry("Aspiration", aspiration.name, detail))
+    if household := _component(character, HouseholdComponent):
+        rows.append(_entry("Household", household.name or household.household_id))
+    if reputation := _component(character, ReputationComponent):
+        rows.append(_entry("Reputation", f"{reputation.score:g}", ", ".join(reputation.known_for)))
+    if persona := _component(character, PersonaProfileComponent):
+        if persona.role:
+            rows.append(_entry("Role", persona.role))
+        if persona.voice:
+            rows.append(_entry("Voice", persona.voice))
+    if body := _component(character, BodyPlanComponent):
+        rows.append(_entry("Body", ", ".join(body.parts), "vitals: " + ", ".join(body.vital_parts)))
+    if weight := _component(character, WeightComponent):
+        rows.append(_entry("Weight", f"{weight.weight:g}"))
+    if pregnancy := _component(character, PregnancyComponent):
+        rows.append(_entry("Pregnancy", f"due at epoch {pregnancy.due_at_epoch}"))
+    return rows
+
+
+def _sheet_traits(character) -> list[str]:
+    traits: list[str] = []
+    if profile := _component(character, CharacterProfileComponent):
+        traits.extend(profile.traits)
+        traits.extend(f"interested in {interest}" for interest in profile.interests)
+        if profile.preferred_routine:
+            traits.append(f"routine: {profile.preferred_routine}")
+    if trait_set := _component(character, TraitSetComponent):
+        traits.extend(trait_set.traits)
+    if preference := _component(character, PreferenceComponent):
+        traits.extend(f"likes {item}" for item in preference.likes)
+        traits.extend(f"dislikes {item}" for item in preference.dislikes)
+    if goals := _component(character, GoalComponent):
+        traits.extend(f"goal: {goal}" for goal in goals.active_goals)
+    if whim := _component(character, WhimComponent):
+        if whim.completed_at_epoch is None:
+            traits.append(f"whim: {whim.want}")
+    return sorted(dict.fromkeys(traits))
+
+
+def _sheet_skills(character) -> list[ClientSheetEntryView]:
+    skills = _component(character, SkillSetComponent)
+    if skills is None:
+        return []
+    return [
+        _entry(
+            _humanize_token(skill).title(),
+            f"level {level}",
+            f"{skills.xp.get(skill, 0.0):g} xp",
+        )
+        for skill, level in sorted(skills.levels.items())
+    ]
+
+
+def _sheet_injuries(actor: WorldActor, character) -> list[ClientSheetEntryView]:
+    injuries: list[ClientSheetEntryView] = []
+    if injury := _component(character, InjuryComponent):
+        injuries.append(
+            _entry(
+                injury.body_part,
+                f"severity {injury.severity:g}",
+                f"pain {injury.pain:g}, bleeding {injury.bleeding_rate:g}",
+            )
+        )
+    for _edge, injury_id in character.get_relationships(HasInjury):
+        injury_entity = actor.world.get_entity(injury_id)
+        if injury := _component(injury_entity, InjuryComponent):
+            injuries.append(
+                _entry(
+                    injury.body_part,
+                    f"severity {injury.severity:g}",
+                    f"pain {injury.pain:g}, bleeding {injury.bleeding_rate:g}",
+                )
+            )
+    return injuries
+
+
+def _sheet_notes(actor: WorldActor, character) -> list[ClientSheetEntryView]:
+    notes: list[ClientSheetEntryView] = []
+    if description := _component(character, DescriptionComponent):
+        if description.short:
+            notes.append(_entry("Description", description.short))
+        if description.appearance:
+            notes.append(_entry("Appearance", description.appearance))
+    for _edge, thought_id in character.get_relationships(HasThought):
+        thought = actor.world.get_entity(thought_id)
+        if thought_component := _component(thought, ThoughtComponent):
+            notes.append(_entry("Thought", thought_component.label, thought_component.text))
+    return notes
+
+
+_RELATION_SKIP = {
+    "Contains",
+    "ControlledBy",
+    "HasInjury",
+    "HasThought",
+    "Holding",
+    "Wearing",
+}
+
+
+def _edge_detail(edge: dict[str, Any]) -> str:
+    bits = [
+        (
+            f"{_humanize_token(key)} {value:g}"
+            if isinstance(value, (int, float))
+            else f"{_humanize_token(key)} {value}"
+        )
+        for key, value in sorted(edge.items())
+        if value not in ("", 0, 0.0, None, False)
+    ]
+    return ", ".join(bits)
+
+
+def _sheet_relations(actor: WorldActor, character) -> list[ClientSheetEntryView]:
+    rows: list[ClientSheetEntryView] = []
+    exported = actor.world.export_entity(character.id)
+    for edge_name, edges in sorted(exported.get("relationships", {}).items()):
+        if edge_name in _RELATION_SKIP:
+            continue
+        for edge in edges:
+            target_id = parse_entity_id(str(edge["target"]))
+            target = (
+                actor.world.get_entity(target_id)
+                if target_id is not None and actor.world.has_entity(target_id)
+                else None
+            )
+            rows.append(
+                _entry(
+                    _humanize_token(edge_name).title(),
+                    entity_name(target) if target is not None else str(edge["target"]),
+                    _edge_detail(jsonable(edge.get("edge", {}))),
+                )
+            )
+    return rows
+
+
+def _character_sheet_projection(actor: WorldActor, character) -> ClientCharacterSheetView:
+    character_component = character.get_component(CharacterComponent)
+    identity = _component(character, IdentityComponent)
+    description = _component(character, DescriptionComponent)
+    return ClientCharacterSheetView(
+        kind=identity.kind if identity is not None else "character",
+        species=character_component.species,
+        biography=character_component.biography,
+        description=description.short if description is not None else "",
+        appearance=description.appearance if description is not None else "",
+        tags=list(identity.tags) if identity is not None else [],
+        status=_sheet_status(character),
+        vitals=_sheet_vitals(character),
+        needs=_sheet_needs(character),
+        affect=_sheet_affect(character),
+        profile=_sheet_profile(actor, character),
+        skills=_sheet_skills(character),
+        traits=_sheet_traits(character),
+        relations=_sheet_relations(actor, character),
+        injuries=_sheet_injuries(actor, character),
+        notes=_sheet_notes(actor, character),
+    )
+
+
 def _action_view(
     definition: ActionDefinition, availability: AvailabilityResult | None = None
 ) -> ClientActionView:
@@ -704,6 +1056,7 @@ def serialize_character_projection(
         inventory=groups["inventory"],
         points=_points_view(character),
         controller=_controller_view(character),
+        sheet=_character_sheet_projection(actor, character),
         target_groups=groups,
         actions=[
             _action_view(

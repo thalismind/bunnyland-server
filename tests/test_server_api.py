@@ -42,10 +42,27 @@ from bunnyland.core import (
     WorldPauseStatusChangedEvent,
     build_submitted_command,
     parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.commands import CommandCost, Lane, OnInsufficientPoints
+from bunnyland.core.components import (
+    AffectComponent,
+    AffectDelta,
+    AffectVector,
+    BleedingComponent,
+    BodyPlanComponent,
+    DeadComponent,
+    DownedComponent,
+    HealthComponent,
+    InjuryComponent,
+    PainComponent,
+    SleepingComponent,
+    ThoughtComponent,
+    WeightComponent,
+)
 from bunnyland.core.controllers import ClaimTimeoutComponent
+from bunnyland.core.edges import HasInjury, HasThought
 from bunnyland.core.events import (
     ActorMovedEvent,
     WorldGenerationCompletedEvent,
@@ -56,7 +73,28 @@ from bunnyland.core.handlers import ok
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
-from bunnyland.mechanics.lifesim import SkillSetComponent
+from bunnyland.mechanics.lifesim import (
+    AgeComponent,
+    AspirationComponent,
+    CareerComponent,
+    CharacterProfileComponent,
+    HouseholdComponent,
+    LifeStageComponent,
+    PregnancyComponent,
+    ReputationComponent,
+    SkillSetComponent,
+    WellRestedComponent,
+    WhimComponent,
+)
+from bunnyland.mechanics.meter import Meter
+from bunnyland.mechanics.needs import HungerComponent, ThirstComponent
+from bunnyland.mechanics.persona import (
+    GoalComponent,
+    PersonaProfileComponent,
+    PreferenceComponent,
+    TraitSetComponent,
+)
+from bunnyland.mechanics.social import SocialBond
 from bunnyland.mechanics.storyteller import IncidentComponent
 from bunnyland.mechanics.toonsim import (
     SpriteBounds,
@@ -298,6 +336,162 @@ def test_client_view_scopes_visible_state_points_controller_and_actions(scenario
         argument["key"] == "exit_id" and argument["target_group"] == "exits"
         for argument in move["arguments"]
     )
+
+
+def test_character_projection_includes_curated_character_sheet_data(scenario):
+    actor = scenario.actor
+    world = actor.world
+    character = world.get_entity(scenario.character)
+    replace_component(
+        character,
+        CharacterComponent(species="hare", biography="A careful tunnel scout."),
+    )
+    replace_component(
+        character,
+        IdentityComponent(name="Juniper", kind="character", tags=("scout", "local")),
+    )
+    character.add_component(
+        DescriptionComponent(
+            short="Dusty from a long patrol.",
+            appearance="Long ears, patched satchel, steady eyes.",
+        )
+    )
+    character.add_component(HealthComponent(current=7.0, maximum=10.0))
+    character.add_component(PainComponent(current=4.0))
+    character.add_component(BleedingComponent(rate=1.5))
+    character.add_component(BodyPlanComponent(parts=("head", "torso", "paws")))
+    character.add_component(WeightComponent(weight=42.0))
+    character.add_component(
+        InjuryComponent(body_part="right ear", severity=1.0, pain=1.5, bleeding_rate=0.0)
+    )
+    character.add_component(HungerComponent(meter=Meter(value=75.0)))
+    character.add_component(ThirstComponent(meter=Meter(value=20.0)))
+    character.add_component(
+        AffectComponent(
+            current=AffectVector(stress=12.0, curiosity=5.0),
+            labels=("tense",),
+        )
+    )
+    character.add_component(LifeStageComponent(stage="adult"))
+    character.add_component(AgeComponent(born_at_epoch=-(22 * 365 * 24 * 60 * 60)))
+    character.add_component(CareerComponent(title="Scout", level=3))
+    character.add_component(
+        AspirationComponent(name="Map the burrow", completed=("Find north tunnel",))
+    )
+    character.add_component(HouseholdComponent(household_id="warren-1"))
+    character.add_component(ReputationComponent(score=4.0, known_for=("reliable",)))
+    character.add_component(
+        SkillSetComponent(levels={"survival": 3, "lockpicking": 1}, xp={"survival": 8.5})
+    )
+    character.add_component(
+        CharacterProfileComponent(
+            traits=("watchful",),
+            interests=("moss maps",),
+            preferred_routine="morning patrol",
+        )
+    )
+    character.add_component(PersonaProfileComponent(role="pathfinder", voice="quiet"))
+    character.add_component(TraitSetComponent(traits=("curious", "patient")))
+    character.add_component(PreferenceComponent(likes=("tea",), dislikes=("floods",)))
+    character.add_component(GoalComponent(active_goals=("keep everyone safe",)))
+    character.add_component(WhimComponent(want="check the north door"))
+    character.add_component(
+        PregnancyComponent(started_at_epoch=0, due_at_epoch=500, co_parent_ids=())
+    )
+    character.add_component(WellRestedComponent(expires_at_epoch=100))
+    character.add_component(SuspendedComponent())
+    character.add_component(SleepingComponent(started_at_epoch=0))
+    character.add_component(DownedComponent(downed_at_epoch=0, cause="test", stable=True))
+    character.add_component(DeadComponent(died_at_epoch=0, cause="test"))
+
+    injury = spawn_entity(
+        world,
+        [InjuryComponent(body_part="left paw", severity=2.0, pain=3.0, bleeding_rate=1.0)],
+    )
+    character.add_relationship(HasInjury(), injury.id)
+    thought = spawn_entity(
+        world,
+        [
+            ThoughtComponent(
+                label="worried",
+                text="The tunnel roof is groaning.",
+                affect_delta=AffectDelta(stress=3.0),
+                created_at_epoch=0,
+            )
+        ],
+    )
+    character.add_relationship(HasThought(), thought.id)
+    marlow = spawn_entity(
+        world,
+        [IdentityComponent(name="Marlow", kind="character"), CharacterComponent()],
+    )
+    character.add_relationship(SocialBond(trust=4.0, familiarity=2.0), marlow.id)
+
+    view = serialize_character_projection(actor, str(scenario.character)).model_dump(
+        mode="json"
+    )
+    sheet = view["sheet"]
+
+    assert sheet["species"] == "hare"
+    assert sheet["biography"] == "A careful tunnel scout."
+    assert sheet["description"] == "Dusty from a long patrol."
+    assert sheet["appearance"] == "Long ears, patched satchel, steady eyes."
+    assert sheet["tags"] == ["scout", "local"]
+    assert {
+        "dead",
+        "downed (stable)",
+        "sleeping",
+        "suspended",
+        "pregnant",
+        "well rested",
+        "tense",
+    } <= set(sheet["status"])
+    assert {row["label"]: row["text"] for row in sheet["vitals"]}["Health"] == "7 / 10"
+    assert {row["label"]: row["band"] for row in sheet["needs"]}["Hunger"] == "urgent"
+    assert {row["label"]: row["text"] for row in sheet["affect"]}["Stress"] == "12"
+    assert {row["label"]: row["value"] for row in sheet["profile"]}["Career"] == "Scout"
+    assert {row["label"]: row["value"] for row in sheet["skills"]}["Survival"] == "level 3"
+    assert "goal: keep everyone safe" in sheet["traits"]
+    assert any(
+        row["label"] == "Social Bond" and row["value"] == "Marlow"
+        for row in sheet["relations"]
+    )
+    assert any(row["label"] == "left paw" for row in sheet["injuries"])
+    assert any(
+        row["label"] == "Thought" and row["value"] == "worried"
+        for row in sheet["notes"]
+    )
+
+    rendered = json.dumps(view)
+    assert "components" not in rendered
+    assert "relationships" not in rendered
+
+
+def test_character_sheet_projection_handles_sparse_optional_fields(scenario):
+    actor = scenario.actor
+    world = actor.world
+    character = world.get_entity(scenario.character)
+    replace_component(character, IdentityComponent(name="Juniper", kind=""))
+    character.add_component(DescriptionComponent(short="", appearance=""))
+    character.add_component(CharacterProfileComponent(traits=("reserved",)))
+    character.add_component(PersonaProfileComponent())
+    character.add_component(WhimComponent(want="already done", completed_at_epoch=1))
+
+    non_injury = spawn_entity(world, [IdentityComponent(name="not an injury", kind="note")])
+    character.add_relationship(HasInjury(), non_injury.id)
+
+    non_thought = spawn_entity(world, [IdentityComponent(name="not a thought", kind="note")])
+    character.add_relationship(HasThought(), non_thought.id)
+
+    sheet = serialize_character_projection(actor, str(scenario.character)).model_dump(
+        mode="json"
+    )["sheet"]
+
+    assert {row["label"]: row["value"] for row in sheet["profile"]}["Kind"] == "character"
+    assert "reserved" in sheet["traits"]
+    assert "whim: already done" not in sheet["traits"]
+    assert sheet["injuries"] == []
+    assert sheet["notes"] == []
 
 
 def test_character_projection_action_availability_reflects_points():

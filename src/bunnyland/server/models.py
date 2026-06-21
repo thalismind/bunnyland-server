@@ -180,6 +180,39 @@ class ClientRoomView(BaseModel):
     exits: list[ClientExitView] = Field(default_factory=list)
 
 
+class ClientSheetMetricView(BaseModel):
+    label: str
+    value: float
+    maximum: float | None = None
+    text: str = ""
+    band: str = ""
+
+
+class ClientSheetEntryView(BaseModel):
+    label: str
+    value: str = ""
+    detail: str = ""
+
+
+class ClientCharacterSheetView(BaseModel):
+    kind: str = "character"
+    species: str = ""
+    biography: str = ""
+    description: str = ""
+    appearance: str = ""
+    tags: list[str] = Field(default_factory=list)
+    status: list[str] = Field(default_factory=list)
+    vitals: list[ClientSheetMetricView] = Field(default_factory=list)
+    needs: list[ClientSheetMetricView] = Field(default_factory=list)
+    affect: list[ClientSheetMetricView] = Field(default_factory=list)
+    profile: list[ClientSheetEntryView] = Field(default_factory=list)
+    skills: list[ClientSheetEntryView] = Field(default_factory=list)
+    traits: list[str] = Field(default_factory=list)
+    relations: list[ClientSheetEntryView] = Field(default_factory=list)
+    injuries: list[ClientSheetEntryView] = Field(default_factory=list)
+    notes: list[ClientSheetEntryView] = Field(default_factory=list)
+
+
 class ClientSpritePositionView(BaseModel):
     x: float = 0.0
     y: float = 0.0
@@ -288,6 +321,7 @@ class CharacterProjectionResponse(BaseModel):
     inventory: list[ClientTargetView] = Field(default_factory=list)
     points: ClientPointsView = Field(default_factory=ClientPointsView)
     controller: ClientControllerView | None = None
+    sheet: ClientCharacterSheetView = Field(default_factory=ClientCharacterSheetView)
     target_groups: dict[str, list[ClientTargetView]] = Field(default_factory=dict)
     actions: list[ClientActionView] = Field(default_factory=list)
 
@@ -609,6 +643,7 @@ __all__ = [
     "ControllerAssignmentRequest",
     "ClientActionArgumentView",
     "ClientActionView",
+    "ClientCharacterSheetView",
     "CharacterProjectionResponse",
     "CharacterQueuedCommandsResponse",
     "ClientControllerView",
@@ -617,6 +652,8 @@ __all__ = [
     "ClientImageView",
     "ClientPointsView",
     "ClientRoomView",
+    "ClientSheetEntryView",
+    "ClientSheetMetricView",
     "ClientSpriteBoundsView",
     "ClientSpritePositionView",
     "ClientSpriteView",
