@@ -27,6 +27,7 @@ from ..core.controllers import ClaimTimeoutComponent
 from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
 from ..core.world_actor import WorldActor
 from ..imagegen.media import MediaError, content_type_for
+from ..imagegen.scene import request_scene_image
 from ..imagegen.spec import ImagePurpose
 from ..llm_agents import (
     ControllerDefinitionStore,
@@ -936,6 +937,21 @@ def create_app(
         service = _require_imagegen()
         extra = body.extra if body is not None else ""
         job = await service.start(record_id, ImagePurpose.EVENT, extra=extra)
+        return _image_response(job)
+
+    @app.post(
+        "/world/character/{character_id}/scene-image",
+        response_model=WorldImageGenerationResponse,
+    )
+    async def request_character_scene_image(character_id: str) -> WorldImageGenerationResponse:
+        # Player-facing: illustrate the character's current room as an on-request scene event.
+        service = _require_imagegen()
+        parsed = parse_entity_id(character_id)
+        if parsed is None or not actor.world.has_entity(parsed):
+            raise HTTPException(status_code=404, detail="character not found")
+        job = await request_scene_image(actor, service, character_id=character_id)
+        if job is None:
+            raise HTTPException(status_code=400, detail="character has no room to illustrate")
         return _image_response(job)
 
     @app.get("/media/{segment}/{name}")

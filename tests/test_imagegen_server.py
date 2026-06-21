@@ -9,6 +9,7 @@ import types
 import pytest
 from conftest import build_scenario
 
+from bunnyland.core import CharacterComponent, IdentityComponent, spawn_entity
 from bunnyland.imagegen.components import PortraitImageComponent
 from bunnyland.imagegen.config import ImageGenConfig
 from bunnyland.imagegen.media import SEGMENT_PORTRAITS, MediaStore
@@ -127,6 +128,131 @@ def test_request_event_image_and_dedup(tmp_path):
     assert first.json()["purpose"] == "event"
     # Once it has an image, a second request reuses it (deduped).
     world.get_entity(record.id)  # still present
+
+
+# --- scene helper + player scene-image endpoint --------------------------------------
+
+
+async def test_scene_helper_unknown_character_returns_none(tmp_path):
+    scenario = build_scenario()
+    from bunnyland.imagegen.scene import request_scene_image
+
+    service = _service(scenario.actor, tmp_path)
+    assert await request_scene_image(scenario.actor, service, character_id="ghost_9") is None
+    await service.aclose()
+
+
+def test_scene_image_endpoint_success(tmp_path):
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path)
+    client = testclient.TestClient(_app(scenario.actor, service))
+    response = client.post(f"/world/character/{scenario.character}/scene-image")
+    assert response.status_code == 200
+    assert response.json()["purpose"] == "event"
+
+
+def test_scene_image_endpoint_unknown_character(tmp_path):
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path)
+    client = testclient.TestClient(_app(scenario.actor, service))
+    assert client.post("/world/character/ghost_9/scene-image").status_code == 404
+
+
+def test_scene_image_endpoint_no_room(tmp_path):
+    scenario = build_scenario()
+    roomless = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Stray", kind="character"), CharacterComponent(species="bunny")],
+    )
+    service = _service(scenario.actor, tmp_path)
+    client = testclient.TestClient(_app(scenario.actor, service))
+    assert client.post(f"/world/character/{roomless.id}/scene-image").status_code == 400
+
+
+def test_scene_image_endpoint_409_without_imagegen():
+    scenario = build_scenario()
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    client = testclient.TestClient(app)
+    assert client.post(f"/world/character/{scenario.character}/scene-image").status_code == 409
+
+
+# --- backend request_image -----------------------------------------------------------
+
+
+async def test_local_backend_request_image_unavailable_and_ok(tmp_path):
+    from bunnyland.tui.backend import LocalBackend
+
+    scenario = build_scenario()
+    backend = LocalBackend(autorun=False)
+    backend.actor = scenario.actor
+    # No service configured -> unavailable.
+    result = await backend.request_image(str(scenario.character))
+    assert result.ok is False and result.status == "unavailable"
+    # With a service -> a real job.
+    backend.imagegen = _service(scenario.actor, tmp_path)
+    ok = await backend.request_image(str(scenario.character))
+    assert ok.ok is True
+    await backend.imagegen.wait_idle()
+    await backend.imagegen.aclose()
+
+
+async def test_local_backend_request_image_no_room(tmp_path):
+    from bunnyland.tui.backend import LocalBackend
+
+    scenario = build_scenario()
+    roomless = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Stray", kind="character"), CharacterComponent(species="bunny")],
+    )
+    backend = LocalBackend(autorun=False)
+    backend.actor = scenario.actor
+    backend.imagegen = _service(scenario.actor, tmp_path)
+    result = await backend.request_image(str(roomless.id))
+    assert result.ok is False and result.status == "no-room"
+    await backend.imagegen.aclose()
+
+
+async def test_remote_backend_request_image_paths():
+    import httpx
+
+    from bunnyland.tui.backend import RemoteBackend
+
+    def handler(request):
+        if request.url.path.endswith("/ok/scene-image"):
+            return httpx.Response(200, json={"status": "queued", "url": "/media/events/x.png"})
+        if request.url.path.endswith("/off/scene-image"):
+            return httpx.Response(409, json={"detail": "disabled"})
+        return httpx.Response(500, json={"detail": "boom"})
+
+    backend = RemoteBackend("http://server")
+    backend._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    ok = await backend.request_image("ok")
+    assert ok.ok is True and ok.url == "/media/events/x.png"
+    off = await backend.request_image("off")
+    assert off.ok is False and off.status == "unavailable"
+    err = await backend.request_image("bad")
+    assert err.ok is False and err.status == "error"
+    await backend._client.aclose()
+
+
+async def test_backend_base_request_image_default():
+    from bunnyland.tui.backend import Backend
+
+    class _Stub(Backend):
+        async def start(self): ...
+        async def close(self): ...
+        async def fetch_snapshot(self):
+            return {}
+
+        async def submit(self, command):
+            raise NotImplementedError
+
+        async def claim(self, player_id, world):
+            return None
+
+    result = await _Stub().request_image("x")
+    assert result.ok is False
 
 
 # --- projection portrait fields ------------------------------------------------------

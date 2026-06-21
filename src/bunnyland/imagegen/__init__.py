@@ -48,6 +48,7 @@ from .prompt import (
     StubPromptEnhancer,
     VectorExampleSource,
 )
+from .scene import request_scene_image
 from .service import ImageGenError, ImageGenJob, ImageGenService
 from .spec import (
     GeneratedPrompt,
@@ -105,6 +106,7 @@ __all__ = [
     "default_templates",
     "load_templates_from",
     "remove_edge_background",
+    "request_scene_image",
     "select_enhancer",
     "substitute",
 ]

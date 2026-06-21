@@ -19,6 +19,7 @@ from textual.widgets.option_list import Option
 
 from ..core.actions import action_icon_for
 from ..core.claim_timeout import normalize_claim_timeout
+from ..imagegen.affordance import REQUEST_EMOJI
 from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, LocalBackend, RemoteBackend
@@ -295,6 +296,7 @@ class BunnylandTUI(App[None]):
 
     BINDINGS = [
         ("r", "refresh", "Refresh"),
+        ("i", "request_image", f"{REQUEST_EMOJI} Image"),
         ("q", "quit", "Quit"),
     ]
 
@@ -346,6 +348,7 @@ class BunnylandTUI(App[None]):
                         id="player",
                     )
                     yield Button("Release", id="character-release", disabled=True)
+                    yield Button(f"{REQUEST_EMOJI} Image", id="request-image")
                 yield Static("Select a character to play as.", id="play-hint")
                 yield Static("", id="points")
                 with Horizontal(id="action-filter-row"):
@@ -716,6 +719,22 @@ class BunnylandTUI(App[None]):
         self._points_line = ""
         self._main_query_one("#player", Select).clear()
         await self.refresh_world()
+
+    @on(Button.Pressed, "#request-image")
+    async def _request_image_pressed(self, _event: Button.Pressed) -> None:
+        await self.action_request_image()
+
+    async def action_request_image(self) -> None:
+        """Request an image of the player's current scene (the 📷 camera affordance)."""
+        if not self.player_id:
+            self._append_activity(Text("Select a character before requesting an image."))
+            return
+        result = await self.backend.request_image(self.player_id)
+        if result.ok:
+            note = "image ready" if result.status == "skipped" else "image requested"
+            self._append_activity(Text(f"{REQUEST_EMOJI} {note}.", style="cyan"))
+        else:
+            self._append_activity(Text(f"{REQUEST_EMOJI} {result.reason}", style="yellow"))
 
     @on(OptionList.OptionSelected, "#members")
     def _member_selected(self, event: OptionList.OptionSelected) -> None:

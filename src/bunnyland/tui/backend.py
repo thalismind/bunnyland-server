@@ -68,6 +68,16 @@ def persistent_client_id(path: Path | None = None) -> str:
 
 
 @dataclass(frozen=True)
+class ImageRequestResult:
+    """Outcome of a camera (image) request: whether it was accepted, and a status/url."""
+
+    ok: bool
+    status: str = ""
+    url: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class SubmitResult:
     """Outcome of submitting a command: accepted for queuing, or rejected at submit.
 
@@ -144,6 +154,10 @@ class Backend(ABC):
         that narrate perceived activity. Backends without an event feed return nothing."""
         return []
 
+    async def request_image(self, character_id: str) -> ImageRequestResult:
+        """Request an image of the character's current scene (the 📷 camera affordance)."""
+        return ImageRequestResult(ok=False, status="unavailable", reason="not available")
+
 
 class LocalBackend(Backend):
     """Generate an offline world and tick it in-process, the TUI as a real player."""
@@ -175,6 +189,7 @@ class LocalBackend(Backend):
         self.client_id = client_id or persistent_client_id()
         self.fallback_controller = fallback_controller
         self.timeout_seconds = timeout_seconds
+        self.imagegen = None
 
     async def start(self) -> None:
         # Imported here so the optional server/llm wiring is only pulled when hosting.
@@ -304,6 +319,20 @@ class LocalBackend(Backend):
     async def recent_events(self) -> list[dict]:
         return self._events.recent_messages() if self._events is not None else []
 
+    async def request_image(self, character_id: str) -> ImageRequestResult:
+        if self.imagegen is None:
+            return ImageRequestResult(
+                ok=False, status="unavailable", reason="image generation is not configured"
+            )
+        from ..imagegen.scene import request_scene_image
+
+        job = await request_scene_image(self.actor, self.imagegen, character_id=character_id)
+        if job is None:
+            return ImageRequestResult(
+                ok=False, status="no-room", reason="your character has no room to illustrate"
+            )
+        return ImageRequestResult(ok=True, status=job.status, url=job.url)
+
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
         """Hand the character to a single reusable web controller, bumping its generation
         so the offline dispatch stops driving it."""
@@ -421,6 +450,21 @@ class RemoteBackend(Backend):
         res = await self._client.get(f"{self.base}/world/events/recent")
         res.raise_for_status()
         return res.json().get("events", [])
+
+    async def request_image(self, character_id: str) -> ImageRequestResult:
+        res = await self._client.post(
+            f"{self.base}/world/character/{character_id}/scene-image"
+        )
+        if res.status_code == 409:
+            return ImageRequestResult(
+                ok=False, status="unavailable", reason="image generation is not available"
+            )
+        if not res.is_success:
+            return ImageRequestResult(
+                ok=False, status="error", reason=f"request failed ({res.status_code})"
+            )
+        body = res.json()
+        return ImageRequestResult(ok=True, status=body.get("status", ""), url=body.get("url", ""))
 
     async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
         res = await self._client.post(

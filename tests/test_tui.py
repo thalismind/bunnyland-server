@@ -2443,3 +2443,89 @@ def test_main_lists_generators_and_exits(monkeypatch, capsys):
     assert "Pop Culture:" in output
     assert "  apartment-demo *" in output
     assert "* ignores --seed" in output
+
+
+def _activity_prompts(activity):
+    return [str(activity.get_option_at_index(i).prompt) for i in range(activity.option_count)]
+
+
+# --- image request (camera affordance) -----------------------------------------------
+
+
+class _ImageBackend(RecordingBackend):
+    """Records image requests and returns a scripted result."""
+
+    def __init__(self, snapshot, result):
+        super().__init__(snapshot)
+        self._result = result
+        self.image_requests: list[str] = []
+
+    async def request_image(self, character_id):
+        self.image_requests.append(character_id)
+        return self._result
+
+
+async def test_app_request_image_without_player():
+    from textual.widgets import OptionList
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test():
+        await app.action_request_image()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("Select a character" in p for p in prompts)
+
+
+async def test_app_request_image_unavailable():
+    from textual.widgets import OptionList
+
+    # RecordingBackend inherits the base default -> unavailable.
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app.action_request_image()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("not available" in p for p in prompts)
+
+
+async def test_app_request_image_queued_and_ready():
+    from textual.widgets import OptionList
+
+    from bunnyland.tui.backend import ImageRequestResult
+
+    queued = ImageRequestResult(ok=True, status="queued", url="/media/events/x.png")
+    app = BunnylandTUI(_ImageBackend(_snapshot(), queued))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await app.action_request_image()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("image requested" in p for p in prompts)
+        assert app.backend.image_requests == [PLAYER]
+
+    ready = ImageRequestResult(ok=True, status="skipped", url="/media/events/x.png")
+    app2 = BunnylandTUI(_ImageBackend(_snapshot(), ready))
+    async with app2.run_test() as pilot:
+        await _select_player(app2, pilot)
+        await app2.action_request_image()
+        activity = app2.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("image ready" in p for p in prompts)
+
+
+async def test_app_request_image_button_press():
+    from textual.widgets import OptionList
+
+    from bunnyland.tui.backend import ImageRequestResult
+
+    backend = _ImageBackend(_snapshot(), ImageRequestResult(ok=True, status="queued"))
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        await pilot.click("#request-image")
+        await pilot.pause()
+        activity = app.query_one("#activity", OptionList)
+        prompts = _activity_prompts(activity)
+        assert any("image requested" in p for p in prompts)
+        assert backend.image_requests == [PLAYER]

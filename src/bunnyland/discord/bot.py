@@ -27,9 +27,9 @@ from ..core.claim_timeout import (
     normalize_claim_timeout,
 )
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
-from ..core.components import ControllerOutboxMessageComponent, RoomComponent
+from ..core.components import ControllerOutboxMessageComponent
 from ..core.controllers import DiscordControllerComponent
-from ..core.ecs import container_of, entity_name, replace_component
+from ..core.ecs import replace_component
 from ..core.events import (
     CharacterClaimedEvent,
     CommandExecutedEvent,
@@ -40,8 +40,7 @@ from ..core.events import (
 from ..core.world_actor import WorldActor
 from ..imagegen.affordance import ACK_EMOJI, DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
 from ..imagegen.events import ImageGenerationCompletedEvent, ImageGenerationFailedEvent
-from ..imagegen.spec import ImagePurpose
-from ..mechanics.history import history_record_for_event, record_world_history
+from ..imagegen.scene import request_scene_image
 
 if TYPE_CHECKING:
     from ..imagegen.service import ImageGenService
@@ -438,39 +437,17 @@ class DiscordBot:
         found = self._character_for_user(user.id)
         if found is None:
             return
-        character_id = found[0]
-        async with self.actor._lock:
-            character = self.actor.world.get_entity(character_id)
-            room_id = container_of(character)
-            if room_id is None or not self.actor.world.has_entity(room_id):
-                return
-            room = self.actor.world.get_entity(room_id)
-            if not room.has_component(RoomComponent):
-                return
-            room_title = room.get_component(RoomComponent).title
-            summary = f"{entity_name(character)} in {room_title}"
-            source_event_id = f"discord-scene:{character_id}:{self.actor.epoch}"
-            record = record_world_history(
-                self.actor.world,
-                summary=summary,
-                source_event_id=source_event_id,
-                event_type="scene",
-                created_at_epoch=self.actor.epoch,
-                location_id=str(room_id),
-            )
-            if record is None:  # a record for this moment already exists -> reuse it
-                record = history_record_for_event(self.actor.world, source_event_id)
-            record_id = str(record.id)
-        self._image_messages[record_id] = message
-        job = await self.imagegen.start(
-            record_id, ImagePurpose.EVENT, requested_by=str(user.id)
+        job = await request_scene_image(
+            self.actor, self.imagegen, character_id=found[0], requested_by=str(user.id)
         )
+        if job is None:  # the character is not in a room to illustrate
+            return
         if job.status == "skipped" and job.url:
             # The scene already has an image: deliver it immediately.
-            self._image_messages.pop(record_id, None)
             await self._post_image(message, job.url)
             await message.add_reaction(DELIVER_EMOJI)
             return
+        self._image_messages[job.entity_id] = message
         await message.add_reaction(ACK_EMOJI)
 
     async def _deliver_image(self, event: ImageGenerationCompletedEvent) -> None:
