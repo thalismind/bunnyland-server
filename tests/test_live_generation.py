@@ -53,6 +53,40 @@ def _live_config() -> ImageGenConfig:
     )
 
 
+#: Substrings that mark a checkpoint as NOT a plain SDXL image model (audio/video/Flux/etc.).
+_NON_SDXL = (
+    "vae",
+    "ace_step",
+    "audio",
+    "wan",
+    "svd",
+    "ltx",
+    "mochi",
+    "cosmos",
+    "video",
+    "flux",
+    "omnigen",
+    "kontext",
+    "refiner",
+)
+#: Preferred reliable SDXL families, tried in order.
+_PREFERRED = ("juggernaut", "dreamshaper", "realcartoon", "yamers-cartoon")
+
+
+def _pick_sdxl_checkpoint(names: list[str]) -> str | None:
+    """Pick a plain SDXL image checkpoint (the server also hosts audio/video/Flux models)."""
+    candidates = [
+        name
+        for name in names
+        if "xl" in name.lower() and not any(bad in name.lower() for bad in _NON_SDXL)
+    ]
+    for preferred in _PREFERRED:
+        for name in candidates:
+            if preferred in name.lower():
+                return name
+    return candidates[0] if candidates else None
+
+
 async def _discover_checkpoint(config: ImageGenConfig) -> str:
     import httpx
 
@@ -61,9 +95,10 @@ async def _discover_checkpoint(config: ImageGenConfig) -> str:
         response.raise_for_status()
         info = response.json()
     names = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
-    if not names:
-        pytest.skip("the ComfyUI server has no checkpoints installed")
-    return names[0]
+    checkpoint = _pick_sdxl_checkpoint(names)
+    if checkpoint is None:
+        pytest.skip("the ComfyUI server has no plain SDXL image checkpoint")
+    return checkpoint
 
 
 def _live_template(checkpoint: str, purpose: ImagePurpose) -> WorkflowTemplate:
