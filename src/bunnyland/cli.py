@@ -903,6 +903,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="claim timeout override in minutes, between 5 and 60",
     )
+    tui.add_argument("--no-icons", action="store_true", help="hide action and activity icons")
 
     args = parser.parse_args(argv)
 
@@ -920,6 +921,8 @@ def main(argv: list[str] | None = None) -> int:
             tui_args.extend(
                 ["--claim-timeout-minutes", str(args.claim_timeout_minutes)]
             )
+        if args.no_icons:
+            tui_args.append("--no-icons")
         return tui_main(tui_args)
 
     if args.command != "serve":

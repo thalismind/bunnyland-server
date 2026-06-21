@@ -3,6 +3,8 @@ the Textual app (RichLog scrollback, clickable target links, Tab completion, his
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from rich.style import Style
 
@@ -397,13 +399,18 @@ async def test_look_and_who_render_clickable_target_links():
 async def test_dispatch_action_resolves_reference_and_submits():
     repl = _repl()
     message = await repl.dispatch("take item_id=a brass key")
-    assert message.plain.startswith("» take")
+    assert message.plain.startswith("» 🤲 take")
     command = repl.backend.commands[-1]
     assert command["command_type"] == "take"
     assert command["payload"] == {"item_id": KEY}
     assert command["controller_generation"] == 2
     assert command["cost"] == {"action": 1, "focus": 0}
     assert command["lane"] == "world"
+
+    plain = _repl()
+    plain.show_icons = False
+    message = await plain.dispatch("take item_id=a brass key")
+    assert message.plain.startswith("» take")
 
 
 async def test_dispatch_action_with_string_argument_passes_through():
@@ -446,7 +453,7 @@ async def test_dispatch_action_surfaces_submit_rejection_reason():
     repl.control = ("controller:1", 2)
 
     message = await repl.dispatch("wait")
-    assert message.plain.startswith("✗ wait")
+    assert message.plain.startswith("✗ ⏳ wait")
     assert "character is asleep" in message.plain
 
 
@@ -645,7 +652,7 @@ def test_render_event_humanizes_and_resolves_names():
                actor_id=MARLOW, item_id=APPLE, tool_id="ghost", recipient_ids=[PLAYER],
                witness_ids=["nobody1", "nobody2"]),
     ])
-    assert text.plain.startswith("Marlow: Gave")
+    assert text.plain.startswith("• Marlow: Gave")
     assert "an apple" in text.plain and "Pib" in text.plain  # item_id and _ids resolved to names
     assert "ghost" not in text.plain  # unresolvable id dropped
     assert "nobody" not in text.plain  # an _ids field with no resolvable names is dropped
@@ -656,7 +663,12 @@ def test_render_event_without_details_is_just_a_label():
     bare = {"type": "event", "data": {"event_type": "WaitedEvent",
                                       "event": {"event_id": "w1", "visibility": "public"}}}
     [text] = repl.drain_events([bare])
-    assert text.plain == "Waited"
+    assert text.plain == "• Waited"
+
+    repl = _repl()
+    repl.show_icons = False
+    [plain] = repl.drain_events([bare])
+    assert plain.plain == "Waited"
 
 
 def test_status_text_with_and_without_player():
@@ -828,7 +840,7 @@ async def test_refresh_clears_stale_control_and_play_reclaims():
     assert repl.control is None
 
     message = await repl.dispatch("wait")
-    assert message.plain.startswith("» wait")
+    assert message.plain.startswith("» ⏳ wait")
     assert backend.claims == [PLAYER]
     assert repl.control == ("controller:1", 2)
     assert backend.commands[-1]["controller_generation"] == 2
@@ -1253,3 +1265,26 @@ def test_main_runs_local_backend(monkeypatch):
     assert repl_app.main(["--seed", "test seed", "--generator", "empty"]) == 0
     assert backends[0].seed == "test seed"
     assert backends[0].generator == "empty"
+
+
+def test_main_no_icons_disables_repl_icons(monkeypatch):
+    apps = []
+
+    class BackendStub:
+        def __init__(self, *, seed=None, generator=None, fallback_controller=None,
+                     timeout_seconds=None):
+            del seed, generator, fallback_controller, timeout_seconds
+
+    class AppStub:
+        def __init__(self, backend):
+            self.backend = backend
+            self.repl = SimpleNamespace(show_icons=True)
+            apps.append(self)
+
+        def run(self): ...
+
+    monkeypatch.setattr(repl_app, "LocalBackend", BackendStub)
+    monkeypatch.setattr(repl_app, "BunnylandReplApp", AppStub)
+
+    assert repl_app.main(["--no-icons"]) == 0
+    assert apps[0].repl.show_icons is False

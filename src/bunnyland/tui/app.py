@@ -17,6 +17,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
+from ..core.actions import action_icon_for
 from ..core.claim_timeout import normalize_claim_timeout
 from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators, format_generator_lines
@@ -39,6 +40,10 @@ def _queued_command_label(command: dict, actions: list[dict] | None = None) -> s
     suffix = f" — {' · '.join(parts)}" if parts else ""
     lane_suffix = f" [{lane}]" if lane else ""
     return f"{name}{lane_suffix}{suffix}"
+
+
+def _action_icon(action: dict) -> str:
+    return str(action.get("icon") or action_icon_for(_action_command_type(action)))
 
 
 def _queued_command_name(command: dict, actions: list[dict] | None = None) -> str:
@@ -95,6 +100,7 @@ def _legacy_action_view(verb: Verb) -> dict:
         "command_type": verb.cmd,
         "tool_name": verb.tool,
         "title": verb.label,
+        "icon": action_icon_for(verb.cmd),
         "lane": verb.lane,
         "cost": {"action": verb.ap, "focus": verb.fp},
         "arguments": arguments,
@@ -292,10 +298,13 @@ class BunnylandTUI(App[None]):
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, backend: Backend, *, show_intro: bool = False) -> None:
+    def __init__(
+        self, backend: Backend, *, show_intro: bool = False, show_icons: bool = True
+    ) -> None:
         super().__init__()
         self.backend = backend
         self.show_intro = show_intro
+        self.show_icons = show_icons
         self.world = World()
         self.player_id = ""
         self.control: tuple[str, int] | None = None
@@ -566,11 +575,16 @@ class BunnylandTUI(App[None]):
             # Never disable: an unavailable action is only de-emphasized (dimmed, with the
             # reason appended) so the player can still queue it if they want to.
             if available:
-                label = Text(f"{_action_title(action)}{tgt}  ({cost})")
+                prefix = f"{_action_icon(action)} " if self.show_icons else ""
+                label = Text(f"{prefix}{_action_title(action)}{tgt}  ({cost})")
             else:
                 reason = _action_unavailable_reason(action)
                 suffix = f" — {reason}" if reason else ""
-                label = Text(f"{_action_title(action)}{tgt}  ({cost}){suffix}", style="dim")
+                prefix = f"{_action_icon(action)} " if self.show_icons else ""
+                label = Text(
+                    f"{prefix}{_action_title(action)}{tgt}  ({cost}){suffix}",
+                    style="dim",
+                )
             action_options[option_id] = action
             verb_entries.append((option_id, label, label.plain))
         self._action_options = action_options
@@ -644,6 +658,7 @@ class BunnylandTUI(App[None]):
             player_id=self.player_id,
             room_of=self.world.room_of,
             name_for=self._name_for,
+            show_icons=self.show_icons,
         )
         if prime:
             self._render_activity()
@@ -882,6 +897,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="claim timeout override in minutes, between 5 and 60",
     )
+    parser.add_argument(
+        "--no-icons",
+        action="store_true",
+        help="hide action and activity icons",
+    )
     args = parser.parse_args(argv)
     if args.list_generators:
         for line in format_generator_lines(available_generators()):
@@ -908,6 +928,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     app = BunnylandTUI(backend)
+    app.show_icons = not args.no_icons
     app.show_intro = True
     app.run()
     return 0

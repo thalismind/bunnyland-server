@@ -704,6 +704,7 @@ def test_cli_tui_command_forwards_remote_options(monkeypatch):
             "llm",
             "--claim-timeout-minutes",
             "12",
+            "--no-icons",
         ]
     )
 
@@ -715,6 +716,7 @@ def test_cli_tui_command_forwards_remote_options(monkeypatch):
         "llm",
         "--claim-timeout-minutes",
         "12",
+        "--no-icons",
     ]
 
 

@@ -26,7 +26,7 @@ from typing import Any
 from rich.style import Style
 from rich.text import Text
 
-from ..core.actions import ActionDefinition, definitions_by_tool_name
+from ..core.actions import ActionDefinition, action_icon_for, definitions_by_tool_name
 from ..llm_agents.dispatch import suggest_names
 from ..llm_agents.natural_language import NaturalCommandParser
 from ..server.models import CharacterSummaryView
@@ -126,8 +126,9 @@ def resolve_name(value: str, world: World, candidates: list[tuple[str, str]]) ->
 class BunnylandRepl:
     """REPL state and command handling over a snapshot :class:`Backend`."""
 
-    def __init__(self, backend: Backend) -> None:
+    def __init__(self, backend: Backend, *, show_icons: bool = True) -> None:
         self.backend = backend
+        self.show_icons = show_icons
         self.world = World()
         self.player_id = ""
         self.control: tuple[str, int] | None = None
@@ -196,6 +197,7 @@ class BunnylandRepl:
             player_id=self.player_id,
             room_of=self.world.room_of,
             name_for=self.name_for,
+            show_icons=self.show_icons,
         )
 
     # ── dispatch ──────────────────────────────────────────────────────────────
@@ -261,10 +263,18 @@ class BunnylandRepl:
             "on_insufficient_points": "queue",
         })
         detail = " ".join(f"{k}={v}" for k, v in payload.items())
+        icon = (
+            f"{definition.icon or action_icon_for(definition.command_type)} "
+            if self.show_icons
+            else ""
+        )
         if not result.accepted:
             reason = result.reason or "command rejected"
-            return Text(f"✗ {definition.command_type} — {reason}".rstrip(), style="dark_orange")
-        return Text(f"» {definition.command_type} {detail}".rstrip(), style="green")
+            return Text(
+                f"✗ {icon}{definition.command_type} — {reason}".rstrip(),
+                style="dark_orange",
+            )
+        return Text(f"» {icon}{definition.command_type} {detail}".rstrip(), style="green")
 
     # ── rendering ─────────────────────────────────────────────────────────────
     def render_room(self) -> Text:
@@ -360,9 +370,13 @@ class BunnylandRepl:
         if topic and topic in self._defs:
             definition = self._defs[topic]
             keys = ", ".join(definition.arg_keys) or "(none)"
-            out = Text(
-                f"{topic} — {definition.title or definition.command_type}\n  parameters: {keys}"
+            icon = (
+                f"{definition.icon or action_icon_for(definition.command_type)} "
+                if self.show_icons
+                else ""
             )
+            title = definition.title or definition.command_type
+            out = Text(f"{icon}{topic} — {title}\n  parameters: {keys}")
             info = availability.get(definition.command_type)
             if info is not None and not info.get("available", True):
                 reason = info.get("unavailable_reason") or "unavailable"
@@ -376,8 +390,13 @@ class BunnylandRepl:
         tools = sorted(self._defs)
         # Available commands first and prominent; unavailable ones still listed but dimmed,
         # since a player may still choose to queue them.
-        available = [tool for tool in tools if is_available(tool)]
-        unavailable = [tool for tool in tools if not is_available(tool)]
+        def label(tool: str) -> str:
+            definition = self._defs[tool]
+            icon = definition.icon or action_icon_for(definition.command_type)
+            return f"{icon} {tool}" if self.show_icons else tool
+
+        available = [label(tool) for tool in tools if is_available(tool)]
+        unavailable = [label(tool) for tool in tools if not is_available(tool)]
         meta = ", ".join(m for m in META_COMMANDS if m != "exit")
         out = Text("Commands (try 'help <command>' for parameters):\n")
         out.append(f"  {', '.join(available)}\n")

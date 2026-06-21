@@ -6,6 +6,8 @@ from collections.abc import Callable
 
 from rich.text import Text
 
+from ..core.actions import action_icon_for
+
 # Events that would drown out narration rather than describe activity: command lifecycle,
 # continuous point/need/affect telemetry, and perception bookkeeping.
 _UNNARRATED_EVENT_TYPES = frozenset({
@@ -21,6 +23,15 @@ _SYSTEM_EVENT_TYPES = frozenset({
     "ControllerChangedEvent",
     "WorldPauseStatusChangedEvent",
 })
+
+EVENT_ICON_BY_TYPE: dict[str, str] = {
+    "ActorMovedEvent": "➡️",
+    "RoomLookedEvent": "👁️",
+    "CommandRejectedEvent": "⚠️",
+    "ControllerChangedEvent": "🎮",
+    "WorldPauseStatusChangedEvent": "⏸️",
+    "CharacterClaimedEvent": "🎮",
+}
 
 # Fields on every ``DomainEvent``; the rest of a serialized event is its specific payload.
 _EVENT_BASE_KEYS = frozenset({
@@ -58,6 +69,7 @@ class EventNarrator:
         player_id: str,
         room_of: Callable[[str | None], str | None],
         name_for: Callable[[str], str | None],
+        show_icons: bool = True,
     ) -> list[Text]:
         rendered: list[Text] = []
         current: set[str] = set()
@@ -76,7 +88,12 @@ class EventNarrator:
             own = bool(player_id) and event.get("actor_id") == player_id
             if own or self._perceives(event, player_id=player_id, room_of=room_of):
                 rendered.append(
-                    self._render_event(data, player_id=player_id, name_for=name_for)
+                    self._render_event(
+                        data,
+                        player_id=player_id,
+                        name_for=name_for,
+                        show_icons=show_icons,
+                    )
                 )
         self._seen_event_ids = current
         return rendered
@@ -108,6 +125,7 @@ class EventNarrator:
         *,
         player_id: str,
         name_for: Callable[[str], str | None],
+        show_icons: bool = True,
     ) -> Text:
         event = data.get("event", {})
         event_type = str(data.get("event_type", "Event"))
@@ -117,10 +135,13 @@ class EventNarrator:
             and event.get("actor_id") == player_id
             and event.get("arrival_summary")
         ):
-            return Text(str(event["arrival_summary"]))
+            prefix = "➡️ " if show_icons else ""
+            return Text(f"{prefix}{event['arrival_summary']}")
         if event_type == "RoomLookedEvent" and event.get("summary"):
-            return Text(str(event["summary"]))
+            prefix = "👁️ " if show_icons else ""
+            return Text(f"{prefix}{event['summary']}")
         label = _humanize_event_type(event_type)
+        icon = _event_icon(event_type, event) if show_icons else ""
         actor = name_for(event.get("actor_id") or "") if event.get("actor_id") else None
         details: list[str] = []
         for key, value in event.items():
@@ -138,6 +159,8 @@ class EventNarrator:
             else:
                 details.append(f"{key.replace('_', ' ')} {value}")
         line = f"{actor}: {label}" if actor else label
+        if icon:
+            line = f"{icon} {line}"
         if details:
             line += f" — {'; '.join(details)}"
         if event_type == "CommandRejectedEvent":
@@ -145,3 +168,9 @@ class EventNarrator:
         if event_type in _SYSTEM_EVENT_TYPES:
             return Text(line, style="dim")
         return Text(line)
+
+
+def _event_icon(event_type: str, event: dict) -> str:
+    if event_type == "CommandRejectedEvent" and event.get("command_type"):
+        return action_icon_for(str(event["command_type"]))
+    return EVENT_ICON_BY_TYPE.get(event_type, "•")

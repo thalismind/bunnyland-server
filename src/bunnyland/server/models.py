@@ -159,6 +159,7 @@ class ClientActionView(BaseModel):
     tool_name: str
     title: str
     description: str = ""
+    icon: str = ""
     lane: Lane = Lane.WORLD
     cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
     arguments: list[ClientActionArgumentView] = Field(default_factory=list)

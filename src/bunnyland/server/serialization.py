@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ..core.actions import ActionDefinition, action_definitions
+from ..core.actions import ActionDefinition, action_definitions, action_icon_for
 from ..core.availability import (
     AvailabilityResult,
     evaluate_availability,
@@ -552,6 +552,7 @@ def _action_view(
         tool_name=definition.name,
         title=definition.title or definition.command_type.replace("-", " ").title(),
         description=definition.description,
+        icon=definition.icon or action_icon_for(definition.command_type),
         lane=definition.lane,
         cost=CommandCostRequest(
             action=definition.cost.action,

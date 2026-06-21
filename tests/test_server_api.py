@@ -501,6 +501,7 @@ def test_client_view_action_menu_uses_advisory_target_groups(scenario):
     scenario.actor.register_action_definition(
         ActionDefinition(
             command_type="mark",
+            icon="📍",
             arguments={"artifact_id": ActionArgument(kind="entity")},
         )
     )
@@ -538,6 +539,9 @@ def test_client_view_action_menu_uses_advisory_target_groups(scenario):
     assert drop_args["item_id"] == "inventory"
     assert put_args["item_id"] == "inventory"
     assert put_args["target_container_id"] == "reachableItems"
+    assert actions["take"]["icon"] == "🤲"
+    assert actions["sip"]["icon"] == "•"
+    assert actions["mark"]["icon"] == "📍"
     assert tell_args["target_id"] == "characters"
     assert tell_args["text"] is None
     assert sip_args["source_id"] == "reachableItems"

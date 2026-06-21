@@ -90,9 +90,11 @@ class BunnylandReplApp(App[None]):
 
     BINDINGS = [Binding("ctrl+c", "quit", "Quit")]
 
-    def __init__(self, backend: Backend, *, show_intro: bool = False) -> None:
+    def __init__(
+        self, backend: Backend, *, show_intro: bool = False, show_icons: bool = True
+    ) -> None:
         super().__init__()
-        self.repl = BunnylandRepl(backend)
+        self.repl = BunnylandRepl(backend, show_icons=show_icons)
         self.show_intro = show_intro
         self.log_view = RichLog(id="log", wrap=True)
         self.command = ReplInput(
@@ -204,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="list the available world generators (demo worlds) for local play and exit",
     )
+    parser.add_argument("--no-icons", action="store_true", help="hide action and event icons")
     args = parser.parse_args(argv)
 
     if args.list_generators:
@@ -231,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     app = BunnylandReplApp(backend)
+    if hasattr(app, "repl"):
+        app.repl.show_icons = not args.no_icons
     app.show_intro = True
     app.run()
     return 0

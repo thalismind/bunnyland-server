@@ -71,12 +71,24 @@ path and silently run against the wrong environment.
 
 ### The two hard gates
 
-- **Coverage floor: `fail_under = 97`** (branch coverage). New code needs tests.
-  If you are below the line, add focused tests rather than carving exclusions.
+- **Coverage floor: `fail_under = 100`** (branch coverage). Treat this as a
+  behavioral coverage gate, not a line-count scoreboard. Untested paths are typed
+  holes: either a reachable behavior is missing a test, or the code is unreachable
+  and should be removed. If every runtime behavior, including rejections and error
+  paths, is tested, then every branch should be tested; if every branch is tested,
+  any uncovered statement is dead code.
 - **E2E and Discord playtest tests may not skip.** `scripts/test-coverage`
   parses the JUnit report and fails the build if any `tests.test_e2e` or
   `tests.test_discord_playtest` case is skipped. If those need credentials or
   fixtures to run, fix the fixture — don't skip the test.
+
+Do not satisfy coverage with hacky monkeypatch-only tests or exclusions. Use
+coverage reports to find missing behavior or unreachable code, then prove the
+behavior with the right layer: comprehensive input tests, Hypothesis
+property-based tests, direct handler tests, mocked Discord playtests, or a
+known-world sequence of commands and expected results.
+The longer rationale lives in
+[`docs/developer/testing.md`](docs/developer/testing.md).
 
 ### Pick the narrowest test layer
 

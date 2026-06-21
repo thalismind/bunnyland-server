@@ -261,7 +261,25 @@ def test_event_narrator_renders_arrival_room_for_own_move():
         name_for=lambda entity_id: entity_name(world.get(entity_id)),
     )
 
-    assert [item.plain for item in shown] == ["Hallway\nHere: Pib.\nExits: south."]
+    assert [item.plain for item in shown] == ["➡️ Hallway\nHere: Pib.\nExits: south."]
+
+    narrator = EventNarrator()
+    plain = narrator.drain_events(
+        [_event(
+            "m1",
+            event_type="ActorMovedEvent",
+            visibility="system",
+            actor_id=PLAYER,
+            from_room_id=PARLOR,
+            to_room_id=HALL,
+            arrival_summary="Hallway\nHere: Pib.\nExits: south.",
+        )],
+        player_id=PLAYER,
+        room_of=world.room_of,
+        name_for=lambda entity_id: entity_name(world.get(entity_id)),
+        show_icons=False,
+    )
+    assert [item.plain for item in plain] == ["Hallway\nHere: Pib.\nExits: south."]
 
 
 def test_event_narrator_uses_normal_style_for_activity_and_dim_for_system():
@@ -307,9 +325,9 @@ def test_event_narrator_uses_normal_style_for_activity_and_dim_for_system():
     )
 
     assert [item.plain for item in shown] == [
-        "Pib: Character claimed — Pib; generation 3",
-        "Parlor: Marlow, an apple",
-        "Pib: Controller changed — generation 4; controller kind web",
+        "🎮 Pib: Character claimed — Pib; generation 3",
+        "👁️ Parlor: Marlow, an apple",
+        "🎮 Pib: Controller changed — generation 4; controller kind web",
     ]
     assert shown[0].style == ""
     assert shown[1].style == ""
@@ -2367,7 +2385,30 @@ def test_main_runs_local_backend(monkeypatch):
     assert backends[0].seed == "test seed"
     assert backends[0].generator == "empty"
     assert backends[0].fallback_controller == "suspend"
-    assert backends[0].timeout_seconds is None
+
+
+def test_main_no_icons_disables_tui_icons(monkeypatch):
+    apps = []
+
+    class BackendStub:
+        def __init__(
+            self, *, seed=None, generator=None, fallback_controller=None, timeout_seconds=None
+        ):
+            del seed, generator, fallback_controller, timeout_seconds
+
+    class AppStub:
+        def __init__(self, backend):
+            self.backend = backend
+            self.show_icons = True
+            apps.append(self)
+
+        def run(self): ...
+
+    monkeypatch.setattr(tui_app, "LocalBackend", BackendStub)
+    monkeypatch.setattr(tui_app, "BunnylandTUI", AppStub)
+
+    assert tui_app.main(["--no-icons"]) == 0
+    assert apps[0].show_icons is False
 
 
 def test_main_lists_generators_and_exits(monkeypatch, capsys):
