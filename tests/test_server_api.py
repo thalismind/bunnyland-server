@@ -111,6 +111,7 @@ from bunnyland.mechanics.toonsim import (
 )
 from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.plugins import bunnyland_plugins, select
+from bunnyland.plugins.builtin import MCP
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import (
     CommandRequest,
@@ -1268,6 +1269,12 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
         "ok": True,
         "world_epoch": scenario.actor.epoch,
         "git_hash": "deadbeefcafebabe",
+        "features": {
+            "mcp": False,
+            "character_chat": False,
+            "character_sheets": True,
+            "image_generation": False,
+        },
     }
     assert snapshot.status_code == 200
     assert snapshot.json()["metadata"]["seed"] == "moss"
@@ -1313,6 +1320,46 @@ def test_health_reports_unknown_git_hash_when_env_is_missing(scenario, monkeypat
         "ok": True,
         "world_epoch": scenario.actor.epoch,
         "git_hash": "unknown",
+        "features": {
+            "mcp": False,
+            "character_chat": False,
+            "character_sheets": True,
+            "image_generation": False,
+        },
+    }
+
+
+def test_health_reports_configured_feature_flags(scenario, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    class ImageService:
+        def start_backfill(self):
+            pass
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        server_app,
+        "create_bunnyland_mcp_app",
+        lambda **_kwargs: server_app.FastAPI(),
+    )
+    app = create_app(
+        scenario.actor,
+        plugins=select(bunnyland_plugins(), [MCP]),
+        imagegen=ImageService(),
+        character_chat=object(),
+    )
+    client = TestClient(app)
+
+    health = client.get("/health")
+
+    assert health.status_code == 200
+    assert health.json()["features"] == {
+        "mcp": True,
+        "character_chat": True,
+        "character_sheets": True,
+        "image_generation": True,
     }
 
 

@@ -62,6 +62,13 @@ class RecentEventsResponse(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class FeatureStatusResponse(BaseModel):
+    mcp: bool = False
+    character_chat: bool = False
+    character_sheets: bool = True
+    image_generation: bool = False
+
+
 class CharacterChatStatusResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1
@@ -108,6 +115,7 @@ class HealthResponse(BaseModel):
     ok: bool = True
     world_epoch: int
     git_hash: str = "unknown"
+    features: FeatureStatusResponse = Field(default_factory=FeatureStatusResponse)
 
 
 class QueuedCommandView(BaseModel):
@@ -701,6 +709,7 @@ __all__ = [
     "DmProjectionResponse",
     "DmRoomProjectionView",
     "EventImageRequest",
+    "FeatureStatusResponse",
     "QueuedCommandView",
     "RecentEventsResponse",
     "RoomProjectionEntityView",

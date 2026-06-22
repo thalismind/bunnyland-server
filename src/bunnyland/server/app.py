@@ -57,6 +57,7 @@ from .models import (
     ControllerDefinitionListResponse,
     DmProjectionResponse,
     EventImageRequest,
+    FeatureStatusResponse,
     HealthResponse,
     RecentEventsResponse,
     RoomProjectionResponse,
@@ -236,7 +237,16 @@ def create_app(
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
-        return HealthResponse(world_epoch=actor.epoch, git_hash=_git_hash())
+        return HealthResponse(
+            world_epoch=actor.epoch,
+            git_hash=_git_hash(),
+            features=FeatureStatusResponse(
+                mcp=mcp_enabled(plugins),
+                character_chat=character_chat is not None,
+                character_sheets=True,
+                image_generation=imagegen is not None,
+            ),
+        )
 
     @app.get("/world/snapshot")
     async def world_snapshot(
