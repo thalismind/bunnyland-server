@@ -40,6 +40,33 @@ _EVENT_BASE_KEYS = frozenset({
 })
 
 
+def perceives_event(
+    event: dict,
+    *,
+    player_id: str,
+    room_of: Callable[[str | None], str | None],
+) -> bool:
+    """Whether a character perceives a serialized event, by its visibility.
+
+    Shared by the client-side narrator and the server's player update stream so both apply
+    the same rule: ``public`` always; ``room`` only in the same room; ``directed`` to the
+    actor or a target; ``private`` only to the actor. System-visibility events (e.g. image
+    generation) are never perceived this way and are surfaced separately."""
+    visibility = event.get("visibility")
+    if visibility == "public":
+        return True
+    if visibility == "room":
+        return bool(player_id) and event.get("room_id") == room_of(player_id)
+    if visibility == "directed":
+        return bool(player_id) and (
+            player_id == event.get("actor_id")
+            or player_id in (event.get("target_ids") or ())
+        )
+    if visibility == "private":
+        return bool(player_id) and player_id == event.get("actor_id")
+    return False
+
+
 def _humanize_event_type(event_type: str) -> str:
     """``ResourceGatheredEvent`` -> ``Resource gathered`` (splits on CamelCase)."""
     name = event_type.removesuffix("Event")
@@ -105,19 +132,7 @@ class EventNarrator:
         player_id: str,
         room_of: Callable[[str | None], str | None],
     ) -> bool:
-        visibility = event.get("visibility")
-        if visibility == "public":
-            return True
-        if visibility == "room":
-            return bool(player_id) and event.get("room_id") == room_of(player_id)
-        if visibility == "directed":
-            return bool(player_id) and (
-                player_id == event.get("actor_id")
-                or player_id in (event.get("target_ids") or ())
-            )
-        if visibility == "private":
-            return bool(player_id) and player_id == event.get("actor_id")
-        return False
+        return perceives_event(event, player_id=player_id, room_of=room_of)
 
     def _render_event(
         self,

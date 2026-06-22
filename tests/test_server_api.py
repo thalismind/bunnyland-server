@@ -129,7 +129,12 @@ from bunnyland.server.admin import (
     save_configured_world,
     start_world_generation,
 )
-from bunnyland.server.app import create_app, next_websocket_update
+from bunnyland.server.app import (
+    create_app,
+    next_player_update,
+    next_websocket_update,
+    player_receives_message,
+)
 from bunnyland.server.models import (
     ClientTargetView,
     ControllerAssignmentRequest,
@@ -4165,6 +4170,135 @@ def test_fastapi_world_updates_websocket_requires_admin_token(scenario):
             "/world/updates", headers={"X-Bunnyland-Admin-Token": "wrong"}
         ) as websocket:
             websocket.receive_json()
+
+
+def _player_event(event_type, **event):
+    return {"type": "event", "data": {"event_type": event_type, "event": event}}
+
+
+def test_player_receives_message_filters_by_perception(scenario):
+    cid = str(scenario.character)
+    # Non-event control frames always pass through.
+    assert player_receives_message(scenario.actor, cid, {"type": "heartbeat", "data": {}}) is True
+    # Image-generation results ride at system visibility but are forwarded explicitly.
+    assert player_receives_message(
+        scenario.actor, cid, _player_event("ImageGenerationCompletedEvent", visibility="system")
+    ) is True
+    # Your own action, even when otherwise private, reaches you.
+    assert player_receives_message(
+        scenario.actor, cid, _player_event("ActorMovedEvent", visibility="private", actor_id=cid)
+    ) is True
+    # Public and same-room events are perceived; another room's are not.
+    assert player_receives_message(
+        scenario.actor, cid, _player_event("Spoke", visibility="public")
+    ) is True
+    assert player_receives_message(
+        scenario.actor, cid, _player_event("Here", visibility="room", room_id=str(scenario.room_a))
+    ) is True
+    assert player_receives_message(
+        scenario.actor, cid, _player_event("There", visibility="room", room_id=str(scenario.room_b))
+    ) is False
+    # Someone else's private action is not perceived.
+    assert player_receives_message(
+        scenario.actor, cid, _player_event("Secret", visibility="private", actor_id="other")
+    ) is False
+    # An unknown character has no room, so room-scoped events never match.
+    assert player_receives_message(
+        scenario.actor,
+        "entity:999999",
+        _player_event("Here", visibility="room", room_id=str(scenario.room_a)),
+    ) is False
+
+
+async def test_next_player_update_skips_unperceived_and_heartbeats(scenario, monkeypatch):
+    cid = str(scenario.character)
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe()
+    try:
+        # A message the player cannot perceive is skipped in favor of one they can.
+        subscription.queue.put_nowait(
+            _player_event("Secret", visibility="private", actor_id="other")
+        )
+        subscription.queue.put_nowait(_player_event("Spoke", visibility="public"))
+        message = await next_player_update(scenario.actor, subscription, cid)
+        assert message["data"]["event_type"] == "Spoke"
+        # An idle stream yields a heartbeat once the interval elapses.
+        monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
+        heartbeat = await next_player_update(scenario.actor, subscription, cid)
+        assert heartbeat == {"type": "heartbeat", "data": {"world_epoch": scenario.actor.epoch}}
+    finally:
+        subscription.close()
+
+
+def test_fastapi_character_updates_websocket_sends_initial_projection(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    with client.websocket_connect(f"/world/character/{scenario.character}/updates") as websocket:
+        message = websocket.receive_json()
+
+    assert message["type"] == "projection"
+    assert message["data"]["character_id"] == str(scenario.character)
+
+
+async def test_player_updates_endpoint_streams_then_handles_disconnect(scenario, monkeypatch):
+    from fastapi import WebSocketDisconnect
+
+    monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
+    app = create_app(scenario.actor)
+    route = next(
+        route for route in app.routes if route.path == "/world/character/{character_id}/updates"
+    )
+    sent: list[dict] = []
+
+    class FakeWebSocket:
+        async def accept(self):
+            return None
+
+        async def send_json(self, payload):
+            sent.append(payload)
+            # Projection first, then a heartbeat from the idle loop; the client then vanishes.
+            if len(sent) >= 2:
+                raise WebSocketDisconnect(code=1006)
+
+        async def close(self, code=1000):
+            return None
+
+    await route.endpoint(FakeWebSocket(), str(scenario.character))
+
+    assert sent[0]["type"] == "projection"
+    assert sent[1]["type"] == "heartbeat"
+
+
+async def test_player_updates_endpoint_rejects_unknown_and_non_character(scenario):
+    app = create_app(scenario.actor)
+    route = next(
+        route for route in app.routes if route.path == "/world/character/{character_id}/updates"
+    )
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.closed: list[int] = []
+            self.accepted = False
+
+        async def accept(self):
+            self.accepted = True
+
+        async def close(self, code=1000):
+            self.closed.append(code)
+
+        async def send_json(self, payload):
+            return None
+
+    unknown = FakeWebSocket()
+    await route.endpoint(unknown, "not-an-id")
+    assert unknown.closed == [1008]
+    assert unknown.accepted is False
+
+    non_character = FakeWebSocket()
+    await route.endpoint(non_character, str(scenario.room_a))
+    assert non_character.closed == [1008]
 
 
 async def test_event_stream_fans_out_pause_status_events(scenario):

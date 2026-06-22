@@ -19,6 +19,7 @@ from ..core import (
     SuspendedComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
+    container_of,
     parse_entity_id,
     spawn_entity,
 )
@@ -40,6 +41,7 @@ from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
 from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
+from ..tui.events import perceives_event
 from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .models import (
@@ -141,6 +143,57 @@ async def next_websocket_update(actor: WorldActor, subscription: EventSubscripti
         )
     except TimeoutError:
         return {"type": "heartbeat", "data": {"world_epoch": actor.epoch}}
+
+
+# Image-generation results ride at SYSTEM visibility with no actor_id, so the perception
+# rules never match them; the player stream forwards them explicitly and the client decides
+# which (by purpose) to surface, mirroring how the web clients read the recent-events feed.
+_IMAGE_EVENT_TYPES = frozenset(
+    {"ImageGenerationCompletedEvent", "ImageGenerationFailedEvent"}
+)
+
+
+def _character_room_id(actor: WorldActor, character_id: str) -> str | None:
+    parsed = parse_entity_id(character_id)
+    if parsed is None or not actor.world.has_entity(parsed):
+        return None
+    room = container_of(actor.world.get_entity(parsed))
+    return None if room is None else str(room)
+
+
+def player_receives_message(actor: WorldActor, character_id: str, message: dict) -> bool:
+    """Whether a player update stream should forward a broadcast message to ``character_id``:
+    its own actions, anything it perceives, and any image-generation result."""
+    if message.get("type") != "event":
+        return True
+    data = message.get("data", {})
+    if data.get("event_type") in _IMAGE_EVENT_TYPES:
+        return True
+    event = data.get("event", {})
+    if event.get("actor_id") == character_id:
+        return True
+    return perceives_event(
+        event,
+        player_id=character_id,
+        room_of=lambda _player_id: _character_room_id(actor, character_id),
+    )
+
+
+async def next_player_update(
+    actor: WorldActor, subscription: EventSubscription, character_id: str
+) -> dict:
+    """The next message the player should see, skipping broadcasts they cannot perceive, or
+    a heartbeat once the stream has been idle for the heartbeat interval."""
+    while True:
+        try:
+            message = await asyncio.wait_for(
+                subscription.queue.get(),
+                timeout=WEBSOCKET_HEARTBEAT_SECONDS,
+            )
+        except TimeoutError:
+            return {"type": "heartbeat", "data": {"world_epoch": actor.epoch}}
+        if player_receives_message(actor, character_id, message):
+            return message
 
 
 def create_app(
@@ -1045,6 +1098,36 @@ def create_app(
             await websocket.send_json({"type": "snapshot", "data": snapshot})
             while True:
                 await websocket.send_json(await next_websocket_update(actor, subscription))
+        except WebSocketDisconnect:
+            pass
+        finally:
+            subscription.close()
+
+    @app.websocket("/world/character/{character_id}/updates")
+    async def world_character_updates(websocket: WebSocket, character_id: str) -> None:
+        # The player-facing live feed: an initial projection, then the events this character
+        # perceives plus its image-generation results. Ungated like the other player
+        # projections — only the character id scopes it — so clients can drop their poll loop
+        # (and fall back to polling if the socket drops).
+        parsed = parse_entity_id(character_id)
+        if parsed is None or not actor.world.has_entity(parsed):
+            await websocket.close(code=1008)  # policy violation: unknown character
+            return
+        if not actor.world.get_entity(parsed).has_component(CharacterComponent):
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+        subscription = stream.subscribe()
+        try:
+            with telemetry.span("websocket.character", {"character.id": character_id}):
+                projection = serialize_character_projection(actor, character_id).model_dump(
+                    mode="json"
+                )
+            await websocket.send_json({"type": "projection", "data": projection})
+            while True:
+                await websocket.send_json(
+                    await next_player_update(actor, subscription, character_id)
+                )
         except WebSocketDisconnect:
             pass
         finally:
