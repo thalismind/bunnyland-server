@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from ..imagegen.service import ImageGenService
     from ..plugins.model import Plugin
     from ..worldgen import GenOptions
+    from .character_chat import CharacterChatService
 
 
 async def run_loop_with_api(
@@ -31,6 +32,7 @@ async def run_loop_with_api(
     plugins: list[Plugin] | None = None,
     admin_token: str | None = None,
     imagegen: ImageGenService | None = None,
+    character_chat: CharacterChatService | None = None,
     max_ticks: int | None = None,
 ) -> int:
     """Run uvicorn and the game loop until either one stops."""
@@ -52,6 +54,7 @@ async def run_loop_with_api(
         plugins=plugins,
         admin_token=admin_token,
         imagegen=imagegen,
+        character_chat=character_chat,
     )
     telemetry.instrument_fastapi(app)
     server = uvicorn.Server(

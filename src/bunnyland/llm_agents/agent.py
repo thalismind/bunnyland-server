@@ -53,6 +53,12 @@ class LLMUsage:
         return bool(self.cost)
 
 
+@dataclass(frozen=True)
+class ChatAgentReply:
+    content: str = ""
+    tool_call: ToolCall | None = None
+
+
 def _int_field(source: object, *names: str) -> int:
     for name in names:
         if isinstance(source, MappingABC):
@@ -709,6 +715,54 @@ class OllamaAgent:
         call = tool_calls[0]["function"]
         return ToolCall(name=call["name"], arguments=dict(call.get("arguments", {})))
 
+    async def chat(
+        self,
+        messages: list[dict],
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> ChatAgentReply:
+        del character_id, provider
+        resolved_model = normalize_model(model or self._model)
+        resolved_tools = tools or []
+        request_attrs = _llm_request_attrs(
+            "character_chat",
+            resolved_model,
+            messages,
+            resolved_tools,
+            system_prompt=str(messages[0].get("content", "")) if messages else "",
+        )
+
+        async def request():
+            return await self._client.chat(
+                model=resolved_model,
+                messages=messages,
+                tools=resolved_tools,
+            )
+
+        response = await _call_provider_with_retries(
+            "ollama",
+            request,
+            max_retries=self._max_retries,
+            retry_delay_seconds=self._retry_delay_seconds,
+            attributes=request_attrs,
+        )
+        if response is None:
+            return ChatAgentReply()
+        _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
+        message = response["message"]
+        tool_calls = message.get("tool_calls") or []
+        tool_call = None
+        if tool_calls:
+            call = tool_calls[0]["function"]
+            tool_call = ToolCall(name=call["name"], arguments=dict(call.get("arguments", {})))
+        return ChatAgentReply(
+            content=str(message.get("content") or "").strip(),
+            tool_call=tool_call,
+        )
+
     def _trim(self, history: list[dict]) -> None:
         # Keep the last N exchanges (user + assistant per turn).
         limit = self._history_turns * 2
@@ -815,6 +869,61 @@ class OpenRouterAgent:
         arguments = _openrouter_arguments(getattr(function, "arguments", {}))
         return ToolCall(name=function.name, arguments=arguments)
 
+    async def chat(
+        self,
+        messages: list[dict],
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> ChatAgentReply:
+        del character_id, provider
+        resolved_model = normalize_model(model or self._model)
+        resolved_tools = tools or []
+        request_attrs = _llm_request_attrs(
+            "character_chat",
+            resolved_model,
+            messages,
+            resolved_tools,
+            system_prompt=str(messages[0].get("content", "")) if messages else "",
+        )
+
+        async def request():
+            return await self._client.chat.send_async(
+                model=resolved_model,
+                messages=messages,
+                tools=resolved_tools,
+            )
+
+        response = await _call_provider_with_retries(
+            "openrouter",
+            request,
+            max_retries=self._max_retries,
+            retry_delay_seconds=self._retry_delay_seconds,
+            attributes=request_attrs,
+        )
+        if response is None:
+            return ChatAgentReply()
+        _record_llm_usage(
+            "openrouter",
+            resolved_model,
+            await _openrouter_enriched_usage(self._client, response),
+        )
+        message = response.choices[0].message
+        tool_calls = getattr(message, "tool_calls", None) or []
+        tool_call = None
+        if tool_calls:
+            function = tool_calls[0].function
+            tool_call = ToolCall(
+                name=function.name,
+                arguments=_openrouter_arguments(getattr(function, "arguments", {})),
+            )
+        return ChatAgentReply(
+            content=str(getattr(message, "content", "") or "").strip(),
+            tool_call=tool_call,
+        )
+
     def _trim(self, history: list[dict]) -> None:
         limit = self._history_turns * 2
         if len(history) > limit:
@@ -850,6 +959,33 @@ class ProviderRouterAgent:
         return agent.decide(
             prompt,
             context,
+            character_id=character_id,
+            model=model,
+            provider=provider,
+            tools=tools,
+        )
+
+    async def chat(
+        self,
+        messages: list[dict],
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> ChatAgentReply:
+        selected = provider or self._default_provider
+        agent = self._providers.get(selected)
+        if agent is None:
+            available = ", ".join(sorted(self._providers)) or "(none)"
+            raise RuntimeError(
+                f"no LLM agent configured for provider {selected!r}; available: {available}"
+            )
+        chat = getattr(agent, "chat", None)
+        if chat is None:
+            raise RuntimeError(f"provider {selected!r} does not support character chat")
+        return await chat(
+            messages,
             character_id=character_id,
             model=model,
             provider=provider,
@@ -983,6 +1119,7 @@ __all__ = [
     "Agent",
     "BACKGROUND_PROFILES",
     "BackgroundProfile",
+    "ChatAgentReply",
     "BehaviorProfileAgent",
     "CharacterAgent",
     "GoalDirectedAgent",

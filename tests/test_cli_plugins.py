@@ -42,6 +42,7 @@ from bunnyland.plugins.builtin import (
     VOIDSIM,
     WORLDGEN,
 )
+from bunnyland.prompts.builder import PromptBuilder
 
 
 def _serve_args(**overrides):
@@ -50,6 +51,7 @@ def _serve_args(**overrides):
         "api_host": "127.0.0.1",
         "api_port": None,
         "autosave_every": 0,
+        "character_chat": False,
         "character_model": None,
         "claim_timeout_controller": None,
         "claim_timeout_seconds": 0,
@@ -682,6 +684,69 @@ def test_cli_serve_credentials_reads_discord_token(monkeypatch):
     credentials = cli._serve_credentials(_serve_args(discord=True))
 
     assert credentials.discord_token == "discord-token"
+
+
+def test_cli_character_chat_requires_api_port():
+    with pytest.raises(SystemExit, match="--character-chat mounts on the HTTP API"):
+        cli._validate_serve_args(_serve_args(character_chat=True, api_port=None))
+
+
+def test_cli_build_character_chat_service_constructs_opt_in_service(monkeypatch, scenario):
+    built = {}
+
+    class DummyAgent:
+        pass
+
+    def fake_provider_agent(args, credentials, models):
+        built["provider_args"] = (args, credentials, models)
+        return DummyAgent()
+
+    monkeypatch.setattr(cli, "_build_provider_agent", fake_provider_agent)
+    service = cli._build_character_chat_service(
+        _serve_args(character_chat=True),
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        cli.ServeCredentials(worldgen_provider="ollama"),
+        cli.ServeModels(worldgen_model="world", character_model="character"),
+    )
+
+    assert service is not None
+    assert isinstance(service.agent, DummyAgent)
+    assert built["provider_args"][0].character_chat is True
+
+
+def test_cli_chat_command_forwards_options(monkeypatch):
+    import bunnyland.chat as chat
+
+    calls = {}
+
+    def fake_chat_main(argv):
+        calls["argv"] = argv
+        return 23
+
+    monkeypatch.setattr(chat, "main", fake_chat_main)
+
+    result = main(["chat", "--server", "http://localhost:8765", "--character", "Juniper"])
+
+    assert result == 23
+    assert calls["argv"] == ["--server", "http://localhost:8765", "--character", "Juniper"]
+
+
+def test_cli_chat_command_omits_blank_character(monkeypatch):
+    import bunnyland.chat as chat
+
+    calls = {}
+
+    def fake_chat_main(argv):
+        calls["argv"] = argv
+        return 24
+
+    monkeypatch.setattr(chat, "main", fake_chat_main)
+
+    result = main(["chat", "--server", "http://localhost:8765"])
+
+    assert result == 24
+    assert calls["argv"] == ["--server", "http://localhost:8765"]
 
 
 def test_cli_tui_command_forwards_remote_options(monkeypatch):

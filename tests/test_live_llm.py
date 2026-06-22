@@ -38,9 +38,19 @@ from bunnyland.core.controllers import LLMControllerComponent
 from bunnyland.core.events import SpeechSaidEvent
 from bunnyland.llm_agents import ControllerDispatch, OllamaAgent, OpenRouterAgent, tool_schemas
 from bunnyland.llm_agents.agent import CHARACTER_SYSTEM_PROMPT
-from bunnyland.plugins import apply_plugins, bunnyland_plugins
-from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.mechanics.persona import (
+    GoalComponent,
+    PersonaProfileComponent,
+    PreferenceComponent,
+    TraitSetComponent,
+)
+from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
+from bunnyland.plugins.builtin import CORE_VERBS
+from bunnyland.prompts.builder import PromptBuilder, render_prompt
+from bunnyland.server.app import create_app
+from bunnyland.server.character_chat import ALLOWED_CHAT_TOOLS, build_character_chat_service
 from bunnyland.server.models import (
+    CharacterChatRequest,
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
     WorldItemGenerationRequest,
@@ -556,6 +566,191 @@ def _gameplay_actor(provider: str) -> tuple[WorldActor, object, object, object, 
     )
     generation = actor.assign_controller(character.id, controller.id)
     return actor, room_b.id, character.id, item.id, generation
+
+
+def _chat_endpoint_actor(provider: str) -> tuple[WorldActor, object]:
+    actor = WorldActor()
+    apply_plugins([plugin for plugin in bunnyland_plugins() if plugin.id == CORE_VERBS], actor)
+
+    room = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Live Chat Burrow", kind="room"),
+            RoomComponent(
+                title="Live Chat Burrow",
+                description="A quiet live-test room with soft moss and one patient listener.",
+            ),
+        ],
+    )
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=5.0),
+            FocusPointsComponent(current=3.0, maximum=3.0, regen_per_hour=3.0),
+            InitiativeComponent(score=1.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character.id)
+
+    controller = spawn_entity(actor.world)
+    controller.add_component(
+        LLMControllerComponent(
+            profile_name="live-chat-test",
+            model=_character_model(provider),
+            provider=provider,
+        )
+    )
+    actor.assign_controller(character.id, controller.id)
+    return actor, character.id
+
+
+def _contextual_chat_actor(provider: str) -> tuple[WorldActor, object]:
+    actor = WorldActor()
+    apply_plugins([plugin for plugin in bunnyland_plugins() if plugin.id == CORE_VERBS], actor)
+
+    room = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Azure Fern Observatory", kind="room"),
+            RoomComponent(
+                title="Azure Fern Observatory",
+                description=(
+                    "A glass-roofed live-test observatory filled with blue ferns "
+                    "and careful map notes."
+                ),
+            ),
+        ],
+    )
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            PersonaProfileComponent(voice="measured and map-minded", role="cartographer"),
+            TraitSetComponent(traits=("observant",)),
+            PreferenceComponent(likes=("blue ferns",)),
+            GoalComponent(active_goals=("chart the moonlit paths",)),
+            ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=5.0),
+            FocusPointsComponent(current=3.0, maximum=3.0, regen_per_hour=3.0),
+            InitiativeComponent(score=1.0),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character.id)
+    item = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="brass astrolabe", kind="item"),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), item.id)
+
+    controller = spawn_entity(actor.world)
+    controller.add_component(
+        LLMControllerComponent(
+            profile_name="live-chat-context-test",
+            model=_character_model(provider),
+            provider=provider,
+        )
+    )
+    actor.assign_controller(character.id, controller.id)
+    return actor, character.id
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_live_character_chat_endpoints_use_real_llm(provider):
+    testclient = pytest.importorskip("fastapi.testclient")
+    actor, character_id = _chat_endpoint_actor(provider)
+    service = build_character_chat_service(
+        actor,
+        PromptBuilder(actor.world),
+        _character_agent(provider),
+    )
+    client = testclient.TestClient(create_app(actor, character_chat=service))
+
+    status = client.get("/world/chat/status")
+    assert status.status_code == 200
+    status_body = status.json()
+    assert status_body["enabled"] is True
+    assert set(status_body["allowed_tools"]).issubset(ALLOWED_CHAT_TOOLS)
+    assert {"look", "say", "wait"}.issubset(set(status_body["allowed_tools"]))
+
+    response = client.post(
+        f"/world/character/{character_id}/chat",
+        json={
+            "client_id": f"live-{provider}",
+            "message": (
+                "Reply in character with one short sentence. Prefer no tool unless "
+                "Juniper would naturally choose one."
+            ),
+            "history_summary": "The human greeted Juniper before this live endpoint test.",
+            "history": [
+                {"role": "user", "text": "hello"},
+                {"role": "character", "text": "quietly, hello"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["schema_version"] == 1
+    assert body["character_id"] == str(character_id)
+    assert body["reply"].strip()
+    assert body["action"]["status"] in {
+        "none",
+        "queued",
+        "executed",
+        "rejected",
+        "unresolved",
+        "failed",
+    }
+    if body["action"]["tool"]:
+        assert body["action"]["tool"] in ALLOWED_CHAT_TOOLS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_live_character_chat_initial_prompt_mentions_room_item_and_profile(provider):
+    actor, character_id = _contextual_chat_actor(provider)
+    builder = PromptBuilder(
+        actor.world,
+        persona_providers=collect_persona_fragments(bunnyland_plugins()),
+    )
+    context_prompt = render_prompt(builder.build(character_id))
+    assert "Azure Fern Observatory" in context_prompt
+    assert "brass astrolabe" in context_prompt
+    assert "Your current role: cartographer." in context_prompt
+    assert "You are observant." in context_prompt
+
+    service = build_character_chat_service(actor, builder, _character_agent(provider))
+    messages = service._messages(
+        context_prompt,
+        CharacterChatRequest(
+            client_id=f"live-context-{provider}",
+            message=(
+                "This starts a new conversation. Using only your starting character "
+                "context, answer in one sentence containing the exact room name "
+                "'Azure Fern Observatory', the exact visible item name "
+                "'brass astrolabe', and your exact role 'cartographer'."
+            ),
+        ),
+    )
+
+    reply = await _character_agent(provider).chat(
+        messages,
+        character_id=str(character_id),
+        model=_character_model(provider),
+        provider=provider,
+        tools=[],
+    )
+    text = reply.content.lower()
+
+    assert "azure fern observatory" in text
+    assert "brass astrolabe" in text
+    assert "cartographer" in text
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,9 @@ FastAPI app factory is imported lazily by callers that install web-server depend
 """
 
 from .models import (
+    CharacterChatRequest,
+    CharacterChatResponse,
+    CharacterChatStatusResponse,
     CharacterProjectionResponse,
     CharacterQueuedCommandsResponse,
     CommandCancelResponse,
@@ -50,6 +53,9 @@ from .subscriptions import EventStream, EventSubscription
 
 __all__ = [
     "CommandRequest",
+    "CharacterChatRequest",
+    "CharacterChatResponse",
+    "CharacterChatStatusResponse",
     "CommandCancelResponse",
     "CommandResponse",
     "ControllerAssignmentRequest",

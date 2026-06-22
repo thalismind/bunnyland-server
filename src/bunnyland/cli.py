@@ -230,6 +230,8 @@ def _validate_serve_args(args) -> None:
         raise SystemExit("--discord-playtest cannot be combined with --api-port yet")
     if args.mcp and args.api_port is None:
         raise SystemExit("--mcp mounts on the HTTP API and needs --api-port")
+    if getattr(args, "character_chat", False) and args.api_port is None:
+        raise SystemExit("--character-chat mounts on the HTTP API and needs --api-port")
 
 
 def _load_serve_plugins(args) -> tuple[list, list]:
@@ -270,7 +272,7 @@ def _serve_credentials(args) -> ServeCredentials:
     host = api_key = worldgen_api_key = None
     openrouter_api_key = openrouter_server_url = None
 
-    if args.llm:
+    if args.llm or getattr(args, "character_chat", False):
         openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
         openrouter_server_url = os.environ.get("OPENROUTER_SERVER_URL")
         host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
@@ -282,9 +284,9 @@ def _serve_credentials(args) -> ServeCredentials:
                 "--llm-provider ollama needs OLLAMA_CLOUD_API_KEY "
                 "(set it in .env or the environment)"
             )
-        if worldgen_provider == "openrouter" and not openrouter_api_key:
+        if args.llm and worldgen_provider == "openrouter" and not openrouter_api_key:
             raise SystemExit("--worldgen-provider openrouter needs OPENROUTER_API_KEY")
-        if worldgen_provider == "ollama" and (not args.load) and not api_key:
+        if args.llm and worldgen_provider == "ollama" and (not args.load) and not api_key:
             raise SystemExit(
                 "--worldgen-provider ollama needs OLLAMA_CLOUD_API_KEY "
                 "(set it in .env or the environment)"
@@ -397,11 +399,7 @@ def _configure_actor_backends(
         )
 
 
-def _build_serve_agent(args, credentials: ServeCredentials, models: ServeModels):
-    if not args.llm:
-        print("Offline demo (no --llm): characters will wait.")
-        return ScriptedAgent([])  # offline: characters wait, the world still ticks
-
+def _build_provider_agent(args, credentials: ServeCredentials, models: ServeModels):
     from .llm_agents import OllamaAgent, OpenRouterAgent, ProviderRouterAgent
 
     providers = {}
@@ -425,6 +423,23 @@ def _build_serve_agent(args, credentials: ServeCredentials, models: ServeModels)
         f"{models.character_model!r}."
     )
     return agent
+
+
+def _build_serve_agent(args, credentials: ServeCredentials, models: ServeModels):
+    if not args.llm:
+        print("Offline demo (no --llm): characters will wait.")
+        return ScriptedAgent([])  # offline: characters wait, the world still ticks
+    return _build_provider_agent(args, credentials, models)
+
+
+def _build_character_chat_service(args, actor, builder, credentials, models):
+    if not getattr(args, "character_chat", False):
+        return None
+    from .server.character_chat import build_character_chat_service
+
+    agent = _build_provider_agent(args, credentials, models)
+    print("Character chat enabled for current LLM-controlled characters.")
+    return build_character_chat_service(actor, builder, agent)
 
 
 def _make_autosave(actor: WorldActor, args, meta: WorldMeta):
@@ -548,6 +563,7 @@ async def _run_serve_runtime(
     credentials: ServeCredentials,
     models: ServeModels,
     imagegen=None,
+    character_chat=None,
 ) -> int:
     max_ticks = args.ticks if args.ticks > 0 else None
     display_ticks = (
@@ -574,6 +590,7 @@ async def _run_serve_runtime(
         models,
         max_ticks,
         imagegen=imagegen,
+        character_chat=character_chat,
     )
 
 
@@ -599,6 +616,7 @@ async def _run_api_runtime(
     models: ServeModels,
     max_ticks: int | None,
     imagegen=None,
+    character_chat=None,
 ) -> int:
     from .server.runtime import run_loop_with_api
 
@@ -620,6 +638,7 @@ async def _run_api_runtime(
                 admin_token=args.admin_token
                 or os.environ.get("BUNNYLAND_ADMIN_TOKEN"),
                 imagegen=imagegen,
+                character_chat=character_chat,
                 max_ticks=max_ticks,
             ),
             loop,
@@ -668,6 +687,7 @@ async def _serve(args) -> None:
         persona_providers=collect_persona_fragments(plugins),
     )
     dispatch = ControllerDispatch(actor, builder, agent)
+    character_chat = _build_character_chat_service(args, actor, builder, credentials, models)
     _configure_claim_timeout(actor, args, models)
     loop = GameLoop(
         actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
@@ -686,6 +706,7 @@ async def _serve(args) -> None:
         credentials,
         models,
         imagegen=imagegen,
+        character_chat=character_chat,
     )
     print(f"Stopped after {ticks} ticks at game epoch {actor.epoch}s.")
 
@@ -899,6 +920,11 @@ def main(argv: list[str] | None = None) -> int:
         help="mount the HTTP MCP server on the existing API port (needs mcp and server extras)",
     )
     serve.add_argument(
+        "--character-chat",
+        action="store_true",
+        help="enable opt-in character chat routes on the HTTP API (needs llm and server extras)",
+    )
+    serve.add_argument(
         "--admin-token",
         default=None,
         help="admin token gating snapshot/overview/DM projections, the world-updates "
@@ -925,7 +951,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     tui.add_argument("--no-icons", action="store_true", help="hide action and activity icons")
 
+    chat = sub.add_parser("chat", help="chat with an LLM-controlled character")
+    chat.add_argument("--server", default="http://127.0.0.1:8765")
+    chat.add_argument("--character", default="", help="character id or exact name")
+
     args = parser.parse_args(argv)
+
+    if args.command == "chat":
+        from .chat import main as chat_main
+
+        chat_args = ["--server", args.server]
+        if args.character:
+            chat_args.extend(["--character", args.character])
+        return chat_main(chat_args)
 
     if args.command == "tui":
         from .tui import main as tui_main

@@ -1303,6 +1303,61 @@ async def test_ollama_agent_returns_wait_after_transient_provider_retries(monkey
     assert agent._history["hazel"] == []
 
 
+async def test_ollama_agent_chat_returns_content_and_tool(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    tools = [{"type": "function", "function": {"name": "wait"}}]
+    agent = OllamaAgent(model="llama3")
+    reply = await agent.chat(
+        [{"role": "system", "content": "chat"}, {"role": "user", "content": "hello"}],
+        character_id="hazel",
+        model="controller-model",
+        tools=tools,
+    )
+
+    assert reply.content == "ok"
+    assert reply.tool_call == ToolCall("wait", {})
+    assert agent._client.models == ["controller-model"]
+    assert agent._client.tools == [tools]
+
+
+async def test_ollama_agent_chat_returns_content_without_tool(monkeypatch):
+    class PlainChatOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(m) for m in messages])
+            return {"message": {"role": "assistant", "content": "just text"}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = PlainChatOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3")
+    reply = await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
+
+    assert reply.content == "just text"
+    assert reply.tool_call is None
+
+
+async def test_ollama_agent_chat_returns_empty_after_transient_provider_retries(monkeypatch):
+    class AlwaysFailOllamaClient(_FlakyOllamaClient):
+        failures = 99
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = AlwaysFailOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", retry_delay_seconds=0)
+    reply = await agent.chat([], character_id="hazel")
+
+    assert reply.content == ""
+    assert reply.tool_call is None
+    assert len(agent._client.calls) == 3
+
+
 class _FakeOpenRouterChat:
     def __init__(self):
         self.calls: list[dict] = []
@@ -1565,6 +1620,70 @@ async def test_openrouter_agent_returns_wait_after_transient_provider_retries(mo
     assert call is None
     assert len(agent._client.chat.calls) == 3
     assert agent._history["hazel"] == []
+
+
+async def test_openrouter_agent_chat_returns_content_and_tool(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    tools = [{"type": "function", "function": {"name": "wait"}}]
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key")
+    reply = await agent.chat(
+        [{"role": "system", "content": "chat"}, {"role": "user", "content": "hello"}],
+        character_id="hazel",
+        model="controller-model",
+        tools=tools,
+    )
+
+    assert reply.content == "ok"
+    assert reply.tool_call == ToolCall("wait", {"reason": "rest"})
+    assert agent._client.chat.calls[0]["model"] == "controller-model"
+    assert agent._client.chat.calls[0]["tools"] == tools
+
+
+async def test_openrouter_agent_chat_returns_content_without_tool(monkeypatch):
+    class PlainChatOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            message = types.SimpleNamespace(role="assistant", content="just text", tool_calls=None)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class PlainChatOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = PlainChatOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = PlainChatOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key")
+    reply = await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
+
+    assert reply.content == "just text"
+    assert reply.tool_call is None
+
+
+async def test_openrouter_agent_chat_returns_empty_after_transient_provider_retries(monkeypatch):
+    class AlwaysFailOpenRouterChat(_FlakyOpenRouterChat):
+        failures = 99
+
+    class AlwaysFailOpenRouterClient(_FlakyOpenRouterClient):
+        chat_type = AlwaysFailOpenRouterChat
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = AlwaysFailOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key", retry_delay_seconds=0)
+    reply = await agent.chat([], character_id="hazel")
+
+    assert reply.content == ""
+    assert reply.tool_call is None
+    assert len(agent._client.chat.calls) == 3
 
 
 async def test_dispatch_records_wait_when_agent_passes():
@@ -1850,6 +1969,41 @@ def test_provider_router_raises_for_unknown_provider():
 
     with pytest.raises(RuntimeError, match="no LLM agent configured for provider 'mystery'"):
         router.decide("prompt", None, character_id="hazel", provider="mystery")
+
+
+async def test_provider_router_chat_uses_selected_agent():
+    class ChatAgent:
+        def __init__(self):
+            self.calls = []
+
+        async def chat(self, messages, *, character_id, model=None, provider=None, tools=None):
+            self.calls.append((messages, character_id, model, provider, tools))
+            return types.SimpleNamespace(content="hello", tool_call=None)
+
+    ollama = ChatAgent()
+    openrouter = ChatAgent()
+    router = ProviderRouterAgent({"ollama": ollama, "openrouter": openrouter})
+
+    reply = await router.chat(
+        [{"role": "user", "content": "hi"}],
+        character_id="hazel",
+        model="model",
+        provider="openrouter",
+        tools=[],
+    )
+
+    assert reply.content == "hello"
+    assert ollama.calls == []
+    assert openrouter.calls[0][1:] == ("hazel", "model", "openrouter", [])
+
+
+async def test_provider_router_chat_rejects_unknown_or_unsupported_provider():
+    router = ProviderRouterAgent({"ollama": _RecordingAgent([])})
+
+    with pytest.raises(RuntimeError, match="no LLM agent configured"):
+        await router.chat([], character_id="hazel", provider="mystery")
+    with pytest.raises(RuntimeError, match="does not support character chat"):
+        await router.chat([], character_id="hazel")
 
 
 async def test_provider_retry_helper_sleeps_between_retries(monkeypatch):

@@ -42,7 +42,11 @@ from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
+from .character_chat import CharacterChatService
 from .models import (
+    CharacterChatRequest,
+    CharacterChatResponse,
+    CharacterChatStatusResponse,
     CharacterListResponse,
     CharacterProjectionResponse,
     CharacterQueuedCommandsResponse,
@@ -152,6 +156,7 @@ def create_app(
     plugins: list[Plugin] | None = None,
     admin_token: str | None = None,
     imagegen: ImageGenService | None = None,
+    character_chat: CharacterChatService | None = None,
     title: str = "bunnyland",
 ):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
@@ -326,6 +331,32 @@ def create_app(
     @app.get("/world/events/recent", response_model=RecentEventsResponse)
     async def recent_events() -> RecentEventsResponse:
         return RecentEventsResponse(events=stream.recent_messages())
+
+    @app.get("/world/chat/status", response_model=CharacterChatStatusResponse)
+    async def world_chat_status() -> CharacterChatStatusResponse:
+        return CharacterChatStatusResponse(
+            world_epoch=actor.epoch,
+            enabled=character_chat is not None,
+            allowed_tools=character_chat.allowed_tools if character_chat is not None else [],
+        )
+
+    @app.post("/world/character/{id}/chat", response_model=CharacterChatResponse)
+    async def world_character_chat(
+        id: str, request: CharacterChatRequest
+    ) -> CharacterChatResponse:
+        if character_chat is None:
+            raise HTTPException(status_code=409, detail="character chat is not enabled")
+        try:
+            with telemetry.span("character.chat", {"character.id": id}):
+                return await character_chat.chat(id, request)
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TypeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            detail = str(exc)
+            status = 400 if detail == "entity is not a character" else 404
+            raise HTTPException(status_code=status, detail=detail) from exc
 
     def _runtime_timing() -> dict:
         now = time.time()

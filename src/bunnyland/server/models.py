@@ -62,6 +62,43 @@ class RecentEventsResponse(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class CharacterChatStatusResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    enabled: bool = False
+    allowed_tools: list[str] = Field(default_factory=list)
+
+
+class CharacterChatHistoryMessage(BaseModel):
+    role: Literal["user", "character"]
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class CharacterChatRequest(BaseModel):
+    client_id: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=4000)
+    history_summary: str = Field(default="", max_length=12000)
+    history: list[CharacterChatHistoryMessage] = Field(default_factory=list, max_length=24)
+
+
+class CharacterChatActionResult(BaseModel):
+    tool: str | None = None
+    command_id: str | None = None
+    status: Literal["none", "queued", "executed", "rejected", "unresolved", "failed"] = "none"
+    reason: str = ""
+    result_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CharacterChatResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    character_id: str
+    reply: str
+    action: CharacterChatActionResult = Field(default_factory=CharacterChatActionResult)
+
+
 class ControllerAssignmentRequest(BaseModel):
     character_id: str
     controller_id: str
