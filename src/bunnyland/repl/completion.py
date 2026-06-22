@@ -87,6 +87,8 @@ def complete_line(
         return [f"{command} {word}" for word in sorted(commands) if word.startswith(rest)]
     if command == "play":
         return [f"{command} {name}" for name in sorted(players) if name.startswith(rest)]
+    if command in {"examine", "x"}:
+        return [f"{command} {name}" for name in sorted(entity_names) if name.startswith(rest)]
 
     definition = definitions.get(command)
     if definition is None:

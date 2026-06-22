@@ -989,6 +989,62 @@ async def test_backend_recent_events_defaults_to_empty():
     assert await RecordingBackend(_snapshot()).recent_events() == []
 
 
+async def test_backend_examine_defaults_to_none():
+    assert await RecordingBackend(_snapshot()).examine(PLAYER, "target:1") is None
+
+
+async def test_local_backend_examine_returns_detail_or_none(scenario):
+    backend = LocalBackend(generator="apartment-demo", autorun=False)
+    backend.actor = scenario.actor
+    backend._fragment_providers = ()
+
+    me = await backend.examine(str(scenario.character), str(scenario.character))
+    assert me["is_self"] is True
+    assert me["name"] == "Juniper"
+    # An unperceivable (adjacent room) or missing target resolves to None, not an error.
+    assert await backend.examine(str(scenario.character), str(scenario.room_b)) is None
+
+
+async def test_remote_backend_examine_reads_endpoint():
+    class Response:
+        is_success = True
+
+        def json(self) -> dict:
+            return {"id": "target:1", "name": "steamed bun", "is_self": False}
+
+    class Client:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        async def get(self, url: str):
+            self.urls.append(url)
+            return Response()
+
+    backend = RemoteBackend("http://server.example")
+    backend._client = Client()
+
+    view = await backend.examine(PLAYER, "target:1")
+
+    assert view["name"] == "steamed bun"
+    assert backend._client.urls == [
+        "http://server.example/world/character/character:1/examine/target:1"
+    ]
+
+
+async def test_remote_backend_examine_missing_target_returns_none():
+    class Response:
+        is_success = False
+
+    class Client:
+        async def get(self, url: str):
+            return Response()
+
+    backend = RemoteBackend("http://server.example")
+    backend._client = Client()
+
+    assert await backend.examine(PLAYER, "ghost") is None
+
+
 async def test_local_backend_records_recent_events():
     backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
     await backend.start()
@@ -1433,6 +1489,59 @@ async def test_help_screen_opens_and_closes():
         assert isinstance(button, Button)
         button.press()
         await pilot.pause()
+
+
+async def test_examine_action_guards_and_opens_modal():
+    from bunnyland.tui.app import ExamineScreen
+
+    backend = RecordingBackend(_snapshot())
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        await _wait_for_tui_ready(app, pilot)
+        # No player selected yet → a guard message in the activity log.
+        await app.action_examine()
+        await pilot.pause()
+        assert any("before examining" in line.plain for line in app.activity_lines)
+
+        await _select_player(app, pilot)
+        # The default backend cannot detail anything → a soft failure, no modal.
+        await app.action_examine()
+        await pilot.pause()
+        assert any("can't make that out" in line.plain for line in app.activity_lines)
+        assert not isinstance(app.screen, ExamineScreen)
+
+        async def fake_examine(character_id, target_id):
+            return {
+                "id": PLAYER, "name": "Pib", "kind": "character", "is_self": True,
+                "details": {"affect": {"labels": ["calm"]}}, "status": ["Rested."],
+                "points": {"action": 5.0, "action_max": 5.0, "focus": 3.0, "focus_max": 3.0},
+            }
+
+        backend.examine = fake_examine
+        await app.action_examine()
+        await pilot.pause()
+        assert isinstance(app.screen, ExamineScreen)
+        assert app.screen._view["name"] == "Pib"
+        assert app.screen._view["is_self"] is True
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ExamineScreen)
+
+
+async def test_examine_screen_without_icons_and_empty_detail_closes_via_button():
+    from textual.widgets import Button
+
+    from bunnyland.tui.app import ExamineScreen
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()), show_icons=False)
+    view = {"id": "x", "name": "smooth stone", "kind": "other", "is_self": False, "details": {}}
+    async with app.run_test() as pilot:
+        await _wait_for_tui_ready(app, pilot)
+        await app.push_screen(ExamineScreen(view, show_icons=False))
+        button = await _wait_for_widget(app.screen, pilot, "#examine-close", Button)
+        button.press()
+        await pilot.pause()
+        assert not isinstance(app.screen, ExamineScreen)
 
 
 async def test_action_form_dropdown_uses_initial_value():

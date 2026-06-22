@@ -386,6 +386,67 @@ async def test_dispatch_meta_commands_render_text():
     assert "You are now Pib" in (await repl.dispatch("play Pib")).plain
 
 
+async def test_examine_resolves_targets_and_guards():
+    idle = _repl(player=False)
+    assert "Pick a player" in (await idle.dispatch("examine an apple")).plain
+
+    repl = _repl()
+    # A name that resolves to nothing here.
+    assert "I don't see" in (await repl.dispatch("examine dragon")).plain
+    # A resolvable target the backend cannot detail (default backend returns None).
+    assert "can't make that out" in (await repl.dispatch("examine an apple")).plain
+
+
+async def test_examine_renders_item_and_self_detail():
+    repl = _repl()
+
+    item_view = {
+        "id": APPLE, "name": "an apple", "kind": "food", "is_self": False,
+        "details": {"food": {"nutrition": 5.0, "satiety": 10.0}, "portable": {"can_pick_up": True}},
+        "status": [], "points": None,
+    }
+    self_view = {
+        "id": PLAYER, "name": "Pib", "kind": "character", "is_self": True,
+        "details": {"affect": {"labels": ["content"]}},
+        "status": ["You feel rested."],
+        "points": {"action": 5.0, "action_max": 5.0, "focus": 3.0, "focus_max": 3.0},
+    }
+
+    async def fake_examine(character_id, target_id):
+        return self_view if target_id == PLAYER else item_view
+
+    repl.backend.examine = fake_examine
+
+    item = await repl.dispatch("examine an apple")
+    assert "an apple" in item.plain
+    assert "(food)" in item.plain
+    assert "Food — nutrition 5, satiety 10" in item.plain
+    assert "Can be carried." in item.plain
+
+    # The 'x' alias and the 'me' self-target both work.
+    mine = await repl.dispatch("x me")
+    assert "(you)" in mine.plain
+    assert "Mood: content" in mine.plain
+    assert "You feel rested." in mine.plain
+    assert "AP 5/5 · FP 3/3" in mine.plain
+
+
+def test_render_examine_without_icons_omits_icon():
+    repl = BunnylandRepl(RecordingBackend(_snapshot()), show_icons=False)
+    out = repl._render_examine({"id": "x", "name": "smooth stone", "kind": "other", "details": {}})
+    assert out.plain == "smooth stone (other)"
+
+
+def test_complete_examine_entity_names():
+    names = ["an apple", "a brass key"]
+    assert complete_line(
+        "examine a", definitions=DEFS, commands=("examine",), entity_names=names
+    ) == ["examine a brass key", "examine an apple"]
+    assert complete_line(
+        "x an", definitions=DEFS, commands=("x",), entity_names=names
+    ) == ["x an apple"]
+
+
 async def test_drain_events_surfaces_scene_image_and_failure():
     repl = _repl()
 

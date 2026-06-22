@@ -55,6 +55,7 @@ from bunnyland.discord import (
     release_discord_character_to_llm,
     render_action_result,
     render_character_list,
+    render_examine,
     render_help,
     render_look,
     render_move_result,
@@ -1285,6 +1286,46 @@ def test_render_look_reports_unclaimed_and_nowhere_characters(scenario):
     assert render_look(scenario.actor, 123) == "You are nowhere."
 
 
+def test_render_examine_self_and_perceivable_item(scenario):
+    from bunnyland.core.components import PortableComponent
+    from bunnyland.mechanics.consumables import FoodComponent
+
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+    bun = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="steamed bun", kind="food"),
+            PortableComponent(),
+            FoodComponent(nutrition=5.0, satiety=10.0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
+    )
+
+    # An empty target examines yourself.
+    me = render_examine(scenario.actor, 123)
+    assert me.startswith("Juniper (character) (you)")
+
+    # A perceivable item, resolved by name.
+    item = render_examine(scenario.actor, 123, "steamed bun")
+    assert item.startswith("steamed bun (food)")
+    assert "Food — nutrition 5, satiety 10" in item
+
+
+def test_render_examine_guards_unclaimed_unknown_and_unperceivable(scenario):
+    assert render_examine(scenario.actor, 123, "anything") == (
+        "You are not controlling a character yet."
+    )
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+    # An unknown name yields did-you-mean guidance, not a detail view.
+    assert "I don't see" in render_examine(scenario.actor, 123, "dragon")
+    # A resolvable-but-unperceivable target (the adjacent room) is a soft failure.
+    assert render_examine(scenario.actor, 123, "North Tunnel") == (
+        "You can't make that out from here."
+    )
+
+
 def test_render_move_result_reports_rejection_reason(scenario):
     assign_discord_controller(
         scenario.actor,
@@ -2319,6 +2360,9 @@ async def test_discord_bot_meta_commands_cover_success_and_errors(scenario):
     assert await bot._handle_meta_command(ctx, "look", "") is True
     assert ctx.sent[-1].startswith("Mosslit Burrow")
 
+    assert await bot._handle_meta_command(ctx, "examine", "") is True
+    assert ctx.sent[-1].startswith("Juniper (character) (you)")
+
     assert await bot._handle_meta_command(ctx, "help", "verbs") is True
     assert "World verbs available now" in ctx.message.thread.sent[-1]
 
@@ -2500,6 +2544,7 @@ async def test_discord_bot_init_registers_commands_and_lifecycle_delegates(
         "release",
         "suspend",
         "look",
+        "examine",
         "help",
     }
     assert {"on_ready", "on_message", "on_command_error"} <= set(client.events)
@@ -2539,6 +2584,9 @@ async def test_discord_registered_command_callbacks_cover_success_and_error_path
 
     await commands["look"](ctx)
     assert ctx.sent[-1].startswith("Mosslit Burrow")
+
+    await commands["examine"](ctx, target=None)
+    assert ctx.sent[-1].startswith("Juniper (character) (you)")
 
     await commands["help"](ctx, topic="verbs")
     assert "World verbs available now" in ctx.message.thread.sent[-1]

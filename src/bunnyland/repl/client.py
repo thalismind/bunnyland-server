@@ -27,6 +27,7 @@ from rich.style import Style
 from rich.text import Text
 
 from ..core.actions import ActionDefinition, action_icon_for, definitions_by_tool_name
+from ..examine_format import examine_detail_lines
 from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
 from ..imagegen.feed import latest_image_completion, latest_image_failure
 from ..llm_agents.dispatch import suggest_names
@@ -40,7 +41,7 @@ from ..tui.model import KIND_ICON, World, entity_icon, entity_name, fmt_points, 
 from .completion import complete_line, reference_candidates
 
 META_COMMANDS = (
-    "help", "who", "look", "inventory", "points", "play", "release",
+    "help", "who", "look", "examine", "inventory", "points", "play", "release",
     "queued", "cancel", "refresh", "quit", "exit"
 )
 IMAGE_COMMANDS = ("image", "img")
@@ -281,6 +282,8 @@ class BunnylandRepl:
             return self.render_players()
         if verb == "look":
             return self.render_room()
+        if verb in {"examine", "x"}:
+            return await self._examine(rest)
         if verb in {"inventory", "inv"}:
             return self.render_inventory()
         if verb == "points":
@@ -343,6 +346,39 @@ class BunnylandRepl:
         if result.ok:
             return Text(f"Opened sheet: {result.url}", style="cyan")
         return Text(result.reason, style="yellow")
+
+    def _examine_target(self, name: str) -> str | None:
+        query = name.strip()
+        if not query or query.lower() in {"me", "self", "you"}:
+            return self.player_id or None
+        candidates = reference_candidates(self.world, self.player_id)
+        resolved = resolve_name(query, self.world, candidates)
+        return resolved if resolved in self.world.entities else None
+
+    async def _examine(self, name: str) -> Text:
+        if not self.player_id:
+            return Text("Pick a player first: play <name>.")
+        # An empty name examines yourself; any other name must resolve to something here.
+        target_id = self._examine_target(name)
+        if target_id is None:
+            return Text(f"I don't see {name!r} here.")
+        view = await self.backend.examine(self.player_id, target_id)
+        if view is None:
+            return Text("You can't make that out from here.", style="yellow")
+        return self._render_examine(view)
+
+    def _render_examine(self, view: dict[str, Any]) -> Text:
+        kind = view.get("kind") or "other"
+        out = Text()
+        if self.show_icons:
+            out.append(f"{KIND_ICON.get(kind) or KIND_ICON['other']} ")
+        out.append_text(link(view.get("name") or view.get("id") or "?", view.get("id", "")))
+        out.append(f" ({kind})")
+        if view.get("is_self"):
+            out.append(" (you)")
+        for detail in examine_detail_lines(view):
+            out.append(f"\n  {detail}")
+        return out
 
     async def _act(self, line: str, verb: str) -> Text:
         parsed = parse_line(line, self._defs)

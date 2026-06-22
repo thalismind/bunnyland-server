@@ -53,6 +53,7 @@ from .models import (
     ControllerDefinitionListResponse,
     DmProjectionResponse,
     EventImageRequest,
+    ExamineResponse,
     HealthResponse,
     RecentEventsResponse,
     RoomProjectionResponse,
@@ -92,6 +93,7 @@ from .serialization import (
     serialize_character_queued_commands,
     serialize_dm_projection,
     serialize_entity,
+    serialize_examine,
     serialize_room_projection,
     serialize_world,
     serialize_world_overview,
@@ -193,6 +195,10 @@ def create_app(
     )
     stream = EventStream(actor)
     meta = meta or WorldMeta()
+    # Status-line fragments contributed by plugins, shared by the MCP examine tool and the
+    # player-facing examine endpoint so both surface the same self-inspection detail.
+    fragment_providers = collect_prompt_fragments(plugins or ())
+    persona_providers = collect_persona_fragments(plugins or ())
     generator_registry = collect_generators(plugins or ())
     generation_job = None
     # Editor-loaded scripted/behavioral controller definitions: register any already on disk
@@ -270,6 +276,35 @@ def create_app(
         except ValueError as exc:
             detail = str(exc)
             status = 400 if detail == "entity is not a character" else 404
+            raise HTTPException(status_code=status, detail=detail) from exc
+
+    @app.get(
+        "/world/character/{character_id}/examine/{target_id}",
+        response_model=ExamineResponse,
+    )
+    async def world_character_examine(character_id: str, target_id: str) -> ExamineResponse:
+        # The player-facing detail view: perception-gated by serialize_examine, which only
+        # reveals entities the character can see or carry (and never another character's
+        # private needs). Mirrors the MCP examine tool so every client inspects the same way.
+        try:
+            with telemetry.span(
+                "character.examine",
+                {"character.id": character_id, "target.id": target_id},
+            ):
+                return serialize_examine(
+                    actor,
+                    character_id,
+                    target_id,
+                    fragment_providers=fragment_providers,
+                )
+        except ValueError as exc:
+            detail = str(exc)
+            if detail == "entity is not a character":
+                status = 400
+            elif detail == "entity is not perceivable":
+                status = 403
+            else:
+                status = 404
             raise HTTPException(status_code=status, detail=detail) from exc
 
     @app.get("/world/room/{id}", response_model=RoomProjectionResponse)
@@ -1033,8 +1068,8 @@ def create_app(
             register_script=_register_script_request,
             register_behavior=_register_behavior_request,
             list_controller_definitions=_controller_definitions_response,
-            fragment_providers=collect_prompt_fragments(plugins or ()),
-            persona_providers=collect_persona_fragments(plugins or ()),
+            fragment_providers=fragment_providers,
+            persona_providers=persona_providers,
             worldgen_options=worldgen_options,
         )
         mcp_session_manager = getattr(mcp_app, "bunnyland_mcp_session_manager", None)

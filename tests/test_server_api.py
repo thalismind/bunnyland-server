@@ -1360,6 +1360,62 @@ def test_fastapi_character_projection_maps_invalid_ids_to_http_errors(scenario):
     assert wrong_kind.json()["detail"] == "entity is not a character"
 
 
+def test_fastapi_character_examine_returns_perceivable_detail(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    from bunnyland.mechanics.consumables import FoodComponent
+
+    bun = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="steamed bun", kind="food"),
+            PortableComponent(),
+            FoodComponent(nutrition=5.0, satiety=10.0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
+    )
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    # A perceivable item in the room exposes its public component values.
+    item = client.get(f"/world/character/{scenario.character}/examine/{bun.id}")
+    assert item.status_code == 200
+    body = item.json()
+    assert body["is_self"] is False
+    assert body["name"] == "steamed bun"
+    assert body["details"]["food"]["satiety"] == 10.0
+    assert body["points"] is None
+
+    # Examining yourself adds points and the is_self flag.
+    me = client.get(f"/world/character/{scenario.character}/examine/{scenario.character}")
+    assert me.status_code == 200
+    me_body = me.json()
+    assert me_body["is_self"] is True
+    assert me_body["name"] == "Juniper"
+    assert me_body["points"]["action"] == 5.0
+
+
+def test_fastapi_character_examine_maps_invalid_ids_to_http_errors(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    not_a_character = client.get(f"/world/character/{scenario.room_a}/examine/{scenario.room_a}")
+    missing_character = client.get(f"/world/character/not-an-id/examine/{scenario.character}")
+    missing_target = client.get(f"/world/character/{scenario.character}/examine/not-an-id")
+    unperceivable = client.get(f"/world/character/{scenario.character}/examine/{scenario.room_b}")
+
+    assert not_a_character.status_code == 400
+    assert not_a_character.json()["detail"] == "entity is not a character"
+    assert missing_character.status_code == 404
+    assert missing_character.json()["detail"] == "character does not exist"
+    assert missing_target.status_code == 404
+    assert missing_target.json()["detail"] == "entity does not exist"
+    assert unperceivable.status_code == 403
+    assert unperceivable.json()["detail"] == "entity is not perceivable"
+
+
 def test_fastapi_room_projection_and_queue_map_invalid_ids_to_http_errors(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)

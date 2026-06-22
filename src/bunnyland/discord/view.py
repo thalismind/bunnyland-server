@@ -8,8 +8,11 @@ from ..core.components import IdentityComponent, RoomComponent
 from ..core.ecs import container_of, parse_entity_id
 from ..core.events import CommandExecutedEvent, CommandRejectedEvent, NotesSearchedEvent
 from ..core.world_actor import WorldActor
+from ..examine_format import examine_detail_lines, examine_header
+from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import action_definitions
 from ..projections import RoomSummaryProjection
+from ..server.serialization import serialize_examine
 from .claim import discord_controlled_character
 
 DISCORD_MESSAGE_LIMIT = 2000
@@ -219,6 +222,32 @@ def render_look(actor: WorldActor, discord_user_id: int) -> str:
         return "You are nowhere."
     summary = RoomSummaryProjection(actor.world).attach().summary(room_id, actor.epoch)
     return summary.visible_summary
+
+
+def render_examine(actor: WorldActor, discord_user_id: int, target_name: str = "") -> str:
+    """Render a perception-gated detail view of one entity (or yourself), mirroring the
+    examine command in the terminal clients and the MCP ``examine`` tool. An empty target
+    examines the caller's own character."""
+    found = discord_controlled_character(actor, discord_user_id)
+    if found is None:
+        return "You are not controlling a character yet."
+    character_id, _controller_id, _generation = found
+    query = target_name.strip()
+    if not query or query.lower() in {"me", "self", "myself"}:
+        target_id = str(character_id)
+    else:
+        character = actor.world.get_entity(character_id)
+        resolved, unresolved = resolve_reference_args(
+            actor.world, character, {"target": query}, keys=frozenset({"target"})
+        )
+        if unresolved:
+            return did_you_mean({"target": query}, unresolved)
+        target_id = resolved["target"]
+    try:
+        view = serialize_examine(actor, str(character_id), target_id).model_dump(mode="json")
+    except ValueError:
+        return "You can't make that out from here."
+    return "\n".join([examine_header(view), *(f"  {line}" for line in examine_detail_lines(view))])
 
 
 def explain_rejection(reason: str) -> str:

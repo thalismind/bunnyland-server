@@ -67,6 +67,7 @@ from .claim import (
 )
 from .view import (
     render_action_result,
+    render_examine,
     render_help,
     render_look,
     render_notes_search_result,
@@ -82,7 +83,7 @@ logger = logging.getLogger("bunnyland.discord")
 QUEUED_REACTION = "\N{HOURGLASS WITH FLOWING SAND}"
 PAUSED_REACTION = "\N{DOUBLE VERTICAL BAR}\N{VARIATION SELECTOR-16}"
 META_COMMANDS = frozenset(
-    {"help", "claim", "characters", "fallback", "look", "release", "suspend"}
+    {"help", "claim", "characters", "examine", "fallback", "look", "release", "suspend"}
 )
 
 
@@ -767,6 +768,10 @@ class DiscordBot:
             await ctx.send(render_look(self.actor, ctx.author.id))
             return True
 
+        if head == "examine":
+            await ctx.send(render_examine(self.actor, ctx.author.id, rest))
+            return True
+
         if head == "help":
             await self._send_threaded_or_reply(
                 ctx,
@@ -923,6 +928,10 @@ class DiscordBot:
         @self.client.command(name="look")
         async def look(ctx):
             await ctx.send(render_look(self.actor, ctx.author.id))
+
+        @self.client.command(name="examine")
+        async def examine(ctx, *, target: str | None = None):
+            await ctx.send(render_examine(self.actor, ctx.author.id, target or ""))
 
         @self.client.command(name="help")
         async def help_command(ctx, *, topic: str | None = None):

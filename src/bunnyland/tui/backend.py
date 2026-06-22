@@ -33,6 +33,7 @@ from ..server.serialization import (
     serialize_character_list,
     serialize_character_projection,
     serialize_character_queued_commands,
+    serialize_examine,
     serialize_room_projection,
     serialize_world,
 )
@@ -130,6 +131,13 @@ class Backend(ABC):
         return None
 
     async def fetch_room_projection(self, room_id: str) -> dict | None:
+        return None
+
+    async def examine(self, character_id: str, target_id: str) -> dict | None:
+        """A perception-gated detail view of one entity the character can see or carry.
+
+        Returns ``None`` when the target cannot be examined — it does not exist, or the
+        character cannot perceive it. Backends without a world return nothing."""
         return None
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
@@ -230,6 +238,7 @@ class LocalBackend(Backend):
         self.fallback_controller = fallback_controller
         self.timeout_seconds = timeout_seconds
         self.imagegen = None
+        self._fragment_providers: tuple = ()
 
     @property
     def supports_image_requests(self) -> bool:
@@ -265,9 +274,10 @@ class LocalBackend(Backend):
         await generator.generate(self.actor, self.seed, GenOptions())
         self.meta = WorldMeta(seed=self.seed, generator=generator.name)
 
+        self._fragment_providers = collect_prompt_fragments(plugins)
         builder = PromptBuilder(
             self.actor.world,
-            fragment_providers=collect_prompt_fragments(plugins),
+            fragment_providers=self._fragment_providers,
             persona_providers=collect_persona_fragments(plugins),
         )
         dispatch = ControllerDispatch(self.actor, builder, ScriptedAgent([]))
@@ -294,6 +304,17 @@ class LocalBackend(Backend):
 
     async def fetch_room_projection(self, room_id: str) -> dict | None:
         return serialize_room_projection(self.actor, room_id).model_dump(mode="json")
+
+    async def examine(self, character_id: str, target_id: str) -> dict | None:
+        try:
+            return serialize_examine(
+                self.actor,
+                character_id,
+                target_id,
+                fragment_providers=self._fragment_providers,
+            ).model_dump(mode="json")
+        except ValueError:
+            return None
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
         now = time.time()
@@ -450,6 +471,16 @@ class RemoteBackend(Backend):
     async def fetch_room_projection(self, room_id: str) -> dict | None:
         res = await self._client.get(f"{self.base}/world/room/{room_id}")
         res.raise_for_status()
+        return res.json()
+
+    async def examine(self, character_id: str, target_id: str) -> dict | None:
+        res = await self._client.get(
+            f"{self.base}/world/character/{character_id}/examine/{target_id}"
+        )
+        # A missing or unperceivable target (4xx) is a normal "you can't see that", not an
+        # error to surface; only a real success carries an examine payload.
+        if not res.is_success:
+            return None
         return res.json()
 
     async def fetch_queued_commands(self, character_id: str) -> dict:

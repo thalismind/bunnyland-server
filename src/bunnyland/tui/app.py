@@ -19,13 +19,14 @@ from textual.widgets.option_list import Option
 
 from ..core.actions import action_icon_for
 from ..core.claim_timeout import normalize_claim_timeout
+from ..examine_format import examine_detail_lines, examine_header
 from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
 from ..imagegen.feed import latest_image_completion, latest_image_failure
 from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, LocalBackend, RemoteBackend
 from .events import EventNarrator
-from .model import Target, World, entity_icon, entity_name, fmt_points, has
+from .model import KIND_ICON, Target, World, entity_icon, entity_name, fmt_points, has
 from .splash import IntroSplash
 from .verbs import ACTION_VERBS, Verb
 
@@ -274,6 +275,7 @@ class HelpScreen(ModalScreen[None]):
         "  r   Refresh the world now\n"
         f"  i   {REQUEST_EMOJI} Request an image of your current scene\n"
         "  s   Open the selected (or your own) character sheet in a browser\n"
+        "  x   Examine the selected (or your own) entity in detail\n"
         "  ?   Show this help\n"
         "  q   Quit\n"
         "\n"
@@ -293,6 +295,36 @@ class HelpScreen(ModalScreen[None]):
                 yield Button("Close", id="help-close", variant="primary")
 
     @on(Button.Pressed, "#help-close")
+    def _close_pressed(self, _event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class ExamineScreen(ModalScreen[None]):
+    """Modal detail view of one perceivable entity, rendering the shared examine view so the
+    TUI inspects exactly what the REPL, Discord bot, and MCP ``examine`` tool surface."""
+
+    BINDINGS = [("escape", "close", "Close"), ("x", "close", "Close")]
+
+    def __init__(self, view: dict, *, show_icons: bool = True) -> None:
+        super().__init__()
+        self._view = view
+        self._show_icons = show_icons
+
+    def compose(self) -> ComposeResult:
+        kind = self._view.get("kind") or "other"
+        icon = (KIND_ICON.get(kind) or KIND_ICON["other"]) if self._show_icons else ""
+        lines = examine_detail_lines(self._view)
+        body = "\n".join(f"  {line}" for line in lines) or "  (nothing more to note)"
+        with Vertical(id="form"):
+            yield Label(examine_header(self._view, icon=icon), id="form-title")
+            yield Static(body)
+            with Horizontal(id="form-buttons"):
+                yield Button("Close", id="examine-close", variant="primary")
+
+    @on(Button.Pressed, "#examine-close")
     def _close_pressed(self, _event: Button.Pressed) -> None:
         self.dismiss(None)
 
@@ -338,6 +370,7 @@ class BunnylandTUI(App[None]):
         ("r", "refresh", "Refresh"),
         ("i", "request_image", f"{REQUEST_EMOJI} Image"),
         ("s", "open_sheet", "Open Sheet"),
+        ("x", "examine", "Examine"),
         ("question_mark", "help", "Help"),
         ("q", "quit", "Quit"),
     ]
@@ -855,6 +888,18 @@ class BunnylandTUI(App[None]):
             self._append_activity(Text(f"Opened sheet: {result.url}", style="cyan"))
         else:
             self._append_activity(Text(result.reason, style="yellow"))
+
+    async def action_examine(self) -> None:
+        """Show a detail view of the selected (or your own) perceivable entity."""
+        if not self.player_id:
+            self._append_activity(Text("Select a character before examining."))
+            return
+        target_id = self.selected_id or self.player_id
+        view = await self.backend.examine(self.player_id, target_id)
+        if view is None:
+            self._append_activity(Text("You can't make that out from here.", style="yellow"))
+            return
+        self.push_screen(ExamineScreen(view, show_icons=self.show_icons))
 
     @on(OptionList.OptionSelected, "#members")
     def _member_selected(self, event: OptionList.OptionSelected) -> None:
