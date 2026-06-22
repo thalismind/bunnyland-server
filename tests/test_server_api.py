@@ -771,7 +771,12 @@ def test_client_view_handles_unperceiving_character_and_errors():
     view = serialize_character_projection(actor, str(character.id)).model_dump(mode="json")
 
     assert view["can_perceive"] is False
-    assert view["room"] == {"id": None, "title": "", "entities": [], "exits": []}
+    assert view["room"] == {
+        "id": str(room.id),
+        "title": "Bare Room",
+        "entities": [],
+        "exits": [],
+    }
     assert view["points"] == {"action": 0.0, "action_max": 0.0, "focus": 0.0, "focus_max": 0.0}
     assert view["controller"] is None
     assert {target["kind"] for target in view["inventory"]} == {
@@ -782,6 +787,20 @@ def test_client_view_handles_unperceiving_character_and_errors():
     }
     assert sum(1 for target in view["inventory"] if target["id"] == str(carried_item.id)) == 1
     assert any(target["id"] == str(worn_item.id) for target in view["inventory"])
+
+    unplaced = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Unplaced", kind="character"),
+            CharacterComponent(),
+            PerceptionComponent(active=False),
+        ],
+    )
+    unplaced_view = serialize_character_projection(
+        actor, str(unplaced.id)
+    ).model_dump(mode="json")
+    assert unplaced_view["room"] == {"id": None, "title": "", "entities": [], "exits": []}
+
     with pytest.raises(ValueError, match="character does not exist"):
         serialize_character_projection(actor, "not-an-id")
     with pytest.raises(ValueError, match="entity is not a character"):

@@ -45,7 +45,7 @@ from ..core.components import (
     ThoughtComponent,
     WeightComponent,
 )
-from ..core.ecs import contents, entity_name, parse_entity_id
+from ..core.ecs import container_of, contents, entity_name, parse_entity_id
 from ..core.edges import Contains, ControlledBy, ExitTo, HasInjury, HasThought, Holding, Wearing
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
@@ -1020,13 +1020,13 @@ def serialize_character_projection(
     perception = perceive(actor.world, character)
     room = ClientRoomView()
     exits: list[ClientExitView] = []
-    room_id = parse_entity_id(perception.room_id)
+    room_id = parse_entity_id(perception.room_id) or container_of(character)
     if room_id is not None and actor.world.has_entity(room_id):
         room_entity = actor.world.get_entity(room_id)
         room_title = (
             room_entity.get_component(RoomComponent).title
             if room_entity.has_component(RoomComponent)
-            else perception.room_id
+            else str(room_id)
         )
         exits = [
             ClientExitView(
@@ -1038,7 +1038,7 @@ def serialize_character_projection(
             for exit in perception.exits
         ]
         room = ClientRoomView(
-            id=perception.room_id,
+            id=str(room_id),
             title=room_title,
             entities=[_perceived_entity_view(entity) for entity in perception.entities],
             exits=exits,
