@@ -523,6 +523,8 @@ def create_bunnyland_mcp_app(
         [WorldImageGenerationRequest], Awaitable[WorldImageGenerationResponse]
     ]
     | None = None,
+    scene_image: Callable[[str], Awaitable[WorldImageGenerationResponse | None]]
+    | None = None,
     register_script: Callable[[ScriptSpec], Awaitable[ControllerDefinitionListResponse]]
     | None = None,
     register_behavior: Callable[[BehaviorTreeSpec], Awaitable[ControllerDefinitionListResponse]]
@@ -1234,6 +1236,32 @@ def create_bunnyland_mcp_app(
             )
         except Exception as exc:
             raise ToolError(str(exc)) from exc
+        return response.model_dump(mode="json")
+
+    @mcp.tool()
+    @_traced_tool
+    async def request_scene_image(
+        agent_id: str, character_id: str | None = None
+    ) -> dict[str, Any]:
+        """Illustrate the character's current room -- the MCP camera affordance.
+
+        This is the player-facing equivalent of the camera button/reaction in the other
+        clients (no admin token required): it records the character's current scene as a
+        world-history event and queues an image for it, reusing one already requested this
+        tick. Resolves the agent's controlled character unless ``character_id`` is given.
+        """
+
+        if scene_image is None:
+            raise ToolError("image generation is not configured")
+        try:
+            character, _controller, _generation = _controlled_or_requested_character(
+                actor, agent_id, character_id
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+        response = await scene_image(str(character))
+        if response is None:
+            raise ToolError("character has no room to illustrate")
         return response.model_dump(mode="json")
 
     del worldgen_options

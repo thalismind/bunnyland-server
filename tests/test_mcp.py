@@ -447,7 +447,7 @@ async def test_mcp_event_bridge_filters_and_notifies_agent_resources(scenario):
         bridge.close()
 
 
-def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario):
+def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario, tmp_path):
     captured = {}
     registered_tools = {}
     registered_resources = {}
@@ -513,14 +513,37 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
 
+    # Pass an imagegen service so the player camera tool is wired into the MCP app too.
+    from bunnyland.imagegen.config import ImageGenConfig
+    from bunnyland.imagegen.media import MediaStore
+    from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
+    from bunnyland.imagegen.service import ImageGenService
+    from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
+
+    class _FakeComfy:
+        async def generate(self, graph, *, output_node_id=""):
+            return b"PNG"
+
+    imagegen = ImageGenService(
+        scenario.actor,
+        ImageGenConfig(server_url="http://comfy.local"),
+        client=_FakeComfy(),
+        templates=WorkflowTemplateStore(defaults=default_templates()),
+        enhancer=StubPromptEnhancer(),
+        examples=CatalogExampleSource(),
+        media=MediaStore(tmp_path),
+    )
+
     app = create_app(
         scenario.actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
         admin_token="secret",
+        imagegen=imagegen,
     )
 
     paths = {route.path for route in app.routes}
     assert "/mcp" in paths
+    assert "request_scene_image" in registered_tools
     assert captured["args"] == ("Bunnyland",)
     assert captured["kwargs"]["stateless_http"] is False
     assert captured["kwargs"]["json_response"] is True
@@ -801,6 +824,40 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         await registered_tools["generate_image_admin"](
             admin_token="secret", entity_id=str(scenario.character)
         )
+
+    # Player-facing scene-image request (camera affordance, no admin token required).
+    await registered_tools["claim_character"](agent_id="agent-a", character_name="Juniper")
+
+    async def scene_image(character_id):
+        calls["scene_image"] = character_id
+        return WorldImageGenerationResponse(
+            world_epoch=scenario.actor.epoch,
+            job_id="scene-1",
+            status="queued",
+            entity_id=character_id,
+            purpose="event",
+        )
+
+    create_bunnyland_mcp_app(scene_image=scene_image, **create_kwargs)
+    scene = await registered_tools["request_scene_image"](agent_id="agent-a")
+    assert scene["job_id"] == "scene-1"
+    assert calls["scene_image"] == str(scenario.character)
+
+    with pytest.raises(RuntimeError, match="not controlling"):
+        await registered_tools["request_scene_image"](agent_id="ghost")
+
+    # The character has no room to illustrate: the callback returns None.
+    async def scene_image_none(_character_id):
+        return None
+
+    create_bunnyland_mcp_app(scene_image=scene_image_none, **create_kwargs)
+    with pytest.raises(RuntimeError, match="no room"):
+        await registered_tools["request_scene_image"](agent_id="agent-a")
+
+    # Without the callback the tool reports image generation is off.
+    create_bunnyland_mcp_app(**create_kwargs)
+    with pytest.raises(RuntimeError, match="not configured"):
+        await registered_tools["request_scene_image"](agent_id="agent-a")
 
 
 async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):

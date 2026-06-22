@@ -37,6 +37,7 @@ from .events import (
     ImageGenerationFailedEvent,
     ImageGenerationStartedEvent,
 )
+from .feed import latest_image_completion, latest_image_failure
 from .media import MediaError, MediaStore
 from .postprocess import remove_edge_background
 from .prompt import (
@@ -111,6 +112,8 @@ __all__ = [
     "build_comfy_client",
     "build_image_service",
     "default_templates",
+    "latest_image_completion",
+    "latest_image_failure",
     "load_templates_from",
     "resolve_family",
     "remove_edge_background",

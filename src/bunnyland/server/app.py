@@ -908,6 +908,18 @@ def create_app(
         )
         return _image_response(job)
 
+    async def _scene_image_request(
+        character_id: str,
+    ) -> WorldImageGenerationResponse | None:
+        # Shared by the player scene-image endpoint and the MCP camera tool. Both callers
+        # guarantee imagegen is configured and the character exists; this returns None only
+        # when there is no room to illustrate, which each caller renders as its own error.
+        service = _require_imagegen()
+        job = await request_scene_image(actor, service, character_id=character_id)
+        if job is None:
+            return None
+        return _image_response(job)
+
     @app.post("/admin/world/generate-image", response_model=WorldImageGenerationResponse)
     async def generate_image(
         request: WorldImageGenerationRequest,
@@ -950,14 +962,14 @@ def create_app(
     )
     async def request_character_scene_image(character_id: str) -> WorldImageGenerationResponse:
         # Player-facing: illustrate the character's current room as an on-request scene event.
-        service = _require_imagegen()
+        _require_imagegen()
         parsed = parse_entity_id(character_id)
         if parsed is None or not actor.world.has_entity(parsed):
             raise HTTPException(status_code=404, detail="character not found")
-        job = await request_scene_image(actor, service, character_id=character_id)
-        if job is None:
+        response = await _scene_image_request(character_id)
+        if response is None:
             raise HTTPException(status_code=400, detail="character has no room to illustrate")
-        return _image_response(job)
+        return response
 
     @app.get("/media/{segment}/{name}")
     async def get_media(segment: str, name: str) -> Response:
@@ -1017,6 +1029,7 @@ def create_app(
             generate_item=_generate_item_request,
             generate_event=_generate_event_request,
             generate_image=_generate_image_request,
+            scene_image=_scene_image_request if imagegen is not None else None,
             register_script=_register_script_request,
             register_behavior=_register_behavior_request,
             list_controller_definitions=_controller_definitions_response,
