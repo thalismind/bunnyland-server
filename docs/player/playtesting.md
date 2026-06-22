@@ -1,8 +1,8 @@
 # Playtesting checklist
 
 Use this guide during a hosted Bunnyland playtest. It is a timed pass through the public
-site, sandbox, clients, character sheet, admin world generation, world inspection, and
-final feedback.
+site, sandbox, clients, character sheet, character chat, admin world generation, world
+inspection, and final feedback.
 
 The whole pass takes about 45 to 60 minutes. Spend longer anywhere you find confusing,
 broken, or especially promising behavior.
@@ -31,8 +31,8 @@ clients and admin tools.
 
 What to try:
 
-- Identify the Web TUI, Toon client, Web REPL, character sheet, world generator, and
-  inspector links.
+- Identify the Web TUI, Toon client, Web REPL, character sheet, character chat, world
+  generator, and inspector links.
 - Check whether one client looks like the recommended starting point.
 - Confirm whether the page mentions the API server it will use.
 
@@ -117,7 +117,31 @@ What to report:
 - Any section whose label was unclear.
 - Any portrait, relationship, inventory, or action detail that contradicted the client.
 
-## 7. Optional Discord play
+## 7. Character chat
+
+Open [Character Chat](https://sandbox.bunnyland.dev/character-chat.html) from the sandbox
+client chooser. Use it only when the page says character chat is available on the current
+server.
+
+What to try:
+
+- Pick an LLM-controlled character and send a short greeting.
+- Ask where they are, what room they are in, and what they can see nearby.
+- Ask about one item, exit, or visible character from the character sheet or another client.
+- Try one conversational suggestion, such as asking them to look around, speak, or wait.
+- Send a message with simple Markdown formatting, such as bold text or a short list, and
+  check whether the transcript stays readable.
+
+What to report:
+
+- Characters that cannot be selected, never answer, or show a controller conflict.
+- Replies that ignore their profile, current room, visible items, or nearby characters.
+- Any answer that claims game state contradicted by the sheet, client, or inspector.
+- Action status lines that are unclear, stale, or missing after the character uses a tool.
+- Transcript formatting issues, especially raw HTML rendering, unsafe links, or unreadable
+  Markdown.
+
+## 8. Optional Discord play
 
 Use Discord only when the guide says the current playtest has a live channel and
 bot available.
@@ -134,7 +158,7 @@ What to report:
 - Bot responses that were delayed, missing, too noisy, or missing useful links.
 - Any Discord-only blocker that prevented normal play.
 
-## 8. Admin password
+## 9. Admin password
 
 Ask the guide for the admin password when the playtest reaches the admin portion.
 Do not publish, paste into notes, or hard-code the password in any feedback.
@@ -149,7 +173,7 @@ What to report:
 - Any login prompt or authentication failure that blocked the admin steps.
 - Any place where the password appeared visible after submission.
 
-## 9. World Generator
+## 10. World Generator
 
 Open [World Generator](https://sandbox.bunnyland.dev/world-generator.html). Create a new
 world for the sandbox after confirming with the guide that replacing the current
@@ -168,7 +192,7 @@ What to report:
 - Progress states that got stuck, skipped useful details, or failed silently.
 - Generated-world failures, partial resets, or confusing completion messages.
 
-## 10. World Inspector
+## 11. World Inspector
 
 Open [World Inspector](https://sandbox.bunnyland.dev/inspector.html) and inspect the world
 you generated.
@@ -187,7 +211,7 @@ What to report:
 - Items that looked important but had no apparent use.
 - Any graph, inspector panel, or event feed display that contradicted player-client output.
 
-## 11. Play the generated world
+## 12. Play the generated world
 
 Open [Web TUI](https://sandbox.bunnyland.dev/web-tui.html) again and explore the newly
 generated world as a player.
@@ -205,7 +229,7 @@ What to report:
 - Whether generated rooms, exits, characters, and objects supported actual play.
 - Any difference between what the inspector suggested and what the player client allowed.
 
-## 12. Submit feedback
+## 13. Submit feedback
 
 Submit feedback in the form, issue, thread, or document the guide provides.
 
