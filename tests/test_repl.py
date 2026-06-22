@@ -386,6 +386,85 @@ async def test_dispatch_meta_commands_render_text():
     assert "You are now Pib" in (await repl.dispatch("play Pib")).plain
 
 
+async def test_drain_events_surfaces_scene_image_and_failure():
+    repl = _repl()
+
+    def completed(epoch, url):
+        return {"event_type": "ImageGenerationCompletedEvent",
+                "event": {"world_epoch": epoch, "purpose": "event", "url": url}}
+
+    lines = repl.drain_events([completed(5, "/media/events/a.png")])
+    assert any("scene image ready" in line.plain and "a.png" in line.plain for line in lines)
+    # The same image does not repeat.
+    repeat = repl.drain_events([completed(5, "/media/events/a.png")])
+    assert all("scene image ready" not in line.plain for line in repeat)
+
+    def failed(epoch, reason=None):
+        event = {"world_epoch": epoch, "purpose": "event"}
+        if reason is not None:
+            event["reason"] = reason
+        return {"event_type": "ImageGenerationFailedEvent", "event": event}
+
+    flines = repl.drain_events([failed(9, "boom")])
+    assert any("image request failed: boom" in line.plain for line in flines)
+    # A failure with no reason falls back to a default message.
+    dlines = repl.drain_events([failed(11)])
+    assert any("image generation failed" in line.plain for line in dlines)
+
+
+async def test_release_drops_the_current_player():
+    repl = _repl()
+    released = await repl.dispatch("release")
+    assert "Released" in released.plain
+    assert repl.player_id == ""
+    assert repl.control is None
+    # Nothing to release the second time.
+    assert "aren't playing" in (await repl.dispatch("release")).plain
+
+
+async def test_queued_lists_commands_and_cancel_removes_them():
+    class QueuedBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__()
+            self.cancelled: list[tuple] = []
+            self.cancel_result = True
+
+        async def fetch_queued_commands(self, character_id):
+            return {"character_id": character_id, "commands": [
+                {"command_id": "cmd-1", "command_type": "wait", "lane": "world"},
+                {"command_id": "cmd-2", "command_type": "reflect"}]}
+
+        async def cancel_command(self, character_id, command_id, controller_id, generation):
+            self.cancelled.append((character_id, command_id, controller_id, generation))
+            return self.cancel_result
+
+    backend = QueuedBackend()
+    repl = BunnylandRepl(backend)
+    repl.world = World.parse(_snapshot())
+    repl.character_list = _character_list_from_snapshot(_snapshot())
+    repl.player_id = PLAYER
+    repl.control = ("controller:1", 2)
+
+    listed = await repl.dispatch("queued")
+    assert "cmd-1" in listed.plain and "wait" in listed.plain
+    cancelled = await repl.dispatch("cancel cmd-1")
+    assert "Cancelled cmd-1" in cancelled.plain
+    assert backend.cancelled == [(PLAYER, "cmd-1", "controller:1", 2)]
+    # A backend that refuses to cancel reports the failure.
+    backend.cancel_result = False
+    assert "Could not cancel" in (await repl.dispatch("cancel cmd-1")).plain
+    # Cancel needs a command id.
+    assert "Usage: cancel" in (await repl.dispatch("cancel")).plain
+
+
+async def test_queued_and_cancel_require_a_player_and_handle_empty():
+    idle = _repl(player=False)
+    assert "Pick a player first" in (await idle.dispatch("queued")).plain
+    assert "Pick a player first" in (await idle.dispatch("cancel cmd-1")).plain
+    # A player with nothing queued (the default backend returns no commands).
+    assert "No queued actions" in (await _repl().dispatch("queued")).plain
+
+
 async def test_look_and_who_render_clickable_target_links():
     repl = _repl()
     room = await repl.dispatch("look")

@@ -27,7 +27,8 @@ from rich.style import Style
 from rich.text import Text
 
 from ..core.actions import ActionDefinition, action_icon_for, definitions_by_tool_name
-from ..imagegen.affordance import REQUEST_EMOJI
+from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
+from ..imagegen.feed import latest_image_completion, latest_image_failure
 from ..llm_agents.dispatch import suggest_names
 from ..llm_agents.natural_language import NaturalCommandParser
 from ..server.models import CharacterSummaryView
@@ -39,7 +40,8 @@ from ..tui.model import KIND_ICON, World, entity_icon, entity_name, fmt_points, 
 from .completion import complete_line, reference_candidates
 
 META_COMMANDS = (
-    "help", "who", "look", "inventory", "points", "play", "refresh", "quit", "exit"
+    "help", "who", "look", "inventory", "points", "play", "release",
+    "queued", "cancel", "refresh", "quit", "exit"
 )
 IMAGE_COMMANDS = ("image", "img")
 SHEET_COMMANDS = ("sheet", "profile")
@@ -138,6 +140,8 @@ class BunnylandRepl:
         self.character_list: list[CharacterSummaryView] = []
         self._defs = definitions_by_tool_name()
         self._events = tui_events.EventNarrator()
+        self._event_image_url = ""
+        self._event_image_failure_epoch = -1
 
     # ── data ──────────────────────────────────────────────────────────────────
     async def refresh(self) -> None:
@@ -177,6 +181,46 @@ class BunnylandRepl:
         await self.refresh()
         return f"You are now {summary.name}."
 
+    async def _release(self) -> Text:
+        if not self.player_id:
+            return Text("You aren't playing a character.")
+        name = entity_name(self.world.get(self.player_id)) or self.player_id
+        self.player_id = ""
+        self.control = None
+        self.world = World()
+        await self.refresh()
+        return Text(f"Released {name}.")
+
+    async def render_queued(self) -> Text:
+        if not self.player_id:
+            return Text("Pick a player first: play <name>.")
+        projection = await self.backend.fetch_queued_commands(self.player_id)
+        commands = (projection or {}).get("commands") or []
+        if not commands:
+            return Text("No queued actions.")
+        out = Text("Queued actions (cancel <id>):")
+        for command in commands:
+            out.append("\n  ")
+            out.append(str(command.get("command_id") or "?"), style="bold")
+            out.append(f"  {command.get('command_type', '?')}")
+            lane = command.get("lane")
+            if lane:
+                out.append(f" · {lane}")
+        return out
+
+    async def _cancel(self, command_id: str) -> Text:
+        command_id = command_id.strip()
+        if not self.player_id or self.control is None:
+            return Text("Pick a player first: play <name>.")
+        if not command_id:
+            return Text("Usage: cancel <command id>. See 'queued'.")
+        cancelled = await self.backend.cancel_command(
+            self.player_id, command_id, self.control[0], self.control[1]
+        )
+        if cancelled:
+            return Text(f"Cancelled {command_id}.", style="cyan")
+        return Text(f"Could not cancel {command_id}.", style="yellow")
+
     def name_for(self, entity_id: str) -> str | None:
         """The display name of a reachable entity id, used by the app's click action."""
         entity = self.world.get(entity_id)
@@ -195,13 +239,34 @@ class BunnylandRepl:
     def drain_events(self, messages: list[dict]) -> list[Text]:
         """Render the not-yet-seen events the current player can perceive, then mark the
         whole window seen. ``messages`` are ``recent_events()`` payloads."""
-        return self._events.drain_events(
+        lines = self._events.drain_events(
             messages,
             player_id=self.player_id,
             room_of=self.world.room_of,
             name_for=self.name_for,
             show_icons=self.show_icons,
         )
+        lines.extend(self._image_lines(messages))
+        return lines
+
+    def _image_lines(self, messages: list[dict]) -> list[Text]:
+        # Image-generation events ride at SYSTEM visibility (no actor), so the perception
+        # filter in EventNarrator drops them; read completions/failures straight from the
+        # recent-events feed instead, matching the web and TUI clients. The dedupe state is
+        # mutated here so the app's priming pass (which discards the lines) still seeds it.
+        out: list[Text] = []
+        completion = latest_image_completion(messages, purpose="event")
+        if completion is not None and completion["url"] != self._event_image_url:
+            self._event_image_url = completion["url"]
+            out.append(
+                Text(f"{DELIVER_EMOJI} scene image ready: {completion['url']}", style="cyan")
+            )
+        failure = latest_image_failure(messages, purpose="event")
+        if failure is not None and failure["world_epoch"] != self._event_image_failure_epoch:
+            self._event_image_failure_epoch = failure["world_epoch"]
+            reason = failure.get("reason") or "image generation failed"
+            out.append(Text(f"{FAIL_EMOJI} image request failed: {reason}", style="yellow"))
+        return out
 
     # ── dispatch ──────────────────────────────────────────────────────────────
     async def dispatch(self, line: str) -> Text:
@@ -227,6 +292,12 @@ class BunnylandRepl:
             if not rest:
                 return Text("Usage: play <player name>")
             return Text(await self.select_player(rest))
+        if verb == "release":
+            return await self._release()
+        if verb == "queued":
+            return await self.render_queued()
+        if verb == "cancel":
+            return await self._cancel(rest)
         if verb in IMAGE_COMMANDS:
             return await self._request_image()
         if verb in SHEET_COMMANDS:
