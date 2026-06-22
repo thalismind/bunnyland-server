@@ -68,7 +68,8 @@ def _parse_junit(path: Path) -> dict:
                 failure = case.find("error")
             if failure is None:
                 continue
-            title = f"{case.attrib.get('classname', node.attrib.get('name', 'pytest'))}.{case.attrib.get('name', '(unknown)')}"
+            classname = case.attrib.get("classname", node.attrib.get("name", "pytest"))
+            title = f"{classname}.{case.attrib.get('name', '(unknown)')}"
             message = failure.attrib.get("message") or (failure.text or "").strip() or "test failed"
             suite["failures"].append({"title": title, "message": message})
     return suite
@@ -110,7 +111,10 @@ def _markdown_report(suite: dict, passed: int, coverage: dict) -> str:
         "",
         "| Passed | Failed | Skipped | Total | Time |",
         "| ---: | ---: | ---: | ---: | ---: |",
-        f"| {passed} | {suite['failed']} | {suite['skipped']} | {suite['tests']} | {suite['time']:.2f}s |",
+        (
+            f"| {passed} | {suite['failed']} | {suite['skipped']} | "
+            f"{suite['tests']} | {suite['time']:.2f}s |"
+        ),
         "",
         "### Test Suites",
         "",

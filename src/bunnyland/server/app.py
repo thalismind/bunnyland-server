@@ -44,6 +44,7 @@ from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .character_chat import CharacterChatService
 from .models import (
+    CharacterChatPendingResponse,
     CharacterChatRequest,
     CharacterChatResponse,
     CharacterChatStatusResponse,
@@ -367,6 +368,24 @@ def create_app(
             detail = str(exc)
             status = 400 if detail == "entity is not a character" else 404
             raise HTTPException(status_code=status, detail=detail) from exc
+
+    @app.get(
+        "/world/character/{id}/chat/pending/{command_id}",
+        response_model=CharacterChatPendingResponse,
+    )
+    async def world_character_chat_pending(
+        id: str, command_id: str, client_id: str
+    ) -> CharacterChatPendingResponse:
+        if character_chat is None:
+            raise HTTPException(status_code=409, detail="character chat is not enabled")
+        try:
+            with telemetry.span(
+                "character.chat.pending",
+                {"character.id": id, "command.id": command_id},
+            ):
+                return await character_chat.pending_result(id, client_id, command_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     def _runtime_timing() -> dict:
         now = time.time()

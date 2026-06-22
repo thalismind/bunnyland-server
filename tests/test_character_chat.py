@@ -15,7 +15,7 @@ from bunnyland.core import (
     WebControllerComponent,
     spawn_entity,
 )
-from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent
 from bunnyland.llm_agents.agent import ChatAgentReply
 from bunnyland.llm_agents.tools import ToolCall
 from bunnyland.mechanics.persona import (
@@ -33,9 +33,10 @@ from bunnyland.server.app import create_app
 from bunnyland.server.character_chat import (
     ALLOWED_CHAT_TOOLS,
     CharacterChatService,
+    PendingChatAction,
     build_character_chat_service,
 )
-from bunnyland.server.models import CharacterChatRequest
+from bunnyland.server.models import CharacterChatActionResult, CharacterChatRequest
 
 
 class FakeChatAgent:
@@ -250,6 +251,115 @@ async def test_character_chat_action_queues_without_immediate_tick():
 
 
 @pytest.mark.asyncio
+async def test_character_chat_queued_remember_result_is_wrapped_when_polled():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    store = install_memory(scenario.actor, InMemoryStore())
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper"))
+    store.add("juniper", text="The greenhouse vines are a human alien hybrid.", source="manual")
+    agent = FakeChatAgent(
+        [
+            ChatAgentReply(tool_call=ToolCall("remember", {"query": "greenhouse vines"})),
+            ChatAgentReply(content="I remember the greenhouse vines are a hybrid."),
+        ]
+    )
+    service = chat_service(scenario, agent, timeout=0.0)
+
+    response = await service.chat(str(scenario.character), chat_request("remember the vines"))
+    assert response.action.status == "queued"
+    assert response.action.command_id
+
+    queued = await service.pending_result(
+        str(scenario.character), "test-client", response.action.command_id
+    )
+    assert queued.complete is False
+    assert queued.reply == ""
+    assert queued.action.status == "queued"
+
+    await scenario.actor.tick(0)
+    wrapped = await service.pending_result(
+        str(scenario.character), "test-client", response.action.command_id
+    )
+
+    assert wrapped.complete is True
+    assert wrapped.action.status == "executed"
+    assert wrapped.action.result_events[0]["event_type"] == "NotesSearchedEvent"
+    assert wrapped.reply == "I remember the greenhouse vines are a hybrid."
+    assert "human alien hybrid" in str(agent.calls[-1]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_character_chat_pending_result_is_client_scoped():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    agent = FakeChatAgent([ChatAgentReply(tool_call=ToolCall("say", {"text": "soon"}))])
+    service = chat_service(scenario, agent, timeout=0.0)
+
+    response = await service.chat(str(scenario.character), chat_request("say something"))
+
+    with pytest.raises(ValueError, match="pending chat action does not exist"):
+        await service.pending_result(
+            str(scenario.character), "other-client", response.action.command_id
+        )
+
+
+@pytest.mark.asyncio
+async def test_character_chat_pending_registration_handles_already_completed_event():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    agent = FakeChatAgent([ChatAgentReply(content="That already happened.")])
+    service = chat_service(scenario, agent, timeout=0.0)
+    service._pending[("test-client", str(scenario.character), "other-command")] = (
+        PendingChatAction(
+            client_id="test-client",
+            character_id=str(scenario.character),
+            command_id="other-command",
+            messages=[],
+            user_message="wait",
+            model=None,
+            provider=None,
+            action=CharacterChatActionResult(
+                tool="wait", command_id="other-command", status="queued"
+            ),
+        )
+    )
+    service._complete_pending(
+        CommandExecutedEvent(
+            **scenario.actor._event_base(
+                actor_id=str(scenario.character),
+                command_id="cmd-completed",
+                command_type="say",
+                result_events=(),
+            )
+        )
+    )
+    service._register_pending(
+        PendingChatAction(
+            client_id="test-client",
+            character_id=str(scenario.character),
+            command_id="cmd-completed",
+            messages=[],
+            user_message="say something",
+            model=None,
+            provider=None,
+            action=CharacterChatActionResult(
+                tool="say", command_id="cmd-completed", status="queued"
+            ),
+        )
+    )
+
+    result = await service.pending_result(
+        str(scenario.character), "test-client", "cmd-completed"
+    )
+
+    assert result.complete is True
+    assert result.action.tool == "say"
+    assert result.action.status == "executed"
+    assert result.reply == "That already happened."
+
+
+@pytest.mark.asyncio
 async def test_character_chat_ignores_unrelated_command_events_while_waiting():
     scenario = build_scenario()
     install_core(scenario.actor)
@@ -436,6 +546,12 @@ def test_character_chat_status_and_disabled_route():
     )
     assert response.status_code == 409
     assert response.json()["detail"] == "character chat is not enabled"
+    pending = client.get(
+        f"/world/character/{scenario.character}/chat/pending/missing",
+        params={"client_id": "c"},
+    )
+    assert pending.status_code == 409
+    assert pending.json()["detail"] == "character chat is not enabled"
 
 
 def test_character_chat_route_reports_invalid_character_and_wrong_kind():
@@ -494,6 +610,42 @@ def test_character_chat_route_validates_request_and_reports_allowed_tools():
         json={"client_id": "c", "message": ""},
     )
     assert response.status_code == 422
+
+
+def test_character_chat_pending_route_reports_queued_action_and_scopes_client():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    service = chat_service(
+        scenario,
+        FakeChatAgent([ChatAgentReply(tool_call=ToolCall("say", {"text": "soon"}))]),
+        timeout=0.0,
+    )
+    app = create_app(scenario.actor, character_chat=service)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    response = client.post(
+        f"/world/character/{scenario.character}/chat",
+        json={"client_id": "c", "message": "say something"},
+    )
+    body = response.json()
+    command_id = body["action"]["command_id"]
+    assert body["action"]["status"] == "queued"
+
+    pending = client.get(
+        f"/world/character/{scenario.character}/chat/pending/{command_id}",
+        params={"client_id": "c"},
+    ).json()
+    assert pending["complete"] is False
+    assert pending["action"]["status"] == "queued"
+    assert pending["reply"] == ""
+
+    missing = client.get(
+        f"/world/character/{scenario.character}/chat/pending/{command_id}",
+        params={"client_id": "other"},
+    )
+    assert missing.status_code == 404
 
 
 def test_build_character_chat_service_factory_returns_service():

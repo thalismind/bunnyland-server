@@ -106,6 +106,17 @@ class CharacterChatResponse(BaseModel):
     action: CharacterChatActionResult = Field(default_factory=CharacterChatActionResult)
 
 
+class CharacterChatPendingResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    character_id: str
+    command_id: str
+    complete: bool = False
+    reply: str = ""
+    action: CharacterChatActionResult = Field(default_factory=CharacterChatActionResult)
+
+
 class ControllerAssignmentRequest(BaseModel):
     character_id: str
     controller_id: str

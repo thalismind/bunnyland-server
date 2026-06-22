@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from typing import Any
 
 from relics import EntityId
@@ -20,6 +21,7 @@ from ..llm_agents.tools import ToolCall, command_from_tool_call, reference_arg_k
 from ..prompts.builder import PromptBuilder, render_prompt
 from .models import (
     CharacterChatActionResult,
+    CharacterChatPendingResponse,
     CharacterChatRequest,
     CharacterChatResponse,
 )
@@ -39,6 +41,19 @@ CHAT_SYSTEM_PROMPT = (
 ACTION_RESULT_TIMEOUT_SECONDS = 1.5
 
 
+@dataclass
+class PendingChatAction:
+    client_id: str
+    character_id: str
+    command_id: str
+    messages: list[dict[str, str]]
+    user_message: str
+    model: str | None
+    provider: str | None
+    action: CharacterChatActionResult
+    reply: str = ""
+
+
 class CharacterChatService:
     def __init__(
         self,
@@ -52,6 +67,10 @@ class CharacterChatService:
         self.builder = builder
         self.agent = agent
         self.result_timeout_seconds = max(0.0, result_timeout_seconds)
+        self._pending: dict[tuple[str, str, str], PendingChatAction] = {}
+        self._completed_actions: dict[str, CharacterChatActionResult] = {}
+        self.actor.bus.subscribe(CommandExecutedEvent, self._complete_pending)
+        self.actor.bus.subscribe(CommandRejectedEvent, self._complete_pending)
 
     @property
     def allowed_tools(self) -> list[str]:
@@ -104,11 +123,84 @@ class CharacterChatService:
             final = final_reply.content or final
         if not final:
             final = self._fallback_reply(action)
+        if action.status == "queued" and action.command_id:
+            self._register_pending(
+                PendingChatAction(
+                    client_id=request.client_id,
+                    character_id=character_id,
+                    command_id=action.command_id,
+                    messages=messages,
+                    user_message=request.message,
+                    model=component.model,
+                    provider=component.provider,
+                    action=action,
+                )
+            )
         return CharacterChatResponse(
             world_epoch=self.actor.epoch,
             character_id=character_id,
             reply=final,
             action=action,
+        )
+
+    async def pending_result(
+        self, character_id: str, client_id: str, command_id: str
+    ) -> CharacterChatPendingResponse:
+        pending = self._pending.get((client_id, character_id, command_id))
+        if pending is None:
+            raise ValueError("pending chat action does not exist")
+        complete = pending.action.status in {"executed", "rejected"}
+        if complete and not pending.reply:
+            final_reply = await self._call_agent(
+                self._followup_messages(pending.messages, pending.user_message, pending.action),
+                character_id=character_id,
+                model=pending.model,
+                provider=pending.provider,
+                tools=[],
+            )
+            pending.reply = final_reply.content or self._fallback_reply(pending.action)
+        return CharacterChatPendingResponse(
+            world_epoch=self.actor.epoch,
+            character_id=character_id,
+            command_id=command_id,
+            complete=complete and bool(pending.reply),
+            reply=pending.reply,
+            action=pending.action,
+        )
+
+    def _complete_pending(self, event: CommandExecutedEvent | CommandRejectedEvent) -> None:
+        action = self._action_from_event(event, None)
+        matched = False
+        for pending in self._pending.values():
+            if pending.command_id != event.command_id:
+                continue
+            pending.action = self._action_from_event(event, pending.action.tool)
+            matched = True
+        if not matched:
+            self._completed_actions[event.command_id] = action
+
+    def _register_pending(self, pending: PendingChatAction) -> None:
+        completed = self._completed_actions.pop(pending.command_id, None)
+        if completed is not None:
+            pending.action = completed.model_copy(update={"tool": pending.action.tool})
+        self._pending[(pending.client_id, pending.character_id, pending.command_id)] = pending
+
+    @staticmethod
+    def _action_from_event(
+        event: CommandExecutedEvent | CommandRejectedEvent, tool: str | None
+    ) -> CharacterChatActionResult:
+        if isinstance(event, CommandRejectedEvent):
+            return CharacterChatActionResult(
+                tool=tool,
+                command_id=event.command_id,
+                status="rejected",
+                reason=event.reason,
+            )
+        return CharacterChatActionResult(
+            tool=tool,
+            command_id=event.command_id,
+            status="executed",
+            result_events=[dict(item) for item in event.result_events],
         )
 
     def _allowed_definitions(self):
