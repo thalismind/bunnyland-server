@@ -93,6 +93,9 @@ async def test_character_chat_no_tool_reply_does_not_submit_command():
     assert response.reply == "I hear you."
     assert response.action.status == "none"
     assert scenario.actor.pending_submissions() == []
+    system_prompt = agent.calls[0]["messages"][0]["content"]
+    assert "call that tool instead of merely describing the action" in system_prompt
+    assert "prefer take_note" in system_prompt
     tool_names = {
         tool["function"]["name"]
         for tool in agent.calls[0]["tools"]

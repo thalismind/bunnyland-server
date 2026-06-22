@@ -25,6 +25,7 @@ from bunnyland.core import (
     FocusPointsComponent,
     IdentityComponent,
     InitiativeComponent,
+    MemoryProfileComponent,
     MoveHandler,
     PortableComponent,
     RoomComponent,
@@ -44,6 +45,7 @@ from bunnyland.mechanics.persona import (
     PreferenceComponent,
     TraitSetComponent,
 )
+from bunnyland.memory import install_memory
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
 from bunnyland.plugins.builtin import CORE_VERBS
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
@@ -571,6 +573,7 @@ def _gameplay_actor(provider: str) -> tuple[WorldActor, object, object, object, 
 def _chat_endpoint_actor(provider: str) -> tuple[WorldActor, object]:
     actor = WorldActor()
     apply_plugins([plugin for plugin in bunnyland_plugins() if plugin.id == CORE_VERBS], actor)
+    install_memory(actor)
 
     room = spawn_entity(
         actor.world,
@@ -587,6 +590,7 @@ def _chat_endpoint_actor(provider: str) -> tuple[WorldActor, object]:
         [
             IdentityComponent(name="Juniper", kind="character"),
             CharacterComponent(species="bunny"),
+            MemoryProfileComponent(vector_collection="juniper-live-chat"),
             ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=5.0),
             FocusPointsComponent(current=3.0, maximum=3.0, regen_per_hour=3.0),
             InitiativeComponent(score=1.0),
@@ -709,6 +713,39 @@ def test_live_character_chat_endpoints_use_real_llm(provider):
     }
     if body["action"]["tool"]:
         assert body["action"]["tool"] in ALLOWED_CHAT_TOOLS
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_live_character_chat_take_note_prompt_calls_tool(provider):
+    testclient = pytest.importorskip("fastapi.testclient")
+    actor, character_id = _chat_endpoint_actor(provider)
+    service = build_character_chat_service(
+        actor,
+        PromptBuilder(actor.world),
+        _character_agent(provider),
+    )
+    client = testclient.TestClient(create_app(actor, character_chat=service))
+
+    response = client.post(
+        f"/world/character/{character_id}/chat",
+        json={
+            "client_id": f"live-note-{provider}",
+            "message": (
+                "This is critical info. Use your take_note tool now to record exactly this: "
+                "the pale plants are a hybrid of human and alien vines that will, given time, "
+                "take over the greenhouse. Do not merely describe writing a note; call the "
+                "take_note tool."
+            ),
+            "history_summary": "",
+            "history": [],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["action"]["tool"] == "take_note", body["reply"]
+    assert body["action"]["status"] in {"queued", "executed"}
 
 
 @pytest.mark.asyncio
