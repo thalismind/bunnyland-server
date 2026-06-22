@@ -9,13 +9,14 @@ from typing import Any
 from relics import EntityId
 
 from ..core import CharacterComponent, parse_entity_id
+from ..core.actions import action_definitions
 from ..core.controllers import LLMControllerComponent
 from ..core.edges import ControlledBy
 from ..core.events import CommandExecutedEvent, CommandRejectedEvent
 from ..core.world_actor import WorldActor
 from ..llm_agents.agent import ChatAgentReply
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
-from ..llm_agents.tools import ToolCall, command_from_tool_call, reference_arg_keys, tool_schemas
+from ..llm_agents.tools import ToolCall, command_from_tool_call, reference_arg_keys
 from ..prompts.builder import PromptBuilder, render_prompt
 from .models import (
     CharacterChatActionResult,
@@ -73,7 +74,7 @@ class CharacterChatService:
             character_id=character_id,
             model=component.model,
             provider=component.provider,
-            tools=tool_schemas(self._allowed_definitions()),
+            tools=self._allowed_tool_schemas(),
         )
         if reply.tool_call is None:
             return CharacterChatResponse(
@@ -110,9 +111,12 @@ class CharacterChatService:
     def _allowed_definitions(self):
         return tuple(
             definition
-            for definition in self.actor.action_definitions()
+            for definition in action_definitions(self.actor.action_definitions())
             if definition.name in ALLOWED_CHAT_TOOLS
         )
+
+    def _allowed_tool_schemas(self) -> list[dict[str, Any]]:
+        return [definition.tool_schema() for definition in self._allowed_definitions()]
 
     def _llm_controller(self, character_id: EntityId):
         character = self.actor.world.get_entity(character_id)

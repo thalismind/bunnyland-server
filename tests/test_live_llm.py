@@ -674,8 +674,8 @@ def test_live_character_chat_endpoints_use_real_llm(provider):
     assert status.status_code == 200
     status_body = status.json()
     assert status_body["enabled"] is True
-    assert set(status_body["allowed_tools"]).issubset(ALLOWED_CHAT_TOOLS)
-    assert {"look", "say", "wait"}.issubset(set(status_body["allowed_tools"]))
+    assert set(status_body["allowed_tools"]) == ALLOWED_CHAT_TOOLS
+    assert {"remember", "take_note", "reflect", "forget"}.issubset(status_body["allowed_tools"])
 
     response = client.post(
         f"/world/character/{character_id}/chat",

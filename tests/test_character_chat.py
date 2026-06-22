@@ -93,6 +93,13 @@ async def test_character_chat_no_tool_reply_does_not_submit_command():
     assert response.reply == "I hear you."
     assert response.action.status == "none"
     assert scenario.actor.pending_submissions() == []
+    tool_names = {
+        tool["function"]["name"]
+        for tool in agent.calls[0]["tools"]
+        if tool.get("type") == "function"
+    }
+    assert tool_names == ALLOWED_CHAT_TOOLS
+    assert "move" not in tool_names
 
 
 @pytest.mark.asyncio
@@ -477,7 +484,8 @@ def test_character_chat_route_validates_request_and_reports_allowed_tools():
     client = TestClient(app)
     status = client.get("/world/chat/status").json()
     assert status["enabled"] is True
-    assert set(status["allowed_tools"]).issubset(ALLOWED_CHAT_TOOLS)
+    assert set(status["allowed_tools"]) == ALLOWED_CHAT_TOOLS
+    assert {"remember", "take_note", "reflect", "forget"}.issubset(status["allowed_tools"])
     response = client.post(
         f"/world/character/{scenario.character}/chat",
         json={"client_id": "c", "message": ""},
