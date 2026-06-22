@@ -19,7 +19,8 @@ from textual.widgets.option_list import Option
 
 from ..core.actions import action_icon_for
 from ..core.claim_timeout import normalize_claim_timeout
-from ..imagegen.affordance import REQUEST_EMOJI
+from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
+from ..imagegen.feed import latest_image_completion, latest_image_failure
 from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, LocalBackend, RemoteBackend
@@ -260,6 +261,45 @@ class ActionForm(ModalScreen[dict | None]):
         self.dismiss(payload)
 
 
+class HelpScreen(ModalScreen[None]):
+    """Modal cheat-sheet of the key bindings and how to play, mirroring the REPL's
+    ``help`` command so a TUI player can discover the controls without leaving the app.
+    """
+
+    BINDINGS = [("escape", "close", "Close"), ("question_mark", "close", "Close")]
+
+    HELP_BODY = (
+        "Bunnyland TUI — controls\n"
+        "\n"
+        "  r   Refresh the world now\n"
+        f"  i   {REQUEST_EMOJI} Request an image of your current scene\n"
+        "  s   Open the selected (or your own) character sheet in a browser\n"
+        "  ?   Show this help\n"
+        "  q   Quit\n"
+        "\n"
+        "Playing:\n"
+        "  • Pick a character from the dropdown to claim and play it.\n"
+        "  • Click a verb in the action list to act; a form collects any arguments.\n"
+        "  • Click a member to target them, a door to travel, or a queued action to cancel it.\n"
+        "  • Search the action list with the filter box; unavailable actions stay listed,\n"
+        "    de-emphasized, and can still be queued."
+    )
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="form"):
+            yield Label("Help", id="form-title")
+            yield Static(self.HELP_BODY)
+            with Horizontal(id="form-buttons"):
+                yield Button("Close", id="help-close", variant="primary")
+
+    @on(Button.Pressed, "#help-close")
+    def _close_pressed(self, _event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class BunnylandTUI(App[None]):
     TITLE = "Bunnyland TUI"
 
@@ -298,6 +338,7 @@ class BunnylandTUI(App[None]):
         ("r", "refresh", "Refresh"),
         ("i", "request_image", f"{REQUEST_EMOJI} Image"),
         ("s", "open_sheet", "Open Sheet"),
+        ("question_mark", "help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -326,6 +367,8 @@ class BunnylandTUI(App[None]):
         self.activity_lines: list[Text] = []
         self._events = EventNarrator()
         self._events_primed = False
+        self._event_image_url = ""
+        self._event_image_failure_epoch = -1
         self._refresh_error: str | None = None
 
     def compose(self) -> ComposeResult:
@@ -337,6 +380,8 @@ class BunnylandTUI(App[None]):
                 yield OptionList(id="members")
                 yield Static("Doors", id="doors-title", classes="col-title")
                 yield OptionList(id="doors")
+                yield Static("Inventory", id="inventory-title", classes="col-title")
+                yield OptionList(id="inventory")
                 yield Static("Activity", id="activity-title", classes="col-title")
                 yield OptionList(id="activity")
             with Vertical(id="actions"):
@@ -441,6 +486,7 @@ class BunnylandTUI(App[None]):
         except NoMatches:
             return
         self._render_room()
+        self._render_inventory()
         self._render_actions()
         self._drain_activity(events, prime=not self._events_primed)
         self._events_primed = True
@@ -529,6 +575,20 @@ class BunnylandTUI(App[None]):
             doors.add_option(Option(f"🚪 {label}", id=f"door:{target_id}"))
         if not room:
             doors.add_option(Option("No room until a character is selected.", disabled=True))
+
+    def _render_inventory(self) -> None:
+        inventory = self._main_query_one("#inventory", OptionList)
+        inventory.clear_options()
+        items = self.world.target_groups.get("inventory", []) if self.player_id else []
+        if not items:
+            hint = (
+                "Nothing carried." if self.player_id
+                else "Select a character to see what they carry."
+            )
+            inventory.add_option(Option(hint, disabled=True))
+            return
+        for item in items:
+            inventory.add_option(Option(f"{item.icon} {item.label}", id=f"inv:{item.value}"))
 
     def _restore_highlight(self, members: OptionList) -> None:
         if not self.selected_id:
@@ -667,11 +727,35 @@ class BunnylandTUI(App[None]):
             name_for=self._name_for,
             show_icons=self.show_icons,
         )
+        image_lines = self._image_activity(events, prime=prime)
         if prime:
             self._render_activity()
             return
         for line in lines:
             self._append_activity(line)
+        for line in image_lines:
+            self._append_activity(line)
+
+    def _image_activity(self, events: list[dict], *, prime: bool) -> list[Text]:
+        # Image-generation events ride at SYSTEM visibility (no actor), so the perception
+        # filter in EventNarrator drops them. Pull completions/failures straight from the
+        # recent-events feed instead, matching the web clients. On the priming pass we only
+        # record what is already there so reconnecting does not replay an old image.
+        lines: list[Text] = []
+        completion = latest_image_completion(events, purpose="event")
+        if completion is not None and completion["url"] != self._event_image_url:
+            self._event_image_url = completion["url"]
+            if not prime:
+                lines.append(
+                    Text(f"{DELIVER_EMOJI} scene image ready: {completion['url']}", style="cyan")
+                )
+        failure = latest_image_failure(events, purpose="event")
+        if failure is not None and failure["world_epoch"] != self._event_image_failure_epoch:
+            self._event_image_failure_epoch = failure["world_epoch"]
+            if not prime:
+                reason = failure.get("reason") or "image generation failed"
+                lines.append(Text(f"{FAIL_EMOJI} image request failed: {reason}", style="yellow"))
+        return lines
 
     def _append_activity(self, line: Text) -> None:
         self.activity_lines.append(line)
@@ -731,6 +815,10 @@ class BunnylandTUI(App[None]):
     @on(Button.Pressed, "#open-sheet")
     async def _open_sheet_pressed(self, _event: Button.Pressed) -> None:
         await self.action_open_sheet()
+
+    def action_help(self) -> None:
+        """Show the key-binding cheat-sheet."""
+        self.push_screen(HelpScreen())
 
     async def action_request_image(self) -> None:
         """Request an image of the player's current scene when the backend supports it."""

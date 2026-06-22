@@ -24,7 +24,7 @@ from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
 from bunnyland.tui import app as tui_app
-from bunnyland.tui.app import ActionForm, BunnylandTUI, FormField
+from bunnyland.tui.app import ActionForm, BunnylandTUI, FormField, HelpScreen
 from bunnyland.tui.backend import (
     Backend,
     LocalBackend,
@@ -1355,6 +1355,84 @@ async def test_action_form_dropdown_selects_and_cancels():
         await pilot.press("escape")
         await pilot.pause()
         assert results[-1] is None
+
+
+async def test_image_activity_surfaces_scene_images_and_failures():
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+
+    def completed(epoch, url):
+        return {"event_type": "ImageGenerationCompletedEvent",
+                "event": {"world_epoch": epoch, "purpose": "event", "url": url}}
+
+    # Priming records the current image without emitting a line.
+    assert app._image_activity([completed(5, "/media/events/a.png")], prime=True) == []
+    assert app._event_image_url == "/media/events/a.png"
+    # A newer image emits a "scene image ready" line; the same url does not repeat.
+    lines = app._image_activity([completed(7, "/media/events/b.png")], prime=False)
+    assert any("scene image ready" in line.plain and "b.png" in line.plain for line in lines)
+    assert app._image_activity([completed(7, "/media/events/b.png")], prime=False) == []
+
+    def failed(epoch, reason=None):
+        event = {"world_epoch": epoch, "purpose": "event"}
+        if reason is not None:
+            event["reason"] = reason
+        return {"event_type": "ImageGenerationFailedEvent", "event": event}
+
+    flines = app._image_activity([failed(9, "boom")], prime=False)
+    assert any("image request failed: boom" in line.plain for line in flines)
+    # A failure with no reason falls back to a default message.
+    dlines = app._image_activity([failed(11)], prime=False)
+    assert any("image generation failed" in line.plain for line in dlines)
+    # Priming a newer failure records its epoch without emitting a line.
+    assert app._image_activity([failed(12, "later")], prime=True) == []
+    assert app._event_image_failure_epoch == 12
+
+
+async def test_refresh_appends_scene_image_activity():
+    backend = RecordingBackend(_snapshot())
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        await _wait_for_tui_ready(app, pilot)
+        await _select_player(app, pilot)
+        backend.events = [{
+            "event_type": "ImageGenerationCompletedEvent",
+            "event": {"world_epoch": 99, "purpose": "event", "url": "/media/events/z.png"},
+        }]
+        await app.refresh_world()
+        await pilot.pause()
+        assert any("scene image ready" in line.plain for line in app.activity_lines)
+
+
+async def _open_help_with_key(app, pilot):
+    from textual.widgets import Button, OptionList
+
+    # The "?" binding lives on the app, so focus a main-screen widget that does not itself
+    # consume the key (the activity list) before pressing it.
+    app.query_one("#activity", OptionList).focus()
+    await pilot.pause()
+    await pilot.press("question_mark")
+    for _ in range(20):
+        if isinstance(app.screen, HelpScreen):
+            return await _wait_for_widget(app.screen, pilot, "#help-close", Button)
+        await pilot.pause(0.05)
+    raise AssertionError("help screen did not open")
+
+
+async def test_help_screen_opens_and_closes():
+    from textual.widgets import Button
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _wait_for_tui_ready(app, pilot)
+        # Open the help cheat-sheet via the "?" binding, close it with Escape (action_close).
+        await _open_help_with_key(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+        # Reopen and close via the Close button (_close_pressed).
+        button = await _open_help_with_key(app, pilot)
+        assert isinstance(button, Button)
+        button.press()
+        await pilot.pause()
 
 
 async def test_action_form_dropdown_uses_initial_value():
