@@ -5,14 +5,21 @@ services:
       - -ec
       - |
         set -- bunnyland serve
+        llm_provider="$${BUNNYLAND_LLM_PROVIDER:-ollama}"
+        worldgen_provider="$${BUNNYLAND_WORLDGEN_PROVIDER:-$$llm_provider}"
         if [ "$${BUNNYLAND_ENABLE_LLM:-0}" = "1" ]; then
-          set -- "$$@" --llm --worldgen-model "$${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
+          set -- "$$@" --llm --llm-provider "$$llm_provider" --worldgen-provider "$$worldgen_provider" --worldgen-model "$${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
+        elif [ "$${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}" = "1" ]; then
+          set -- "$$@" --llm-provider "$$llm_provider" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
         fi
         if [ "$${BUNNYLAND_ENABLE_DISCORD:-0}" = "1" ]; then
           set -- "$$@" --discord
         fi
         if [ "$${BUNNYLAND_ENABLE_MCP:-0}" = "1" ]; then
           set -- "$$@" --mcp
+        fi
+        if [ "$${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}" = "1" ]; then
+          set -- "$$@" --character-chat
         fi
         exec "$$@" \
           --load "$${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}" \

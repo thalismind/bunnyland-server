@@ -8,14 +8,21 @@ services:
       - -ec
       - |
         set -- bunnyland serve
+        llm_provider="$${BUNNYLAND_LLM_PROVIDER:-ollama}"
+        worldgen_provider="$${BUNNYLAND_WORLDGEN_PROVIDER:-$$llm_provider}"
         if [ "$${BUNNYLAND_ENABLE_LLM:-0}" = "1" ]; then
-          set -- "$$@" --llm --worldgen-model "$${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
+          set -- "$$@" --llm --llm-provider "$$llm_provider" --worldgen-provider "$$worldgen_provider" --worldgen-model "$${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
+        elif [ "$${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}" = "1" ]; then
+          set -- "$$@" --llm-provider "$$llm_provider" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
         fi
         if [ "$${BUNNYLAND_ENABLE_DISCORD:-0}" = "1" ]; then
           set -- "$$@" --discord
         fi
         if [ "$${BUNNYLAND_ENABLE_MCP:-0}" = "1" ]; then
           set -- "$$@" --mcp
+        fi
+        if [ "$${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}" = "1" ]; then
+          set -- "$$@" --character-chat
         fi
         if [ -n "$${BUNNYLAND_STARTER_PACK:-}" ]; then
           set -- "$$@" --starter-pack "$${BUNNYLAND_STARTER_PACK}"
@@ -39,8 +46,13 @@ services:
       BUNNYLAND_TIME_SCALE: ${BUNNYLAND_TIME_SCALE:-1800}
       BUNNYLAND_AUTOSAVE_EVERY: ${BUNNYLAND_AUTOSAVE_EVERY:-20}
       BUNNYLAND_ENABLE_LLM: ${BUNNYLAND_ENABLE_LLM:-0}
+      BUNNYLAND_LLM_PROVIDER: ${BUNNYLAND_LLM_PROVIDER:-ollama}
+      BUNNYLAND_WORLDGEN_PROVIDER: ${BUNNYLAND_WORLDGEN_PROVIDER:-}
+      BUNNYLAND_WORLDGEN_MODEL: ${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}
+      BUNNYLAND_CHARACTER_MODEL: ${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}
       BUNNYLAND_ENABLE_DISCORD: ${BUNNYLAND_ENABLE_DISCORD:-0}
       BUNNYLAND_ENABLE_MCP: ${BUNNYLAND_ENABLE_MCP:-0}
+      BUNNYLAND_ENABLE_CHARACTER_CHAT: ${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}
       BUNNYLAND_ADMIN_TOKEN: ${BUNNYLAND_ADMIN_TOKEN:-}
     expose:
       - "8765"

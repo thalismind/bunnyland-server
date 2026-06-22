@@ -38,6 +38,7 @@ def _build_wizard_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path, P
   printf 'enable_llm=%s\\n' "$BUNNYLAND_ENABLE_LLM"
   printf 'enable_discord=%s\\n' "$BUNNYLAND_ENABLE_DISCORD"
   printf 'enable_mcp=%s\\n' "$BUNNYLAND_ENABLE_MCP"
+  printf 'enable_character_chat=%s\\n' "$BUNNYLAND_ENABLE_CHARACTER_CHAT"
 } > "$WIZARD_TEST_SETUP_LOG"
 """
     )
@@ -145,6 +146,7 @@ def test_vps_docker_wizard_uses_stdin_answers_for_prompted_setup_values(
         "enable_llm=0",
         "enable_discord=0",
         "enable_mcp=0",
+        "enable_character_chat=0",
     ]
 
 

@@ -41,6 +41,7 @@ web_tag="${BUNNYLAND_WEB_TAG:-main}"
 enable_llm="${BUNNYLAND_ENABLE_LLM:-}"
 enable_discord="${BUNNYLAND_ENABLE_DISCORD:-}"
 enable_mcp="${BUNNYLAND_ENABLE_MCP:-0}"
+enable_character_chat="${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}"
 admin_token="${BUNNYLAND_ADMIN_TOKEN:-}"
 discord_url="${BUNNYLAND_DISCORD_URL:-}"
 llm_provider="${BUNNYLAND_LLM_PROVIDER:-ollama}"
@@ -114,8 +115,21 @@ case "$enable_mcp" in
   *) die "BUNNYLAND_ENABLE_MCP must be 0 or 1" ;;
 esac
 
+case "$enable_character_chat" in
+  0 | 1) ;;
+  *) die "BUNNYLAND_ENABLE_CHARACTER_CHAT must be 0 or 1" ;;
+esac
+
 if [[ "$enable_mcp" == "1" && -z "$admin_token" ]]; then
   die "set BUNNYLAND_ADMIN_TOKEN when BUNNYLAND_ENABLE_MCP=1"
+fi
+
+if [[ ( "$enable_llm" == "1" && ( "$llm_provider" == "ollama" || "$worldgen_provider" == "ollama" ) ) || ( "$enable_character_chat" == "1" && "$llm_provider" == "ollama" ) ]] && [[ -z "${OLLAMA_CLOUD_API_KEY:-}" ]]; then
+  die "set OLLAMA_CLOUD_API_KEY when enabling Ollama-backed LLM features"
+fi
+
+if [[ ( "$enable_llm" == "1" && ( "$llm_provider" == "openrouter" || "$worldgen_provider" == "openrouter" ) ) || ( "$enable_character_chat" == "1" && "$llm_provider" == "openrouter" ) ]] && [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+  die "set OPENROUTER_API_KEY when enabling OpenRouter-backed LLM features"
 fi
 
 install_nerdctl() {
@@ -291,12 +305,18 @@ render_server_service() {
     printf '          --worldgen-provider %s \\\n' "$(shell_quote "$worldgen_provider")"
     printf '          --worldgen-model %s \\\n' "$(shell_quote "$worldgen_model")"
     printf '          --character-model %s \\\n' "$(shell_quote "$character_model")"
+  elif [[ "$enable_character_chat" == "1" ]]; then
+    printf '          --llm-provider %s \\\n' "$(shell_quote "$llm_provider")"
+    printf '          --character-model %s \\\n' "$(shell_quote "$character_model")"
   fi
   if [[ "$enable_discord" == "1" ]]; then
     printf '          --discord \\\n'
   fi
   if [[ "$enable_mcp" == "1" ]]; then
     printf '          --mcp \\\n'
+  fi
+  if [[ "$enable_character_chat" == "1" ]]; then
+    printf '          --character-chat \\\n'
   fi
   if [[ -n "$starter_pack" ]]; then
     printf '          --starter-pack %s \\\n' "$(shell_quote "$starter_pack")"
@@ -329,10 +349,11 @@ render_server_service() {
   printf '      BUNNYLAND_WORLDGEN_PROVIDER: %s\n' "$(yaml_quote "$worldgen_provider")"
   printf '      BUNNYLAND_ENABLE_DISCORD: %s\n' "$(yaml_quote "$enable_discord")"
   printf '      BUNNYLAND_ENABLE_MCP: %s\n' "$(yaml_quote "$enable_mcp")"
+  printf '      BUNNYLAND_ENABLE_CHARACTER_CHAT: %s\n' "$(yaml_quote "$enable_character_chat")"
   if [[ "$enable_mcp" == "1" ]]; then
     printf '      BUNNYLAND_ADMIN_TOKEN: %s\n' "$(yaml_quote "$admin_token")"
   fi
-  if [[ "$enable_llm" == "1" ]]; then
+  if [[ "$enable_llm" == "1" || "$enable_character_chat" == "1" ]]; then
     if [[ "$llm_provider" == "ollama" || "$worldgen_provider" == "ollama" ]]; then
       printf '      OLLAMA_CLOUD_API_KEY: %s\n' "$(yaml_quote "$OLLAMA_CLOUD_API_KEY")"
       printf '      OLLAMA_HOST: %s\n' "$(yaml_quote "${OLLAMA_HOST:-https://ollama.com}")"

@@ -285,6 +285,13 @@ if [[ "$full_deployment" == "1" ]]; then
   character_model="$(prompt "Character model" "$character_model")"
 fi
 
+enable_character_chat=0
+if [[ "$full_deployment" == "1" ]]; then
+  if confirm "Enable character chat web/API endpoints?" "y"; then
+    enable_character_chat=1
+  fi
+fi
+
 enable_discord=0
 discord_token=""
 discord_user_id=""
@@ -326,6 +333,7 @@ write_env BUNNYLAND_ADMIN_PASSWORD "$admin_password"
 write_env BUNNYLAND_ENABLE_LLM "$enable_llm"
 write_env BUNNYLAND_ENABLE_DISCORD "$enable_discord"
 write_env BUNNYLAND_ENABLE_MCP "$enable_mcp"
+write_env BUNNYLAND_ENABLE_CHARACTER_CHAT "$enable_character_chat"
 if [[ -n "$starter_pack" ]]; then
   write_env BUNNYLAND_STARTER_PACK "$starter_pack"
 fi
@@ -438,6 +446,11 @@ if [[ "$enable_mcp" == "1" ]]; then
   printf '  MCP endpoint      : enabled at /api/mcp (admin token set)\n'
 else
   printf '  MCP endpoint      : disabled\n'
+fi
+if [[ "$enable_character_chat" == "1" ]]; then
+  printf '  Character chat    : enabled\n'
+else
+  printf '  Character chat    : disabled\n'
 fi
 printf '\nThis installs packages, adds firewall rules, and requests a real Let'\''s Encrypt\n'
 printf 'certificate (which is rate-limited), then starts the containers. If UFW is inactive,\n'
