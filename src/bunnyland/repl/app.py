@@ -101,6 +101,8 @@ class BunnylandReplApp(App[None]):
             id="cmd", placeholder="type a command — 'help' for a list, 'quit' to exit"
         )
         self._refresh_error: str | None = None  # last reported refresh failure, for throttling
+        self._update_worker = None
+        self._streamed_player = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -118,12 +120,34 @@ class BunnylandReplApp(App[None]):
             Text(f"Bunnyland REPL · {self.repl.backend.label}. Type 'help', 'quit' to exit.",
                  style="bold")
         )
+        # The periodic poll is the fallback; a streaming backend additionally pushes updates
+        # that trigger an immediate refresh.
         self.set_interval(REFRESH_SECONDS, self._safe_refresh)
+        self._restart_update_stream()
         self.command.focus()
 
     async def on_unmount(self) -> None:
         self._save_history()
         await self.repl.backend.close()
+
+    def _restart_update_stream(self) -> None:
+        """(Re)start the live update worker for the current player. A no-op for backends that
+        don't stream; the periodic poll remains the fallback."""
+        if self._update_worker is not None:
+            self._update_worker.cancel()
+            self._update_worker = None
+        self._streamed_player = self.repl.player_id
+        backend = self.repl.backend
+        if not backend.supports_live_updates() or not self.repl.player_id:
+            return
+        self._update_worker = self.run_worker(
+            backend.watch_updates(self.repl.player_id, self._on_stream_message),
+            name="updates",
+            exit_on_error=False,
+        )
+
+    async def _on_stream_message(self, _message: dict) -> None:
+        await self._safe_refresh()
 
     # ── helpers ─────────────────────────────────────────────────────────────────
     def write_log(self, renderable) -> None:
@@ -166,6 +190,9 @@ class BunnylandReplApp(App[None]):
             output = Text(f"⚠ {exc}", style="red")
         self.write_log(output)
         self.sub_title = self.repl.status_text()
+        # A command may have claimed or released a character; resync the live stream.
+        if self.repl.player_id != self._streamed_player:
+            self._restart_update_stream()
 
     def action_insert(self, ref: str) -> None:
         """Clicking a target link inserts its name into the input at the cursor."""

@@ -7,15 +7,22 @@ so the app never needs to know which one it is using.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
 import urllib.parse
 import webbrowser
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
+
+try:  # Optional: only remote play streams live updates; local play polls in-process.
+    import websockets
+except ImportError:
+    websockets = None
 
 from ..core import (
     CommandCost,
@@ -174,6 +181,18 @@ class Backend(ABC):
         """Recent domain-event messages (``{"type": "event", "data": {...}}``) for clients
         that narrate perceived activity. Backends without an event feed return nothing."""
         return []
+
+    def supports_live_updates(self) -> bool:
+        """Whether ``watch_updates`` can push live update messages. Backends that cannot
+        return ``False`` so clients keep their periodic poll instead."""
+        return False
+
+    async def watch_updates(
+        self, character_id: str, on_message: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        """Stream player update messages (``{"type": ...}``) to ``on_message`` until the feed
+        ends. Base backends do not stream; clients fall back to their periodic poll."""
+        return
 
     async def request_image(self, character_id: str) -> ImageRequestResult:
         """Request an image of the character's current scene (the 📷 camera affordance)."""
@@ -528,6 +547,28 @@ class RemoteBackend(Backend):
         res = await self._client.get(f"{self.base}/world/events/recent")
         res.raise_for_status()
         return res.json().get("events", [])
+
+    def supports_live_updates(self) -> bool:
+        return websockets is not None
+
+    def _updates_url(self, character_id: str) -> str:
+        scheme, _, rest = self.base.partition("://")
+        host = rest if rest else scheme  # tolerate a scheme-less base
+        ws_scheme = "wss" if scheme == "https" else "ws"
+        return f"{ws_scheme}://{host}/world/character/{character_id}/updates"
+
+    async def watch_updates(
+        self, character_id: str, on_message: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        if websockets is None:
+            return
+        try:
+            async with websockets.connect(self._updates_url(character_id)) as socket:
+                async for raw in socket:
+                    await on_message(json.loads(raw))
+        except (OSError, websockets.WebSocketException):
+            # The server is unreachable or the socket dropped; the client keeps polling.
+            return
 
     async def request_image(self, character_id: str) -> ImageRequestResult:
         res = await self._client.post(

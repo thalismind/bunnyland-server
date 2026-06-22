@@ -403,6 +403,7 @@ class BunnylandTUI(App[None]):
         self._event_image_url = ""
         self._event_image_failure_epoch = -1
         self._refresh_error: str | None = None
+        self._update_worker = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -446,10 +447,32 @@ class BunnylandTUI(App[None]):
             self.push_screen(IntroSplash())
         await self.backend.start()
         await self.refresh_world()
+        # The periodic poll is the fallback; when the backend can stream, push updates drive
+        # an immediate refresh so the world reacts without waiting for the next tick.
         self.set_interval(REFRESH_SECONDS, self.refresh_world)
+        self._restart_update_stream()
 
     async def on_unmount(self) -> None:
         await self.backend.close()
+
+    def _restart_update_stream(self) -> None:
+        """(Re)start the live update worker for the current player. A no-op for backends that
+        don't stream (local play polls in-process); the periodic poll stays as the fallback."""
+        if self._update_worker is not None:
+            self._update_worker.cancel()
+            self._update_worker = None
+        if not self.backend.supports_live_updates() or not self.player_id:
+            return
+        self._update_worker = self.run_worker(
+            self.backend.watch_updates(self.player_id, self._on_stream_message),
+            name="updates",
+            exit_on_error=False,
+        )
+
+    async def _on_stream_message(self, _message: dict) -> None:
+        # Any pushed update means the player's world changed; refresh now rather than waiting
+        # for the next poll tick.
+        await self.refresh_world()
 
     def _main_query_one(self, selector: str, expect_type=None):
         try:
@@ -818,6 +841,7 @@ class BunnylandTUI(App[None]):
         self.selected_id = None
         self.control = await self.backend.claim(new_id, self.world) if new_id else None
         await self.refresh_world()
+        self._restart_update_stream()
 
     @on(Button.Pressed, "#character-release")
     async def _character_release_pressed(self, _event: Button.Pressed) -> None:

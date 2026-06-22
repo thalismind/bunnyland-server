@@ -1016,6 +1016,42 @@ async def test_app_runs_meta_and_action_commands():
         assert app.repl.backend.commands[-1]["command_type"] == "take"
 
 
+class _ReplStreamingBackend(RecordingBackend):
+    def __init__(self, snapshot: dict | None = None) -> None:
+        super().__init__(snapshot)
+        self.watched: list[str] = []
+
+    def supports_live_updates(self) -> bool:
+        return True
+
+    async def watch_updates(self, character_id, on_message):
+        self.watched.append(character_id)
+        await on_message({"type": "event", "data": {}})
+
+
+async def test_repl_app_streams_updates_for_streaming_backend():
+    app = BunnylandReplApp(_ReplStreamingBackend())
+    async with app.run_test() as pilot:
+        await _submit(app, pilot, "play Pib")
+        await pilot.pause()
+        assert app.repl.player_id
+        assert app._streamed_player == app.repl.player_id
+        assert app.repl.backend.watched and app.repl.backend.watched[-1] == app.repl.player_id
+        assert app._update_worker is not None
+        # Releasing the character changes the player → the worker is cancelled and not restarted.
+        await _submit(app, pilot, "release")
+        await pilot.pause()
+        assert app._update_worker is None
+
+
+async def test_repl_app_does_not_stream_for_non_streaming_backend():
+    app = BunnylandReplApp(RecordingBackend())
+    async with app.run_test() as pilot:
+        await _submit(app, pilot, "play Pib")
+        await pilot.pause()
+        assert app._update_worker is None
+
+
 async def test_intro_splash_fades_and_dismisses():
     app = BunnylandReplApp(RecordingBackend(), show_intro=True)
     async with app.run_test() as pilot:

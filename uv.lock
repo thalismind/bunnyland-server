@@ -336,6 +336,7 @@ otel = [
 repl = [
     { name = "httpx" },
     { name = "textual" },
+    { name = "websockets" },
 ]
 server = [
     { name = "fastapi" },
@@ -344,6 +345,7 @@ server = [
 tui = [
     { name = "httpx" },
     { name = "textual" },
+    { name = "websockets" },
 ]
 yaml = [
     { name = "pyyaml" },
@@ -382,6 +384,8 @@ requires-dist = [
     { name = "textual", marker = "extra == 'tui'", specifier = ">=0.60" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.27" },
     { name = "websockets", marker = "extra == 'imagegen'", specifier = ">=12" },
+    { name = "websockets", marker = "extra == 'repl'", specifier = ">=12" },
+    { name = "websockets", marker = "extra == 'tui'", specifier = ">=12" },
 ]
 provides-extras = ["chroma", "discord", "imagegen", "llm", "mcp", "otel", "server", "tui", "repl", "yaml"]
 

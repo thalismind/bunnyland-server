@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import sys
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -24,6 +26,7 @@ from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
 from bunnyland.tui import app as tui_app
+from bunnyland.tui import backend as tui_backend
 from bunnyland.tui.app import ActionForm, BunnylandTUI, FormField, HelpScreen
 from bunnyland.tui.backend import (
     Backend,
@@ -1045,6 +1048,106 @@ async def test_remote_backend_examine_missing_target_returns_none():
     assert await backend.examine(PLAYER, "ghost") is None
 
 
+async def test_backend_base_does_not_stream_live_updates():
+    backend = RecordingBackend(_snapshot())
+    assert backend.supports_live_updates() is False
+    received: list[dict] = []
+    # The base watch returns immediately without delivering anything.
+    await backend.watch_updates(PLAYER, received.append)
+    assert received == []
+
+
+def test_remote_backend_updates_url_uses_websocket_scheme():
+    assert RemoteBackend("http://server.example")._updates_url("character:1") == (
+        "ws://server.example/world/character/character:1/updates"
+    )
+    assert RemoteBackend("https://play.test/api")._updates_url("character:1") == (
+        "wss://play.test/api/world/character/character:1/updates"
+    )
+    # A scheme-less base falls back to a plain ws:// URL.
+    assert RemoteBackend("server.example")._updates_url("c") == (
+        "ws://server.example/world/character/c/updates"
+    )
+
+
+def test_remote_backend_supports_live_updates_tracks_websockets(monkeypatch):
+    backend = RemoteBackend("http://server.example")
+    monkeypatch.setattr(tui_backend, "websockets", object())
+    assert backend.supports_live_updates() is True
+    monkeypatch.setattr(tui_backend, "websockets", None)
+    assert backend.supports_live_updates() is False
+
+
+async def test_remote_backend_watch_updates_forwards_messages(monkeypatch):
+    connected: list[str] = []
+
+    class FakeConnection:
+        def __init__(self, raws):
+            self._raws = raws
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def __aiter__(self):
+            for raw in self._raws:
+                yield raw
+
+    class FakeWebsockets:
+        WebSocketException = RuntimeError
+
+        def connect(self, url):
+            connected.append(url)
+            return FakeConnection(['{"type": "event", "data": {"x": 1}}'])
+
+    monkeypatch.setattr(tui_backend, "websockets", FakeWebsockets())
+    backend = RemoteBackend("http://server.example")
+    received: list[dict] = []
+
+    async def collect(message):
+        received.append(message)
+
+    await backend.watch_updates("character:1", collect)
+
+    assert connected == ["ws://server.example/world/character/character:1/updates"]
+    assert received == [{"type": "event", "data": {"x": 1}}]
+
+
+async def test_remote_backend_watch_updates_swallows_connection_errors(monkeypatch):
+    class FakeWebsockets:
+        WebSocketException = RuntimeError
+
+        def connect(self, url):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(tui_backend, "websockets", FakeWebsockets())
+    backend = RemoteBackend("http://server.example")
+    received: list[dict] = []
+
+    # Should not raise: a failed connection just ends the stream so the client keeps polling.
+    await backend.watch_updates("character:1", received.append)
+    assert received == []
+
+
+async def test_remote_backend_watch_updates_noop_without_websockets(monkeypatch):
+    monkeypatch.setattr(tui_backend, "websockets", None)
+    backend = RemoteBackend("http://server.example")
+    received: list[dict] = []
+    await backend.watch_updates("character:1", received.append)
+    assert received == []
+
+
+def test_backend_module_handles_missing_websockets():
+    try:
+        with patch.dict(sys.modules, {"websockets": None}):
+            reloaded = importlib.reload(tui_backend)
+            assert reloaded.websockets is None
+    finally:
+        importlib.reload(tui_backend)
+
+
 async def test_local_backend_records_recent_events():
     backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
     await backend.start()
@@ -1542,6 +1645,51 @@ async def test_examine_screen_without_icons_and_empty_detail_closes_via_button()
         button.press()
         await pilot.pause()
         assert not isinstance(app.screen, ExamineScreen)
+
+
+class _StreamingBackend(RecordingBackend):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.watched: list[str] = []
+
+    def supports_live_updates(self) -> bool:
+        return True
+
+    async def watch_updates(self, character_id, on_message):
+        self.watched.append(character_id)
+        await on_message({"type": "event", "data": {}})
+
+
+async def test_tui_skips_update_stream_for_non_streaming_backend():
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _wait_for_tui_ready(app, pilot)
+        # A non-streaming backend (local play) never starts a worker; it relies on the poll.
+        assert app._update_worker is None
+
+
+async def test_tui_streams_updates_into_refresh():
+    backend = _StreamingBackend(_snapshot())
+    app = BunnylandTUI(backend)
+    refreshes: list[int] = []
+    async with app.run_test() as pilot:
+        await _wait_for_tui_ready(app, pilot)
+        original = app.refresh_world
+
+        async def spy():
+            refreshes.append(1)
+            await original()
+
+        app.refresh_world = spy
+        await _select_player(app, pilot)  # selecting a player (re)starts the stream worker
+        await pilot.pause()
+        assert backend.watched and backend.watched[-1] == PLAYER
+        assert refreshes  # the pushed message triggered an immediate refresh
+        assert app._update_worker is not None
+        # Restarting cancels the prior worker before starting a new one.
+        app._restart_update_stream()
+        await pilot.pause()
+        assert app._update_worker is not None
 
 
 async def test_action_form_dropdown_uses_initial_value():
