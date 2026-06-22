@@ -15,22 +15,27 @@ from bunnyland.content import load_content_library
 from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
+    BehaviorControllerComponent,
     CharacterComponent,
     ContainerComponent,
     ContainmentMode,
     Contains,
     ControlledBy,
     DescriptionComponent,
+    DiscordControllerComponent,
     DoorComponent,
     DropHandler,
     ExitTo,
     Holding,
     IdentityComponent,
+    LLMControllerComponent,
     LockableComponent,
+    MCPControllerComponent,
     PerceptionComponent,
     PortableComponent,
     PutHandler,
     RoomComponent,
+    ScriptedControllerComponent,
     StealthComponent,
     SuspendedComponent,
     SuspendedControllerComponent,
@@ -316,6 +321,9 @@ def test_client_view_scopes_visible_state_points_controller_and_actions(scenario
     assert view["controller"] == {
         "controller_id": str(scenario.controller),
         "generation": scenario.generation,
+        "kind": "llm",
+        "name": "default",
+        "detail": "ollama/claude",
     }
     rendered = json.dumps(view)
     assert "a loose pebble" in rendered
@@ -337,6 +345,82 @@ def test_client_view_scopes_visible_state_points_controller_and_actions(scenario
         for argument in move["arguments"]
     )
 
+
+def test_client_view_describes_controller_identity(scenario):
+    actor = scenario.actor
+    world = actor.world
+
+    def assign_and_view(components):
+        controller = spawn_entity(world, components)
+        generation = actor.assign_controller(scenario.character, controller.id)
+        view = serialize_character_projection(actor, str(scenario.character)).model_dump(
+            mode="json"
+        )
+        return generation, view["controller"]
+
+    cases = [
+        (
+            [DiscordControllerComponent(discord_user_id=42, default_channel_id=99)],
+            "discord",
+            "Discord user 42",
+            "channel 99",
+        ),
+        (
+            [WebControllerComponent(client_id="tab-1", label="Toon Client")],
+            "web",
+            "Toon Client",
+            "tab-1",
+        ),
+        ([WebControllerComponent(client_id="web", label="web")], "web", "web", ""),
+        (
+            [MCPControllerComponent(agent_id="agent-1", label="Operator")],
+            "mcp",
+            "Operator",
+            "agent-1",
+        ),
+        ([MCPControllerComponent(agent_id="agent-2", label="")], "mcp", "agent-2", ""),
+        (
+            [LLMControllerComponent(profile_name="guide", model="mixtral")],
+            "llm",
+            "guide",
+            "ollama/mixtral",
+        ),
+        (
+            [LLMControllerComponent(profile_name="guide", model="", provider="openai")],
+            "llm",
+            "guide",
+            "openai",
+        ),
+        (
+            [BehaviorControllerComponent(behavior_name="patrol", act_every_ticks=2)],
+            "behavior",
+            "patrol",
+            "every 2 tick(s)",
+        ),
+        (
+            [ScriptedControllerComponent(script_name="morning", loop=True)],
+            "scripted",
+            "morning",
+            "looping",
+        ),
+        ([ScriptedControllerComponent(script_name="", loop=False)], "scripted", "scripted", ""),
+        ([SuspendedControllerComponent(reason="offline")], "suspended", "Suspended", "offline"),
+        (
+            [IdentityComponent(name="custom controller", kind="controller")],
+            "",
+            "custom controller",
+            "",
+        ),
+    ]
+    for components, kind, name, detail in cases:
+        generation, controller = assign_and_view(components)
+        assert controller == {
+            "controller_id": controller["controller_id"],
+            "generation": generation,
+            "kind": kind,
+            "name": name,
+            "detail": detail,
+        }
 
 def test_character_projection_includes_curated_character_sheet_data(scenario):
     actor = scenario.actor

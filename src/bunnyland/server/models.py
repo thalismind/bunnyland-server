@@ -138,6 +138,9 @@ class ClientPointsView(BaseModel):
 class ClientControllerView(BaseModel):
     controller_id: str
     generation: int
+    kind: str = ""
+    name: str = ""
+    detail: str = ""
 
 
 class ClientTargetView(BaseModel):

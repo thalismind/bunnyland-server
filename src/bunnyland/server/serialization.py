@@ -45,6 +45,15 @@ from ..core.components import (
     ThoughtComponent,
     WeightComponent,
 )
+from ..core.controllers import (
+    BehaviorControllerComponent,
+    DiscordControllerComponent,
+    LLMControllerComponent,
+    MCPControllerComponent,
+    ScriptedControllerComponent,
+    SuspendedControllerComponent,
+    WebControllerComponent,
+)
 from ..core.ecs import container_of, contents, entity_name, parse_entity_id
 from ..core.edges import Contains, ControlledBy, ExitTo, HasInjury, HasThought, Holding, Wearing
 from ..core.events import DomainEvent
@@ -518,9 +527,49 @@ def _inventory_targets(actor: WorldActor, character) -> list[ClientTargetView]:
     return sorted(targets, key=lambda target: target.label.lower())
 
 
-def _controller_view(character) -> ClientControllerView | None:
+def _controller_display(controller) -> tuple[str, str, str]:
+    if controller.has_component(DiscordControllerComponent):
+        discord = controller.get_component(DiscordControllerComponent)
+        return (
+            "discord",
+            f"Discord user {discord.discord_user_id}",
+            f"channel {discord.default_channel_id}",
+        )
+    if controller.has_component(WebControllerComponent):
+        web = controller.get_component(WebControllerComponent)
+        label = web.label or web.client_id or "web"
+        return ("web", label, web.client_id if web.client_id and web.client_id != label else "")
+    if controller.has_component(MCPControllerComponent):
+        mcp = controller.get_component(MCPControllerComponent)
+        label = mcp.label or mcp.agent_id or "MCP agent"
+        return ("mcp", label, mcp.agent_id if mcp.agent_id and mcp.agent_id != label else "")
+    if controller.has_component(LLMControllerComponent):
+        llm = controller.get_component(LLMControllerComponent)
+        detail = f"{llm.provider}/{llm.model}" if llm.model else llm.provider
+        return ("llm", llm.profile_name, detail)
+    if controller.has_component(BehaviorControllerComponent):
+        behavior = controller.get_component(BehaviorControllerComponent)
+        return ("behavior", behavior.behavior_name, f"every {behavior.act_every_ticks:g} tick(s)")
+    if controller.has_component(ScriptedControllerComponent):
+        scripted = controller.get_component(ScriptedControllerComponent)
+        detail = "looping" if scripted.loop else ""
+        return ("scripted", scripted.script_name or "scripted", detail)
+    if controller.has_component(SuspendedControllerComponent):
+        suspended = controller.get_component(SuspendedControllerComponent)
+        return ("suspended", "Suspended", suspended.reason)
+    return ("", entity_name(controller), "")
+
+
+def _controller_view(actor: WorldActor, character) -> ClientControllerView | None:
     for edge, controller_id in character.get_relationships(ControlledBy):
-        return ClientControllerView(controller_id=str(controller_id), generation=edge.generation)
+        kind, name, detail = _controller_display(actor.world.get_entity(controller_id))
+        return ClientControllerView(
+            controller_id=str(controller_id),
+            generation=edge.generation,
+            kind=kind,
+            name=name,
+            detail=detail,
+        )
     return None
 
 
@@ -1055,7 +1104,7 @@ def serialize_character_projection(
         room=room,
         inventory=groups["inventory"],
         points=_points_view(character),
-        controller=_controller_view(character),
+        controller=_controller_view(actor, character),
         sheet=_character_sheet_projection(actor, character),
         target_groups=groups,
         actions=[
