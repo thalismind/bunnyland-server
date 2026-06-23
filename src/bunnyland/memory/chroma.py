@@ -8,9 +8,10 @@ inserted sequence number in the metadata.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
-from .store import MemoryEntry
+from .store import MemoryDocument, MemoryEntry
 
 
 class ChromaMemoryStore:
@@ -105,8 +106,53 @@ class ChromaMemoryStore:
         col.delete(ids=[note_id])
         return True
 
+    def list_documents(self, collection: str) -> list[MemoryDocument]:
+        got = self._collection(collection).get(include=["documents", "metadatas"])
+        return self._documents_from_get(got)
+
+    def update_document(
+        self,
+        collection: str,
+        note_id: str,
+        *,
+        document: str,
+        metadata: dict[str, Any],
+    ) -> MemoryDocument | None:
+        col = self._collection(collection)
+        got = col.get(ids=[note_id])
+        ids = got.get("ids", []) or []
+        if note_id not in ids:
+            return None
+        col.update(ids=[note_id], documents=[document], metadatas=[dict(metadata)])
+        return MemoryDocument(id=note_id, document=document, metadata=dict(metadata))
+
     @staticmethod
-    def _entries_from_get(got: dict) -> list[MemoryEntry]:
+    def _documents_from_get(got: dict) -> list[MemoryDocument]:
+        ids = got.get("ids", []) or []
+        docs = got.get("documents", []) or []
+        metas = got.get("metadatas", []) or []
+        documents = []
+        for id_, doc, meta in zip(ids, docs, metas, strict=False):
+            documents.append(
+                MemoryDocument(
+                    id=id_,
+                    document=doc or "",
+                    metadata=dict(meta or {}),
+                )
+            )
+        return documents
+
+    @staticmethod
+    def _tags_from_metadata(meta: dict) -> tuple[str, ...]:
+        raw = meta.get("tags", "")
+        if isinstance(raw, str):
+            return tuple(t for t in raw.split(",") if t)
+        if isinstance(raw, (list, tuple)):
+            return tuple(str(t) for t in raw if str(t))
+        return ()
+
+    @classmethod
+    def _entries_from_get(cls, got: dict) -> list[MemoryEntry]:
         ids = got.get("ids", []) or []
         docs = got.get("documents", []) or []
         metas = got.get("metadatas", []) or []
@@ -117,9 +163,10 @@ class ChromaMemoryStore:
                 MemoryEntry(
                     id=id_,
                     text=doc,
-                    tags=tuple(t for t in str(meta.get("tags", "")).split(",") if t),
+                    tags=cls._tags_from_metadata(meta),
                     created_at_epoch=int(meta.get("created_at_epoch", 0)),
                     source=str(meta.get("source", "manual")),
+                    metadata=dict(meta),
                 )
             )
         return entries

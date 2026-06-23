@@ -12,7 +12,7 @@ from .handlers import (
     RememberHandler,
     TakeNoteHandler,
 )
-from .store import InMemoryStore, MemoryEntry, MemoryStore
+from .store import InMemoryStore, MemoryDocument, MemoryEntry, MemoryStore
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -24,6 +24,7 @@ def install_memory(actor: WorldActor, store: MemoryStore | None = None) -> Memor
     Returns the store so callers can inspect/share it. Defaults to an in-memory store.
     """
     store = store or InMemoryStore()
+    actor.memory_store = store
     actor.register_handler(TakeNoteHandler(store))
     actor.register_handler(RememberHandler(store))
     actor.register_handler(ForgetHandler(store))
@@ -37,6 +38,7 @@ __all__ = [
     "ConversationMemoryReactor",
     "ForgetHandler",
     "InMemoryStore",
+    "MemoryDocument",
     "MemoryEntry",
     "MemoryStore",
     "ReflectHandler",

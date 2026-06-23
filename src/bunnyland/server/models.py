@@ -343,6 +343,47 @@ class WorldOverviewResponse(BaseModel):
     rooms: list[WorldOverviewRoomView] = Field(default_factory=list)
 
 
+class MemoryCharacterView(BaseModel):
+    character_id: str
+    name: str
+    private_collection: str
+    shared_collections: list[str] = Field(default_factory=list)
+
+
+class MemoryCharactersResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    characters: list[MemoryCharacterView] = Field(default_factory=list)
+
+
+class MemoryDocumentView(BaseModel):
+    id: str
+    document: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryDocumentsResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    collection: str
+    documents: list[MemoryDocumentView] = Field(default_factory=list)
+
+
+class MemoryDocumentUpdateRequest(BaseModel):
+    document: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryDocumentResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    collection: str
+    document: MemoryDocumentView
+
+
 class ActionSearchResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1

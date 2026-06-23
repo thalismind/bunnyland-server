@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 from uuid import uuid4
 
 
@@ -22,6 +22,14 @@ class MemoryEntry:
     created_at_epoch: int = 0
     source: str = "manual"
     score: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MemoryDocument:
+    id: str
+    document: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class MemoryStore(Protocol):
@@ -45,6 +53,17 @@ class MemoryStore(Protocol):
     ) -> list[MemoryEntry]: ...
 
     def delete(self, collection: str, note_id: str) -> bool: ...
+
+    def list_documents(self, collection: str) -> list[MemoryDocument]: ...
+
+    def update_document(
+        self,
+        collection: str,
+        note_id: str,
+        *,
+        document: str,
+        metadata: dict[str, Any],
+    ) -> MemoryDocument | None: ...
 
 
 _STOPWORDS = frozenset(
@@ -75,6 +94,39 @@ def _tokens(text: str) -> set[str]:
     }
 
 
+def _entry_metadata(
+    tags: tuple[str, ...],
+    created_at_epoch: int,
+    source: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    values = dict(metadata or {})
+    values.setdefault("tags", list(tags))
+    values.setdefault("created_at_epoch", created_at_epoch)
+    values.setdefault("source", source)
+    return values
+
+
+def _tags_from_metadata(metadata: dict[str, Any]) -> tuple[str, ...]:
+    raw = metadata.get("tags", ())
+    if isinstance(raw, str):
+        return tuple(tag for tag in raw.split(",") if tag)
+    if isinstance(raw, (list, tuple)):
+        return tuple(str(tag) for tag in raw if str(tag))
+    return ()
+
+
+def _entry_from_document(document: MemoryDocument) -> MemoryEntry:
+    return MemoryEntry(
+        id=document.id,
+        text=document.document,
+        tags=_tags_from_metadata(document.metadata),
+        created_at_epoch=int(document.metadata.get("created_at_epoch", 0) or 0),
+        source=str(document.metadata.get("source", "manual")),
+        metadata=dict(document.metadata),
+    )
+
+
 class InMemoryStore:
     """A simple, dependency-free store. ``vector`` mode falls back to keyword scoring."""
 
@@ -96,6 +148,7 @@ class InMemoryStore:
             tags=tuple(tags),
             created_at_epoch=created_at_epoch,
             source=source,
+            metadata=_entry_metadata(tuple(tags), created_at_epoch, source),
         )
         self._collections[collection].append(entry)
         return entry
@@ -127,6 +180,7 @@ class InMemoryStore:
                         created_at_epoch=entry.created_at_epoch,
                         source=entry.source,
                         score=float(overlap),
+                        metadata=dict(entry.metadata),
                     )
                 )
         scored.sort(key=lambda e: (e.score or 0.0, e.created_at_epoch), reverse=True)
@@ -140,5 +194,41 @@ class InMemoryStore:
                 return True
         return False
 
+    def list_documents(self, collection: str) -> list[MemoryDocument]:
+        documents = []
+        for entry in self._collections.get(collection, []):
+            metadata = _entry_metadata(
+                entry.tags,
+                entry.created_at_epoch,
+                entry.source,
+                entry.metadata,
+            )
+            documents.append(
+                MemoryDocument(id=entry.id, document=entry.text, metadata=metadata)
+            )
+        return documents
 
-__all__ = ["InMemoryStore", "MemoryEntry", "MemoryStore"]
+    def update_document(
+        self,
+        collection: str,
+        note_id: str,
+        *,
+        document: str,
+        metadata: dict[str, Any],
+    ) -> MemoryDocument | None:
+        entries = self._collections.get(collection, [])
+        updated = _entry_from_document(
+            MemoryDocument(id=note_id, document=document, metadata=dict(metadata))
+        )
+        for index, entry in enumerate(entries):
+            if entry.id == note_id:
+                entries[index] = updated
+                return MemoryDocument(
+                    id=updated.id,
+                    document=updated.text,
+                    metadata=dict(updated.metadata),
+                )
+        return None
+
+
+__all__ = ["InMemoryStore", "MemoryDocument", "MemoryEntry", "MemoryStore"]

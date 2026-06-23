@@ -31,6 +31,7 @@ from bunnyland.core import (
     LLMControllerComponent,
     LockableComponent,
     MCPControllerComponent,
+    MemoryProfileComponent,
     PerceptionComponent,
     PortableComponent,
     PutHandler,
@@ -109,6 +110,7 @@ from bunnyland.mechanics.toonsim import (
     SpriteScale,
     ToonRoomComponent,
 )
+from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.plugins.builtin import MCP
@@ -1242,6 +1244,9 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/admin/world/generate-item" in paths
     assert "/admin/world/generate-event" in paths
     assert "/admin/world/save" in paths
+    assert "/admin/memory/characters" in paths
+    assert "/admin/memory/collections/{collection}/documents" in paths
+    assert "/admin/memory/collections/{collection}/documents/{id}" in paths
     assert "/admin/runtime" in paths
     assert "/admin/pause" in paths
     assert "/admin/resume" in paths
@@ -1547,6 +1552,163 @@ def test_fastapi_world_snapshot_requires_admin_token(scenario):
     assert any(
         entity["id"] == str(scenario.character) for entity in allowed.json()["entities"]
     )
+
+
+def test_fastapi_admin_memory_lists_characters_and_documents_without_backend_type(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    store = install_memory(scenario.actor, InMemoryStore())
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(
+        MemoryProfileComponent(
+            vector_collection="juniper-private",
+            shared_collections=("burrow-board", "kitchen-board"),
+        )
+    )
+    entry = store.add(
+        "juniper-private",
+        text="Berries grow near the north tunnel.",
+        tags=("forage",),
+        created_at_epoch=12,
+        source="manual",
+    )
+    app = create_app(scenario.actor, admin_token="secret")
+    client = testclient.TestClient(app)
+
+    characters = client.get(
+        "/admin/memory/characters", headers={"X-Bunnyland-Admin-Token": "secret"}
+    )
+    documents = client.get(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+    )
+
+    assert characters.status_code == 200
+    assert characters.json()["characters"] == [
+        {
+            "character_id": str(scenario.character),
+            "name": "Juniper",
+            "private_collection": "juniper-private",
+            "shared_collections": ["burrow-board", "kitchen-board"],
+        }
+    ]
+    assert documents.status_code == 200
+    body = documents.json()
+    assert body["collection"] == "juniper-private"
+    assert body["documents"] == [
+        {
+            "id": entry.id,
+            "document": "Berries grow near the north tunnel.",
+            "metadata": {
+                "tags": ["forage"],
+                "created_at_epoch": 12,
+                "source": "manual",
+            },
+        }
+    ]
+    rendered = json.dumps({"characters": characters.json(), "documents": body}).lower()
+    assert "backend" not in rendered
+    assert "store" not in rendered
+    assert "chroma" not in rendered
+
+
+def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    store = install_memory(scenario.actor, InMemoryStore())
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        MemoryProfileComponent(vector_collection="juniper-private")
+    )
+    entry = store.add("juniper-private", text="old text", created_at_epoch=1)
+    app = create_app(scenario.actor, admin_token="secret")
+    client = testclient.TestClient(app)
+
+    updated = client.patch(
+        f"/admin/memory/collections/juniper-private/documents/{entry.id}",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+        json={
+            "document": "updated text",
+            "metadata": {"tags": ["edited"], "created_at_epoch": 22, "source": "admin"},
+        },
+    )
+    listed = client.get(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+    )
+    deleted = client.delete(
+        f"/admin/memory/collections/juniper-private/documents/{entry.id}",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+    )
+    after_delete = client.get(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["document"] == {
+        "id": entry.id,
+        "document": "updated text",
+        "metadata": {"tags": ["edited"], "created_at_epoch": 22, "source": "admin"},
+    }
+    assert listed.json()["documents"][0]["document"] == "updated text"
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert after_delete.json()["documents"] == []
+
+
+def test_fastapi_admin_memory_missing_document_returns_404(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    install_memory(scenario.actor, InMemoryStore())
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        MemoryProfileComponent(vector_collection="juniper-private")
+    )
+    app = create_app(scenario.actor, admin_token="secret")
+    client = testclient.TestClient(app)
+
+    updated = client.patch(
+        "/admin/memory/collections/juniper-private/documents/missing",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+        json={"document": "updated text", "metadata": {}},
+    )
+    deleted = client.delete(
+        "/admin/memory/collections/juniper-private/documents/missing",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+    )
+
+    assert updated.status_code == 404
+    assert updated.json()["detail"] == "memory document not found"
+    assert deleted.status_code == 404
+    assert deleted.json()["detail"] == "memory document not found"
+
+
+def test_fastapi_admin_memory_returns_generic_conflict_when_unconfigured(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor, admin_token="secret")
+    client = testclient.TestClient(app)
+
+    response = client.get(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "memory is not configured"
+    assert "chroma" not in response.text.lower()
+
+
+def test_fastapi_admin_memory_requires_admin_token(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    store = install_memory(scenario.actor, InMemoryStore())
+    store.add("juniper-private", text="secret note")
+    app = create_app(scenario.actor, admin_token="secret")
+    client = testclient.TestClient(app)
+
+    missing = client.get("/admin/memory/characters")
+    wrong = client.get(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "wrong"},
+    )
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
 
 
 def test_fastapi_dm_projection_uses_configured_admin_token_env(monkeypatch, scenario):

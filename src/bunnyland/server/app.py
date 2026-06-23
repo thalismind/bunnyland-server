@@ -16,6 +16,8 @@ from ..claims import matching_controller
 from ..content import load_content_library
 from ..core import (
     CharacterComponent,
+    IdentityComponent,
+    MemoryProfileComponent,
     SuspendedComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
@@ -60,6 +62,12 @@ from .models import (
     EventImageRequest,
     FeatureStatusResponse,
     HealthResponse,
+    MemoryCharactersResponse,
+    MemoryCharacterView,
+    MemoryDocumentResponse,
+    MemoryDocumentsResponse,
+    MemoryDocumentUpdateRequest,
+    MemoryDocumentView,
     RecentEventsResponse,
     RoomProjectionResponse,
     StoredControllerDefinitions,
@@ -159,6 +167,7 @@ def create_app(
     admin_token: str | None = None,
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
+    memory_store=None,
     title: str = "bunnyland",
 ):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
@@ -202,6 +211,7 @@ def create_app(
     meta = meta or WorldMeta()
     generator_registry = collect_generators(plugins or ())
     generation_job = None
+    memory_store = memory_store or getattr(actor, "memory_store", None)
     # Editor-loaded scripted/behavioral controller definitions: register any already on disk
     # so a restarted server keeps the scripts and behavior trees the editor previously saved.
     definition_store = ControllerDefinitionStore(definitions_path)
@@ -211,6 +221,11 @@ def create_app(
         if imagegen is None:
             raise HTTPException(status_code=409, detail="image generation is not configured")
         return imagegen
+
+    def _require_memory_store():
+        if memory_store is None:
+            raise HTTPException(status_code=409, detail="memory is not configured")
+        return memory_store
 
     def _parse_purpose(value: str) -> ImagePurpose:
         try:
@@ -423,6 +438,70 @@ def create_app(
             running=loop.running,
             **_runtime_timing(),
         )
+
+    def _memory_document_view(document) -> MemoryDocumentView:
+        return MemoryDocumentView(
+            id=document.id,
+            document=document.document,
+            metadata=dict(document.metadata),
+        )
+
+    def _memory_characters_response() -> MemoryCharactersResponse:
+        characters = []
+        query = actor.world.query().with_all(
+            [CharacterComponent, IdentityComponent, MemoryProfileComponent]
+        )
+        for character in query.execute_entities():
+            identity = character.get_component(IdentityComponent)
+            profile = character.get_component(MemoryProfileComponent)
+            characters.append(
+                MemoryCharacterView(
+                    character_id=str(character.id),
+                    name=identity.name,
+                    private_collection=profile.vector_collection,
+                    shared_collections=list(profile.shared_collections),
+                )
+            )
+        characters.sort(key=lambda item: (item.name.lower(), item.character_id))
+        return MemoryCharactersResponse(world_epoch=actor.epoch, characters=characters)
+
+    def _memory_documents_response(collection: str) -> MemoryDocumentsResponse:
+        store = _require_memory_store()
+        documents = [
+            _memory_document_view(document)
+            for document in store.list_documents(collection)
+        ]
+        return MemoryDocumentsResponse(
+            world_epoch=actor.epoch,
+            collection=collection,
+            documents=documents,
+        )
+
+    def _memory_update_response(
+        collection: str,
+        note_id: str,
+        request: MemoryDocumentUpdateRequest,
+    ) -> MemoryDocumentResponse:
+        store = _require_memory_store()
+        document = store.update_document(
+            collection,
+            note_id,
+            document=request.document,
+            metadata=request.metadata,
+        )
+        if document is None:
+            raise HTTPException(status_code=404, detail="memory document not found")
+        return MemoryDocumentResponse(
+            world_epoch=actor.epoch,
+            collection=collection,
+            document=_memory_document_view(document),
+        )
+
+    def _delete_memory_document(collection: str, note_id: str) -> dict:
+        store = _require_memory_store()
+        if not store.delete(collection, note_id):
+            raise HTTPException(status_code=404, detail="memory document not found")
+        return {"ok": True, "schema_version": 1, "world_epoch": actor.epoch}
 
     async def _cancel_command_request(
         character_id: str,
@@ -844,6 +923,47 @@ def create_app(
     @app.get("/admin/runtime", response_model=WorldRuntimeResponse)
     async def runtime_status() -> WorldRuntimeResponse:
         return _runtime_response()
+
+    @app.get("/admin/memory/characters", response_model=MemoryCharactersResponse)
+    async def list_memory_characters(
+        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
+    ) -> MemoryCharactersResponse:
+        _require_projection_admin(admin_token)
+        _require_memory_store()
+        return _memory_characters_response()
+
+    @app.get(
+        "/admin/memory/collections/{collection}/documents",
+        response_model=MemoryDocumentsResponse,
+    )
+    async def list_memory_documents(
+        collection: str,
+        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
+    ) -> MemoryDocumentsResponse:
+        _require_projection_admin(admin_token)
+        return _memory_documents_response(collection)
+
+    @app.patch(
+        "/admin/memory/collections/{collection}/documents/{id}",
+        response_model=MemoryDocumentResponse,
+    )
+    async def update_memory_document(
+        collection: str,
+        id: str,
+        request: MemoryDocumentUpdateRequest,
+        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
+    ) -> MemoryDocumentResponse:
+        _require_projection_admin(admin_token)
+        return _memory_update_response(collection, id, request)
+
+    @app.delete("/admin/memory/collections/{collection}/documents/{id}")
+    async def delete_memory_document(
+        collection: str,
+        id: str,
+        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
+    ) -> dict:
+        _require_projection_admin(admin_token)
+        return _delete_memory_document(collection, id)
 
     @app.post("/admin/pause", response_model=WorldRuntimeResponse)
     async def pause_world() -> WorldRuntimeResponse:

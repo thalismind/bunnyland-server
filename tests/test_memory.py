@@ -673,6 +673,53 @@ def test_inmemory_store_delete_skips_non_matching_entries():
     assert store.delete("c", "no-such-id") is False
 
 
+def test_inmemory_store_lists_and_updates_documents():
+    store = InMemoryStore()
+    entry = store.add("c", text="old", tags=("tag",), created_at_epoch=1)
+
+    listed = store.list_documents("c")
+    updated = store.update_document(
+        "c",
+        entry.id,
+        document="new",
+        metadata={"tags": ["edited"], "created_at_epoch": 2, "source": "admin"},
+    )
+
+    assert listed[0].document == "old"
+    assert listed[0].metadata == {
+        "tags": ["tag"],
+        "created_at_epoch": 1,
+        "source": "manual",
+    }
+    assert updated is not None
+    assert updated.document == "new"
+    assert store.search("c", mode="recent")[0].source == "admin"
+    assert store.update_document("c", "missing", document="x", metadata={}) is None
+
+
+def test_inmemory_store_update_document_accepts_metadata_tag_shapes():
+    store = InMemoryStore()
+    string_tags = store.add("c", text="string tags")
+    scalar_tags = store.add("c", text="scalar tags")
+
+    store.update_document(
+        "c",
+        string_tags.id,
+        document="string tags",
+        metadata={"tags": "alpha,beta", "source": "admin"},
+    )
+    store.update_document(
+        "c",
+        scalar_tags.id,
+        document="scalar tags",
+        metadata={"tags": 12, "source": "admin"},
+    )
+
+    entries = {entry.id: entry for entry in store.search("c", mode="recent")}
+    assert entries[string_tags.id].tags == ("alpha", "beta")
+    assert entries[scalar_tags.id].tags == ()
+
+
 def test_chroma_store_delete_removes_existing_note():
     class FakeCollection:
         def __init__(self) -> None:
@@ -714,6 +761,13 @@ def test_chroma_store_delete_removes_existing_note():
             self.documents = [row[1] for row in rows]
             self.metadatas = [row[2] for row in rows]
 
+        def update(self, *, ids, documents, metadatas):
+            selected = set(ids)
+            for index, id_ in enumerate(self.ids):
+                if id_ in selected:
+                    self.documents[index] = documents[0]
+                    self.metadatas[index] = metadatas[0]
+
     class FakeClient:
         def __init__(self) -> None:
             self.collection = FakeCollection()
@@ -728,6 +782,79 @@ def test_chroma_store_delete_removes_existing_note():
     assert store.delete("c", entry.id) is True
     assert store.search("c", mode="recent") == []
     assert store.delete("c", entry.id) is False
+
+
+def test_chroma_store_lists_and_updates_documents():
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.rows: list[tuple[str, str, dict]] = []
+
+        def add(self, *, ids, documents, metadatas):
+            self.rows.extend(zip(ids, documents, metadatas, strict=False))
+
+        def get(self, ids=None, include=None):
+            del include
+            selected = set(ids or [row[0] for row in self.rows])
+            rows = [row for row in self.rows if row[0] in selected]
+            return {
+                "ids": [row[0] for row in rows],
+                "documents": [row[1] for row in rows],
+                "metadatas": [row[2] for row in rows],
+            }
+
+        def update(self, *, ids, documents, metadatas):
+            selected = set(ids)
+            self.rows = [
+                (
+                    row[0],
+                    documents[0] if row[0] in selected else row[1],
+                    metadatas[0] if row[0] in selected else row[2],
+                )
+                for row in self.rows
+            ]
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.collection = FakeCollection()
+
+        def get_or_create_collection(self, *, name, **kwargs):
+            del name, kwargs
+            return self.collection
+
+    store = ChromaMemoryStore(client=FakeClient())
+    entry = store.add("c", text="old", tags=("tag",), created_at_epoch=1)
+    list_tags = store.add("c", text="list tags", created_at_epoch=2)
+    scalar_tags = store.add("c", text="scalar tags", created_at_epoch=3)
+
+    listed = store.list_documents("c")
+    updated = store.update_document(
+        "c",
+        entry.id,
+        document="new",
+        metadata={"tags": "edited", "created_at_epoch": 2, "source": "admin", "seq": 9},
+    )
+    store.update_document(
+        "c",
+        list_tags.id,
+        document="list tags",
+        metadata={"tags": ["alpha", "beta"], "created_at_epoch": 3, "source": "admin"},
+    )
+    store.update_document(
+        "c",
+        scalar_tags.id,
+        document="scalar tags",
+        metadata={"tags": 12, "created_at_epoch": 4, "source": "admin"},
+    )
+
+    assert listed[0].document == "old"
+    assert listed[0].metadata["tags"] == "tag"
+    assert updated is not None
+    assert updated.metadata["seq"] == 9
+    assert store.list_documents("c")[0].document == "new"
+    entries = {entry.id: entry for entry in store.search("c", mode="recent")}
+    assert entries[list_tags.id].tags == ("alpha", "beta")
+    assert entries[scalar_tags.id].tags == ()
+    assert store.update_document("c", "missing", document="x", metadata={}) is None
 
 
 def test_chroma_store_vector_keyword_and_embedding_paths():
