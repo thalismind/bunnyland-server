@@ -870,6 +870,10 @@ def test_chroma_store_lists_and_updates_documents():
     assert updated is not None
     assert updated.metadata["seq"] == 9
     assert store.list_documents("c")[0].document == "new"
+    assert ChromaMemoryStore._tags_from_metadata({"tags": ["legacy", "list"]}) == (
+        "legacy",
+        "list",
+    )
     entries = {entry.id: entry for entry in store.search("c", mode="recent")}
     assert entries[created.id].tags == ("new", "note")
     assert entries[list_tags.id].tags == ("alpha", "beta")
