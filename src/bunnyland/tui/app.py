@@ -483,8 +483,11 @@ class BunnylandTUI(App[None]):
         else:
             self.world = World()
             self.action_views = []
-        self._sync_players()
-        self._render_play_state()
+        try:
+            self._sync_players()
+            self._render_play_state()
+        except NoMatches:
+            return
         self.queued_commands = await self._fetch_queued_commands()
         self.view_room_id = self.world.room_of(self.player_id)
 

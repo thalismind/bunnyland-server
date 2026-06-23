@@ -2066,6 +2066,31 @@ async def test_refresh_world_returns_quietly_when_status_widget_is_absent():
         await healthy.refresh_world()  # success branch hits the NoMatches guard
 
 
+async def test_refresh_world_returns_quietly_when_release_widget_is_absent():
+    from textual.css.query import NoMatches
+
+    def hide_release(app):
+        def patch(obj):
+            real = obj.query_one
+
+            def query_one(selector, *args, **kwargs):
+                if selector == "#character-release":
+                    raise NoMatches("#character-release")
+                return real(selector, *args, **kwargs)
+
+            obj.query_one = query_one  # type: ignore[method-assign]
+
+        patch(app)
+        for screen in app.get_screen_stack():
+            patch(screen)
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        hide_release(app)
+        await app.refresh_world()
+
+
 async def test_app_failed_queue_cancel_reports_activity():
     class CancelFailBackend(RecordingBackend):
         async def cancel_command(
