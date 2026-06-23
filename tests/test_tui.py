@@ -2226,6 +2226,51 @@ async def test_app_member_and_verb_selection_handlers():
         assert app.backend.commands[-1]["command_type"] == "wait"
 
 
+async def test_app_target_label_and_clear_target_controls():
+    from textual.widgets import Button, OptionList, Static
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        target_label = app.query_one("#target-label", Static)
+        clear_target = app.query_one("#target-clear", Button)
+
+        assert str(target_label.render()) == "Target: none"
+        assert clear_target.disabled
+
+        app.action_clear_target()
+        assert app.selected_id is None
+        assert str(target_label.render()) == "Target: none"
+        assert clear_target.disabled
+
+        app._member_selected(SimpleNamespace(option=SimpleNamespace(id=APPLE)))
+        assert str(target_label.render()) == "Target: an apple"
+        assert not clear_target.disabled
+
+        app.action_clear_target()
+        assert app.selected_id is None
+        assert str(target_label.render()) == "Target: none"
+        assert clear_target.disabled
+
+        inventory = app.query_one("#inventory", OptionList)
+        app._inventory_selected(
+            SimpleNamespace(option=SimpleNamespace(id=inventory.get_option_at_index(0).id))
+        )
+        assert app.selected_id == KEY
+        assert str(target_label.render()) == "Target: a brass key"
+        assert not clear_target.disabled
+
+        app._target_clear_pressed(SimpleNamespace(button=clear_target))
+        await pilot.pause()
+        assert app.selected_id is None
+        assert str(target_label.render()) == "Target: none"
+        assert clear_target.disabled
+
+        app.selected_id = "missing"
+        app._sync_target_controls()
+        assert str(target_label.render()) == "Target: missing"
+
+
 async def test_app_action_form_selection_runs_in_worker(monkeypatch):
     from textual.worker import get_current_worker
 
@@ -2789,7 +2834,11 @@ async def test_app_open_sheet_rejects_non_character_selection():
         await app.action_open_sheet()
         activity = app.query_one("#activity", OptionList)
         prompts = _activity_prompts(activity)
-        assert any("Select a visible character" in p for p in prompts)
+        assert any("Select a visible character or clear the target" in p for p in prompts)
+
+        app.action_clear_target()
+        await app.action_open_sheet()
+        assert app.backend.sheet_requests == [PLAYER]
 
 
 async def test_app_open_sheet_button_press():

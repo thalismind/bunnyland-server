@@ -274,13 +274,15 @@ class HelpScreen(ModalScreen[None]):
         "  r   Refresh the world now\n"
         f"  i   {REQUEST_EMOJI} Request an image of your current scene\n"
         "  s   Open the selected (or your own) character sheet in a browser\n"
+        "  x   Clear the selected action target\n"
         "  ?   Show this help\n"
         "  q   Quit\n"
         "\n"
         "Playing:\n"
         "  • Pick a character from the dropdown to claim and play it.\n"
         "  • Click a verb in the action list to act; a form collects any arguments.\n"
-        "  • Click a member to target them, a door to travel, or a queued action to cancel it.\n"
+        "  • Click a member or inventory item to target it, a door to travel, or a\n"
+        "    queued action to cancel it.\n"
         "  • Search the action list with the filter box; unavailable actions stay listed,\n"
         "    de-emphasized, and can still be queued."
     )
@@ -319,6 +321,9 @@ class BunnylandTUI(App[None]):
     #character-release { width: 10; min-width: 10; }
     #play-hint { padding: 0 1; color: $text-muted; height: 1; }
     #points { padding: 0 1; height: 1; }
+    #target-row { height: 3; }
+    #target-label { width: 1fr; content-align: left middle; color: $text-muted; }
+    #target-clear { width: 14; min-width: 14; }
     #action-filter-row { height: 3; }
     #action-filter { width: 1fr; }
     #action-filter-clear { width: 9; min-width: 9; }
@@ -338,6 +343,7 @@ class BunnylandTUI(App[None]):
         ("r", "refresh", "Refresh"),
         ("i", "request_image", f"{REQUEST_EMOJI} Image"),
         ("s", "open_sheet", "Open Sheet"),
+        ("x", "clear_target", "Clear Target"),
         ("question_mark", "help", "Help"),
         ("q", "quit", "Quit"),
     ]
@@ -400,6 +406,9 @@ class BunnylandTUI(App[None]):
                         yield Button("▣ Sheet", id="open-sheet")
                 yield Static("Select a character to play as.", id="play-hint")
                 yield Static("", id="points")
+                with Horizontal(id="target-row"):
+                    yield Static("Target: none", id="target-label")
+                    yield Button("Clear Target", id="target-clear", disabled=True)
                 with Horizontal(id="action-filter-row"):
                     yield Input(placeholder="Search actions", id="action-filter")
                     yield Button("Clear", id="action-filter-clear")
@@ -541,6 +550,7 @@ class BunnylandTUI(App[None]):
             hint.update("Select a character to play as.")
         else:
             hint.update("Connect to a world with playable characters.")
+        self._sync_target_controls()
 
     # ── rendering ─────────────────────────────────────────────────────────────
     def _render_room(self) -> None:
@@ -589,6 +599,7 @@ class BunnylandTUI(App[None]):
             return
         for item in items:
             inventory.add_option(Option(f"{item.icon} {item.label}", id=f"inv:{item.value}"))
+        self._sync_target_controls()
 
     def _restore_highlight(self, members: OptionList) -> None:
         if not self.selected_id:
@@ -775,6 +786,12 @@ class BunnylandTUI(App[None]):
         entity = self.world.get(entity_id)
         return entity_name(entity) if entity else None
 
+    def _sync_target_controls(self) -> None:
+        target_name = self._name_for(self.selected_id) if self.selected_id else None
+        label = target_name or self.selected_id or "none"
+        self._main_query_one("#target-label", Static).update(f"Target: {label}")
+        self._main_query_one("#target-clear", Button).disabled = self.selected_id is None
+
     # ── events ──────────────────────────────────────────────────────────────────
     @on(Select.Changed, "#player")
     async def _player_changed(self, event: Select.Changed) -> None:
@@ -816,9 +833,21 @@ class BunnylandTUI(App[None]):
     async def _open_sheet_pressed(self, _event: Button.Pressed) -> None:
         await self.action_open_sheet()
 
+    @on(Button.Pressed, "#target-clear")
+    def _target_clear_pressed(self, _event: Button.Pressed) -> None:
+        self.action_clear_target()
+
     def action_help(self) -> None:
         """Show the key-binding cheat-sheet."""
         self.push_screen(HelpScreen())
+
+    def action_clear_target(self) -> None:
+        """Clear the selected action target without releasing the character."""
+        if self.selected_id is None:
+            return
+        self.selected_id = None
+        self._sync_target_controls()
+        self._render_room()
 
     async def action_request_image(self) -> None:
         """Request an image of the player's current scene when the backend supports it."""
@@ -847,7 +876,7 @@ class BunnylandTUI(App[None]):
         if self.selected_id:
             selected = self.world.get(self.selected_id)
             if selected is None or not has(selected, "CharacterComponent"):
-                self._append_activity(Text("Select a visible character or clear the selection."))
+                self._append_activity(Text("Select a visible character or clear the target."))
                 return
             character_id = self.selected_id
         result = await self.backend.open_character_sheet(character_id)
@@ -859,6 +888,12 @@ class BunnylandTUI(App[None]):
     @on(OptionList.OptionSelected, "#members")
     def _member_selected(self, event: OptionList.OptionSelected) -> None:
         self.selected_id = event.option.id
+        self._sync_target_controls()
+
+    @on(OptionList.OptionSelected, "#inventory")
+    def _inventory_selected(self, event: OptionList.OptionSelected) -> None:
+        self.selected_id = str(event.option.id or "").removeprefix("inv:")
+        self._sync_target_controls()
 
     @on(OptionList.OptionSelected, "#doors")
     def _door_selected(self, event: OptionList.OptionSelected) -> None:
