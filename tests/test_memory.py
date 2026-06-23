@@ -676,6 +676,11 @@ def test_inmemory_store_delete_skips_non_matching_entries():
 def test_inmemory_store_lists_and_updates_documents():
     store = InMemoryStore()
     entry = store.add("c", text="old", tags=("tag",), created_at_epoch=1)
+    created = store.create_document(
+        "c",
+        document="created",
+        metadata={"tags": ["new"], "created_at_epoch": 3, "source": "admin"},
+    )
 
     listed = store.list_documents("c")
     updated = store.update_document(
@@ -691,8 +696,15 @@ def test_inmemory_store_lists_and_updates_documents():
         "created_at_epoch": 1,
         "source": "manual",
     }
+    assert created.document == "created"
+    assert created.metadata == {
+        "tags": ["new"],
+        "created_at_epoch": 3,
+        "source": "admin",
+    }
     assert updated is not None
     assert updated.document == "new"
+    assert store.search("c", mode="recent")[0].id == created.id
     assert store.search("c", mode="recent")[0].source == "admin"
     assert store.update_document("c", "missing", document="x", metadata={}) is None
 
@@ -825,6 +837,11 @@ def test_chroma_store_lists_and_updates_documents():
     entry = store.add("c", text="old", tags=("tag",), created_at_epoch=1)
     list_tags = store.add("c", text="list tags", created_at_epoch=2)
     scalar_tags = store.add("c", text="scalar tags", created_at_epoch=3)
+    created = store.create_document(
+        "c",
+        document="created",
+        metadata={"tags": ["new", "note"], "created_at_epoch": 4, "source": "admin"},
+    )
 
     listed = store.list_documents("c")
     updated = store.update_document(
@@ -848,10 +865,13 @@ def test_chroma_store_lists_and_updates_documents():
 
     assert listed[0].document == "old"
     assert listed[0].metadata["tags"] == "tag"
+    assert created.document == "created"
+    assert created.metadata["tags"] == ["new", "note"]
     assert updated is not None
     assert updated.metadata["seq"] == 9
     assert store.list_documents("c")[0].document == "new"
     entries = {entry.id: entry for entry in store.search("c", mode="recent")}
+    assert entries[created.id].tags == ("new", "note")
     assert entries[list_tags.id].tags == ("alpha", "beta")
     assert entries[scalar_tags.id].tags == ()
     assert store.update_document("c", "missing", document="x", metadata={}) is None

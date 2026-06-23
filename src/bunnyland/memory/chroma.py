@@ -14,6 +14,14 @@ from uuid import uuid4
 from .store import MemoryDocument, MemoryEntry
 
 
+def _metadata_for_chroma(metadata: dict[str, Any]) -> dict[str, Any]:
+    values = dict(metadata)
+    raw_tags = values.get("tags")
+    if isinstance(raw_tags, (list, tuple)):
+        values["tags"] = ",".join(str(tag) for tag in raw_tags if str(tag))
+    return values
+
+
 class ChromaMemoryStore:
     """Vector-backed store. ``chromadb`` is imported lazily so core stays light."""
 
@@ -110,6 +118,21 @@ class ChromaMemoryStore:
         got = self._collection(collection).get(include=["documents", "metadatas"])
         return self._documents_from_get(got)
 
+    def create_document(
+        self,
+        collection: str,
+        *,
+        document: str,
+        metadata: dict[str, Any],
+    ) -> MemoryDocument:
+        note_id = uuid4().hex
+        self._collection(collection).add(
+            ids=[note_id],
+            documents=[document],
+            metadatas=[_metadata_for_chroma(metadata)],
+        )
+        return MemoryDocument(id=note_id, document=document, metadata=dict(metadata))
+
     def update_document(
         self,
         collection: str,
@@ -123,7 +146,11 @@ class ChromaMemoryStore:
         ids = got.get("ids", []) or []
         if note_id not in ids:
             return None
-        col.update(ids=[note_id], documents=[document], metadatas=[dict(metadata)])
+        col.update(
+            ids=[note_id],
+            documents=[document],
+            metadatas=[_metadata_for_chroma(metadata)],
+        )
         return MemoryDocument(id=note_id, document=document, metadata=dict(metadata))
 
     @staticmethod

@@ -1654,6 +1654,45 @@ def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
     assert after_delete.json()["documents"] == []
 
 
+def test_fastapi_admin_memory_creates_document(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    install_memory(scenario.actor, InMemoryStore())
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        MemoryProfileComponent(vector_collection="juniper-private")
+    )
+    app = create_app(scenario.actor, admin_token="secret")
+    client = testclient.TestClient(app)
+
+    created = client.post(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+        json={
+            "document": "new memory text",
+            "metadata": {"tags": ["new"], "created_at_epoch": 33, "source": "admin"},
+        },
+    )
+    listed = client.get(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["collection"] == "juniper-private"
+    assert body["document"]["id"]
+    assert body["document"]["document"] == "new memory text"
+    assert body["document"]["metadata"] == {
+        "tags": ["new"],
+        "created_at_epoch": 33,
+        "source": "admin",
+    }
+    assert listed.json()["documents"] == [body["document"]]
+    rendered = json.dumps(body).lower()
+    assert "backend" not in rendered
+    assert "store" not in rendered
+    assert "chroma" not in rendered
+
+
 def test_fastapi_admin_memory_missing_document_returns_404(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     install_memory(scenario.actor, InMemoryStore())
@@ -1688,10 +1727,18 @@ def test_fastapi_admin_memory_returns_generic_conflict_when_unconfigured(scenari
         "/admin/memory/collections/juniper-private/documents",
         headers={"X-Bunnyland-Admin-Token": "secret"},
     )
+    create_response = client.post(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "secret"},
+        json={"document": "new text", "metadata": {}},
+    )
 
     assert response.status_code == 409
     assert response.json()["detail"] == "memory is not configured"
+    assert create_response.status_code == 409
+    assert create_response.json()["detail"] == "memory is not configured"
     assert "chroma" not in response.text.lower()
+    assert "chroma" not in create_response.text.lower()
 
 
 def test_fastapi_admin_memory_requires_admin_token(scenario):
@@ -1706,9 +1753,15 @@ def test_fastapi_admin_memory_requires_admin_token(scenario):
         "/admin/memory/collections/juniper-private/documents",
         headers={"X-Bunnyland-Admin-Token": "wrong"},
     )
+    wrong_create = client.post(
+        "/admin/memory/collections/juniper-private/documents",
+        headers={"X-Bunnyland-Admin-Token": "wrong"},
+        json={"document": "new text", "metadata": {}},
+    )
 
     assert missing.status_code == 403
     assert wrong.status_code == 403
+    assert wrong_create.status_code == 403
 
 
 def test_fastapi_dm_projection_uses_configured_admin_token_env(monkeypatch, scenario):

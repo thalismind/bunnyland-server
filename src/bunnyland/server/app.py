@@ -497,6 +497,22 @@ def create_app(
             document=_memory_document_view(document),
         )
 
+    def _memory_create_response(
+        collection: str,
+        request: MemoryDocumentUpdateRequest,
+    ) -> MemoryDocumentResponse:
+        store = _require_memory_store()
+        document = store.create_document(
+            collection,
+            document=request.document,
+            metadata=request.metadata,
+        )
+        return MemoryDocumentResponse(
+            world_epoch=actor.epoch,
+            collection=collection,
+            document=_memory_document_view(document),
+        )
+
     def _delete_memory_document(collection: str, note_id: str) -> dict:
         store = _require_memory_store()
         if not store.delete(collection, note_id):
@@ -942,6 +958,19 @@ def create_app(
     ) -> MemoryDocumentsResponse:
         _require_projection_admin(admin_token)
         return _memory_documents_response(collection)
+
+    @app.post(
+        "/admin/memory/collections/{collection}/documents",
+        response_model=MemoryDocumentResponse,
+        status_code=201,
+    )
+    async def create_memory_document(
+        collection: str,
+        request: MemoryDocumentUpdateRequest,
+        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
+    ) -> MemoryDocumentResponse:
+        _require_projection_admin(admin_token)
+        return _memory_create_response(collection, request)
 
     @app.patch(
         "/admin/memory/collections/{collection}/documents/{id}",

@@ -56,6 +56,14 @@ class MemoryStore(Protocol):
 
     def list_documents(self, collection: str) -> list[MemoryDocument]: ...
 
+    def create_document(
+        self,
+        collection: str,
+        *,
+        document: str,
+        metadata: dict[str, Any],
+    ) -> MemoryDocument: ...
+
     def update_document(
         self,
         collection: str,
@@ -207,6 +215,28 @@ class InMemoryStore:
                 MemoryDocument(id=entry.id, document=entry.text, metadata=metadata)
             )
         return documents
+
+    def create_document(
+        self,
+        collection: str,
+        *,
+        document: str,
+        metadata: dict[str, Any],
+    ) -> MemoryDocument:
+        created = _entry_from_document(
+            MemoryDocument(id=uuid4().hex, document=document, metadata=dict(metadata))
+        )
+        self._collections[collection].append(created)
+        return MemoryDocument(
+            id=created.id,
+            document=created.text,
+            metadata=_entry_metadata(
+                created.tags,
+                created.created_at_epoch,
+                created.source,
+                created.metadata,
+            ),
+        )
 
     def update_document(
         self,
