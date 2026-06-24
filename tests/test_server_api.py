@@ -1668,7 +1668,7 @@ def test_fastapi_admin_memory_creates_document(scenario):
         headers={"X-Bunnyland-Admin-Token": "secret"},
         json={
             "document": "new memory text",
-            "metadata": {"tags": ["new"], "created_at_epoch": 33, "source": "admin"},
+            "metadata": {"tags": "new, note", "created_at_epoch": 33, "source": "admin"},
         },
     )
     listed = client.get(
@@ -1682,7 +1682,7 @@ def test_fastapi_admin_memory_creates_document(scenario):
     assert body["document"]["id"]
     assert body["document"]["document"] == "new memory text"
     assert body["document"]["metadata"] == {
-        "tags": ["new"],
+        "tags": ["new", "note"],
         "created_at_epoch": 33,
         "source": "admin",
     }

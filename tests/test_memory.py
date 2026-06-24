@@ -173,6 +173,26 @@ async def test_take_note_stores_privately_and_spends_focus():
     assert len(store.search("juniper", mode="recent")) == 1
 
 
+async def test_take_note_splits_comma_string_tags():
+    scenario, store = memory_scenario()
+    command = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="take-note",
+        cost=CommandCost(focus=1),
+        lane=Lane.FOCUS,
+        payload={"text": "The dome specimen is stable.", "tags": "status, dome, specimen"},
+    )
+
+    await scenario.actor.submit(command)
+    await scenario.actor.tick(0.0)
+
+    [entry] = store.search("juniper", mode="recent")
+    assert entry.tags == ("status", "dome", "specimen")
+    assert entry.metadata["tags"] == ["status", "dome", "specimen"]
+
+
 async def test_remember_returns_recent_notes_privately():
     scenario, _store = memory_scenario()
     searched = collect(scenario.actor, NotesSearchedEvent)
@@ -679,7 +699,7 @@ def test_inmemory_store_lists_and_updates_documents():
     created = store.create_document(
         "c",
         document="created",
-        metadata={"tags": ["new"], "created_at_epoch": 3, "source": "admin"},
+        metadata={"tags": "new, note", "created_at_epoch": 3, "source": "admin"},
     )
 
     listed = store.list_documents("c")
@@ -698,7 +718,7 @@ def test_inmemory_store_lists_and_updates_documents():
     }
     assert created.document == "created"
     assert created.metadata == {
-        "tags": ["new"],
+        "tags": ["new", "note"],
         "created_at_epoch": 3,
         "source": "admin",
     }
@@ -833,14 +853,26 @@ def test_chroma_store_lists_and_updates_documents():
             del name, kwargs
             return self.collection
 
-    store = ChromaMemoryStore(client=FakeClient())
+    client = FakeClient()
+    store = ChromaMemoryStore(client=client)
     entry = store.add("c", text="old", tags=("tag",), created_at_epoch=1)
     list_tags = store.add("c", text="list tags", created_at_epoch=2)
     scalar_tags = store.add("c", text="scalar tags", created_at_epoch=3)
+    client.collection.rows.append(
+        (
+            "broken",
+            "broken tags",
+            {
+                "tags": list("status, dome, specimen, survival"),
+                "created_at_epoch": 5,
+                "source": "manual",
+            },
+        )
+    )
     created = store.create_document(
         "c",
         document="created",
-        metadata={"tags": ["new", "note"], "created_at_epoch": 4, "source": "admin"},
+        metadata={"tags": "new, note", "created_at_epoch": 4, "source": "admin"},
     )
 
     listed = store.list_documents("c")
@@ -864,9 +896,11 @@ def test_chroma_store_lists_and_updates_documents():
     )
 
     assert listed[0].document == "old"
-    assert listed[0].metadata["tags"] == "tag"
+    assert listed[0].metadata["tags"] == ["tag"]
+    assert listed[3].metadata["tags"] == ["status", "dome", "specimen", "survival"]
     assert created.document == "created"
     assert created.metadata["tags"] == ["new", "note"]
+    assert client.collection.rows[-1][2]["tags"] == "new,note"
     assert updated is not None
     assert updated.metadata["seq"] == 9
     assert store.list_documents("c")[0].document == "new"
@@ -878,6 +912,7 @@ def test_chroma_store_lists_and_updates_documents():
     assert entries[created.id].tags == ("new", "note")
     assert entries[list_tags.id].tags == ("alpha", "beta")
     assert entries[scalar_tags.id].tags == ()
+    assert entries["broken"].tags == ("status", "dome", "specimen", "survival")
     assert store.update_document("c", "missing", document="x", metadata={}) is None
 
 

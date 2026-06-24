@@ -25,7 +25,7 @@ from ..core.events import (
     ReflectionCreatedEvent,
 )
 from ..core.handlers.base import HandlerContext, HandlerResult, ok, rejected
-from .store import MemoryStore
+from .store import MemoryStore, normalize_tags
 
 DEFAULT_REFLECTION_INTERVAL_SECONDS = 24 * 3600
 DEFAULT_REFLECTION_MIN_ENTRIES = 3
@@ -75,7 +75,7 @@ class TakeNoteHandler:
         except ValueError as exc:
             return rejected(str(exc))
 
-        tags = tuple(payload.get("tags", ()) or ())
+        tags = normalize_tags(payload.get("tags", ()) or ())
         entry = self.store.add(
             collection, text=text, tags=tags, created_at_epoch=ctx.epoch, source="manual"
         )

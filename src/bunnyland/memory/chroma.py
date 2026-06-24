@@ -11,14 +11,18 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .store import MemoryDocument, MemoryEntry
+from .store import MemoryDocument, MemoryEntry, normalize_tags
 
 
 def _metadata_for_chroma(metadata: dict[str, Any]) -> dict[str, Any]:
     values = dict(metadata)
-    raw_tags = values.get("tags")
-    if isinstance(raw_tags, (list, tuple)):
-        values["tags"] = ",".join(str(tag) for tag in raw_tags if str(tag))
+    values["tags"] = ",".join(normalize_tags(values.get("tags", ())))
+    return values
+
+
+def _metadata_for_document(metadata: dict[str, Any]) -> dict[str, Any]:
+    values = dict(metadata)
+    values["tags"] = list(normalize_tags(values.get("tags", ())))
     return values
 
 
@@ -63,12 +67,18 @@ class ChromaMemoryStore:
         source: str = "manual",
     ) -> MemoryEntry:
         self._counter += 1
+        metadata = {
+            "tags": list(normalize_tags(tags)),
+            "created_at_epoch": created_at_epoch,
+            "source": source,
+        }
         entry = MemoryEntry(
             id=uuid4().hex,
             text=text,
-            tags=tuple(tags),
+            tags=normalize_tags(tags),
             created_at_epoch=created_at_epoch,
             source=source,
+            metadata=metadata,
         )
         self._collection(collection).add(
             ids=[entry.id],
@@ -131,7 +141,11 @@ class ChromaMemoryStore:
             documents=[document],
             metadatas=[_metadata_for_chroma(metadata)],
         )
-        return MemoryDocument(id=note_id, document=document, metadata=dict(metadata))
+        return MemoryDocument(
+            id=note_id,
+            document=document,
+            metadata=_metadata_for_document(metadata),
+        )
 
     def update_document(
         self,
@@ -151,7 +165,11 @@ class ChromaMemoryStore:
             documents=[document],
             metadatas=[_metadata_for_chroma(metadata)],
         )
-        return MemoryDocument(id=note_id, document=document, metadata=dict(metadata))
+        return MemoryDocument(
+            id=note_id,
+            document=document,
+            metadata=_metadata_for_document(metadata),
+        )
 
     @staticmethod
     def _documents_from_get(got: dict) -> list[MemoryDocument]:
@@ -164,19 +182,14 @@ class ChromaMemoryStore:
                 MemoryDocument(
                     id=id_,
                     document=doc or "",
-                    metadata=dict(meta or {}),
+                    metadata=_metadata_for_document(meta or {}),
                 )
             )
         return documents
 
     @staticmethod
     def _tags_from_metadata(meta: dict) -> tuple[str, ...]:
-        raw = meta.get("tags", "")
-        if isinstance(raw, str):
-            return tuple(t for t in raw.split(",") if t)
-        if isinstance(raw, (list, tuple)):
-            return tuple(str(t) for t in raw if str(t))
-        return ()
+        return normalize_tags(meta.get("tags", ""))
 
     @classmethod
     def _entries_from_get(cls, got: dict) -> list[MemoryEntry]:
@@ -185,7 +198,7 @@ class ChromaMemoryStore:
         metas = got.get("metadatas", []) or []
         entries = []
         for id_, doc, meta in zip(ids, docs, metas, strict=False):
-            meta = meta or {}
+            meta = _metadata_for_document(meta or {})
             entries.append(
                 MemoryEntry(
                     id=id_,

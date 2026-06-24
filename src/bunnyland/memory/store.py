@@ -109,29 +109,40 @@ def _entry_metadata(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     values = dict(metadata or {})
-    values.setdefault("tags", list(tags))
+    values["tags"] = list(normalize_tags(values.get("tags", tags)))
     values.setdefault("created_at_epoch", created_at_epoch)
     values.setdefault("source", source)
     return values
 
 
-def _tags_from_metadata(metadata: dict[str, Any]) -> tuple[str, ...]:
-    raw = metadata.get("tags", ())
+def normalize_tags(raw: object) -> tuple[str, ...]:
     if isinstance(raw, str):
-        return tuple(tag for tag in raw.split(",") if tag)
+        return tuple(tag for tag in (part.strip() for part in raw.split(",")) if tag)
     if isinstance(raw, (list, tuple)):
-        return tuple(str(tag) for tag in raw if str(tag))
+        values = tuple(str(tag) for tag in raw if str(tag).strip())
+        if values and "," in values and all(len(tag) == 1 for tag in values):
+            return normalize_tags("".join(values))
+        tags: list[str] = []
+        for value in values:
+            tags.extend(normalize_tags(value) if "," in value else (value.strip(),))
+        return tuple(tag for tag in tags if tag)
     return ()
 
 
 def _entry_from_document(document: MemoryDocument) -> MemoryEntry:
+    metadata = _entry_metadata(
+        normalize_tags(document.metadata.get("tags", ())),
+        int(document.metadata.get("created_at_epoch", 0) or 0),
+        str(document.metadata.get("source", "manual")),
+        document.metadata,
+    )
     return MemoryEntry(
         id=document.id,
         text=document.document,
-        tags=_tags_from_metadata(document.metadata),
-        created_at_epoch=int(document.metadata.get("created_at_epoch", 0) or 0),
-        source=str(document.metadata.get("source", "manual")),
-        metadata=dict(document.metadata),
+        tags=normalize_tags(metadata.get("tags", ())),
+        created_at_epoch=int(metadata.get("created_at_epoch", 0) or 0),
+        source=str(metadata.get("source", "manual")),
+        metadata=metadata,
     )
 
 
@@ -261,4 +272,10 @@ class InMemoryStore:
         return None
 
 
-__all__ = ["InMemoryStore", "MemoryDocument", "MemoryEntry", "MemoryStore"]
+__all__ = [
+    "InMemoryStore",
+    "MemoryDocument",
+    "MemoryEntry",
+    "MemoryStore",
+    "normalize_tags",
+]
