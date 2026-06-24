@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
 from relics import EntityId
 
+from .. import telemetry
 from ..core import CharacterComponent, parse_entity_id
 from ..core.actions import action_definitions
 from ..core.controllers import LLMControllerComponent
@@ -39,6 +42,7 @@ CHAT_SYSTEM_PROMPT = (
     "searching memory or notes, use remember."
 )
 ACTION_RESULT_TIMEOUT_SECONDS = 1.5
+CHAT_TRACE_TEXT_CHARS = 4096
 
 
 @dataclass
@@ -77,28 +81,59 @@ class CharacterChatService:
         return sorted(definition.name for definition in self._allowed_definitions())
 
     async def chat(self, character_id: str, request: CharacterChatRequest) -> CharacterChatResponse:
-        parsed = parse_entity_id(character_id)
-        if parsed is None or not self.actor.world.has_entity(parsed):
-            raise ValueError("character does not exist")
-        character = self.actor.world.get_entity(parsed)
-        if not character.has_component(CharacterComponent):
-            raise TypeError("entity is not a character")
+        telemetry.set_span_attributes(
+            {
+                "character.id": character_id,
+                "chat.client_id": request.client_id,
+                "chat.input": _trace_text(request.message),
+                "chat.input_chars": len(request.message),
+                "chat.history.count": len(request.history),
+                "chat.history_summary_chars": len(request.history_summary),
+            }
+        )
+        with _chat_span("character.chat.validate", {"character.id": character_id}) as span:
+            parsed = parse_entity_id(character_id)
+            if parsed is None or not self.actor.world.has_entity(parsed):
+                raise ValueError("character does not exist")
+            character = self.actor.world.get_entity(parsed)
+            if not character.has_component(CharacterComponent):
+                raise TypeError("entity is not a character")
 
-        controller = self._llm_controller(parsed)
-        if controller is None:
-            raise PermissionError("character chat requires the current controller to be llm")
-        controller_id, generation, component = controller
+            controller = self._llm_controller(parsed)
+            if controller is None:
+                raise PermissionError("character chat requires the current controller to be llm")
+            controller_id, generation, component = controller
+            span.set_attribute("controller.id", str(controller_id))
+            span.set_attribute("controller.generation", generation)
+            span.set_attribute("model", component.model or "")
+            span.set_attribute("provider", component.provider or "")
 
-        context = self.builder.build(parsed, epoch=self.actor.epoch)
-        messages = self._messages(render_prompt(context), request)
+        with _chat_span("character.chat.prompt", {"character.id": character_id}) as span:
+            context = self.builder.build(parsed, epoch=self.actor.epoch)
+            prompt = render_prompt(context)
+            messages = self._messages(prompt, request)
+            span.set_attribute("chat.prompt", _trace_text(prompt))
+            span.set_attribute("chat.prompt_chars", len(prompt))
+            span.set_attribute("chat.messages.count", len(messages))
+
         reply = await self._call_agent(
             messages,
             character_id=character_id,
             model=component.model,
             provider=component.provider,
             tools=self._allowed_tool_schemas(),
+            phase="initial",
         )
+        _trace_reply(reply, phase="initial")
         if reply.tool_call is None:
+            telemetry.set_span_attributes(
+                {
+                    "chat.final_reply": _trace_text(reply.content or "..."),
+                    "chat.action.status": "none",
+                    "chat.action.tool": "",
+                    "command.id": "",
+                }
+            )
             return CharacterChatResponse(
                 world_epoch=self.actor.epoch,
                 character_id=character_id,
@@ -119,8 +154,10 @@ class CharacterChatService:
                 model=component.model,
                 provider=component.provider,
                 tools=[],
+                phase="followup",
             )
             final = final_reply.content or final
+            _trace_reply(final_reply, phase="followup")
         if not final:
             final = self._fallback_reply(action)
         if action.status == "queued" and action.command_id:
@@ -136,6 +173,14 @@ class CharacterChatService:
                     action=action,
                 )
             )
+        telemetry.set_span_attributes(
+            {
+                "chat.final_reply": _trace_text(final),
+                "chat.action.status": action.status,
+                "chat.action.tool": action.tool or "",
+                "command.id": action.command_id or "",
+            }
+        )
         return CharacterChatResponse(
             world_epoch=self.actor.epoch,
             character_id=character_id,
@@ -146,10 +191,23 @@ class CharacterChatService:
     async def pending_result(
         self, character_id: str, client_id: str, command_id: str
     ) -> CharacterChatPendingResponse:
-        pending = self._pending.get((client_id, character_id, command_id))
-        if pending is None:
-            raise ValueError("pending chat action does not exist")
-        complete = pending.action.status in {"executed", "rejected"}
+        telemetry.set_span_attributes(
+            {
+                "character.id": character_id,
+                "chat.client_id": client_id,
+                "command.id": command_id,
+            }
+        )
+        with _chat_span(
+            "character.chat.pending.lookup",
+            {"character.id": character_id, "command.id": command_id},
+        ) as span:
+            pending = self._pending.get((client_id, character_id, command_id))
+            if pending is None:
+                raise ValueError("pending chat action does not exist")
+            complete = pending.action.status in {"executed", "rejected"}
+            span.set_attribute("chat.action.status", pending.action.status)
+            span.set_attribute("chat.pending.complete", complete)
         if complete and not pending.reply:
             final_reply = await self._call_agent(
                 self._followup_messages(pending.messages, pending.user_message, pending.action),
@@ -157,9 +215,11 @@ class CharacterChatService:
                 model=pending.model,
                 provider=pending.provider,
                 tools=[],
+                phase="pending_followup",
             )
             pending.reply = final_reply.content or self._fallback_reply(pending.action)
-        return CharacterChatPendingResponse(
+            _trace_reply(final_reply, phase="pending_followup")
+        response = CharacterChatPendingResponse(
             world_epoch=self.actor.epoch,
             character_id=character_id,
             command_id=command_id,
@@ -167,6 +227,14 @@ class CharacterChatService:
             reply=pending.reply,
             action=pending.action,
         )
+        telemetry.set_span_attributes(
+            {
+                "chat.pending.complete": response.complete,
+                "chat.reply": _trace_text(response.reply),
+                "chat.action.status": response.action.status,
+            }
+        )
+        return response
 
     def _complete_pending(self, event: CommandExecutedEvent | CommandRejectedEvent) -> None:
         action = self._action_from_event(event, None)
@@ -263,22 +331,66 @@ class CharacterChatService:
         model: str | None,
         provider: str | None,
         tools: list[dict[str, Any]],
+        phase: str,
     ) -> ChatAgentReply:
-        chat = getattr(self.agent, "chat", None)
-        if chat is None:
-            raise RuntimeError("configured LLM agent does not support character chat")
-        result = chat(
-            messages,
-            character_id=character_id,
-            model=model,
-            provider=provider,
-            tools=tools,
-        )
-        if isinstance(result, Awaitable):
-            return await result
-        return result
+        with _chat_span(
+            "character.chat.llm",
+            {
+                "character.id": character_id,
+                "chat.phase": phase,
+                "model": model or "",
+                "provider": provider or "",
+                "llm.tools.count": len(tools),
+                "llm.history.messages": len(messages),
+            },
+        ) as span:
+            llm_input = str(messages[-1].get("content", "")) if messages else ""
+            span.set_attribute("llm.input", _trace_text(llm_input))
+            span.set_attribute("llm.input_chars", len(llm_input))
+            chat = getattr(self.agent, "chat", None)
+            if chat is None:
+                raise RuntimeError("configured LLM agent does not support character chat")
+            result = chat(
+                messages,
+                character_id=character_id,
+                model=model,
+                provider=provider,
+                tools=tools,
+            )
+            reply = await result if isinstance(result, Awaitable) else result
+            span.set_attribute("chat.reply", _trace_text(reply.content or ""))
+            span.set_attribute("chat.reply_chars", len(reply.content or ""))
+            span.set_attribute("chat.tool.called", reply.tool_call is not None)
+            if reply.tool_call is not None:
+                span.set_attribute("chat.tool.name", reply.tool_call.name)
+                span.set_attribute("chat.tool.arguments", _trace_json(reply.tool_call.arguments))
+            return reply
 
     async def _submit_tool(
+        self,
+        character_id: EntityId,
+        controller_id: str,
+        generation: int,
+        call: ToolCall,
+    ) -> CharacterChatActionResult:
+        with _chat_span(
+            "character.chat.tool",
+            {
+                "character.id": str(character_id),
+                "controller.id": controller_id,
+                "controller.generation": generation,
+                "chat.tool.name": call.name,
+                "chat.tool.arguments": _trace_json(call.arguments),
+            },
+        ) as span:
+            action = await self._submit_tool_inner(character_id, controller_id, generation, call)
+            span.set_attribute("chat.action.status", action.status)
+            span.set_attribute("command.id", action.command_id or "")
+            span.set_attribute("chat.action.reason", _trace_text(action.reason))
+            span.set_attribute("chat.action.result_events", _trace_json(action.result_events))
+            return action
+
+    async def _submit_tool_inner(
         self,
         character_id: EntityId,
         controller_id: str,
@@ -379,6 +491,43 @@ def build_character_chat_service(
     actor: WorldActor, builder: PromptBuilder, agent
 ) -> CharacterChatService:
     return CharacterChatService(actor, builder, agent)
+
+
+def _trace_text(value: str) -> str:
+    return telemetry.attr_text(value, limit=CHAT_TRACE_TEXT_CHARS)
+
+
+def _trace_json(value: Any) -> str:
+    try:
+        text = json.dumps(value, sort_keys=True)
+    except TypeError:
+        text = json.dumps(str(value))
+    return _trace_text(text)
+
+
+def _trace_reply(reply: ChatAgentReply, *, phase: str) -> None:
+    attributes = {
+        f"chat.{phase}.reply": _trace_text(reply.content or ""),
+        f"chat.{phase}.reply_chars": len(reply.content or ""),
+        f"chat.{phase}.tool_called": reply.tool_call is not None,
+    }
+    if reply.tool_call is not None:
+        attributes[f"chat.{phase}.tool_name"] = reply.tool_call.name
+        attributes[f"chat.{phase}.tool_arguments"] = _trace_json(reply.tool_call.arguments)
+    telemetry.set_span_attributes(attributes)
+
+
+@contextmanager
+def _chat_span(name: str, attributes: dict[str, Any] | None = None):
+    with telemetry.span(name, attributes) as span:
+        try:
+            yield span
+        except Exception as exc:
+            span.record_exception(exc)
+            telemetry.mark_span_error(str(exc), span)
+            raise
+        else:
+            telemetry.mark_span_ok(span)
 
 
 __all__ = [

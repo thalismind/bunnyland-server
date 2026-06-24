@@ -16,11 +16,18 @@ import pytest
 from conftest import build_scenario
 
 from bunnyland import telemetry
-from bunnyland.core import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
+from bunnyland.core import (
+    ActionDefinition,
+    CommandCost,
+    Lane,
+    OnInsufficientPoints,
+    build_submitted_command,
+)
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.llm_agents.agent import (
     CHARACTER_SYSTEM_PROMPT,
+    ChatAgentReply,
     OllamaAgent,
     _ollama_token_usage,
     _ollama_usage,
@@ -28,6 +35,8 @@ from bunnyland.llm_agents.agent import (
     _openrouter_usage,
 )
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.server.character_chat import CharacterChatService, _trace_json
+from bunnyland.server.models import CharacterChatRequest
 
 
 def _command(scenario, command_type="move", **kwargs):
@@ -234,6 +243,43 @@ def _metric_points(reader):
     return points
 
 
+class _FakeTelemetryChatAgent:
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    async def chat(self, messages, *, character_id, model=None, provider=None, tools=None):
+        self.calls.append(
+            {
+                "messages": messages,
+                "character_id": character_id,
+                "model": model,
+                "provider": provider,
+                "tools": tools or [],
+            }
+        )
+        if not self.replies:
+            return ChatAgentReply(content="done")
+        return self.replies.pop(0)
+
+
+def _span_status_name(span) -> str:
+    return span.status.status_code.name
+
+
+def _chat_service(scenario, agent, *, timeout=0.01):
+    return CharacterChatService(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        agent,
+        result_timeout_seconds=timeout,
+    )
+
+
+def test_character_chat_trace_json_falls_back_for_unserializable_value():
+    assert _trace_json({"bad": object()}).startswith('"')
+
+
 @pytestmark_otel
 def test_trace_file_exporter_writes_jsonl(monkeypatch, tmp_path):
     trace_path = tmp_path / "release.trace.jsonl"
@@ -334,6 +380,23 @@ async def test_tick_emits_spans_and_command_metrics(otel_capture):
     assert accepted == {"move": 1}
     rejected = points["bunnyland.commands.rejected"]
     assert rejected[0].attributes["reject_reason"] == "no_handler"
+
+
+@pytestmark_otel
+async def test_command_submit_marks_unexpected_exception_error(otel_capture, monkeypatch):
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+
+    def explode(_command):
+        raise RuntimeError("validation exploded")
+
+    monkeypatch.setattr(scenario.actor, "_validate_submission", explode)
+    with pytest.raises(RuntimeError, match="validation exploded"):
+        await scenario.actor.submit(_command(scenario))
+
+    submit = _spans_by_name(span_exporter)["command.submit"]
+    assert _span_status_name(submit) == "ERROR"
+    assert submit.status.description.endswith("validation exploded")
 
 
 @pytestmark_otel
@@ -783,6 +846,100 @@ async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
         assert response.status_code == 200
 
     assert "world.snapshot" in _spans_by_name(span_exporter)
+
+
+@pytestmark_otel
+async def test_character_chat_traces_input_reply_and_status(otel_capture):
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    agent = _FakeTelemetryChatAgent([ChatAgentReply(content="I hear the tunnel.")])
+    service = _chat_service(scenario, agent)
+
+    with telemetry.span("character.chat", {"character.id": str(scenario.character)}) as span:
+        response = await service.chat(
+            str(scenario.character),
+            CharacterChatRequest(client_id="trace-client", message="what do you hear?"),
+        )
+        telemetry.mark_span_ok(span)
+
+    assert response.reply == "I hear the tunnel."
+    spans = _spans_by_name(span_exporter)
+    assert {
+        "character.chat",
+        "character.chat.validate",
+        "character.chat.prompt",
+        "character.chat.llm",
+    } <= set(spans)
+    for name in (
+        "character.chat",
+        "character.chat.validate",
+        "character.chat.prompt",
+        "character.chat.llm",
+    ):
+        assert _span_status_name(spans[name]) == "OK"
+
+    chat = spans["character.chat"]
+    assert chat.attributes["chat.client_id"] == "trace-client"
+    assert chat.attributes["chat.input"] == "what do you hear?"
+    assert chat.attributes["chat.input_chars"] == len("what do you hear?")
+    assert chat.attributes["chat.final_reply"] == "I hear the tunnel."
+    assert chat.attributes["chat.action.status"] == "none"
+    prompt = spans["character.chat.prompt"]
+    assert "Mosslit Burrow" in prompt.attributes["chat.prompt"]
+    assert prompt.attributes["chat.prompt_chars"] > 0
+    llm = spans["character.chat.llm"]
+    assert llm.attributes["chat.phase"] == "initial"
+    assert "what do you hear?" in llm.attributes["llm.input"]
+    assert llm.attributes["chat.reply"] == "I hear the tunnel."
+    assert llm.attributes["chat.tool.called"] is False
+
+
+@pytestmark_otel
+async def test_character_chat_traces_tool_usage_and_command_submit_status(otel_capture):
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    scenario.actor.register_action_definition(ActionDefinition("wait", tool_name="wait"))
+    agent = _FakeTelemetryChatAgent(
+        [
+            ChatAgentReply(content="", tool_call=ToolCall("wait", {})),
+            ChatAgentReply(content="I wait for a moment."),
+        ]
+    )
+    service = _chat_service(scenario, agent)
+
+    with telemetry.span("character.chat", {"character.id": str(scenario.character)}) as span:
+        response = await service.chat(
+            str(scenario.character),
+            CharacterChatRequest(client_id="trace-client", message="wait here"),
+        )
+        telemetry.mark_span_ok(span)
+
+    assert response.action.status == "rejected"
+    spans = span_exporter.get_finished_spans()
+    by_name = _spans_by_name(span_exporter)
+    llm_spans = [span for span in spans if span.name == "character.chat.llm"]
+    assert len(llm_spans) == 2
+    assert {span.attributes["chat.phase"] for span in llm_spans} == {"initial", "followup"}
+    for span in llm_spans:
+        assert _span_status_name(span) == "OK"
+
+    tool = by_name["character.chat.tool"]
+    assert _span_status_name(tool) == "OK"
+    assert tool.attributes["chat.tool.name"] == "wait"
+    assert tool.attributes["chat.tool.arguments"] == "{}"
+    assert tool.attributes["chat.action.status"] == "rejected"
+    assert tool.attributes["chat.action.reason"] == "no handler for wait"
+
+    submit = by_name["command.submit"]
+    assert _span_status_name(submit) == "ERROR"
+    assert submit.attributes["command.type"] == "wait"
+    assert submit.attributes["command.accepted"] is False
+    assert submit.attributes["command.reject_reason_text"] == "no handler for wait"
+    chat = by_name["character.chat"]
+    assert chat.attributes["chat.initial.tool_called"] is True
+    assert chat.attributes["chat.initial.tool_name"] == "wait"
+    assert chat.attributes["chat.followup.reply"] == "I wait for a moment."
+    assert chat.attributes["chat.action.status"] == "rejected"
 
 
 @pytestmark_otel

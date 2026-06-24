@@ -28,11 +28,15 @@ from typing import Any
 try:
     from opentelemetry import metrics as _otel_metrics
     from opentelemetry import trace as _otel_trace
+    from opentelemetry.trace import Status as _OtelStatus
+    from opentelemetry.trace import StatusCode as _OtelStatusCode
 
     _OTEL_AVAILABLE = True
 except ImportError:  # the optional ``otel`` extra is not installed
     _otel_metrics = None
     _otel_trace = None
+    _OtelStatus = None
+    _OtelStatusCode = None
     _OTEL_AVAILABLE = False
 
 
@@ -396,6 +400,22 @@ def set_span_attributes(attributes: Mapping[str, Any]) -> None:
         current.set_attribute(key, value)
 
 
+def mark_span_ok(span: Any | None = None) -> None:
+    """Mark a span as successful. A no-op when telemetry is disabled."""
+    if not _ENABLED:
+        return
+    target = span if span is not None else _otel_trace.get_current_span()
+    target.set_status(_OtelStatus(_OtelStatusCode.OK))
+
+
+def mark_span_error(description: str = "", span: Any | None = None) -> None:
+    """Mark a span as failed. A no-op when telemetry is disabled."""
+    if not _ENABLED:
+        return
+    target = span if span is not None else _otel_trace.get_current_span()
+    target.set_status(_OtelStatus(_OtelStatusCode.ERROR, description or None))
+
+
 @contextmanager
 def record_duration(record: Any, attributes: dict[str, Any] | None = None) -> Iterator[None]:
     """Time the wrapped block and feed the elapsed seconds to ``record`` (a histogram).
@@ -522,6 +542,8 @@ __all__ = [
     "enabled",
     "init_telemetry",
     "instrument_fastapi",
+    "mark_span_error",
+    "mark_span_ok",
     "record_command_accepted",
     "record_command_rejected",
     "record_command_submitted",

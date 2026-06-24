@@ -216,15 +216,25 @@ class WorldActor:
                 "character.id": command.character_id,
                 "command.lane": command.lane.value,
             },
-        ):
-            reason = self._validate_submission(command)
-            if reason is not None:
-                await self._reject(command, reason)
-                return SubmissionOutcome(
-                    accepted=False, command_id=command.command_id, reason=reason
-                )
-            await self._inbox.put(command)
-            return SubmissionOutcome(accepted=True, command_id=command.command_id)
+        ) as span:
+            try:
+                reason = self._validate_submission(command)
+                if reason is not None:
+                    span.set_attribute("command.accepted", False)
+                    span.set_attribute("command.reject_reason_text", reason)
+                    telemetry.mark_span_error(reason, span)
+                    await self._reject(command, reason)
+                    return SubmissionOutcome(
+                        accepted=False, command_id=command.command_id, reason=reason
+                    )
+                await self._inbox.put(command)
+                span.set_attribute("command.accepted", True)
+                telemetry.mark_span_ok(span)
+                return SubmissionOutcome(accepted=True, command_id=command.command_id)
+            except Exception as exc:
+                span.record_exception(exc)
+                telemetry.mark_span_error(str(exc), span)
+                raise
 
     def _definition_for(self, command_type: str) -> ActionDefinition:
         if self._definition_cache is None:

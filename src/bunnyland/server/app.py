@@ -373,8 +373,15 @@ def create_app(
         if character_chat is None:
             raise HTTPException(status_code=409, detail="character chat is not enabled")
         try:
-            with telemetry.span("character.chat", {"character.id": id}):
-                return await character_chat.chat(id, request)
+            with telemetry.span("character.chat", {"character.id": id}) as span:
+                try:
+                    response = await character_chat.chat(id, request)
+                except Exception as exc:
+                    span.record_exception(exc)
+                    telemetry.mark_span_error(str(exc), span)
+                    raise
+                telemetry.mark_span_ok(span)
+                return response
         except PermissionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except TypeError as exc:
@@ -397,8 +404,15 @@ def create_app(
             with telemetry.span(
                 "character.chat.pending",
                 {"character.id": id, "command.id": command_id},
-            ):
-                return await character_chat.pending_result(id, client_id, command_id)
+            ) as span:
+                try:
+                    response = await character_chat.pending_result(id, client_id, command_id)
+                except Exception as exc:
+                    span.record_exception(exc)
+                    telemetry.mark_span_error(str(exc), span)
+                    raise
+                telemetry.mark_span_ok(span)
+                return response
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

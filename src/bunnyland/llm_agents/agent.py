@@ -1028,8 +1028,15 @@ async def _call_provider_with_retries(
         try:
             with telemetry.span(
                 "llm.provider.attempt", {**base_attrs, "llm.attempt": attempt}
-            ):
-                return await request()
+            ) as span:
+                try:
+                    result = await request()
+                except Exception as exc:
+                    span.record_exception(exc)
+                    telemetry.mark_span_error(str(exc), span)
+                    raise
+                telemetry.mark_span_ok(span)
+                return result
         except Exception as exc:
             if not _is_transient_provider_error(exc):
                 raise
