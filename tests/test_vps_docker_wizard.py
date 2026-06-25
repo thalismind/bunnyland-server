@@ -134,6 +134,15 @@ def test_vps_docker_setup_renders_memory_flags_and_env_values() -> None:
     assert "BUNNYLAND_MEMORY_PATH: %s" in text
 
 
+def test_home_nginx_template_denies_hidden_paths() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    text = (repo_root / "deploy" / "nginx" / "frontend-tls-home.conf").read_text()
+
+    assert "root /usr/share/nginx/home;" in text
+    assert "location ~ /\\.(?!well-known/) {" in text
+    assert "return 404;" in text
+
+
 def test_vps_docker_wizard_uses_stdin_answers_for_prompted_setup_values(
     tmp_path: Path,
 ) -> None:
