@@ -681,6 +681,21 @@ def test_inmemory_store_vector_falls_back_to_keyword():
     assert "basin" in results[0].text
 
 
+def test_inmemory_store_keyword_tolerates_typos():
+    store = InMemoryStore()
+    store.add("c", text="the basin water is unsafe", created_at_epoch=1)
+    store.add("c", text="berries are tasty", created_at_epoch=2)
+
+    # A misspelled query token still matches via difflib fuzzy scoring...
+    fuzzy = store.search("c", query="watar", mode="keyword", limit=5)
+    assert len(fuzzy) == 1
+    assert "basin" in fuzzy[0].text
+    assert 0 < fuzzy[0].score < 1.0
+
+    # ...while an unrelated query stays below the cutoff and matches nothing.
+    assert store.search("c", query="mountain", mode="keyword") == []
+
+
 def test_inmemory_store_delete_skips_non_matching_entries():
     store = InMemoryStore()
     first = store.add("c", text="the basin water is unsafe", created_at_epoch=1)

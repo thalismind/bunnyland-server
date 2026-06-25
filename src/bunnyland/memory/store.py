@@ -7,11 +7,16 @@ useful — spec 11.16). The vector backend (ChromaDB) implements the same interf
 
 from __future__ import annotations
 
+import difflib
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import uuid4
+
+# Minimum difflib similarity for a query token to count as a fuzzy match. Exact matches
+# always score 1.0; this only governs typo/near-miss tolerance in keyword search.
+_FUZZY_CUTOFF = 0.8
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,22 @@ def _tokens(text: str) -> set[str]:
     }
 
 
+def _fuzzy_score(query_tokens: set[str], candidates: set[str]) -> float:
+    """Score query tokens against an entry's tokens, tolerating typos via difflib.
+
+    Each query token contributes the similarity ratio of its best candidate match
+    (1.0 for an exact hit), so close-but-imperfect tokens still rank, while the cutoff
+    keeps unrelated tokens from matching.
+    """
+    pool = list(candidates)
+    score = 0.0
+    for token in query_tokens:
+        match = difflib.get_close_matches(token, pool, n=1, cutoff=_FUZZY_CUTOFF)
+        if match:
+            score += difflib.SequenceMatcher(None, token, match[0]).ratio()
+    return score
+
+
 def _entry_metadata(
     tags: tuple[str, ...],
     created_at_epoch: int,
@@ -185,12 +206,12 @@ class InMemoryStore:
             return []
         if mode == "recent" or not query:
             return list(reversed(entries))[:limit]
-        # keyword / vector (fallback): score by token overlap, then recency.
+        # keyword / vector (fallback): fuzzy token score, then recency.
         query_tokens = _tokens(query)
         scored: list[MemoryEntry] = []
         for entry in entries:
-            overlap = len(query_tokens & (_tokens(entry.text) | set(entry.tags)))
-            if overlap:
+            score = _fuzzy_score(query_tokens, _tokens(entry.text) | set(entry.tags))
+            if score:
                 scored.append(
                     MemoryEntry(
                         id=entry.id,
@@ -198,7 +219,7 @@ class InMemoryStore:
                         tags=entry.tags,
                         created_at_epoch=entry.created_at_epoch,
                         source=entry.source,
-                        score=float(overlap),
+                        score=score,
                         metadata=dict(entry.metadata),
                     )
                 )
