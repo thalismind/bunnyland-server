@@ -729,6 +729,8 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert snapshot["metadata"]["seed"] == "moss"
     assert any(entity["id"] == str(scenario.character) for entity in snapshot["entities"])
 
+    assert "save_world_admin" in registered_tools
+
     status = registered_tools["runtime_status"]()
     assert status == {
         "ok": True,
@@ -1481,7 +1483,13 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
 
 
 def _capture_mcp_tools(
-    monkeypatch, actor, *, admin_token: str = "secret", loop=None, request_headers=None
+    monkeypatch,
+    actor,
+    *,
+    admin_token: str = "secret",
+    loop=None,
+    request_headers=None,
+    save_path=None,
 ) -> dict:
     """Build the MCP app with a fake FastMCP and return its registered tool closures.
 
@@ -1546,6 +1554,7 @@ def _capture_mcp_tools(
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
         admin_token=admin_token,
         loop=loop,
+        save_path=save_path,
     )
     return registered_tools
 
@@ -1566,6 +1575,40 @@ def test_runtime_status_reports_tick_cadence(monkeypatch, scenario):
     no_loop = _capture_mcp_tools(monkeypatch, scenario.actor)["runtime_status"]()
     assert no_loop["tick_seconds"] is None
     assert no_loop["game_seconds_per_tick"] is None
+
+
+def test_save_world_admin_uses_configured_path(monkeypatch, scenario, tmp_path):
+    path = tmp_path / "mcp-save.json"
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor, save_path=path)
+
+    saved = asyncio.run(tools["save_world_admin"](admin_token="secret"))
+
+    assert saved["path"] == str(path)
+    assert saved["world_epoch"] == scenario.actor.epoch
+    assert path.exists()
+    assert json.loads(path.read_text())["bunnyland"]["seed"] == ""
+
+
+def test_save_world_admin_requires_configured_path(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+
+    with pytest.raises(RuntimeError, match="server was not started with --save"):
+        asyncio.run(tools["save_world_admin"](admin_token="secret"))
+
+
+def test_save_world_admin_wraps_save_errors(monkeypatch, scenario, tmp_path):
+    def raise_save_error(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mcp_server, "save_configured_world", raise_save_error)
+    tools = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        save_path=tmp_path / "mcp-save.json",
+    )
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        asyncio.run(tools["save_world_admin"](admin_token="secret"))
 
 
 def test_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):

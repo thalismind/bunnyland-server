@@ -9,6 +9,7 @@ import os
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote
 
@@ -39,6 +40,7 @@ from ..core.events import CharacterClaimedEvent, DomainEvent
 from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..plugins.builtin import MCP
 from ..prompts import PromptBuilder, render_prompt
+from ..server.admin import save_configured_world
 from ..server.models import (
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
@@ -98,15 +100,29 @@ def _traced_tool(fn):
 
         @functools.wraps(fn)
         async def async_wrapper(*args, **kwargs):
-            with telemetry.span(name):
-                return await fn(*args, **kwargs)
+            with telemetry.span(name) as span:
+                try:
+                    result = await fn(*args, **kwargs)
+                except Exception as exc:
+                    span.record_exception(exc)
+                    telemetry.mark_span_error(str(exc), span)
+                    raise
+                telemetry.mark_span_ok(span)
+                return result
 
         return async_wrapper
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        with telemetry.span(name):
-            return fn(*args, **kwargs)
+        with telemetry.span(name) as span:
+            try:
+                result = fn(*args, **kwargs)
+            except Exception as exc:
+                span.record_exception(exc)
+                telemetry.mark_span_error(str(exc), span)
+                raise
+            telemetry.mark_span_ok(span)
+            return result
 
     return wrapper
 
@@ -504,6 +520,7 @@ def create_bunnyland_mcp_app(
     meta: WorldMeta,
     loop: GameLoop | None,
     admin_token: str | None,
+    save_path: str | Path | None = None,
     patch_world: Callable[[WorldPatchRequest], Awaitable[WorldPatchResponse]],
     generate_world: Callable[[WorldGenerateRequest], Awaitable[WorldGenerateResponse]],
     generation_status: Callable[[], Awaitable[WorldGenerationStatusResponse]],
@@ -688,6 +705,25 @@ def create_bunnyland_mcp_app(
 
         admin(admin_token)
         return serialize_world_overview(actor).model_dump()
+
+    @mcp.tool()
+    @_traced_tool
+    async def save_world_admin(admin_token: str | None = None) -> dict[str, Any]:
+        """Save the current world to the configured persistent JSON/YAML file.
+
+        Requires the MCP admin token. The server must have been started with a save path
+        (the same configuration used by the REST ``/admin/world/save`` endpoint).
+        """
+
+        admin(admin_token)
+        if save_path is None:
+            raise ToolError("server was not started with --save")
+        try:
+            async with actor._lock:
+                response = save_configured_world(actor, save_path, meta=meta)
+        except Exception as exc:
+            raise ToolError(str(exc)) from exc
+        return response.model_dump(mode="json")
 
     @mcp.tool()
     def runtime_status() -> dict[str, Any]:

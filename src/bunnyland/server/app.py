@@ -1244,6 +1244,7 @@ def create_app(
             meta=meta,
             loop=loop,
             admin_token=admin_token,
+            save_path=save_path,
             patch_world=_patch_world_request,
             generate_world=_generate_world_request,
             generation_status=_world_generation_status_response,

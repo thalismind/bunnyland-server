@@ -828,6 +828,98 @@ async def test_save_and_load_emit_persistence_spans_and_metrics(otel_capture, tm
 
 
 @pytestmark_otel
+async def test_save_world_marks_span_error_on_write_failure(otel_capture, tmp_path):
+    from bunnyland.core import WorldActor
+    from bunnyland.persistence import WorldMeta, save_world
+
+    span_exporter, _reader = otel_capture
+    actor = WorldActor()
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("file")
+
+    with pytest.raises(OSError):
+        save_world(actor, blocked_parent / "world.json", meta=WorldMeta(seed="broken"))
+
+    save_span = _spans_by_name(span_exporter)["world.save"]
+    assert _span_status_name(save_span) == "ERROR"
+    assert save_span.status.description
+
+
+@pytestmark_otel
+async def test_mcp_save_world_admin_traces_status(otel_capture, monkeypatch, tmp_path):
+    from bunnyland.mcp.server import create_bunnyland_mcp_app
+    from bunnyland.persistence import WorldMeta
+
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: types.SimpleNamespace(resources=None)
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    class FakeFastMCP:
+        def __init__(self, *_args, **_kwargs):
+            self._mcp_server = FakeLowServer()
+
+        def tool(self):
+            def decorate(func):
+                registered_tools[func.__name__] = func
+                return func
+
+            return decorate
+
+        def resource(self, _uri, **_kwargs):
+            return lambda func: func
+
+        def streamable_http_app(self):
+            return types.SimpleNamespace()
+
+    fastmcp_module = types.ModuleType("mcp.server.fastmcp")
+    exceptions_module = types.ModuleType("mcp.server.fastmcp.exceptions")
+    fastmcp_module.FastMCP = FakeFastMCP
+    exceptions_module.ToolError = RuntimeError
+    monkeypatch.setitem(sys.modules, "mcp", types.ModuleType("mcp"))
+    monkeypatch.setitem(sys.modules, "mcp.server", types.ModuleType("mcp.server"))
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
+
+    async def unused(*_args, **_kwargs):
+        raise AssertionError("not used by save_world_admin")
+
+    path = tmp_path / "world.json"
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        admin_token="secret",
+        save_path=path,
+        patch_world=unused,
+        generate_world=unused,
+        generation_status=unused,
+        generate_room=unused,
+        generate_character=unused,
+        generate_item=unused,
+        generate_event=unused,
+    )
+
+    saved = await registered_tools["save_world_admin"](admin_token="secret")
+
+    assert saved["path"] == str(path)
+    assert path.exists()
+    spans = _spans_by_name(span_exporter)
+    assert _span_status_name(spans["mcp.save_world_admin"]) == "OK"
+    assert _span_status_name(spans["world.save"]) == "OK"
+    assert spans["world.save"].attributes["path"] == str(path)
+
+
+@pytestmark_otel
 async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
