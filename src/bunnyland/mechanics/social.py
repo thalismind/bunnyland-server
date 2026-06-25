@@ -363,7 +363,7 @@ def obligations_for(
             obligations.append((entity, component))
     return sorted(
         obligations,
-        key=lambda item: (item[1].created_at_epoch, item[0].id),
+        key=lambda item: (item[1].created_at_epoch, str(item[0].id)),
         reverse=True,
     )
 

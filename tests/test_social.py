@@ -826,6 +826,36 @@ def test_obligations_for_skips_obligations_without_the_character():
     assert obligations_for(world, bystander.id) == []
 
 
+def test_obligations_for_orders_tied_epochs_without_entity_id_comparison():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    first = create_obligation(
+        world,
+        kind="promise",
+        text="first promise",
+        debtor_id=scenario.character,
+        creditor_id=hazel,
+        source_event_id="src-first",
+        created_at_epoch=1,
+    )
+    second = create_obligation(
+        world,
+        kind="promise",
+        text="second promise",
+        debtor_id=scenario.character,
+        creditor_id=hazel,
+        source_event_id="src-second",
+        created_at_epoch=1,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert {entity for entity, _component in obligations_for(world, scenario.character)} == {
+        first,
+        second,
+    }
+
+
 def test_conversation_line_skips_invalid_targets():
     # Unparseable, self, and missing targets are all skipped; only the valid listener learns.
     scenario, hazel = _scenario_with_listener()
