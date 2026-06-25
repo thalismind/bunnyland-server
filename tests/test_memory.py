@@ -592,6 +592,29 @@ def test_take_note_rejects_blank_text_and_bad_memory_scopes():
     assert handler.execute(ctx, shared_missing).reason == "shared collection is required"
 
 
+def test_take_note_defaults_null_and_blank_scope_to_private():
+    scenario, store = memory_scenario()
+    ctx = handler_context(scenario)
+    handler = TakeNoteHandler(store)
+
+    for scope in (None, ""):
+        command = build_submitted_command(
+            character_id=str(scenario.character),
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="take-note",
+            cost=CommandCost(focus=1),
+            lane=Lane.FOCUS,
+            payload={"text": f"note with scope {scope!r}", "scope": scope},
+        )
+
+        result = handler.execute(ctx, command)
+
+        assert result.ok is True
+        assert result.events[0].scope == "private"
+        assert result.events[0].collection == "juniper"
+
+
 def test_shared_collection_defaults_when_profile_has_one_shared_collection():
     scenario, store = memory_scenario()
     character = scenario.actor.world.get_entity(scenario.character)

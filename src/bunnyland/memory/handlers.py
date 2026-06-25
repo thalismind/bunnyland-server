@@ -38,7 +38,10 @@ def _collection(ctx: HandlerContext, character_id, payload: Mapping[str, Any]) -
     if not character.has_component(MemoryProfileComponent):
         raise ValueError("character has no memory profile")
     profile = character.get_component(MemoryProfileComponent)
-    scope = str(payload.get("scope", "private")).strip().lower()
+    raw_scope = payload.get("scope")
+    scope = str(raw_scope).strip().lower() if raw_scope is not None else ""
+    if not scope:
+        scope = "private"
     if scope == "private":
         return profile.vector_collection, "private"
     if scope != "shared":
