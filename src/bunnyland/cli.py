@@ -165,6 +165,15 @@ def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[Worl
 def configure_memory_backend(actor: WorldActor, backend: str, path: str | None = None) -> None:
     if backend == "in-memory":
         return
+    if backend == "json":
+        if path is None:
+            raise RuntimeError(
+                "json memory backend requires --memory-path or --save to choose a file"
+            )
+        from .memory.jsonfile import JsonMemoryStore
+
+        install_memory(actor, JsonMemoryStore(path))
+        return
     if backend != "chroma":
         raise ValueError(f"unknown memory backend {backend!r}")
     from .memory.chroma import ChromaMemoryStore
@@ -175,10 +184,14 @@ def configure_memory_backend(actor: WorldActor, backend: str, path: str | None =
 def _resolve_memory_path(args) -> str | None:
     if args.memory_path:
         return args.memory_path
-    if args.memory_backend != "chroma" or not args.save:
+    if not args.save:
         return None
     save_path = Path(args.save)
-    return str(save_path.with_name(f"{save_path.stem}.memory") / "chroma")
+    if args.memory_backend == "chroma":
+        return str(save_path.with_name(f"{save_path.stem}.memory") / "chroma")
+    if args.memory_backend == "json":
+        return str(save_path.with_name(f"{save_path.stem}.memory.json"))
+    return None
 
 
 def _env_int(name: str) -> int | None:
@@ -796,14 +809,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     serve.add_argument(
         "--memory-backend",
-        choices=("in-memory", "chroma"),
+        choices=("in-memory", "chroma", "json"),
         default="in-memory",
         help="memory store backend for notes and remember/search",
     )
     serve.add_argument(
         "--memory-path",
         default=None,
-        help="persistent Chroma directory when --memory-backend=chroma",
+        help=(
+            "persistent Chroma directory when --memory-backend=chroma, "
+            "or JSON file when --memory-backend=json"
+        ),
     )
     serve.add_argument("--save", default=None, help="save the world to this path on exit")
     serve.add_argument(

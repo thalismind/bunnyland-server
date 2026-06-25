@@ -882,6 +882,36 @@ def test_resolve_memory_path_keeps_chroma_ephemeral_without_save():
     assert cli._resolve_memory_path(_serve_args(memory_backend="chroma")) is None
 
 
+def test_resolve_memory_path_derives_json_file_from_save(tmp_path):
+    save_path = tmp_path / "worlds" / "main.json"
+
+    resolved = cli._resolve_memory_path(
+        _serve_args(memory_backend="json", save=str(save_path))
+    )
+
+    assert resolved == str(tmp_path / "worlds" / "main.memory.json")
+
+
+def test_resolve_memory_path_keeps_json_unset_without_save():
+    assert cli._resolve_memory_path(_serve_args(memory_backend="json")) is None
+
+
+def test_configure_memory_backend_installs_json_store(tmp_path):
+    actor = WorldActor()
+    path = tmp_path / "world.memory.json"
+
+    configure_memory_backend(actor, "json", str(path))
+
+    actor.memory_store.add("juniper", text="remembered")
+    assert path.exists()
+    assert "take-note" in actor.available_command_types()
+
+
+def test_configure_memory_backend_json_requires_path():
+    with pytest.raises(RuntimeError, match="json memory backend requires"):
+        configure_memory_backend(WorldActor(), "json")
+
+
 async def test_run_with_optional_discord_returns_runtime_and_closes_bot():
     class FakeBot:
         def __init__(self) -> None:

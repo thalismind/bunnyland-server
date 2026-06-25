@@ -41,6 +41,7 @@ from bunnyland.memory.handlers import (
     RememberHandler,
     TakeNoteHandler,
 )
+from bunnyland.memory.jsonfile import JsonMemoryStore
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 
 HOUR = 3600.0
@@ -750,6 +751,75 @@ def test_inmemory_store_update_document_accepts_metadata_tag_shapes():
     entries = {entry.id: entry for entry in store.search("c", mode="recent")}
     assert entries[string_tags.id].tags == ("alpha", "beta")
     assert entries[scalar_tags.id].tags == ()
+
+
+def test_json_store_persists_and_reloads_across_instances(tmp_path):
+    path = tmp_path / "nested" / "world.memory.json"
+    store = JsonMemoryStore(path)
+    first = store.add("juniper", text="the basin water is unsafe", created_at_epoch=1)
+    store.add("juniper", text="berries are tasty", tags=("food",), created_at_epoch=2)
+
+    # The single JSON file is written eagerly and groups entries by collection.
+    assert path.exists()
+
+    reloaded = JsonMemoryStore(path)
+    recent = reloaded.search("juniper", mode="recent")
+    assert [entry.text for entry in recent] == [
+        "berries are tasty",
+        "the basin water is unsafe",
+    ]
+    keyword = reloaded.search("juniper", query="water", mode="vector", limit=5)
+    assert [entry.id for entry in keyword] == [first.id]
+    assert reloaded.search("juniper", query="food", mode="keyword")[0].tags == ("food",)
+
+
+def test_json_store_load_skips_missing_file(tmp_path):
+    store = JsonMemoryStore(tmp_path / "absent.json")
+    assert store.search("juniper", mode="recent") == []
+
+
+def test_json_store_delete_only_persists_on_removal(tmp_path):
+    path = tmp_path / "world.memory.json"
+    store = JsonMemoryStore(path)
+    entry = store.add("juniper", text="keep me", created_at_epoch=1)
+
+    assert store.delete("juniper", "no-such-id") is False
+    assert store.delete("juniper", entry.id) is True
+
+    assert JsonMemoryStore(path).search("juniper", mode="recent") == []
+
+
+def test_json_store_documents_round_trip_through_file(tmp_path):
+    path = tmp_path / "world.memory.json"
+    store = JsonMemoryStore(path)
+    entry = store.add("juniper", text="old", tags=("tag",), created_at_epoch=1)
+    store.create_document(
+        "juniper",
+        document="created",
+        metadata={"tags": "new, note", "created_at_epoch": 3, "source": "admin"},
+    )
+    assert (
+        store.update_document(
+            "juniper",
+            entry.id,
+            document="edited",
+            metadata={"tags": ["edited"], "created_at_epoch": 2, "source": "admin"},
+        )
+        is not None
+    )
+    assert store.update_document("juniper", "missing", document="x", metadata={}) is None
+
+    documents = {doc.document: doc for doc in JsonMemoryStore(path).list_documents("juniper")}
+    assert documents["edited"].metadata == {
+        "tags": ["edited"],
+        "created_at_epoch": 2,
+        "source": "admin",
+    }
+    assert documents["created"].metadata == {
+        "tags": ["new", "note"],
+        "created_at_epoch": 3,
+        "source": "admin",
+    }
 
 
 def test_chroma_store_delete_removes_existing_note():
