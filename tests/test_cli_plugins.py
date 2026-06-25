@@ -853,6 +853,35 @@ def test_configure_memory_backend_rejects_unknown_backend():
         configure_memory_backend(WorldActor(), "disk")
 
 
+def test_resolve_memory_path_derives_chroma_path_from_save(tmp_path):
+    save_path = tmp_path / "worlds" / "main.json"
+
+    resolved = cli._resolve_memory_path(
+        _serve_args(memory_backend="chroma", save=str(save_path))
+    )
+
+    assert resolved == str(tmp_path / "worlds" / "main.memory" / "chroma")
+
+
+def test_resolve_memory_path_prefers_explicit_memory_path(tmp_path):
+    save_path = tmp_path / "worlds" / "main.json"
+    memory_path = tmp_path / "custom-memory"
+
+    resolved = cli._resolve_memory_path(
+        _serve_args(
+            memory_backend="chroma",
+            memory_path=str(memory_path),
+            save=str(save_path),
+        )
+    )
+
+    assert resolved == str(memory_path)
+
+
+def test_resolve_memory_path_keeps_chroma_ephemeral_without_save():
+    assert cli._resolve_memory_path(_serve_args(memory_backend="chroma")) is None
+
+
 async def test_run_with_optional_discord_returns_runtime_and_closes_bot():
     class FakeBot:
         def __init__(self) -> None:
@@ -1064,6 +1093,7 @@ def test_configure_memory_backend_can_install_chroma(monkeypatch, tmp_path):
 def test_configure_actor_backends_applies_lifesim_and_reports_memory_backend(
     monkeypatch,
     capsys,
+    tmp_path,
 ):
     calls = {}
 
@@ -1077,11 +1107,15 @@ def test_configure_actor_backends_applies_lifesim_and_reports_memory_backend(
     monkeypatch.setattr(cli, "configure_lifesim_aging", fake_configure_lifesim_aging)
     monkeypatch.setattr(cli, "configure_memory_backend", fake_configure_memory_backend)
 
-    cli._configure_actor_backends(actor, _serve_args(memory_backend="chroma"), True)
+    save_path = tmp_path / "worlds" / "main.json"
+    cli._configure_actor_backends(
+        actor, _serve_args(memory_backend="chroma", save=str(save_path)), True
+    )
 
     assert calls["lifesim"] == (actor, True)
-    assert calls["memory"] == (actor, "chroma", None)
-    assert "Using 'chroma' memory backend." in capsys.readouterr().out
+    expected_memory_path = str(tmp_path / "worlds" / "main.memory" / "chroma")
+    assert calls["memory"] == (actor, "chroma", expected_memory_path)
+    assert f"Using 'chroma' memory backend at {expected_memory_path}." in capsys.readouterr().out
 
 
 def test_configure_actor_backends_converts_memory_runtime_errors(monkeypatch):

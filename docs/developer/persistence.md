@@ -64,13 +64,17 @@ If the request uses `"save": true`, the completed replacement is written to the 
 | Persisted                                              | Not persisted                              |
 |--------------------------------------------------------|--------------------------------------------|
 | All entities, components, edges (rooms, items, characters, controllers) | Volatile command queues / inbox |
-| The game clock (epoch) and per-character needs/moods   | Private notes in the memory store*         |
+| The game clock (epoch) and per-character needs/moods   | In-memory private notes and recall data |
 | Seed, generation prompt, and generator name            | Plugin code (re-applied from `--plugin`/`--module` on load) |
 | Shared world-history records and their actor/target links | Narration-only prose that was never committed to ECS |
+| Chroma private notes and recall data, when `--memory-backend=chroma` is configured | |
 
-\* Vector/notes memory lives in a separate store; persisting it is tracked separately (see
-`PLAN.md`). Plugins are *code*, not data: load re-applies the same plugins, so launch a
-reload with the same `--plugin`/`--module` flags you generated with.
+Chroma memory is stored outside the world JSON file. If `--memory-backend=chroma` is used
+without `--memory-path`, and the server also has `--save worlds/marsh.json`, memory is
+persisted beside the save at `worlds/marsh.memory/chroma`. Set `--memory-path` to choose a
+different Chroma directory. The `in-memory` backend is still non-persistent. Plugins are
+*code*, not data: load re-applies the same plugins, so launch a reload with the same
+`--plugin`/`--module` flags you generated with.
 
 World history is normal ECS state (`WorldHistoryRecordComponent`, `HistoryActor`, and
 `HistoryTarget`). Durable marks are normal ECS state too (`PhysicalMarkComponent` and

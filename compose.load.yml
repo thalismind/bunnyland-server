@@ -7,6 +7,7 @@ services:
         set -- bunnyland serve
         llm_provider="$${BUNNYLAND_LLM_PROVIDER:-ollama}"
         worldgen_provider="$${BUNNYLAND_WORLDGEN_PROVIDER:-$$llm_provider}"
+        memory_backend="$${BUNNYLAND_MEMORY_BACKEND:-in-memory}"
         if [ "$${BUNNYLAND_ENABLE_LLM:-0}" = "1" ]; then
           set -- "$$@" --llm --llm-provider "$$llm_provider" --worldgen-provider "$$worldgen_provider" --worldgen-model "$${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
         elif [ "$${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}" = "1" ]; then
@@ -20,6 +21,10 @@ services:
         fi
         if [ "$${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}" = "1" ]; then
           set -- "$$@" --character-chat
+        fi
+        set -- "$$@" --memory-backend "$$memory_backend"
+        if [ -n "$${BUNNYLAND_MEMORY_PATH:-}" ]; then
+          set -- "$$@" --memory-path "$${BUNNYLAND_MEMORY_PATH}"
         fi
         exec "$$@" \
           --load "$${BUNNYLAND_WORLD_FILE:-/data/worlds/main.json}" \

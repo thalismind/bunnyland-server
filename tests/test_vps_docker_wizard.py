@@ -107,6 +107,33 @@ def _run_wizard(
     )
 
 
+def test_compose_startup_commands_wire_memory_env_flags() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    for compose_file in ("compose.yml", "compose.load.yml"):
+        text = (repo_root / compose_file).read_text()
+        assert 'memory_backend="$${BUNNYLAND_MEMORY_BACKEND:-in-memory}"' in text
+        assert 'set -- "$$@" --memory-backend "$$memory_backend"' in text
+        assert 'set -- "$$@" --memory-path "$${BUNNYLAND_MEMORY_PATH}"' in text
+
+    base_compose = (repo_root / "compose.yml").read_text()
+    assert "BUNNYLAND_MEMORY_BACKEND: ${BUNNYLAND_MEMORY_BACKEND:-in-memory}" in base_compose
+    assert "BUNNYLAND_MEMORY_PATH: ${BUNNYLAND_MEMORY_PATH:-}" in base_compose
+
+
+def test_vps_docker_setup_renders_memory_flags_and_env_values() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    text = (repo_root / "scripts" / "vps-docker-setup").read_text()
+
+    assert 'memory_backend="${BUNNYLAND_MEMORY_BACKEND:-in-memory}"' in text
+    assert 'memory_path="${BUNNYLAND_MEMORY_PATH:-}"' in text
+    assert "unsupported BUNNYLAND_MEMORY_BACKEND" in text
+    assert "--memory-backend %s" in text
+    assert "--memory-path %s" in text
+    assert "BUNNYLAND_MEMORY_BACKEND: %s" in text
+    assert "BUNNYLAND_MEMORY_PATH: %s" in text
+
+
 def test_vps_docker_wizard_uses_stdin_answers_for_prompted_setup_values(
     tmp_path: Path,
 ) -> None:

@@ -172,6 +172,15 @@ def configure_memory_backend(actor: WorldActor, backend: str, path: str | None =
     install_memory(actor, ChromaMemoryStore(persist_path=path))
 
 
+def _resolve_memory_path(args) -> str | None:
+    if args.memory_path:
+        return args.memory_path
+    if args.memory_backend != "chroma" or not args.save:
+        return None
+    save_path = Path(args.save)
+    return str(save_path.with_name(f"{save_path.stem}.memory") / "chroma")
+
+
 def _env_int(name: str) -> int | None:
     value = os.environ.get(name)
     if value is None or value.strip() == "":
@@ -388,14 +397,15 @@ def _configure_actor_backends(
     if lifesim_natural_aging is not None:
         configure_lifesim_aging(actor, natural_aging=lifesim_natural_aging)
 
+    memory_path = _resolve_memory_path(args)
     try:
-        configure_memory_backend(actor, args.memory_backend, args.memory_path)
+        configure_memory_backend(actor, args.memory_backend, memory_path)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
     if args.memory_backend != "in-memory":
         print(
             f"Using {args.memory_backend!r} memory backend"
-            f"{f' at {args.memory_path}' if args.memory_path else ''}."
+            f"{f' at {memory_path}' if memory_path else ''}."
         )
 
 

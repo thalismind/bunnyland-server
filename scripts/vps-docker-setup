@@ -57,6 +57,8 @@ image_workflows="${BUNNYLAND_IMAGE_WORKFLOWS:-}"
 tick_seconds="${BUNNYLAND_TICK_SECONDS:-30}"
 time_scale="${BUNNYLAND_TIME_SCALE:-1800}"
 autosave_every="${BUNNYLAND_AUTOSAVE_EVERY:-20}"
+memory_backend="${BUNNYLAND_MEMORY_BACKEND:-in-memory}"
+memory_path="${BUNNYLAND_MEMORY_PATH:-}"
 dry_run="${BUNNYLAND_SETUP_DRY_RUN:-0}"
 
 case "$llm_provider" in
@@ -72,6 +74,11 @@ esac
 case "$starter_pack" in
   "" | peaceful | fantastic | futuristic) ;;
   *) die "unsupported BUNNYLAND_STARTER_PACK: $starter_pack" ;;
+esac
+
+case "$memory_backend" in
+  in-memory | chroma) ;;
+  *) die "unsupported BUNNYLAND_MEMORY_BACKEND: $memory_backend" ;;
 esac
 
 # Optional public Discord invite shown on the web welcome page and client menu. Empty means
@@ -326,6 +333,10 @@ render_server_service() {
   else
     printf '          --generator %s \\\n' "$(shell_quote "$generator")"
   fi
+  printf '          --memory-backend %s \\\n' "$(shell_quote "$memory_backend")"
+  if [[ -n "$memory_path" ]]; then
+    printf '          --memory-path %s \\\n' "$(shell_quote "$memory_path")"
+  fi
   printf '          --ticks 0 \\\n'
   printf '          --tick-seconds %s \\\n' "$(shell_quote "$tick_seconds")"
   printf '          --time-scale %s \\\n' "$(shell_quote "$time_scale")"
@@ -344,6 +355,8 @@ render_server_service() {
   printf '      BUNNYLAND_TICK_SECONDS: %s\n' "$(yaml_quote "$tick_seconds")"
   printf '      BUNNYLAND_TIME_SCALE: %s\n' "$(yaml_quote "$time_scale")"
   printf '      BUNNYLAND_AUTOSAVE_EVERY: %s\n' "$(yaml_quote "$autosave_every")"
+  printf '      BUNNYLAND_MEMORY_BACKEND: %s\n' "$(yaml_quote "$memory_backend")"
+  printf '      BUNNYLAND_MEMORY_PATH: %s\n' "$(yaml_quote "$memory_path")"
   printf '      BUNNYLAND_ENABLE_LLM: %s\n' "$(yaml_quote "$enable_llm")"
   printf '      BUNNYLAND_LLM_PROVIDER: %s\n' "$(yaml_quote "$llm_provider")"
   printf '      BUNNYLAND_WORLDGEN_PROVIDER: %s\n' "$(yaml_quote "$worldgen_provider")"

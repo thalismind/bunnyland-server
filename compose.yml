@@ -10,6 +10,7 @@ services:
         set -- bunnyland serve
         llm_provider="$${BUNNYLAND_LLM_PROVIDER:-ollama}"
         worldgen_provider="$${BUNNYLAND_WORLDGEN_PROVIDER:-$$llm_provider}"
+        memory_backend="$${BUNNYLAND_MEMORY_BACKEND:-in-memory}"
         if [ "$${BUNNYLAND_ENABLE_LLM:-0}" = "1" ]; then
           set -- "$$@" --llm --llm-provider "$$llm_provider" --worldgen-provider "$$worldgen_provider" --worldgen-model "$${BUNNYLAND_WORLDGEN_MODEL:-deepseek-v4-pro}" --character-model "$${BUNNYLAND_CHARACTER_MODEL:-deepseek-v4-flash}"
         elif [ "$${BUNNYLAND_ENABLE_CHARACTER_CHAT:-0}" = "1" ]; then
@@ -26,6 +27,10 @@ services:
         fi
         if [ -n "$${BUNNYLAND_STARTER_PACK:-}" ]; then
           set -- "$$@" --starter-pack "$${BUNNYLAND_STARTER_PACK}"
+        fi
+        set -- "$$@" --memory-backend "$$memory_backend"
+        if [ -n "$${BUNNYLAND_MEMORY_PATH:-}" ]; then
+          set -- "$$@" --memory-path "$${BUNNYLAND_MEMORY_PATH}"
         fi
         exec "$$@" \
           --generator "$${BUNNYLAND_GENERATOR:-lifesim-demo}" \
@@ -45,6 +50,8 @@ services:
       BUNNYLAND_TICK_SECONDS: ${BUNNYLAND_TICK_SECONDS:-30}
       BUNNYLAND_TIME_SCALE: ${BUNNYLAND_TIME_SCALE:-1800}
       BUNNYLAND_AUTOSAVE_EVERY: ${BUNNYLAND_AUTOSAVE_EVERY:-20}
+      BUNNYLAND_MEMORY_BACKEND: ${BUNNYLAND_MEMORY_BACKEND:-in-memory}
+      BUNNYLAND_MEMORY_PATH: ${BUNNYLAND_MEMORY_PATH:-}
       BUNNYLAND_ENABLE_LLM: ${BUNNYLAND_ENABLE_LLM:-0}
       BUNNYLAND_LLM_PROVIDER: ${BUNNYLAND_LLM_PROVIDER:-ollama}
       BUNNYLAND_WORLDGEN_PROVIDER: ${BUNNYLAND_WORLDGEN_PROVIDER:-}
