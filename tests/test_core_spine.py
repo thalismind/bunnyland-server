@@ -11,6 +11,7 @@ from bunnyland.claims import (
     ClaimSecretRegistry,
     add_claim,
     character_has_claim,
+    claim_client_matches,
     claim_matches,
     claimable_characters,
     claimed_character_for,
@@ -637,18 +638,18 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
     assert claim_matches(claim, "web", "client")
     assert not claim_matches(claim, "web", "other")
     assert not claim_matches(claim, "mcp", "client")
+    assert claim_client_matches(claim, " client ")
+    assert not claim_client_matches(claim, "other")
     assert character_has_claim(scenario.actor, character)
     assert claimable_characters(scenario.actor, [character], allow_child_claims=True) == []
     loose = spawn_entity(scenario.actor.world, [CharacterComponent()])
     assert character_has_claim(scenario.actor, loose) is False
     assert claimed_character_for(
         scenario.actor,
-        client_kind="WEB",
         client_id=" client ",
     ) == (character, web, character.get_relationships(ControlledBy)[0][0], claim)
     assert claimed_character_for(
         scenario.actor,
-        client_kind="web",
         client_id="missing",
     ) is None
     ensure_claim_secret(registry, claim, claim_id="claim-1", claim_secret=secret)
@@ -660,6 +661,11 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
 
     registry.clear()
     assert not registry.has_secret(claim.claim_id)
+    replacement = registry.issue(claim.claim_id)
+    with pytest.raises(ValueError, match="claim secret already exists"):
+        registry.issue(claim.claim_id)
+    assert registry.secret(claim.claim_id) == replacement
+    registry.clear()
     kept = add_claim(
         spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="kept")]),
         client_kind="web",
@@ -672,7 +678,6 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
     assert not web.has_component(ClaimedComponent)
     assert claimed_character_for(
         scenario.actor,
-        client_kind="web",
         client_id="kept",
     ) is None
 

@@ -487,6 +487,12 @@ class LocalBackend(Backend):
         so the offline dispatch stops driving it."""
         async with self.actor._lock:
             stored = load_claim_control(self.client_id, player_id)
+            stored_valid = (
+                stored
+                if stored
+                and self._claim_secrets.validate(stored.claim_id, stored.claim_secret)
+                else None
+            )
             if self._controller is None:
                 self._controller = spawn_entity(
                     self.actor.world,
@@ -498,12 +504,12 @@ class LocalBackend(Backend):
                 client_id=self.client_id,
                 character_id=player_id,
                 label="tui",
-                claim_id=stored.claim_id if stored else None,
+                claim_id=stored_valid.claim_id if stored_valid else None,
                 now_unix=int(time.time()),
             )
             claim_secret = (
-                stored.claim_secret
-                if stored and self._claim_secrets.validate(claim.claim_id, stored.claim_secret)
+                stored_valid.claim_secret
+                if stored_valid is not None
                 else self._claim_secrets.issue(claim.claim_id)
             )
             apply_claim_timeout_settings(

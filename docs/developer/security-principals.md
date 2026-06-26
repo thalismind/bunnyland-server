@@ -14,10 +14,12 @@ Use these suffixes exactly:
 
 The current claim fields are:
 
-- `client_kind`: public client category, such as `web`, `mcp`, or `discord`.
+- `client_kind`: public current client category, such as `web`, `mcp`, or `discord`.
+  This is metadata about the attached client/controller kind, not the ownership proof.
 - `client_id`: public persistent client identifier. This is safe to store in ECS and
-  show in admin snapshots.
-- `claim_id`: public claim identifier. This is safe to store in ECS and persist.
+  show in admin snapshots. The same `client_id` can move between client kinds.
+- `claim_id`: public server-issued claim identifier. This is safe to store in ECS and
+  persist. Clients must never choose claim IDs for new claims.
 - `claim_secret`: private bearer secret for the claim. This is only held by the client
   and the server's in-memory claim-secret registry.
 
@@ -42,7 +44,7 @@ Controller + ClaimedComponent(client_kind, client_id, claim_id, character_id)
 The client and claim secret live outside ECS:
 
 ```text
-(client_kind, client_id, claim_id) -> claim_secret
+(client_id, claim_id) -> claim_secret
 ```
 
 The `claim_secret` mapping is process-local in v1. Because the world is persisted but
@@ -54,14 +56,22 @@ now, while preserving the rule that secrets never enter persisted ECS data.
 
 Private character data requires all of:
 
-- `client_kind`
 - `client_id`
 - `claim_id`
 - `claim_secret`
 
+`client_kind` is not an authorization factor. A valid `client_id`, `claim_id`, and
+`claim_secret` can move the claim between web, MCP, Discord, and future client kinds.
+New claims always receive a server-generated `claim_id`; client-supplied claim IDs are
+accepted only when validating an existing claim.
+
 Private data includes room perspective, queued commands, MCP prompt/context, scene image
 requests, command submission, and any character-private state. Admin endpoints remain
 privileged separately.
+
+External command endpoints must reject unclaimed characters. In-world controllers such
+as LLM, scripted, and behavioral controllers act through the world actor rather than
+through bearer-secret client endpoints.
 
 Send `claim_secret` in a header, cookie, or separate MCP tool parameter. Never put it in a
 query string, ECS component, persisted world file, or generic command payload object.

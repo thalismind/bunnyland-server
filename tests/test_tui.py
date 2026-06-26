@@ -707,7 +707,8 @@ def test_assign_web_controller_reports_web_kind():
 
 
 # ── local backend (host a world in-process) ───────────────────────────────────
-async def test_local_backend_hosts_claims_and_submits():
+async def test_local_backend_hosts_claims_and_submits(monkeypatch, tmp_path):
+    monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
     backend = LocalBackend(
         generator="apartment-demo",
         autorun=False,
@@ -721,8 +722,14 @@ async def test_local_backend_hosts_claims_and_submits():
         assert world.rooms() and world.characters()
 
         player = world.characters()[0]["id"]
+        save_claim_control(
+            "local-client",
+            player,
+            ControlClaim("controller:old", 1, "client-chosen-claim", "stale-secret"),
+        )
         control = await backend.claim(player, world)
         assert control is not None
+        assert control.claim_id != "client-chosen-claim"
         controller_id, _generation = control
         # The claim attaches our reusable web controller.
         assert backend.actor._controller_kind(backend._controller.id) == "web"

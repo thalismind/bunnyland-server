@@ -18,6 +18,7 @@ from bunnyland.core import (
     ActionDefinition,
     BehaviorControllerComponent,
     CharacterComponent,
+    ClaimedComponent,
     ContainerComponent,
     ContainmentMode,
     Contains,
@@ -1823,13 +1824,22 @@ def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
+    claimed = client.post(
+        "/world/controllers/web/claim",
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+        },
+    ).json()
 
     response = client.post(
         "/world/commands",
+        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
         json={
             "character_id": str(scenario.character),
-            "controller_id": str(scenario.controller),
-            "controller_generation": scenario.generation,
+            "controller_id": claimed["controller_id"],
+            "controller_generation": claimed["controller_generation"],
+            "claim_id": claimed["claim_id"],
             "command_type": "move",
             "payload": {"direction": "north"},
             "cost": {"action": 1},
@@ -1855,10 +1865,17 @@ def test_fastapi_cancel_queued_command_removes_it(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
+    claimed = client.post(
+        "/world/controllers/web/claim",
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+        },
+    ).json()
     command = build_submitted_command(
         character_id=str(scenario.character),
-        controller_id=str(scenario.controller),
-        controller_generation=scenario.generation,
+        controller_id=claimed["controller_id"],
+        controller_generation=claimed["controller_generation"],
         command_type="move",
         payload={"direction": "north"},
         cost=CommandCost(action=1),
@@ -1871,11 +1888,17 @@ def test_fastapi_cancel_queued_command_removes_it(scenario):
     response = client.delete(
         f"/world/character/{scenario.character}/commands/cmd-cancel-me",
         params={
-            "controller_id": str(scenario.controller),
-            "controller_generation": scenario.generation,
+            "controller_id": claimed["controller_id"],
+            "controller_generation": claimed["controller_generation"],
+            "claim_id": claimed["claim_id"],
         },
+        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
     )
-    queued = client.get(f"/world/character/{scenario.character}/commands")
+    queued = client.get(
+        f"/world/character/{scenario.character}/commands",
+        params={"claim_id": claimed["claim_id"]},
+        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+    )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -1892,7 +1915,9 @@ def test_fastapi_cancel_queued_command_removes_it(scenario):
         params={
             "controller_id": str(scenario.controller),
             "controller_generation": scenario.generation + 1,
+            "claim_id": claimed["claim_id"],
         },
+        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
     )
     assert stale.status_code == 409
 
@@ -2247,6 +2272,7 @@ async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
             character_id=str(scenario.character),
             client_id="client-a",
             label="toon",
+            claim_id="client-chosen-claim",
             fallback_controller="llm",
             timeout_seconds=600,
         )
@@ -2264,6 +2290,7 @@ async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
     assert first.controller_id == second.controller_id
     assert first.controller_generation == second.controller_generation
     assert first.controller_generation == scenario.generation + 1
+    assert first.claim_id != "client-chosen-claim"
 
     controller = scenario.actor.world.get_entity(parse_entity_id(first.controller_id))
     assert controller.get_component(WebControllerComponent).client_id == "client-a"
@@ -2331,17 +2358,27 @@ async def test_web_controller_claim_rejects_active_claim_conflicts(scenario):
         claim_id=claimed.claim_id,
     )
 
-    with pytest.raises(Exception) as non_web_claim:
+    moved = await route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            claim_id=claimed.claim_id,
+        ),
+        claim_secret=claimed.claim_secret,
+    )
+    assert moved.claim_id == claimed.claim_id
+    moved_controller = scenario.actor.world.get_entity(parse_entity_id(moved.controller_id))
+    assert moved_controller.get_component(ClaimedComponent).client_kind == "web"
+
+    with pytest.raises(Exception) as other_client:
         await route.endpoint(
             WebControllerClaimRequest(
                 character_id=str(scenario.character),
-                client_id="client-a",
-                claim_id=claimed.claim_id,
+                client_id="client-b",
             ),
-            claim_secret=claimed.claim_secret,
         )
-    assert non_web_claim.value.status_code == 409
-    assert non_web_claim.value.detail == "character is already claimed"
+    assert other_client.value.status_code == 409
+    assert other_client.value.detail == "character is already claimed"
 
 
 async def test_web_controller_claim_ignores_client_controller_claimed_for_other_character(
@@ -2467,17 +2504,19 @@ async def test_web_command_submission_with_no_controller_returns_stale_generatio
     character = scenario.actor.world.get_entity(scenario.character)
     character.remove_relationship(ControlledBy, scenario.controller)
 
-    response = await submit_route.endpoint(
-        CommandRequest(
-            character_id=str(scenario.character),
-            controller_id=str(scenario.controller),
-            controller_generation=scenario.generation,
-            command_type="say",
-            payload={"text": "hello"},
+    with pytest.raises(Exception) as exc:
+        await submit_route.endpoint(
+            CommandRequest(
+                character_id=str(scenario.character),
+                controller_id=str(scenario.controller),
+                controller_generation=scenario.generation,
+                command_type="say",
+                payload={"text": "hello"},
+            )
         )
-    )
 
-    assert response.reason == "no handler for say"
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "character is not claimed"
 
 
 async def test_web_command_submission_keeps_active_matching_web_claim(scenario):
@@ -2512,21 +2551,25 @@ async def test_web_command_submission_keeps_active_matching_web_claim(scenario):
     ) == claimed.controller_generation
 
 
-async def test_web_command_submission_ignores_unclaimed_and_non_web_claims(scenario):
+async def test_web_command_submission_rejects_unclaimed_and_resumes_portable_claims(
+    scenario,
+):
     app = create_app(scenario.actor)
     submit_route = next(route for route in app.routes if route.path == "/world/commands")
     character = scenario.actor.world.get_entity(scenario.character)
 
-    no_claim = await submit_route.endpoint(
-        CommandRequest(
-            character_id=str(scenario.character),
-            controller_id=str(scenario.controller),
-            controller_generation=scenario.generation,
-            command_type="say",
-            payload={"text": "hello"},
+    with pytest.raises(Exception) as no_claim:
+        await submit_route.endpoint(
+            CommandRequest(
+                character_id=str(scenario.character),
+                controller_id=str(scenario.controller),
+                controller_generation=scenario.generation,
+                command_type="say",
+                payload={"text": "hello"},
+            )
         )
-    )
-    assert no_claim.reason == "no handler for say"
+    assert no_claim.value.status_code == 403
+    assert no_claim.value.detail == "character is not claimed"
 
     claim_route = next(
         route for route in app.routes if route.path == "/world/controllers/web/claim"
@@ -2564,7 +2607,11 @@ async def test_web_command_submission_ignores_unclaimed_and_non_web_claims(scena
     )
 
     assert non_web.reason == "no handler for say"
-    assert character.get_relationships(ControlledBy)[0][1] == actor_controller.id
+    active_controller_id = character.get_relationships(ControlledBy)[0][1]
+    active_controller = scenario.actor.world.get_entity(active_controller_id)
+    assert active_controller.id != actor_controller.id
+    assert active_controller.has_component(WebControllerComponent)
+    assert active_controller.get_component(ClaimedComponent).client_kind == "web"
 
 
 async def test_web_command_submission_rejects_mismatched_active_web_claim(scenario):
@@ -3339,14 +3386,23 @@ def test_fastapi_cancel_command_reports_not_found_when_command_absent(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
+    claimed = client.post(
+        "/world/controllers/web/claim",
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+        },
+    ).json()
 
     # Valid character + generation but no such queued command -> ok=False, "command not found".
     response = client.delete(
         f"/world/character/{scenario.character}/commands/never-queued",
         params={
-            "controller_id": str(scenario.controller),
-            "controller_generation": scenario.generation,
+            "controller_id": claimed["controller_id"],
+            "controller_generation": claimed["controller_generation"],
+            "claim_id": claimed["claim_id"],
         },
+        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
     )
 
     assert response.status_code == 200

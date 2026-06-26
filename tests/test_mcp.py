@@ -11,6 +11,7 @@ import pytest
 from pydantic import AnyUrl
 
 import bunnyland.mcp.server as mcp_server
+from bunnyland.claims import ClaimSecretRegistry, add_claim
 from bunnyland.cli import select_plugins
 from bunnyland.core import (
     CharacterComponent,
@@ -20,6 +21,7 @@ from bunnyland.core import (
     LLMControllerComponent,
     MCPControllerComponent,
     SuspendedComponent,
+    WebControllerComponent,
     WorldActor,
     parse_entity_id,
     spawn_entity,
@@ -307,16 +309,54 @@ def test_assign_mcp_controller_claims_suspended_character():
     claimed = assign_mcp_controller(
         actor,
         client_id="client-a",
+        claim_id="client-chosen-claim",
         character_name="Juniper",
     )
 
     assert claimed["character_name"] == "Juniper"
+    assert claimed["claim_id"] != "client-chosen-claim"
     assert not character.has_component(SuspendedComponent)
     controller_id = character.get_relationships(ControlledBy)[0][1]
     controller = actor.world.get_entity(controller_id)
     mcp = controller.get_component(MCPControllerComponent)
     assert mcp.client_id == "client-a"
     assert mcp_controlled_character(actor, "client-a") == (character.id, controller_id, 0)
+
+
+def test_assign_mcp_controller_moves_portable_claim_from_web_controller():
+    actor = WorldActor()
+    registry = ClaimSecretRegistry()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    web = spawn_entity(actor.world, [WebControllerComponent(client_id="client-a")])
+    actor.assign_controller(character.id, web.id)
+    claim = add_claim(
+        web,
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(character.id),
+        claim_id="server-issued-claim",
+    )
+    secret = registry.issue(claim.claim_id)
+
+    moved = assign_mcp_controller(
+        actor,
+        claim_secrets=registry,
+        client_id="client-a",
+        claim_id="server-issued-claim",
+        claim_secret=secret,
+        character_name="Juniper",
+    )
+
+    controller = actor.world.get_entity(parse_entity_id(moved["controller_id"]))
+    assert moved["claim_id"] == "server-issued-claim"
+    assert controller.get_component(ClaimedComponent).client_kind == "mcp"
+    assert not web.has_component(ClaimedComponent)
 
 
 def test_assign_mcp_controller_skips_child_character_for_default_claim():

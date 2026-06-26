@@ -16,7 +16,7 @@ from ..claims import (
     CLIENT_KIND_WEB,
     ClaimSecretRegistry,
     add_claim,
-    claim_matches,
+    claim_client_matches,
     controller_claim,
     current_controller,
     ensure_claim_secret,
@@ -350,15 +350,20 @@ def create_app(
         *,
         claim_id: str | None = None,
         claim_secret: str | None = None,
-    ) -> None:
+        require_claimed: bool = False,
+    ):
         character = _character_entity(character_id)
         found = current_controller(actor, character)
         if found is None:
-            return
+            if require_claimed:
+                raise HTTPException(status_code=403, detail="character is not claimed")
+            return None
         controller, _edge = found
         claim = controller_claim(controller)
         if claim is None:
-            return
+            if require_claimed:
+                raise HTTPException(status_code=403, detail="character is not claimed")
+            return None
         try:
             ensure_claim_secret(
                 claim_secrets,
@@ -368,18 +373,10 @@ def create_app(
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return character, controller, claim
 
-    def _resume_web_claim_for_command(command):
-        character = _character_entity(command.character_id)
-        found = current_controller(actor, character)
-        if found is None:
-            return command
-        controller, _edge = found
-        claim = controller_claim(controller)
-        if claim is None:
-            return command
-        if claim.client_kind != CLIENT_KIND_WEB:
-            return command
+    def _resume_web_claim_for_command(command, claim_context):
+        character, controller, claim = claim_context
         if controller.has_component(WebControllerComponent):
             web = controller.get_component(WebControllerComponent)
             if web.client_id != claim.client_id:
@@ -395,6 +392,15 @@ def create_app(
                 [WebControllerComponent(client_id=claim.client_id, label=claim.label or "web")],
             )
         transfer_claim(controller, web_controller)
+        add_claim(
+            web_controller,
+            client_kind=CLIENT_KIND_WEB,
+            client_id=claim.client_id,
+            character_id=claim.character_id,
+            label=claim.label,
+            claim_id=claim.claim_id,
+            now_unix=claim.claimed_at_unix,
+        )
         generation = actor.assign_controller(character.id, web_controller.id)
         record_claim_activity(web_controller, now_unix=int(time.time()))
         if character.has_component(SuspendedComponent):
@@ -426,7 +432,7 @@ def create_app(
         claim = controller_claim(controller)
         if claim is None:
             raise HTTPException(status_code=409, detail="character is not claimed")
-        if not claim_matches(claim, CLIENT_KIND_WEB, client_id):
+        if not claim_client_matches(claim, client_id):
             raise HTTPException(status_code=409, detail="character is claimed by another client")
         try:
             ensure_claim_secret(
@@ -713,7 +719,12 @@ def create_app(
         claim_id: str | None = None,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> CommandCancelResponse:
-        _require_claim_secret(character_id, claim_id=claim_id, claim_secret=claim_secret)
+        _require_claim_secret(
+            character_id,
+            claim_id=claim_id,
+            claim_secret=claim_secret,
+            require_claimed=True,
+        )
         parsed_character = parse_entity_id(character_id)
         parsed_controller = parse_entity_id(controller_id)
         if parsed_controller is None or actor.current_generation(
@@ -731,14 +742,15 @@ def create_app(
         return CommandCancelResponse(ok=True, command_id=command_id, cancelled=True)
 
     async def _submit_command_request(request: CommandRequest) -> CommandResponse:
-        _require_claim_secret(
+        claim_context = _require_claim_secret(
             request.character_id,
             claim_id=request.claim_id,
             claim_secret=_claim_secret(request),
+            require_claimed=True,
         )
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
         async with actor._lock:
-            command = _resume_web_claim_for_command(command)
+            command = _resume_web_claim_for_command(command, claim_context)
         outcome = await actor.submit(command)
         return CommandResponse(
             queued=outcome.accepted,
@@ -804,11 +816,11 @@ def create_app(
                     if active_controller is not None
                     else None
                 )
-                claim_id = request.claim_id
+                claim_id = None
                 claim_secret = _claim_secret(request)
                 validated_claim_secret = False
                 if active_claim is not None:
-                    if not claim_matches(active_claim, CLIENT_KIND_WEB, client_id):
+                    if not claim_client_matches(active_claim, client_id):
                         raise HTTPException(
                             status_code=409,
                             detail="character is already claimed",

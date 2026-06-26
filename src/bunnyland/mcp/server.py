@@ -21,7 +21,7 @@ from ..claims import (
     CLIENT_KIND_MCP,
     ClaimSecretRegistry,
     add_claim,
-    claim_matches,
+    claim_client_matches,
     claimable_characters,
     claimed_character_for,
     controlled_character,
@@ -413,9 +413,10 @@ def assign_mcp_controller(
             active_controller = actor.world.get_entity(controller_id)
             break
     active_claim = controller_claim(active_controller) if active_controller is not None else None
+    issued_claim_id = None
     validated_claim_secret = False
     if active_claim is not None:
-        if not claim_matches(active_claim, CLIENT_KIND_MCP, client_id):
+        if not claim_client_matches(active_claim, client_id):
             raise RuntimeError("character is already claimed")
         try:
             ensure_claim_secret(
@@ -427,7 +428,7 @@ def assign_mcp_controller(
         except PermissionError as exc:
             raise RuntimeError(str(exc)) from exc
         validated_claim_secret = True
-        claim_id = active_claim.claim_id
+        issued_claim_id = active_claim.claim_id
         claim_secret = claim_secrets.secret(active_claim.claim_id)
 
     controller = _mcp_controller_for(actor, client_id)
@@ -448,7 +449,7 @@ def assign_mcp_controller(
         client_id=client_id,
         character_id=str(character.id),
         label=label,
-        claim_id=claim_id,
+        claim_id=issued_claim_id,
         now_unix=_now_unix(),
     )
     if (
@@ -497,7 +498,7 @@ def release_mcp_controller(
     identity = character.get_component(IdentityComponent)
     old_controller = actor.world.get_entity(old_controller_id)
     claim = controller_claim(old_controller)
-    if claim is None or not claim_matches(claim, CLIENT_KIND_MCP, client_id):
+    if claim is None or not claim_client_matches(claim, client_id):
         raise RuntimeError("client does not hold the claim for this character")
     try:
         ensure_claim_secret(
@@ -574,7 +575,6 @@ def release_mcp_claim(
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
     found = claimed_character_for(
         actor,
-        client_kind=CLIENT_KIND_MCP,
         client_id=client_id,
     )
     if found is None:
@@ -655,7 +655,6 @@ def _controlled_or_requested_character(
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
     found = claimed_character_for(
         actor,
-        client_kind=CLIENT_KIND_MCP,
         client_id=client_id,
     )
     if found is None:
@@ -830,7 +829,6 @@ def create_bunnyland_mcp_app(
     def client_events_resource(client_id: str) -> str:
         found = claimed_character_for(
             actor,
-            client_kind=CLIENT_KIND_MCP,
             client_id=client_id,
         )
         if found is None:

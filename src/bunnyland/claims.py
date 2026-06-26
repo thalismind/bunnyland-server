@@ -37,6 +37,8 @@ class ClaimSecretRegistry:
         self._secrets: dict[str, str] = {}
 
     def issue(self, claim_id: str) -> str:
+        if claim_id in self._secrets:
+            raise ValueError("claim secret already exists")
         secret = secrets.token_urlsafe(32)
         self._secrets[claim_id] = secret
         return secret
@@ -140,6 +142,10 @@ def claim_matches(claim: ClaimedComponent, client_kind: str, client_id: str) -> 
     )
 
 
+def claim_client_matches(claim: ClaimedComponent, client_id: str) -> bool:
+    return claim.client_id == client_id.strip()
+
+
 def ensure_claim_secret(
     registry: ClaimSecretRegistry,
     claim: ClaimedComponent,
@@ -221,7 +227,6 @@ def remove_claim(
 def claimed_character_for(
     actor: ActorContext,
     *,
-    client_kind: str,
     client_id: str,
 ) -> tuple[Any, Any, ControlledBy, ClaimedComponent] | None:
     parsed_client = client_id.strip()
@@ -232,7 +237,7 @@ def claimed_character_for(
             continue
         controller, edge = found
         claim = controller_claim(controller)
-        if claim is not None and claim_matches(claim, client_kind, parsed_client):
+        if claim is not None and claim_client_matches(claim, parsed_client):
             return character, controller, edge, claim
     return None
 
@@ -286,6 +291,7 @@ __all__ = [
     "CLIENT_KIND_WEB",
     "ClaimSecretRegistry",
     "add_claim",
+    "claim_client_matches",
     "claim_matches",
     "claimable_characters",
     "claimed_character_for",
