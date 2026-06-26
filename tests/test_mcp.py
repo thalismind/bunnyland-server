@@ -1664,6 +1664,63 @@ async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenar
     assert queued["queued"] is True
 
 
+@pytest.mark.parametrize("verb", ["take-control", "release-to-llm", "suspend", "resume"])
+async def test_mcp_send_command_rejects_control_verbs(monkeypatch, scenario, verb):
+    # send_command must not accept controller-changing verbs: they bypass the
+    # generation/ownership gates and would let a claim holder repoint their character at an
+    # arbitrary controller. (ToolError is monkeypatched to RuntimeError by the fake fastmcp.)
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(
+                resources=SimpleNamespace(subscribe=False, listChanged=False)
+            )
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    _install_fake_fastmcp(
+        monkeypatch, registered_tools=registered_tools, low_server=FakeLowServer()
+    )
+
+    async def boom(_request):
+        raise AssertionError("unused")
+
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        admin_token="secret",
+        patch_world=boom,
+        generate_world=boom,
+        generation_status=boom,
+        generate_room=boom,
+        generate_character=boom,
+        generate_item=boom,
+        generate_event=boom,
+    )
+
+    claimed = await registered_tools["claim_character"](
+        client_id="client-a",
+        character_name="Juniper",
+    )
+    other = spawn_entity(
+        scenario.actor.world, [WebControllerComponent(client_id="victim", label="other")]
+    )
+
+    with pytest.raises(RuntimeError, match="control verb"):
+        await registered_tools["send_command"](
+            client_id="client-a",
+            command_type=verb,
+            payload={"controller_id": str(other.id)},
+            **_claim_args(claimed),
+        )
+
+
 async def test_mcp_admin_header_fallback_when_request_is_absent(monkeypatch, scenario):
     registered_tools = {}
 
@@ -2323,13 +2380,13 @@ def test_world_overview_admin_tool_is_gated_and_returns_room_network(monkeypatch
 
 
 def test_admin_tool_authorizes_via_injected_header_without_arg(monkeypatch, scenario):
-    # The authenticating proxy injects X-Bunnyland-Admin-Token, so a proxied caller does not
+    # The authenticating proxy injects X-Bunnyland-Admin-Secret, so a proxied caller does not
     # pass admin_token: the tool authorizes from the header alone.
     tools = _capture_mcp_tools(
         monkeypatch,
         scenario.actor,
         admin_token="secret",
-        request_headers={"X-Bunnyland-Admin-Token": "secret"},
+        request_headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
 
     overview = tools["world_overview_admin"]()
@@ -2340,7 +2397,7 @@ def test_admin_tool_authorizes_via_injected_header_without_arg(monkeypatch, scen
         monkeypatch,
         scenario.actor,
         admin_token="secret",
-        request_headers={"X-Bunnyland-Admin-Token": "wrong"},
+        request_headers={"X-Bunnyland-Admin-Secret": "wrong"},
     )
     with pytest.raises(RuntimeError, match="invalid MCP admin token"):
         rejected["world_overview_admin"]()

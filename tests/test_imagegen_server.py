@@ -24,7 +24,7 @@ from bunnyland.server.app import create_app
 
 testclient = pytest.importorskip("fastapi.testclient")
 
-ADMIN = {"X-Bunnyland-Admin-Token": "secret"}
+ADMIN = {"X-Bunnyland-Admin-Secret": "secret"}
 
 
 class _FakeClient:

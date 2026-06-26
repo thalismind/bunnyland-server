@@ -138,7 +138,7 @@ A LoRA is an extra node inserted between the model loader and the samplers, with
 
 ## Admin controls
 
-With an admin token (`X-Bunnyland-Admin-Token`):
+With an admin token (`X-Bunnyland-Admin-Secret`):
 
 ```bash
 # Generate (or regenerate) an image for any entity or history record:

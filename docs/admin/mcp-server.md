@@ -43,13 +43,13 @@ https://sandbox.example.com/api/mcp
 ## Authentication
 
 There is a single admin secret, `BUNNYLAND_ADMIN_TOKEN` (also `--admin-token`), checked via
-the `X-Bunnyland-Admin-Token` header. It gates the snapshot/overview/DM projections, the
+the `X-Bunnyland-Admin-Secret` header. It gates the snapshot/overview/DM projections, the
 `/world/updates` stream, and the MCP `*_admin` tools.
 
 Two layers cooperate on the VPS Docker deployment:
 
 - nginx protects `/api/admin/`, `/api/mcp[/]`, and the admin world paths with one Basic-auth
-  realm (the world-editor htpasswd). After a login it injects `X-Bunnyland-Admin-Token`
+  realm (the world-editor htpasswd). After a login it injects `X-Bunnyland-Admin-Secret`
   before proxying, so a single browser login also authorizes the same-origin WebSocket.
 - The backend independently verifies that injected token, so reaching the app directly (not
   through nginx) still requires it.
@@ -227,7 +227,7 @@ indirectly through room events, nearby actors, conditions, and regenerated point
 
 ## Admin tools
 
-Admin tools authorize from the `X-Bunnyland-Admin-Token` header an authenticating proxy
+Admin tools authorize from the `X-Bunnyland-Admin-Secret` header an authenticating proxy
 injects, so a proxied client need not pass anything. The examples below show the explicit
 `admin_token` argument, which is the fallback for direct, non-proxied MCP clients.
 

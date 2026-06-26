@@ -289,8 +289,13 @@ def _client(scenario, tmp_path):
     testclient = pytest.importorskip("fastapi.testclient")
     from bunnyland.server.app import create_app
 
-    app = create_app(scenario.actor, definitions_path=str(tmp_path / "defs.json"))
-    return testclient.TestClient(app)
+    app = create_app(
+        scenario.actor,
+        definitions_path=str(tmp_path / "defs.json"),
+        admin_token="secret",
+    )
+    # The /admin/* surface is gated server-side; send the injected admin secret like nginx.
+    return testclient.TestClient(app, headers={"X-Bunnyland-Admin-Secret": "secret"})
 
 
 def test_rest_lists_and_registers_definitions(tmp_path):

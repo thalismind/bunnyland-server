@@ -300,7 +300,7 @@ The setup wizard can also prompt for these values. When enabled, setup writes
 (on both the server and the frontend, since nginx injects the token), starts `bunnyland
 serve` with `--mcp`, and keeps the server on the same private `8765` service port. The same
 token gates the admin world projections and the `/world/updates` map stream: nginx Basic-auth
-protects those paths under one realm and injects `X-Bunnyland-Admin-Token` after login, so a
+protects those paths under one realm and injects `X-Bunnyland-Admin-Secret` after login, so a
 single browser login also authorizes the same-origin WebSocket.
 
 The public MCP URL is:

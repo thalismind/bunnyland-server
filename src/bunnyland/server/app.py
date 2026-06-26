@@ -40,7 +40,7 @@ from ..core import (
 from ..core.claim_timeout import apply_claim_timeout_settings, record_claim_activity
 from ..core.controllers import ClaimedComponent, ClaimTimeoutComponent
 from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
-from ..core.world_actor import WorldActor
+from ..core.world_actor import CONTROL_COMMANDS, WorldActor
 from ..imagegen.media import MediaError, content_type_for
 from ..imagegen.scene import request_scene_image
 from ..imagegen.spec import ImagePurpose
@@ -147,14 +147,26 @@ if TYPE_CHECKING:
 # parameter as a query field, closing every connection with a 403. Optional dependency, so
 # fall back to ``None`` and raise a friendly error from ``create_app`` if it is missing.
 try:
-    from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
+    from fastapi import (
+        FastAPI,
+        Header,
+        HTTPException,
+        Request,
+        Response,
+        WebSocket,
+        WebSocketDisconnect,
+    )
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
 except ImportError:
-    FastAPI = Header = HTTPException = Response = None  # type: ignore[assignment, misc]
-    WebSocket = WebSocketDisconnect = CORSMiddleware = None  # type: ignore[assignment, misc]
+    FastAPI = Header = HTTPException = Request = Response = None  # type: ignore[assignment, misc]
+    WebSocket = WebSocketDisconnect = CORSMiddleware = JSONResponse = None  # type: ignore[assignment, misc]
 
 
 ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
+#: Header carrying the admin bearer secret. nginx injects it after Basic auth; it mirrors the
+#: player-facing ``X-Bunnyland-Claim-Secret`` naming. Compared case-insensitively on read.
+ADMIN_SECRET_HEADER = "X-Bunnyland-Admin-Secret"
 logger = logging.getLogger("bunnyland.server")
 GIT_HASH_ENV = "BUNNYLAND_GIT_HASH"
 
@@ -284,7 +296,7 @@ def create_app(
     async def world_snapshot(
         admin_token: str | None = Header(
             default=None,
-            alias="X-Bunnyland-Admin-Token",
+            alias=ADMIN_SECRET_HEADER,
         ),
     ) -> dict:
         # The raw ECS dump reveals the whole world; gate it like the DM/overview
@@ -335,6 +347,22 @@ def create_app(
             raise HTTPException(status_code=403, detail=f"{ADMIN_TOKEN_ENV} is not configured")
         if supplied != expected:
             raise HTTPException(status_code=403, detail="invalid admin token")
+
+    @app.middleware("http")
+    async def _enforce_admin_secret(request: Request, call_next):
+        # Single choke point for the whole /admin/* surface so a newly added admin route
+        # cannot silently ship unauthenticated. Routes that touch the claim graph
+        # (/admin/controllers/assign, /admin/world) are reassignment primitives, so this
+        # must fail closed: an unset BUNNYLAND_ADMIN_TOKEN rejects rather than opens. The
+        # privileged /world/{snapshot,dm,overview} projections and the /world/updates
+        # WebSocket are not under /admin and keep their own explicit guard. nginx injects
+        # the admin secret after Basic auth; direct callers must supply it themselves.
+        if request.url.path.startswith("/admin"):
+            try:
+                _require_projection_admin(request.headers.get(ADMIN_SECRET_HEADER.lower()))
+            except HTTPException as exc:
+                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return await call_next(request)
 
     def _character_entity(character_id: str):
         parsed = parse_entity_id(character_id)
@@ -490,7 +518,7 @@ def create_app(
         id: str,
         admin_token: str | None = Header(
             default=None,
-            alias="X-Bunnyland-Admin-Token",
+            alias=ADMIN_SECRET_HEADER,
         ),
     ) -> DmProjectionResponse:
         _require_projection_admin(admin_token)
@@ -504,7 +532,7 @@ def create_app(
     async def world_overview(
         admin_token: str | None = Header(
             default=None,
-            alias="X-Bunnyland-Admin-Token",
+            alias=ADMIN_SECRET_HEADER,
         ),
     ) -> WorldOverviewResponse:
         _require_projection_admin(admin_token)
@@ -742,6 +770,18 @@ def create_app(
         return CommandCancelResponse(ok=True, command_id=command_id, cancelled=True)
 
     async def _submit_command_request(request: CommandRequest) -> CommandResponse:
+        if request.command_type in CONTROL_COMMANDS:
+            # Control verbs reassign a character's controller (spec 7.4) and deliberately
+            # bypass the generation/ownership gates that protect normal actions, taking their
+            # target controller straight from the payload. They are a server orchestration
+            # primitive, not a player action: web clients change controllers through the
+            # dedicated /world/controllers/web/* endpoints, which validate that the caller
+            # owns the claim. Accepting them on the generic command surface would let any
+            # claim holder repoint their character at an arbitrary controller entity.
+            raise HTTPException(
+                status_code=400,
+                detail="control verbs are not accepted here; use the web controller endpoints",
+            )
         claim_context = _require_claim_secret(
             request.character_id,
             claim_id=request.claim_id,
@@ -1256,10 +1296,7 @@ def create_app(
         return _runtime_response()
 
     @app.get("/admin/memory/characters", response_model=MemoryCharactersResponse)
-    async def list_memory_characters(
-        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
-    ) -> MemoryCharactersResponse:
-        _require_projection_admin(admin_token)
+    async def list_memory_characters() -> MemoryCharactersResponse:
         _require_memory_store()
         return _memory_characters_response()
 
@@ -1267,11 +1304,7 @@ def create_app(
         "/admin/memory/collections/{collection}/documents",
         response_model=MemoryDocumentsResponse,
     )
-    async def list_memory_documents(
-        collection: str,
-        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
-    ) -> MemoryDocumentsResponse:
-        _require_projection_admin(admin_token)
+    async def list_memory_documents(collection: str) -> MemoryDocumentsResponse:
         return _memory_documents_response(collection)
 
     @app.post(
@@ -1282,9 +1315,7 @@ def create_app(
     async def create_memory_document(
         collection: str,
         request: MemoryDocumentUpdateRequest,
-        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
     ) -> MemoryDocumentResponse:
-        _require_projection_admin(admin_token)
         return _memory_create_response(collection, request)
 
     @app.patch(
@@ -1295,18 +1326,11 @@ def create_app(
         collection: str,
         id: str,
         request: MemoryDocumentUpdateRequest,
-        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
     ) -> MemoryDocumentResponse:
-        _require_projection_admin(admin_token)
         return _memory_update_response(collection, id, request)
 
     @app.delete("/admin/memory/collections/{collection}/documents/{id}")
-    async def delete_memory_document(
-        collection: str,
-        id: str,
-        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
-    ) -> dict:
-        _require_projection_admin(admin_token)
+    async def delete_memory_document(collection: str, id: str) -> dict:
         return _delete_memory_document(collection, id)
 
     @app.post("/admin/pause", response_model=WorldRuntimeResponse)
@@ -1478,20 +1502,14 @@ def create_app(
     @app.post("/admin/world/generate-image", response_model=WorldImageGenerationResponse)
     async def generate_image(
         request: WorldImageGenerationRequest,
-        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
     ) -> WorldImageGenerationResponse:
-        _require_projection_admin(admin_token)
         return await _generate_image_request(request)
 
     @app.get(
         "/admin/world/generate-image/{job_id}",
         response_model=WorldImageGenerationResponse,
     )
-    async def image_job_status(
-        job_id: str,
-        admin_token: str | None = Header(default=None, alias="X-Bunnyland-Admin-Token"),
-    ) -> WorldImageGenerationResponse:
-        _require_projection_admin(admin_token)
+    async def image_job_status(job_id: str) -> WorldImageGenerationResponse:
         service = _require_imagegen()
         job = service.job(job_id)
         if job is None:
@@ -1556,10 +1574,11 @@ def create_app(
     async def world_updates(websocket: WebSocket) -> None:
         # This stream pushes the full world snapshot — the same privileged surface as
         # /world/snapshot. The production nginx config does Basic auth and then injects
-        # X-Bunnyland-Admin-Token before proxying, so the token never rides in the query
-        # string. Direct (non-proxied) clients must set the header themselves.
+        # X-Bunnyland-Admin-Secret before proxying, so the secret never rides in the query
+        # string. Direct (non-proxied) clients must set the header themselves. (The /admin
+        # middleware does not cover WebSocket handshakes, so this guard stays explicit.)
         try:
-            _require_projection_admin(websocket.headers.get("x-bunnyland-admin-token"))
+            _require_projection_admin(websocket.headers.get(ADMIN_SECRET_HEADER.lower()))
         except HTTPException:
             await websocket.close(code=1008)  # policy violation
             return

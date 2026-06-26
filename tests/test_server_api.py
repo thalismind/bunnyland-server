@@ -11,7 +11,7 @@ import pytest
 from conftest import build_scenario
 
 import bunnyland.server.worldgen as server_worldgen
-from bunnyland.claims import add_claim, transfer_claim
+from bunnyland.claims import add_claim, current_controller, transfer_claim
 from bunnyland.content import load_content_library
 from bunnyland.core import (
     ActionArgument,
@@ -175,6 +175,12 @@ from bunnyland.worldgen import (
     StoryEventProposal,
     collect_generators,
 )
+
+#: The /admin/* surface is gated by the admin-secret middleware (fail-closed). Tests that
+#: drive admin routes build the app with this token and send the matching header, mirroring
+#: the secret nginx injects after Basic auth in production.
+_ADMIN_TOKEN = "secret"
+_ADMIN_SECRET_HEADERS = {"X-Bunnyland-Admin-Secret": _ADMIN_TOKEN}
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -1264,7 +1270,7 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
     client = testclient.TestClient(app)
 
     health = client.get("/health")
-    snapshot = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Token": "secret"})
+    snapshot = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "secret"})
     schema = client.get("/world/schema")
     library = client.get("/world/library")
     recent = client.get("/world/events/recent")
@@ -1465,7 +1471,7 @@ def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     dm_operation = schema["paths"]["/world/dm/{id}"]["get"]
     assert {parameter["name"] for parameter in dm_operation["parameters"]} == {
         "id",
-        "X-Bunnyland-Admin-Token",
+        "X-Bunnyland-Admin-Secret",
     }
     assert dm_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/DmProjectionResponse"
@@ -1490,8 +1496,8 @@ def test_fastapi_dm_projection_requires_permission_and_returns_typed_view(scenar
     client = testclient.TestClient(app)
 
     missing = client.get("/world/dm/dm-1")
-    wrong = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "wrong"})
-    allowed = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "secret"})
+    wrong = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "wrong"})
+    allowed = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "secret"})
 
     assert missing.status_code == 403
     assert wrong.status_code == 403
@@ -1519,8 +1525,8 @@ def test_fastapi_world_overview_requires_permission_and_returns_room_network(sce
     client = testclient.TestClient(app)
 
     missing = client.get("/world/overview")
-    wrong = client.get("/world/overview", headers={"X-Bunnyland-Admin-Token": "wrong"})
-    allowed = client.get("/world/overview", headers={"X-Bunnyland-Admin-Token": "secret"})
+    wrong = client.get("/world/overview", headers={"X-Bunnyland-Admin-Secret": "wrong"})
+    allowed = client.get("/world/overview", headers={"X-Bunnyland-Admin-Secret": "secret"})
 
     assert missing.status_code == 403
     assert wrong.status_code == 403
@@ -1546,8 +1552,8 @@ def test_fastapi_world_snapshot_requires_admin_token(scenario):
     client = testclient.TestClient(app)
 
     missing = client.get("/world/snapshot")
-    wrong = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Token": "wrong"})
-    allowed = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Token": "secret"})
+    wrong = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "wrong"})
+    allowed = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "secret"})
 
     assert missing.status_code == 403
     assert wrong.status_code == 403
@@ -1578,11 +1584,11 @@ def test_fastapi_admin_memory_lists_characters_and_documents_without_backend_typ
     client = testclient.TestClient(app)
 
     characters = client.get(
-        "/admin/memory/characters", headers={"X-Bunnyland-Admin-Token": "secret"}
+        "/admin/memory/characters", headers={"X-Bunnyland-Admin-Secret": "secret"}
     )
     documents = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
 
     assert characters.status_code == 200
@@ -1626,7 +1632,7 @@ def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
 
     updated = client.patch(
         f"/admin/memory/collections/juniper-private/documents/{entry.id}",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
         json={
             "document": "updated text",
             "metadata": {"tags": ["edited"], "created_at_epoch": 22, "source": "admin"},
@@ -1634,15 +1640,15 @@ def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
     )
     listed = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
     deleted = client.delete(
         f"/admin/memory/collections/juniper-private/documents/{entry.id}",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
     after_delete = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
 
     assert updated.status_code == 200
@@ -1668,7 +1674,7 @@ def test_fastapi_admin_memory_creates_document(scenario):
 
     created = client.post(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
         json={
             "document": "new memory text",
             "metadata": {"tags": "new, note", "created_at_epoch": 33, "source": "admin"},
@@ -1676,7 +1682,7 @@ def test_fastapi_admin_memory_creates_document(scenario):
     )
     listed = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
 
     assert created.status_code == 201
@@ -1707,12 +1713,12 @@ def test_fastapi_admin_memory_missing_document_returns_404(scenario):
 
     updated = client.patch(
         "/admin/memory/collections/juniper-private/documents/missing",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
         json={"document": "updated text", "metadata": {}},
     )
     deleted = client.delete(
         "/admin/memory/collections/juniper-private/documents/missing",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
 
     assert updated.status_code == 404
@@ -1728,11 +1734,11 @@ def test_fastapi_admin_memory_returns_generic_conflict_when_unconfigured(scenari
 
     response = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
     create_response = client.post(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "secret"},
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
         json={"document": "new text", "metadata": {}},
     )
 
@@ -1754,11 +1760,11 @@ def test_fastapi_admin_memory_requires_admin_token(scenario):
     missing = client.get("/admin/memory/characters")
     wrong = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "wrong"},
+        headers={"X-Bunnyland-Admin-Secret": "wrong"},
     )
     wrong_create = client.post(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Token": "wrong"},
+        headers={"X-Bunnyland-Admin-Secret": "wrong"},
         json={"document": "new text", "metadata": {}},
     )
 
@@ -1767,14 +1773,73 @@ def test_fastapi_admin_memory_requires_admin_token(scenario):
     assert wrong_create.status_code == 403
 
 
+def _admin_route_targets(app):
+    # Every /admin/* path with a concrete value for each path param. The admin-secret
+    # middleware runs before routing/body parsing, so a method+path with no body is enough
+    # to prove the gate; HEAD/OPTIONS are skipped (FastAPI/CORS own those).
+    substitutions = {"{collection}": "c", "{id}": "x", "{job_id}": "j"}
+    targets = []
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        if not path.startswith("/admin"):
+            continue
+        concrete = path
+        for token, value in substitutions.items():
+            concrete = concrete.replace(token, value)
+        for method in sorted(getattr(route, "methods", set()) or set()):
+            if method in {"HEAD", "OPTIONS"}:
+                continue
+            targets.append((method, concrete, path))
+    return targets
+
+
+def test_admin_routes_require_admin_secret(scenario):
+    # Regression guard for the centralized admin gate: a new /admin/* route that forgets
+    # authorization fails here instead of silently shipping an unauthenticated controller /
+    # world-mutation primitive. With a token configured but none supplied, every admin route
+    # must reject before its handler runs.
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app)
+
+    targets = _admin_route_targets(app)
+    # Sanity: the introspection actually found the sensitive routes we care about.
+    paths = {path for _method, _concrete, path in targets}
+    assert "/admin/controllers/assign" in paths
+    assert "/admin/world" in paths
+    assert "/admin/world/generate" in paths
+
+    for method, concrete, path in targets:
+        response = client.request(method, concrete)
+        assert response.status_code == 403, f"{method} {path} is not admin-gated"
+        assert response.json()["detail"] == "invalid admin token"
+
+
+def test_admin_gate_fails_closed_when_token_unset(scenario, monkeypatch):
+    # With no admin token configured (arg unset and env cleared), the gate must reject rather
+    # than fall open — the /admin surface can never be reachable without a secret.
+    testclient = pytest.importorskip("fastapi.testclient")
+    monkeypatch.delenv("BUNNYLAND_ADMIN_TOKEN", raising=False)
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    response = client.post(
+        "/admin/controllers/assign",
+        headers={"X-Bunnyland-Admin-Secret": "anything"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "BUNNYLAND_ADMIN_TOKEN is not configured"
+
+
 def test_fastapi_dm_projection_uses_configured_admin_token_env(monkeypatch, scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     monkeypatch.setenv("BUNNYLAND_ADMIN_TOKEN", "env-secret")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    blocked = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "secret"})
-    allowed = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "env-secret"})
+    blocked = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "secret"})
+    allowed = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "env-secret"})
 
     assert blocked.status_code == 403
     assert allowed.status_code == 200
@@ -1787,7 +1852,7 @@ def test_fastapi_dm_projection_rejects_when_admin_token_unconfigured(monkeypatch
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    response = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Token": "secret"})
+    response = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "secret"})
 
     assert response.status_code == 403
     assert response.json()["detail"] == "BUNNYLAND_ADMIN_TOKEN is not configured"
@@ -1859,6 +1924,49 @@ def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
         message["data"]["event_type"] == "ActorMovedEvent"
         for message in recent.json()["events"]
     )
+
+
+@pytest.mark.parametrize(
+    "verb", ["take-control", "release-to-llm", "suspend", "resume"]
+)
+def test_fastapi_command_endpoint_rejects_control_verbs(scenario, verb):
+    # A claim holder must not be able to repoint their character at an arbitrary controller
+    # through the generic command surface; control transitions go through the dedicated web
+    # controller endpoints. The character's controller must stay put.
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    claimed = client.post(
+        "/world/controllers/web/claim",
+        json={"character_id": str(scenario.character), "client_id": "client-a"},
+    ).json()
+    # A controller the caller does not own — the target a hijack attempt would aim at.
+    other = spawn_entity(
+        scenario.actor.world, [WebControllerComponent(client_id="victim", label="other")]
+    )
+
+    response = client.post(
+        "/world/commands",
+        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+        json={
+            "character_id": str(scenario.character),
+            "controller_id": claimed["controller_id"],
+            "controller_generation": claimed["controller_generation"],
+            "claim_id": claimed["claim_id"],
+            "command_type": verb,
+            "payload": {"controller_id": str(other.id)},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "control verbs are not accepted here; use the web controller endpoints"
+    )
+    # The hijack target never became the controller.
+    character = scenario.actor.world.get_entity(scenario.character)
+    current = current_controller(scenario.actor, character)
+    assert current is not None
+    assert current[0].id != other.id
 
 
 def test_fastapi_cancel_queued_command_removes_it(scenario):
@@ -1950,8 +2058,8 @@ async def test_character_chat_endpoint_maps_service_exceptions(scenario):
 
 def test_fastapi_world_generation_status_endpoint_reports_idle(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor)
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
 
     response = client.get("/admin/world/generation")
 
@@ -1970,8 +2078,8 @@ def test_fastapi_runtime_endpoint_reports_attached_loop(scenario):
         time_scale = 1800.0
         next_tick_at_unix = None
 
-    app = create_app(scenario.actor, loop=FakeLoop())
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, loop=FakeLoop(), admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
 
     response = client.get("/admin/runtime")
     queued = client.get(f"/world/character/{scenario.character}/commands")
@@ -2025,8 +2133,8 @@ def test_fastapi_pause_and_resume_endpoints_update_runtime(scenario):
             return publish()
 
     loop = FakeLoop()
-    app = create_app(scenario.actor, loop=loop)
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, loop=loop, admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
 
     paused = client.post("/admin/pause")
     resumed = client.post("/admin/resume")
@@ -2068,6 +2176,21 @@ def test_fastapi_web_controller_claim_reports_bad_requests(scenario):
     assert blank_client.json()["detail"] == "client_id must not be blank"
 
 
+def test_fastapi_web_controller_claim_bounds_client_id_length(scenario):
+    # An unbounded client_id would be stored and echoed verbatim; the model caps it so a
+    # claim request cannot carry an oversized identifier.
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    oversized = client.post(
+        "/world/controllers/web/claim",
+        json={"character_id": str(scenario.character), "client_id": "x" * 200},
+    )
+
+    assert oversized.status_code == 422
+
+
 def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
@@ -2076,8 +2199,8 @@ def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
         raise RuntimeError("generator is already busy")
 
     monkeypatch.setattr(server_app, "start_world_generation", runtime_error)
-    app = create_app(scenario.actor, plugins=plugins)
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, plugins=plugins, admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
 
     conflict = client.post(
         "/admin/world/generate",
@@ -2139,8 +2262,8 @@ def test_fastapi_entity_generation_translates_unexpected_errors(
         raise RuntimeError("dm unavailable")
 
     monkeypatch.setattr(server_app, target, raise_unexpected)
-    app = create_app(scenario.actor)
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
 
     response = client.post(path, json=payload)
 
@@ -2155,8 +2278,8 @@ def test_fastapi_save_endpoint_translates_save_errors(monkeypatch, scenario, tmp
         raise OSError("disk full")
 
     monkeypatch.setattr(server_app, "save_configured_world", raise_save_error)
-    app = create_app(scenario.actor, save_path=tmp_path / "world.json")
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, save_path=tmp_path / "world.json", admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
 
     response = client.post("/admin/world/save")
 
@@ -3274,8 +3397,8 @@ async def test_admin_patch_endpoint_translates_patch_errors_to_http_400(scenario
 
 def test_fastapi_list_controller_definitions_endpoint(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor)
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
 
     response = client.get("/admin/controllers/definitions")
 
@@ -3326,7 +3449,7 @@ def test_fastapi_dm_projection_translates_value_errors_to_400(scenario):
 
     # A whitespace-only dm id strips to empty and raises ValueError from the serializer.
     response = client.get(
-        "/world/dm/%20", headers={"X-Bunnyland-Admin-Token": "secret"}
+        "/world/dm/%20", headers={"X-Bunnyland-Admin-Secret": "secret"}
     )
 
     assert response.status_code == 400
@@ -3502,7 +3625,7 @@ async def test_world_updates_websocket_handles_disconnect_on_send(scenario):
     closed = []
 
     class FakeWebSocket:
-        headers = {"x-bunnyland-admin-token": "secret"}
+        headers = {"x-bunnyland-admin-secret": "secret"}
 
         async def accept(self):
             return None
@@ -3574,8 +3697,8 @@ def test_pause_and_resume_tolerate_loops_without_publish(scenario):
             self.paused = False
             return None
 
-    app = create_app(scenario.actor, loop=QuietLoop())
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, loop=QuietLoop(), admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
 
     paused = client.post("/admin/pause")
     resumed = client.post("/admin/resume")
@@ -3592,7 +3715,7 @@ def test_fastapi_world_updates_websocket_handles_client_disconnect(scenario):
     client = testclient.TestClient(app)
 
     with client.websocket_connect(
-        "/world/updates", headers={"X-Bunnyland-Admin-Token": "secret"}
+        "/world/updates", headers={"X-Bunnyland-Admin-Secret": "secret"}
     ) as websocket:
         assert websocket.receive_json()["type"] == "snapshot"
         # Queue another message so the handler's next send races the client close, then
@@ -4943,7 +5066,7 @@ def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
     client = testclient.TestClient(app)
 
     with client.websocket_connect(
-        "/world/updates", headers={"X-Bunnyland-Admin-Token": "secret"}
+        "/world/updates", headers={"X-Bunnyland-Admin-Secret": "secret"}
     ) as websocket:
         message = websocket.receive_json()
 
@@ -4971,7 +5094,7 @@ def test_fastapi_world_updates_websocket_requires_admin_token(scenario):
 
     with pytest.raises(StarletteWebSocketDisconnect):
         with client.websocket_connect(
-            "/world/updates", headers={"X-Bunnyland-Admin-Token": "wrong"}
+            "/world/updates", headers={"X-Bunnyland-Admin-Secret": "wrong"}
         ) as websocket:
             websocket.receive_json()
 

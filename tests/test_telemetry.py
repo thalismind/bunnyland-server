@@ -933,7 +933,7 @@ async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
     app = create_app(actor, meta=WorldMeta(seed="s", generator="stub"), admin_token="secret")
     with TestClient(app) as client:
         response = client.get(
-            "/world/snapshot", headers={"X-Bunnyland-Admin-Token": "secret"}
+            "/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "secret"}
         )
         assert response.status_code == 200
 

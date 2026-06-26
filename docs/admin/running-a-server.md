@@ -146,7 +146,7 @@ uv run bunnyland serve --llm --generator recursive \
 | `--api-host`     | `127.0.0.1`    | Host for the optional HTTP/websocket client API.                |
 | `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
 | `--mcp`          | off            | Mount the MCP endpoint at `/mcp` on the existing API server.    |
-| `--admin-token`  | env            | Admin token for snapshot/overview/DM projections, the world-updates stream, and MCP admin tools; defaults to `BUNNYLAND_ADMIN_TOKEN`. |
+| `--admin-token`  | env            | Admin secret gating the whole `/admin/*` surface plus snapshot/overview/DM projections, the world-updates stream, and MCP admin tools; defaults to `BUNNYLAND_ADMIN_TOKEN`. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
 | `--starter-pack` | (none)         | Enable a startup preset: `peaceful`, `fantastic`, or `futuristic`. |
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](./).   |
@@ -155,6 +155,23 @@ uv run bunnyland serve --llm --generator recursive \
 | `--load-paused`  | off            | Start the server tick cycle paused when used with `--load`.    |
 | `--save`         | (none)         | Save the world to this path on exit.                           |
 | `--autosave-every`| `0`           | Autosave every N ticks (needs `--save`).                       |
+
+## Admin surface security
+
+The entire `/admin/*` surface is gated **server-side and fail-closed**: every admin route
+requires the admin secret in the `X-Bunnyland-Admin-Secret` header, and if no admin token is
+configured (`--admin-token` / `BUNNYLAND_ADMIN_TOKEN`) those routes return `403` rather than
+falling open. This matters because routes such as `POST /admin/controllers/assign` and
+`PATCH /admin/world` reassign controllers and mutate the world directly, bypassing the
+per-player claim secret. The production nginx config performs Basic auth and then injects the
+`X-Bunnyland-Admin-Secret` header (clients can never supply their own), so browser admins log
+in once. Do **not** publish the API container's port directly — keep nginx the only ingress so
+the admin surface is never reachable without passing Basic auth first.
+
+Player commands (`POST /world/commands`) and the MCP `send_command` tool reject the control
+verbs (`take-control`, `release-to-llm`, `suspend`, `resume`); controller changes go through
+the dedicated `/world/controllers/web/*` endpoints (or the MCP claim/release tools), which
+validate that the caller owns the claim.
 
 ## The time model
 

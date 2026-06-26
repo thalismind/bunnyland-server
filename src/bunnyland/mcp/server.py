@@ -46,6 +46,7 @@ from ..core import (
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
 from ..core.ecs import container_of, parse_entity_id
 from ..core.events import CharacterClaimedEvent, DomainEvent
+from ..core.world_actor import CONTROL_COMMANDS
 from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..plugins.builtin import MCP
 from ..prompts import PromptBuilder, render_prompt
@@ -785,14 +786,14 @@ def create_bunnyland_mcp_app(
         event_bridge.unsubscribe(str(uri), context.session)
 
     def _request_admin_header() -> str | None:
-        """The X-Bunnyland-Admin-Token header from the active streamable-HTTP request, if
-        any. nginx injects it after Basic auth so proxied callers need not pass the token."""
+        """The X-Bunnyland-Admin-Secret header from the active streamable-HTTP request, if
+        any. nginx injects it after Basic auth so proxied callers need not pass the secret."""
         try:
             request = mcp.get_context().request_context.request
         except (LookupError, AttributeError, ValueError):
             return None
         headers = getattr(request, "headers", {}) or {}
-        return headers.get("X-Bunnyland-Admin-Token")
+        return headers.get("X-Bunnyland-Admin-Secret")
 
     def _request_claim_header(name: str) -> str | None:
         try:
@@ -803,7 +804,7 @@ def create_bunnyland_mcp_app(
         return headers.get(name)
 
     def admin(supplied: str | None) -> None:
-        # Prefer the X-Bunnyland-Admin-Token header the authenticating nginx proxy injects;
+        # Prefer the X-Bunnyland-Admin-Secret header the authenticating nginx proxy injects;
         # fall back to the explicit tool argument for direct (non-proxied) MCP clients.
         resolved = supplied or _request_admin_header()
         try:
@@ -1276,6 +1277,15 @@ def create_bunnyland_mcp_app(
                 claim_id=claim_id,
                 claim_secret=claim_secret,
             )
+            if command_type in CONTROL_COMMANDS:
+                # Control verbs reassign the character's controller and bypass the
+                # generation/ownership gates; they are a server orchestration primitive, not
+                # a player action. MCP controller changes go through assign_mcp_controller /
+                # release_mcp_controller, which validate claim ownership.
+                raise ToolError(
+                    f"control verb {command_type!r} cannot be sent through send_command; "
+                    "use the controller claim/release tools"
+                )
             if command_type not in actor.available_command_types():
                 raise ToolError(
                     f"unknown command_type {command_type!r}; call search_actions to find "

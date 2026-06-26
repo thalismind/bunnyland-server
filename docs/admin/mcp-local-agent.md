@@ -47,7 +47,7 @@ http://127.0.0.1:8765/mcp
 ```
 
 Local-only servers do not need reverse-proxy Basic auth. Without a proxy injecting
-`X-Bunnyland-Admin-Token`, admin tools take the admin token as an `admin_token` argument.
+`X-Bunnyland-Admin-Secret`, admin tools take the admin token as an `admin_token` argument.
 
 ## Enable MCP on the VPS
 

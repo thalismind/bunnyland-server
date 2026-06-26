@@ -11,6 +11,11 @@ from ..content import ContentLibrary
 from ..core.claim_timeout import CLAIM_TIMEOUT_MAX_SECONDS, CLAIM_TIMEOUT_MIN_SECONDS
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, SubmittedCommand
 
+#: Upper bound for client-supplied free-form identifiers/labels (client_id, controller
+#: label). Caps unbounded strings that would otherwise be stored or echoed, without
+#: constraining legitimate values (UUID client ids and short labels are well under this).
+IDENTIFIER_MAX_LENGTH = 128
+
 
 class CommandCostRequest(BaseModel):
     action: int = 0
@@ -84,7 +89,7 @@ class CharacterChatHistoryMessage(BaseModel):
 
 
 class CharacterChatRequest(BaseModel):
-    client_id: str = Field(min_length=1, max_length=128)
+    client_id: str = Field(min_length=1, max_length=IDENTIFIER_MAX_LENGTH)
     claim_id: str | None = None
     message: str = Field(min_length=1, max_length=4000)
     history_summary: str = Field(default="", max_length=12000)
@@ -452,7 +457,7 @@ class WorldLibraryResponse(ContentLibrary):
 
 class WebControllerFallbackRequest(BaseModel):
     character_id: str
-    client_id: str = Field(min_length=1)
+    client_id: str = Field(min_length=1, max_length=IDENTIFIER_MAX_LENGTH)
     claim_id: str | None = None
     fallback_controller: str | None = None
     fallback_reason: str | None = None
@@ -465,7 +470,7 @@ class WebControllerFallbackRequest(BaseModel):
 
 
 class WebControllerClaimRequest(WebControllerFallbackRequest):
-    label: str = "web"
+    label: str = Field(default="web", max_length=IDENTIFIER_MAX_LENGTH)
 
 
 class WebControllerFallbackResponse(BaseModel):
