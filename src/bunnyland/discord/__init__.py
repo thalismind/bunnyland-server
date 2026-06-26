@@ -7,11 +7,13 @@ from .bot import (
     discord_broadcast_channel_ids,
     parse_discord_action,
     parse_discord_id_list,
-    release_discord_character_to_llm,
     set_discord_claim_fallback,
     suspend_discord_character,
 )
-from .claim import render_character_list
+from .claim import (
+    release_discord_claim,
+    render_character_list,
+)
 from .view import (
     HELP_TEXT,
     explain_rejection,
@@ -33,7 +35,7 @@ __all__ = [
     "explain_rejection",
     "parse_discord_action",
     "parse_discord_id_list",
-    "release_discord_character_to_llm",
+    "release_discord_claim",
     "render_character_list",
     "render_action_result",
     "render_help",

@@ -57,7 +57,6 @@ from bunnyland.core.events import (
 )
 from bunnyland.discord import (
     assign_discord_controller,
-    release_discord_character_to_llm,
     suspend_discord_character,
 )
 from bunnyland.engine import GameLoop
@@ -656,15 +655,19 @@ async def test_character_controller_lifecycle_e2e():
     await actor.tick(0.0)
     assert executed[-1].command_type == "wait"
 
-    released = release_discord_character_to_llm(
-        actor,
-        discord_user_id=123,
-        model="deepseek-v4-flash",
-        provider="openrouter",
+    released_llm = spawn_entity(
+        world,
+        [
+            LLMControllerComponent(
+                profile_name="released",
+                model="deepseek-v4-flash",
+                provider="openrouter",
+            )
+        ],
     )
+    await apply_control("release-to-llm", released_llm.id)
     edge, _controller_id, controller = current_controller()
     llm = controller.get_component(LLMControllerComponent)
-    assert released == "Juniper"
     assert edge.generation == 4
     assert llm.model == "deepseek-v4-flash"
     assert llm.provider == "openrouter"

@@ -15,7 +15,13 @@ import pytest
 
 import bunnyland.discord.bot as discord_bot
 import bunnyland.discord.view as discord_view
-from bunnyland.claims import add_claim
+from bunnyland.claims import (
+    ClaimSecretRegistry,
+    add_claim,
+    controller_claim,
+    ensure_claim_secret,
+    transfer_claim,
+)
 from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
@@ -53,7 +59,7 @@ from bunnyland.discord import (
     explain_rejection,
     parse_discord_action,
     parse_discord_id_list,
-    release_discord_character_to_llm,
+    release_discord_claim,
     render_action_result,
     render_character_list,
     render_help,
@@ -79,6 +85,7 @@ from bunnyland.discord.claim import (
     _match_character,
     _retire_discord_controller,
     discord_controlled_character,
+    resume_discord_claim,
 )
 from bunnyland.memory import InMemoryStore, install_memory
 
@@ -165,6 +172,7 @@ def _bot_for_scenario(scenario, **attrs):
     bot._world_paused = attrs.pop("world_paused", False)
     bot._pending = attrs.pop("pending", {})
     bot._paused_reactions = attrs.pop("paused_reactions", {})
+    bot.claim_secrets = attrs.pop("claim_secrets", None)
     bot.client = attrs.pop("client", _DiscordObject(user="bot-user"))
     for key, value in attrs.items():
         setattr(bot, key, value)
@@ -474,7 +482,9 @@ def test_assign_discord_controller_reuses_existing_user_channel_controller(scena
     assert matching_controllers == [first_controller_id]
 
 
-def test_assign_discord_controller_reuses_controller_for_a_different_character(scenario):
+def test_assign_discord_controller_does_not_reuse_claimed_controller_for_different_character(
+    scenario,
+):
     # Claim Juniper so user 123 owns a Discord controller bound to that character.
     assign_discord_controller(
         scenario.actor,
@@ -503,7 +513,45 @@ def test_assign_discord_controller_reuses_controller_for_a_different_character(s
     )
     scenario.actor.assign_controller(hazel.id, other_controller.id)
 
-    # Reuse the same Discord controller but claim a different character.
+    # A claimed controller stays attached to its existing character; claiming another
+    # character creates a separate controller instead of moving the old claim.
+    name = assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Hazel",
+    )
+
+    assert name == "Hazel"
+    juniper_controller_ids = {cid for _edge, cid in juniper.get_relationships(ControlledBy)}
+    hazel_controller_ids = {cid for _edge, cid in hazel.get_relationships(ControlledBy)}
+    assert controller_id in juniper_controller_ids
+    assert controller_id not in hazel_controller_ids
+
+
+def test_assign_discord_controller_reuses_unclaimed_controller_for_different_character(
+    scenario,
+):
+    hazel = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), hazel.id
+    )
+    other_controller = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="default", model="deepseek-v4-flash")],
+    )
+    scenario.actor.assign_controller(hazel.id, other_controller.id)
+    discord_controller = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=123, default_channel_id=456)],
+    )
+
     name = assign_discord_controller(
         scenario.actor,
         discord_user_id=123,
@@ -513,7 +561,218 @@ def test_assign_discord_controller_reuses_controller_for_a_different_character(s
 
     assert name == "Hazel"
     hazel_controller_ids = {cid for _edge, cid in hazel.get_relationships(ControlledBy)}
-    assert controller_id in hazel_controller_ids
+    assert discord_controller.id in hazel_controller_ids
+
+
+def test_assign_discord_controller_rejects_claim_owned_by_another_client(scenario):
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    add_claim(
+        controller,
+        client_kind="web",
+        client_id="other-client",
+        character_id=str(scenario.character),
+        claim_id="claim-other",
+    )
+
+    with pytest.raises(RuntimeError, match="character is already claimed"):
+        assign_discord_controller(
+            scenario.actor,
+            discord_user_id=123,
+            character_name="Juniper",
+        )
+
+
+def test_assign_discord_controller_rejects_bad_secret_for_existing_claim(scenario):
+    claim_secrets = ClaimSecretRegistry()
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    claim = add_claim(
+        controller,
+        client_kind="web",
+        client_id="123",
+        character_id=str(scenario.character),
+        claim_id="claim-web",
+    )
+    claim_secrets.issue(claim.claim_id)
+
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        assign_discord_controller(
+            scenario.actor,
+            claim_secrets=claim_secrets,
+            discord_user_id=123,
+            claim_id=claim.claim_id,
+            claim_secret="wrong",
+            character_name="Juniper",
+        )
+
+
+def test_assign_discord_controller_adds_missing_claim_to_existing_controller(scenario):
+    claim_secrets = ClaimSecretRegistry()
+    character = scenario.actor.world.get_entity(scenario.character)
+    controller = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=123, default_channel_id=456)],
+    )
+    scenario.actor.assign_controller(character.id, controller.id)
+
+    name = assign_discord_controller(
+        scenario.actor,
+        claim_secrets=claim_secrets,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+
+    claim = controller_claim(controller)
+    assert name == "Juniper"
+    assert claim is not None
+    assert claim.client_kind == "discord"
+    assert claim.client_id == "123"
+    assert claim_secrets.secret(claim.claim_id) is not None
+
+
+def test_assign_discord_controller_reissues_missing_secret_for_existing_claim(scenario):
+    claim_secrets = ClaimSecretRegistry()
+    character = scenario.actor.world.get_entity(scenario.character)
+    controller = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=123, default_channel_id=456)],
+    )
+    scenario.actor.assign_controller(character.id, controller.id)
+    claim = add_claim(
+        controller,
+        client_kind="discord",
+        client_id="123",
+        character_id=str(character.id),
+        claim_id="claim-stale",
+    )
+
+    name = assign_discord_controller(
+        scenario.actor,
+        claim_secrets=claim_secrets,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+
+    assert name == "Juniper"
+    assert claim_secrets.secret(claim.claim_id) is not None
+
+
+def test_resume_discord_claim_returns_active_discord_controller(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    edge, controller_id = character.get_relationships(ControlledBy)[0]
+
+    resumed = resume_discord_claim(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+    )
+
+    assert resumed == (character, controller_id, edge.generation)
+
+
+def test_resume_discord_claim_uses_fresh_controller_when_existing_has_other_claim(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    suspend_discord_character(scenario.actor, discord_user_id=123, reason="idle")
+    conflicting = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=123, default_channel_id=456)],
+    )
+    add_claim(
+        conflicting,
+        client_kind="discord",
+        client_id="123",
+        character_id="entity_999",
+        claim_id="claim-other",
+    )
+
+    resumed = resume_discord_claim(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+    )
+
+    assert resumed is not None
+    _character, controller_id, _generation = resumed
+    assert controller_id != conflicting.id
+    assert controller_claim(conflicting) is not None
+    assert scenario.actor.world.get_entity(controller_id).has_component(DiscordControllerComponent)
+    assert not character.has_component(SuspendedComponent)
+
+
+def test_resume_discord_claim_from_llm_fallback_without_suspended_marker(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    _edge, old_controller_id = character.get_relationships(ControlledBy)[0]
+    old_controller = scenario.actor.world.get_entity(old_controller_id)
+    fallback = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="default", model="deepseek-v4-flash")],
+    )
+    transfer_claim(old_controller, fallback)
+    scenario.actor.assign_controller(character.id, fallback.id)
+
+    resumed = resume_discord_claim(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+    )
+
+    assert resumed is not None
+    _character, controller_id, generation = resumed
+    controller = scenario.actor.world.get_entity(controller_id)
+    assert generation == 3
+    assert controller.has_component(DiscordControllerComponent)
+    assert not character.has_component(SuspendedComponent)
+
+
+def test_resume_discord_claim_replaces_mismatched_active_discord_controller(scenario):
+    character = scenario.actor.world.get_entity(scenario.character)
+    controller = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=999, default_channel_id=456)],
+    )
+    scenario.actor.assign_controller(character.id, controller.id)
+    claim = add_claim(
+        controller,
+        client_kind="discord",
+        client_id="123",
+        character_id=str(character.id),
+        claim_id="claim-mismatch",
+    )
+
+    resumed = resume_discord_claim(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+    )
+
+    assert resumed is not None
+    _character, controller_id, _generation = resumed
+    resumed_controller = scenario.actor.world.get_entity(controller_id)
+    resumed_claim = controller_claim(resumed_controller)
+    assert controller_id != controller.id
+    assert resumed_controller.has_component(DiscordControllerComponent)
+    assert resumed_controller.get_component(DiscordControllerComponent).discord_user_id == 123
+    assert resumed_claim is not None
+    assert resumed_claim.claim_id == claim.claim_id
 
 
 def test_assign_discord_controller_stores_claim_timeout_preferences(scenario):
@@ -742,52 +1001,91 @@ def test_discord_bot_ignores_messages_rejected_by_filters():
     assert not bot._should_handle_message(_message(guild_id=111, channel_id=333, content="look"))
 
 
-def test_release_discord_character_reassigns_to_llm_controller(scenario):
+def test_release_discord_claim_removes_claim_without_changing_controller(scenario):
+    claim_secrets = ClaimSecretRegistry()
     assign_discord_controller(
         scenario.actor,
+        claim_secrets=claim_secrets,
         discord_user_id=123,
         character_name="Juniper",
     )
-
-    released = release_discord_character_to_llm(
-        scenario.actor,
-        discord_user_id=123,
-        model="deepseek-v4-flash",
-        provider="openrouter",
-    )
-
     character = scenario.actor.world.get_entity(scenario.character)
     edge, controller_id = character.get_relationships(ControlledBy)[0]
     controller = scenario.actor.world.get_entity(controller_id)
-    llm = controller.get_component(LLMControllerComponent)
+    claim = controller_claim(controller)
+    assert claim is not None
+    claim_secret = claim_secrets.secret(claim.claim_id)
+
+    released = release_discord_claim(
+        scenario.actor,
+        claim_secrets=claim_secrets,
+        discord_user_id=123,
+    )
+
+    current_edge, current_controller_id = character.get_relationships(ControlledBy)[0]
     assert released == "Juniper"
-    assert edge.generation == 2
-    assert llm.model == "deepseek-v4-flash"
-    assert llm.provider == "openrouter"
-    assert not controller.has_component(DiscordControllerComponent)
-    assert not character.has_component(SuspendedComponent)
-    assert render_character_list(scenario.actor).splitlines()[1] == "- Juniper - LLM controller"
-    controllers = scenario.actor.world.query().with_all([DiscordControllerComponent])
-    assert [
-        entity
-        for entity in controllers.execute_entities()
-        if entity.get_component(DiscordControllerComponent).discord_user_id == 123
-    ] == []
+    assert current_controller_id == controller_id
+    assert current_edge.generation == edge.generation
+    assert controller_claim(controller) is None
+    assert not claim_secrets.validate(claim.claim_id, claim_secret)
+    assert discord_controlled_character(scenario.actor, 123) is None
 
 
-def test_release_discord_character_clears_suspended_marker(scenario):
+def test_suspend_discord_character_keeps_claim_and_resume_restores_discord_control(scenario):
+    claim_secrets = ClaimSecretRegistry()
     assign_discord_controller(
         scenario.actor,
+        claim_secrets=claim_secrets,
         discord_user_id=123,
+        default_channel_id=456,
         character_name="Juniper",
     )
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(SuspendedComponent(reason="resting"))
+    old_controller_id = character.get_relationships(ControlledBy)[0][1]
+    old_controller = scenario.actor.world.get_entity(old_controller_id)
+    claim = controller_claim(old_controller)
+    assert claim is not None
+    claim_secret = claim_secrets.secret(claim.claim_id)
 
-    released = release_discord_character_to_llm(scenario.actor, discord_user_id=123)
+    suspended = suspend_discord_character(
+        scenario.actor,
+        discord_user_id=123,
+        reason="player suspended",
+    )
 
-    assert released == "Juniper"
+    suspended_edge, suspended_controller_id = character.get_relationships(ControlledBy)[0]
+    suspended_controller = scenario.actor.world.get_entity(suspended_controller_id)
+    suspended_claim = controller_claim(suspended_controller)
+    assert suspended == "Juniper"
+    assert suspended_edge.generation == 2
+    assert suspended_claim is not None
+    assert suspended_claim.claim_id == claim.claim_id
+    ensure_claim_secret(claim_secrets, suspended_claim, claim_secret=claim_secret)
+    assert discord_controlled_character(scenario.actor, 123) is None
+    assert character.has_component(SuspendedComponent)
+
+    resumed = resume_discord_claim(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+    )
+
+    assert resumed is not None
+    resumed_character, resumed_controller_id, generation = resumed
+    resumed_controller = scenario.actor.world.get_entity(resumed_controller_id)
+    resumed_claim = controller_claim(resumed_controller)
+    assert resumed_character.id == character.id
+    assert generation == 3
+    assert resumed_controller.has_component(DiscordControllerComponent)
+    assert resumed_claim is not None
+    assert resumed_claim.claim_id == claim.claim_id
+    ensure_claim_secret(claim_secrets, resumed_claim, claim_secret=claim_secret)
     assert not character.has_component(SuspendedComponent)
+    assert discord_controlled_character(scenario.actor, 123) == (
+        character.id,
+        resumed_controller_id,
+        generation,
+    )
 
 
 def test_retire_discord_controller_ignores_non_discord_controllers(scenario):
@@ -2030,6 +2328,32 @@ async def test_discord_bot_build_command_supports_plugin_verbs_without_tool(scen
     assert command.lane.value == "world"
 
 
+async def test_discord_bot_build_command_resumes_idle_claim(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    suspend_discord_character(scenario.actor, discord_user_id=123, reason="idle")
+    bot = _bot_for_scenario(scenario)
+
+    command, error = await bot._build_command(
+        123,
+        parse_discord_action("move north", scenario.actor.available_command_types()),
+        default_channel_id=456,
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    edge, controller_id = character.get_relationships(ControlledBy)[0]
+    controller = scenario.actor.world.get_entity(controller_id)
+    assert error is None
+    assert command.controller_id == str(controller_id)
+    assert command.controller_generation == edge.generation == 3
+    assert controller.has_component(DiscordControllerComponent)
+    assert not character.has_component(SuspendedComponent)
+
+
 async def test_discord_bot_submit_action_returns_build_errors(scenario):
     bot = _bot_for_scenario(scenario)
     ctx = _DiscordThreadCtx(message=_DiscordCommandMessage())
@@ -2337,14 +2661,14 @@ async def test_discord_bot_meta_commands_cover_success_and_errors(scenario):
     assert "World verbs available now" in ctx.message.thread.sent[-1]
 
     assert await bot._handle_meta_command(ctx, "release", "") is True
-    assert ctx.replies[-1][0] == "Juniper is now controlled by the LLM."
+    assert ctx.replies[-1][0] == "Released your claim on Juniper."
 
     assert await bot._handle_meta_command(ctx, "release", "") is True
-    assert "not controlling" in ctx.replies[-1][0]
+    assert "do not have a character claim" in ctx.replies[-1][0]
 
     assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
     assert await bot._handle_meta_command(ctx, "suspend", "") is True
-    assert ctx.replies[-1][0] == "Juniper is suspended until someone claims them."
+    assert ctx.replies[-1][0] == "Juniper is idle until you resume with another command."
 
     assert await bot._handle_meta_command(ctx, "dance", "") is False
 
@@ -2558,15 +2882,19 @@ async def test_discord_registered_command_callbacks_cover_success_and_error_path
     assert "World verbs available now" in ctx.message.thread.sent[-1]
 
     await commands["release"](ctx)
-    assert ctx.replies[-1][0] == "Juniper is now controlled by the LLM."
+    assert ctx.replies[-1][0] == "Released your claim on Juniper."
 
     await commands["release"](ctx)
-    assert "not controlling" in ctx.replies[-1][0]
+    assert "do not have a character claim" in ctx.replies[-1][0]
 
     assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
     await commands["suspend"](ctx)
-    assert ctx.replies[-1][0] == "Juniper is suspended until someone claims them."
+    assert ctx.replies[-1][0] == "Juniper is idle until you resume with another command."
 
+    await commands["suspend"](ctx)
+    assert "idle until you resume" in ctx.replies[-1][0]
+
+    await commands["release"](ctx)
     await commands["suspend"](ctx)
     assert "not controlling" in ctx.replies[-1][0]
 

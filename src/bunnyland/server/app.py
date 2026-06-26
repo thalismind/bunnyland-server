@@ -193,6 +193,7 @@ def create_app(
     admin_token: str | None = None,
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
+    claim_secrets: ClaimSecretRegistry | None = None,
     memory_store=None,
     title: str = "bunnyland",
 ):
@@ -235,7 +236,7 @@ def create_app(
     )
     stream = EventStream(actor)
     meta = meta or WorldMeta()
-    claim_secrets = ClaimSecretRegistry()
+    claim_secrets = claim_secrets or ClaimSecretRegistry()
     normalize_claimed_controllers_without_secrets(actor, claim_secrets)
     generator_registry = collect_generators(plugins or ())
     generation_job = None

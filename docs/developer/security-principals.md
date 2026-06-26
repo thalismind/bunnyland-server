@@ -80,8 +80,9 @@ query string, ECS component, persisted world file, or generic command payload ob
 
 Claiming attaches `ClaimedComponent` to the current controller or transfers it to the new
 client controller. A character with an active claim cannot be claimed by another client.
-The same client can reclaim only by presenting the matching `claim_id` and
-`claim_secret`.
+HTTP and MCP clients reclaim by presenting the matching `claim_id` and `claim_secret`.
+Discord commands authenticate the same `client_id` through Discord's user identity; portable
+handoff from Discord to HTTP/MCP still requires the bearer secret.
 
 Controller release and claim release are different operations:
 

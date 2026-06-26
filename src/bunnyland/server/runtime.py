@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .. import telemetry
+from ..claims import ClaimSecretRegistry
 from ..core.world_actor import WorldActor
 from ..engine import GameLoop
 from ..persistence import WorldMeta
@@ -33,6 +34,7 @@ async def run_loop_with_api(
     admin_token: str | None = None,
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
+    claim_secrets: ClaimSecretRegistry | None = None,
     max_ticks: int | None = None,
 ) -> int:
     """Run uvicorn and the game loop until either one stops."""
@@ -55,6 +57,7 @@ async def run_loop_with_api(
         admin_token=admin_token,
         imagegen=imagegen,
         character_chat=character_chat,
+        claim_secrets=claim_secrets,
     )
     telemetry.instrument_fastapi(app)
     server = uvicorn.Server(

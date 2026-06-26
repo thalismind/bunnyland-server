@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import telemetry
+from .claims import ClaimSecretRegistry
 from .core.claim_timeout import CLAIM_TIMEOUT_DEFAULT_SECONDS, normalize_claim_timeout
 from .core.systems import ClaimTimeoutSystem
 from .core.world_actor import WorldActor
@@ -524,6 +525,7 @@ def _setup_discord_bot(
     credentials: ServeCredentials,
     models: ServeModels,
     meta: WorldMeta,
+    claim_secrets: ClaimSecretRegistry,
     imagegen=None,
 ):
     if not args.discord:
@@ -545,12 +547,18 @@ def _setup_discord_bot(
             dm_user_ids=dm_user_filter_ids,
         ),
         imagegen=imagegen,
+        claim_secrets=claim_secrets,
     )
-    _maybe_assign_startup_discord_claim(actor, args, meta)
+    _maybe_assign_startup_discord_claim(actor, args, meta, claim_secrets)
     return discord_bot
 
 
-def _maybe_assign_startup_discord_claim(actor: WorldActor, args, meta: WorldMeta) -> None:
+def _maybe_assign_startup_discord_claim(
+    actor: WorldActor,
+    args,
+    meta: WorldMeta,
+    claim_secrets: ClaimSecretRegistry,
+) -> None:
     claim_user_id = args.discord_user_id or _env_int("BUNNYLAND_DISCORD_USER_ID")
     claim_channel_id = args.discord_channel_id or _env_int("BUNNYLAND_DISCORD_CHANNEL_ID") or 0
     claim_character = args.discord_character or os.environ.get("BUNNYLAND_DISCORD_CHARACTER")
@@ -565,6 +573,7 @@ def _maybe_assign_startup_discord_claim(actor: WorldActor, args, meta: WorldMeta
             default_channel_id=claim_channel_id,
             character_name=claim_character,
             allow_child_claims=args.discord_allow_child_claims,
+            claim_secrets=claim_secrets,
         )
     except RuntimeError as exc:
         print(f"Skipped startup Discord claim for user {claim_user_id}: {exc}")
@@ -587,6 +596,7 @@ async def _run_serve_runtime(
     models: ServeModels,
     imagegen=None,
     character_chat=None,
+    claim_secrets: ClaimSecretRegistry | None = None,
 ) -> int:
     max_ticks = args.ticks if args.ticks > 0 else None
     display_ticks = (
@@ -614,6 +624,7 @@ async def _run_serve_runtime(
         max_ticks,
         imagegen=imagegen,
         character_chat=character_chat,
+        claim_secrets=claim_secrets,
     )
 
 
@@ -640,6 +651,7 @@ async def _run_api_runtime(
     max_ticks: int | None,
     imagegen=None,
     character_chat=None,
+    claim_secrets: ClaimSecretRegistry | None = None,
 ) -> int:
     from .server.runtime import run_loop_with_api
 
@@ -662,6 +674,7 @@ async def _run_api_runtime(
                 or os.environ.get("BUNNYLAND_ADMIN_TOKEN"),
                 imagegen=imagegen,
                 character_chat=character_chat,
+                claim_secrets=claim_secrets,
                 max_ticks=max_ticks,
             ),
             loop,
@@ -712,12 +725,22 @@ async def _serve(args) -> None:
     dispatch = ControllerDispatch(actor, builder, agent)
     character_chat = _build_character_chat_service(args, actor, builder, credentials, models)
     _configure_claim_timeout(actor, args, models)
+    claim_secrets = ClaimSecretRegistry()
     loop = GameLoop(
         actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
         autosave=autosave, autosave_every=args.autosave_every,
         paused=bool(args.load and args.load_paused),
     )
-    discord_bot = _setup_discord_bot(actor, loop, args, credentials, models, meta, imagegen)
+    discord_bot = _setup_discord_bot(
+        actor,
+        loop,
+        args,
+        credentials,
+        models,
+        meta,
+        claim_secrets,
+        imagegen,
+    )
     ticks = await _run_serve_runtime(
         loop,
         actor,
@@ -730,6 +753,7 @@ async def _serve(args) -> None:
         models,
         imagegen=imagegen,
         character_chat=character_chat,
+        claim_secrets=claim_secrets,
     )
     print(f"Stopped after {ticks} ticks at game epoch {actor.epoch}s.")
 

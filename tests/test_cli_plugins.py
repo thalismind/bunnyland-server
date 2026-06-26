@@ -10,6 +10,7 @@ import pytest
 from conftest import install_plugin_module
 
 import bunnyland.cli as cli
+from bunnyland.claims import ClaimSecretRegistry
 from bunnyland.cli import (
     assign_discord_controller,
     build_actor,
@@ -385,6 +386,9 @@ def test_cli_discord_startup_claim_assigns_configured_user(monkeypatch, tmp_path
     output = capsys.readouterr().out
     assert result == 0
     assert calls["claim_actor"] is calls["bot_actor"]
+    claim_secrets = calls["claim_kwargs"].pop("claim_secrets")
+    assert isinstance(claim_secrets, ClaimSecretRegistry)
+    assert calls["bot_kwargs"]["claim_secrets"] is claim_secrets
     assert calls["claim_kwargs"] == {
         "discord_user_id": 123,
         "default_channel_id": 456,
@@ -1259,7 +1263,13 @@ def test_maybe_assign_startup_discord_claim_handles_errors_and_save(
     monkeypatch.setenv("BUNNYLAND_DISCORD_CHANNEL_ID", "456")
     monkeypatch.setattr(cli, "assign_discord_controller", failing_assign)
 
-    cli._maybe_assign_startup_discord_claim(actor, _serve_args(discord=True), meta)
+    claim_secrets = ClaimSecretRegistry()
+    cli._maybe_assign_startup_discord_claim(
+        actor,
+        _serve_args(discord=True),
+        meta,
+        claim_secrets,
+    )
     assert "Skipped startup Discord claim for user 123" in capsys.readouterr().out
 
     path = tmp_path / "claimed-world.json"
@@ -1267,6 +1277,7 @@ def test_maybe_assign_startup_discord_claim_handles_errors_and_save(
     def successful_assign(actor, **kwargs):
         del actor
         assert kwargs["default_channel_id"] == 456
+        assert kwargs["claim_secrets"] is claim_secrets
         return "Juniper"
 
     monkeypatch.setattr(cli, "assign_discord_controller", successful_assign)
@@ -1275,6 +1286,7 @@ def test_maybe_assign_startup_discord_claim_handles_errors_and_save(
         actor,
         _serve_args(discord=True, save=str(path)),
         meta,
+        claim_secrets,
     )
 
     assert "Assigned Discord user 123 to 'Juniper'." in capsys.readouterr().out

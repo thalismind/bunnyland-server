@@ -20,6 +20,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ..claims import ClaimSecretRegistry
 from ..core.commands import SubmittedCommand
 from ..core.events import CommandExecutedEvent, CommandRejectedEvent, DomainEvent
 from ..engine import GameLoop
@@ -183,6 +184,7 @@ class DiscordPlaytestHarness:
         self._bot._world_paused = loop.paused
         self._bot._pending = {}
         self._bot._paused_reactions = {}
+        self._bot.claim_secrets = ClaimSecretRegistry()
         self._bot._build_command = self._traced_build_command
         loop.actor.bus.subscribe(CommandExecutedEvent, self._bot._complete_pending)
         loop.actor.bus.subscribe(CommandRejectedEvent, self._bot._complete_pending)
@@ -199,9 +201,18 @@ class DiscordPlaytestHarness:
             await asyncio.gather(*self._tasks.values(), return_exceptions=True)
 
     async def _traced_build_command(
-        self, discord_user_id: int, action
+        self,
+        discord_user_id: int,
+        action,
+        *,
+        default_channel_id: int = 0,
     ) -> tuple[SubmittedCommand | None, str | None]:
-        command, error = await DiscordBot._build_command(self._bot, discord_user_id, action)
+        command, error = await DiscordBot._build_command(
+            self._bot,
+            discord_user_id,
+            action,
+            default_channel_id=default_channel_id,
+        )
         self.commands.append(
             {
                 "discord_user_id": discord_user_id,

@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
+from ..claims import ClaimSecretRegistry
 from ..core.claim_timeout import (
     normalize_claim_timeout,
 )
@@ -60,8 +61,9 @@ from ..llm_agents.tools import (
 from .claim import (
     assign_discord_controller,
     discord_controlled_character,
-    release_discord_character_to_llm,
+    release_discord_claim,
     render_character_list,
+    resume_discord_claim,
     set_discord_claim_fallback,
     suspend_discord_character,
 )
@@ -334,6 +336,7 @@ class DiscordBot:
         pause_status: Callable[[], bool] | None = None,
         message_filters: DiscordMessageFilters | None = None,
         imagegen: ImageGenService | None = None,
+        claim_secrets: ClaimSecretRegistry | None = None,
     ) -> None:
         discord, commands = _require_discord()
         self.actor = actor
@@ -343,6 +346,7 @@ class DiscordBot:
         self.character_model = character_model
         self.message_filters = message_filters or DiscordMessageFilters()
         self.imagegen = imagegen
+        self.claim_secrets = claim_secrets
         self._pause_status = pause_status
         self._world_paused = pause_status() if pause_status is not None else False
         intents = discord.Intents.default()
@@ -469,13 +473,22 @@ class DiscordBot:
         data = self.imagegen.media.read(parts[1], parts[2])
         await message.reply(file=discord.File(BytesIO(data), filename=parts[2]))
 
-    async def _build_command(self, discord_user_id: int, action: DiscordAction):
-        found = self._character_for_user(discord_user_id)
+    async def _build_command(
+        self,
+        discord_user_id: int,
+        action: DiscordAction,
+        *,
+        default_channel_id: int = 0,
+    ):
+        found = resume_discord_claim(
+            self.actor,
+            discord_user_id=discord_user_id,
+            default_channel_id=default_channel_id,
+        )
         if found is None:
             return None, "You are not controlling a character yet."
-        character_id, controller_id, generation = found
+        character, controller_id, generation = found
 
-        character = self.actor.world.get_entity(character_id)
         resolved, unresolved = resolve_reference_args(
             self.actor.world,
             character,
@@ -488,7 +501,7 @@ class DiscordBot:
         if action.tool is not None:
             command = command_from_tool_call(
                 ToolCall(name=action.tool, arguments=resolved),
-                character_id=str(character_id),
+                character_id=str(character.id),
                 controller_id=str(controller_id),
                 controller_generation=generation,
                 submitted_at_epoch=self.actor.epoch,
@@ -496,7 +509,7 @@ class DiscordBot:
             )
         else:
             command = build_submitted_command(
-                character_id=str(character_id),
+                character_id=str(character.id),
                 controller_id=str(controller_id),
                 controller_generation=generation,
                 command_type=action.command_type,
@@ -516,7 +529,11 @@ class DiscordBot:
             pass
 
     async def _submit_action(self, ctx, action: DiscordAction) -> str:
-        command, error = await self._build_command(ctx.author.id, action)
+        command, error = await self._build_command(
+            ctx.author.id,
+            action,
+            default_channel_id=getattr(ctx.channel, "id", 0),
+        )
         if error is not None:
             return error
         command = replace(command, on_insufficient_points=OnInsufficientPoints.DENY)
@@ -688,6 +705,7 @@ class DiscordBot:
                 claim_args = _parse_discord_claim_args(rest)
                 claimed = assign_discord_controller(
                     self.actor,
+                    claim_secrets=self.claim_secrets,
                     discord_user_id=ctx.author.id,
                     default_channel_id=ctx.channel.id,
                     character_name=claim_args.character_name,
@@ -742,16 +760,15 @@ class DiscordBot:
 
         if head == "release":
             try:
-                released = release_discord_character_to_llm(
+                released = release_discord_claim(
                     self.actor,
+                    claim_secrets=self.claim_secrets,
                     discord_user_id=ctx.author.id,
-                    model=self.character_model,
-                    provider=self.llm_provider,
                 )
             except RuntimeError as exc:
                 await self._reply(ctx, str(exc))
                 return True
-            await self._reply(ctx, f"{released} is now controlled by the LLM.")
+            await self._reply(ctx, f"Released your claim on {released}.")
             return True
 
         if head == "suspend":
@@ -760,10 +777,15 @@ class DiscordBot:
             except RuntimeError as exc:
                 await self._reply(ctx, str(exc))
                 return True
-            await self._reply(ctx, f"{suspended} is suspended until someone claims them.")
+            await self._reply(ctx, f"{suspended} is idle until you resume with another command.")
             return True
 
         if head == "look":
+            resume_discord_claim(
+                self.actor,
+                discord_user_id=ctx.author.id,
+                default_channel_id=getattr(ctx.channel, "id", 0),
+            )
             await ctx.send(render_look(self.actor, ctx.author.id))
             return True
 
@@ -849,6 +871,7 @@ class DiscordBot:
                 claim_args = _parse_discord_claim_args(character)
                 claimed = assign_discord_controller(
                     self.actor,
+                    claim_secrets=self.claim_secrets,
                     discord_user_id=ctx.author.id,
                     default_channel_id=ctx.channel.id,
                     character_name=claim_args.character_name,
@@ -900,16 +923,15 @@ class DiscordBot:
         @self.client.command(name="release")
         async def release(ctx):
             try:
-                released = release_discord_character_to_llm(
+                released = release_discord_claim(
                     self.actor,
+                    claim_secrets=self.claim_secrets,
                     discord_user_id=ctx.author.id,
-                    model=self.character_model,
-                    provider=self.llm_provider,
                 )
             except RuntimeError as exc:
                 await self._reply(ctx, str(exc))
                 return
-            await self._reply(ctx, f"{released} is now controlled by the LLM.")
+            await self._reply(ctx, f"Released your claim on {released}.")
 
         @self.client.command(name="suspend")
         async def suspend(ctx):
@@ -918,10 +940,15 @@ class DiscordBot:
             except RuntimeError as exc:
                 await self._reply(ctx, str(exc))
                 return
-            await self._reply(ctx, f"{suspended} is suspended until someone claims them.")
+            await self._reply(ctx, f"{suspended} is idle until you resume with another command.")
 
         @self.client.command(name="look")
         async def look(ctx):
+            resume_discord_claim(
+                self.actor,
+                discord_user_id=ctx.author.id,
+                default_channel_id=getattr(ctx.channel, "id", 0),
+            )
             await ctx.send(render_look(self.actor, ctx.author.id))
 
         @self.client.command(name="help")
@@ -977,7 +1004,7 @@ __all__ = [
     "discord_broadcast_channel_ids",
     "parse_discord_action",
     "parse_discord_id_list",
-    "release_discord_character_to_llm",
+    "release_discord_claim",
     "set_discord_claim_fallback",
     "suspend_discord_character",
 ]
