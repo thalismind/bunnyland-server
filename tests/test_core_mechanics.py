@@ -546,7 +546,7 @@ async def test_world_actor_control_commands_and_controller_kinds():
     discord = spawn_entity(
         scenario.actor.world, [DiscordControllerComponent(discord_user_id=1, default_channel_id=2)]
     )
-    mcp = spawn_entity(scenario.actor.world, [MCPControllerComponent(agent_id="agent")])
+    mcp = spawn_entity(scenario.actor.world, [MCPControllerComponent(client_id="client")])
     web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
     suspended = spawn_entity(
         scenario.actor.world, [SuspendedControllerComponent(reason="already suspended")]

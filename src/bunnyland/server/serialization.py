@@ -541,8 +541,8 @@ def _controller_display(controller) -> tuple[str, str, str]:
         return ("web", label, web.client_id if web.client_id and web.client_id != label else "")
     if controller.has_component(MCPControllerComponent):
         mcp = controller.get_component(MCPControllerComponent)
-        label = mcp.label or mcp.agent_id or "MCP agent"
-        return ("mcp", label, mcp.agent_id if mcp.agent_id and mcp.agent_id != label else "")
+        label = mcp.label or mcp.client_id or "MCP client"
+        return ("mcp", label, mcp.client_id if mcp.client_id and mcp.client_id != label else "")
     if controller.has_component(LLMControllerComponent):
         llm = controller.get_component(LLMControllerComponent)
         detail = f"{llm.provider}/{llm.model}" if llm.model else llm.provider
@@ -1010,7 +1010,7 @@ def serialize_action_search(
     """Search the available action catalogue, returning a slim, paged action list.
 
     Progressive disclosure for clients that cannot render the whole catalogue at once
-    (e.g. MCP agents): match ``query`` against each action's command_type, title, and tool
+    (e.g. MCP clients): match ``query`` against each action's command_type, title, and tool
     name over the actions this world actually accepts. Mirrors the ``actions`` field of the
     character projection, which the web client filters client-side instead.
 

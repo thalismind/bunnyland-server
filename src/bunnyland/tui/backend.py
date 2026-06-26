@@ -7,6 +7,7 @@ so the app never needs to know which one it is using.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -17,11 +18,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from ..claims import (
+    CLIENT_KIND_WEB,
+    ClaimSecretRegistry,
+    add_claim,
+    remove_claim,
+    transfer_claim,
+)
 from ..core import (
     CommandCost,
     Lane,
+    LLMControllerComponent,
     OnInsufficientPoints,
     SuspendedComponent,
+    SuspendedControllerComponent,
     WebControllerComponent,
     build_submitted_command,
     spawn_entity,
@@ -42,6 +52,35 @@ logger = logging.getLogger("bunnyland.tui")
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "bunnyland"
 CLIENT_ID_PATH = CONFIG_DIR / "client-id"
+
+
+@dataclass(frozen=True)
+class ControlClaim:
+    controller_id: str
+    generation: int
+    claim_id: str = ""
+    claim_secret: str = ""
+    active: bool = True
+
+    def __iter__(self):
+        yield self.controller_id
+        yield self.generation
+
+    def __getitem__(self, index: int):
+        return (self.controller_id, self.generation)[index]
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, ControlClaim):
+            return (
+                self.controller_id == other.controller_id
+                and self.generation == other.generation
+                and self.claim_id == other.claim_id
+                and self.claim_secret == other.claim_secret
+                and self.active == other.active
+            )
+        if isinstance(other, (tuple, list)) and len(other) == 2:
+            return (self.controller_id, self.generation) == tuple(other)
+        return False
 
 
 def _client_id_path() -> Path:
@@ -67,6 +106,61 @@ def persistent_client_id(path: Path | None = None) -> str:
     except OSError:
         logger.warning("Could not persist TUI client id to %s", path, exc_info=True)
     return client_id
+
+
+def _claim_path(client_id: str, character_id: str) -> Path:
+    safe_client = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in client_id)
+    safe_character = "".join(ch if ch.isalnum() or ch in "-_:" else "_" for ch in character_id)
+    return CONFIG_DIR / "claims" / safe_client / f"{safe_character}.json"
+
+
+def load_claim_control(client_id: str, character_id: str) -> ControlClaim | None:
+    try:
+        data = json.loads(_claim_path(client_id, character_id).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not data.get("claim_id") or not data.get("claim_secret"):
+        return None
+    return ControlClaim(
+        controller_id=str(data.get("controller_id") or ""),
+        generation=int(data.get("generation") or 0),
+        claim_id=str(data["claim_id"]),
+        claim_secret=str(data["claim_secret"]),
+        active=bool(data.get("active", True)),
+    )
+
+
+def save_claim_control(client_id: str, character_id: str, control: ControlClaim) -> None:
+    if not control.claim_id or not control.claim_secret:
+        return
+    path = _claim_path(client_id, character_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "controller_id": control.controller_id,
+                    "generation": control.generation,
+                    "claim_id": control.claim_id,
+                    "claim_secret": control.claim_secret,
+                    "active": control.active,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.warning("Could not persist TUI claim data to %s", path, exc_info=True)
+
+
+def clear_claim_control(client_id: str, character_id: str) -> None:
+    try:
+        _claim_path(client_id, character_id).unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning("Could not remove TUI claim data for %s", character_id, exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -159,8 +253,18 @@ class Backend(ABC):
     async def submit(self, command: dict) -> SubmitResult: ...
 
     @abstractmethod
-    async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
+    async def claim(self, player_id: str, world: World) -> ControlClaim | None:
         """Return the controller (id, generation) the player should submit commands as."""
+
+    async def release_controller(
+        self,
+        player_id: str,
+        control: ControlClaim,
+    ) -> ControlClaim | None:
+        return control
+
+    async def release_claim(self, player_id: str, control: ControlClaim) -> bool:
+        return False
 
     async def recent_events(self) -> list[dict]:
         """Recent domain-event messages (``{"type": "event", "data": {...}}``) for clients
@@ -225,6 +329,7 @@ class LocalBackend(Backend):
         self._loop = None
         self._task: asyncio.Task | None = None
         self._controller = None
+        self._claim_secrets = ClaimSecretRegistry()
         self._events = None
         self.client_id = client_id or persistent_client_id()
         self.fallback_controller = fallback_controller
@@ -377,15 +482,30 @@ class LocalBackend(Backend):
             )
         return ImageRequestResult(ok=True, status=job.status, url=job.url)
 
-    async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
+    async def claim(self, player_id: str, world: World) -> ControlClaim | None:
         """Hand the character to a single reusable web controller, bumping its generation
         so the offline dispatch stops driving it."""
         async with self.actor._lock:
+            stored = load_claim_control(self.client_id, player_id)
             if self._controller is None:
                 self._controller = spawn_entity(
                     self.actor.world,
                     [WebControllerComponent(client_id=self.client_id, label="tui")],
                 )
+            claim = add_claim(
+                self._controller,
+                client_kind=CLIENT_KIND_WEB,
+                client_id=self.client_id,
+                character_id=player_id,
+                label="tui",
+                claim_id=stored.claim_id if stored else None,
+                now_unix=int(time.time()),
+            )
+            claim_secret = (
+                stored.claim_secret
+                if stored and self._claim_secrets.validate(claim.claim_id, stored.claim_secret)
+                else self._claim_secrets.issue(claim.claim_id)
+            )
             apply_claim_timeout_settings(
                 self._controller,
                 now_unix=int(time.time()),
@@ -399,7 +519,82 @@ class LocalBackend(Backend):
             character = self.actor.world.get_entity(parse_entity_id(player_id))
             if character.has_component(SuspendedComponent):
                 character.remove_component(SuspendedComponent)
-        return str(self._controller.id), generation
+        control = ControlClaim(
+            controller_id=str(self._controller.id),
+            generation=generation,
+            claim_id=claim.claim_id,
+            claim_secret=claim_secret,
+            active=True,
+        )
+        save_claim_control(self.client_id, player_id, control)
+        return control
+
+    async def release_controller(
+        self,
+        player_id: str,
+        control: ControlClaim,
+    ) -> ControlClaim | None:
+        async with self.actor._lock:
+            character_id = parse_entity_id(player_id)
+            if character_id is None or not self.actor.world.has_entity(character_id):
+                return None
+            old_controller_id = parse_entity_id(control.controller_id)
+            if old_controller_id is None or not self.actor.world.has_entity(old_controller_id):
+                return None
+            old_controller = self.actor.world.get_entity(old_controller_id)
+            fallback = (self.fallback_controller or "suspend").strip()
+            parsed_fallback = parse_entity_id(fallback)
+            if parsed_fallback is not None and self.actor.world.has_entity(parsed_fallback):
+                new_controller = self.actor.world.get_entity(parsed_fallback)
+                kind = self.actor._controller_kind(parsed_fallback)
+                if kind == "unknown":
+                    return None
+            elif fallback == "llm":
+                new_controller = spawn_entity(
+                    self.actor.world,
+                    [
+                        LLMControllerComponent(
+                            profile_name="default",
+                            model=os.environ.get("BUNNYLAND_CHARACTER_MODEL", "deepseek-v4-flash"),
+                        )
+                    ],
+                )
+                kind = "llm"
+            else:
+                new_controller = spawn_entity(
+                    self.actor.world,
+                    [SuspendedControllerComponent(reason="released by TUI client")],
+                )
+                kind = "suspended"
+            transfer_claim(old_controller, new_controller)
+            character = self.actor.world.get_entity(character_id)
+            if kind == "suspended":
+                generation = self.actor.suspend(
+                    character_id,
+                    new_controller.id,
+                    reason="released by TUI client",
+                )
+            else:
+                generation = self.actor.assign_controller(character_id, new_controller.id)
+                if character.has_component(SuspendedComponent):
+                    character.remove_component(SuspendedComponent)
+        released = ControlClaim(
+            controller_id=str(new_controller.id),
+            generation=generation,
+            claim_id=control.claim_id,
+            claim_secret=control.claim_secret,
+            active=False,
+        )
+        save_claim_control(self.client_id, player_id, released)
+        return released
+
+    async def release_claim(self, player_id: str, control: ControlClaim) -> bool:
+        controller_id = parse_entity_id(control.controller_id)
+        if controller_id is None or not self.actor.world.has_entity(controller_id):
+            return False
+        remove_claim(self.actor.world.get_entity(controller_id), self._claim_secrets)
+        clear_claim_control(self.client_id, player_id)
+        return True
 
 
 class RemoteBackend(Backend):
@@ -422,6 +617,32 @@ class RemoteBackend(Backend):
         self.client_id = client_id or persistent_client_id()
         self.fallback_controller = fallback_controller
         self.timeout_seconds = timeout_seconds
+        self._claims: dict[str, ControlClaim] = {}
+
+    def _claim_for(self, character_id: str) -> ControlClaim | None:
+        return self._claims.get(character_id) or load_claim_control(self.client_id, character_id)
+
+    def _claim_headers(self, character_id: str) -> dict[str, str]:
+        claim = self._claim_for(character_id)
+        return (
+            {"X-Bunnyland-Claim-Secret": claim.claim_secret}
+            if claim and claim.claim_secret
+            else {}
+        )
+
+    def _claim_params(self, character_id: str) -> dict[str, str]:
+        claim = self._claim_for(character_id)
+        return {"claim_id": claim.claim_id} if claim and claim.claim_id else {}
+
+    def _claim_request_kwargs(self, character_id: str, *, params: bool = False) -> dict:
+        kwargs = {}
+        claim_headers = self._claim_headers(character_id)
+        if claim_headers:
+            kwargs["headers"] = claim_headers
+        claim_params = self._claim_params(character_id)
+        if params and claim_params:
+            kwargs["params"] = claim_params
+        return kwargs
 
     async def start(self) -> None:
         import httpx
@@ -443,7 +664,10 @@ class RemoteBackend(Backend):
         return list(CharacterListResponse.model_validate(res.json()).characters)
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
-        res = await self._client.get(f"{self.base}/world/character/{character_id}")
+        res = await self._client.get(
+            f"{self.base}/world/character/{character_id}",
+            **self._claim_request_kwargs(character_id, params=True),
+        )
         res.raise_for_status()
         return res.json()
 
@@ -454,7 +678,8 @@ class RemoteBackend(Backend):
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
         res = await self._client.get(
-            f"{self.base}/world/character/{character_id}/commands"
+            f"{self.base}/world/character/{character_id}/commands",
+            **self._claim_request_kwargs(character_id, params=True),
         )
         res.raise_for_status()
         return res.json()
@@ -466,19 +691,28 @@ class RemoteBackend(Backend):
         controller_id: str,
         controller_generation: int,
     ) -> bool:
+        kwargs = self._claim_request_kwargs(character_id)
+        kwargs["params"] = {
+            "controller_id": controller_id,
+            "controller_generation": controller_generation,
+            **self._claim_params(character_id),
+        }
         res = await self._client.delete(
             f"{self.base}/world/character/{character_id}/commands/{command_id}",
-            params={
-                "controller_id": controller_id,
-                "controller_generation": controller_generation,
-            },
+            **kwargs,
         )
         if not res.is_success:
             return False
         return bool(res.json().get("cancelled"))
 
     async def submit(self, command: dict) -> SubmitResult:
-        res = await self._client.post(f"{self.base}/world/commands", json=command)
+        character_id = str(command.get("character_id") or "")
+        claim = self._claim_for(character_id)
+        if claim is not None and claim.claim_id:
+            command = {**command, "claim_id": claim.claim_id}
+        kwargs = self._claim_request_kwargs(character_id)
+        kwargs["json"] = command
+        res = await self._client.post(f"{self.base}/world/commands", **kwargs)
         try:
             body = res.json()
         except Exception:
@@ -500,7 +734,8 @@ class RemoteBackend(Backend):
 
     async def request_image(self, character_id: str) -> ImageRequestResult:
         res = await self._client.post(
-            f"{self.base}/world/character/{character_id}/scene-image"
+            f"{self.base}/world/character/{character_id}/scene-image",
+            **self._claim_request_kwargs(character_id, params=True),
         )
         if res.status_code == 409:
             return ImageRequestResult(
@@ -520,17 +755,27 @@ class RemoteBackend(Backend):
             return SheetOpenResult(ok=False, url=url, reason="could not open browser")
         return SheetOpenResult(ok=True, url=url)
 
-    async def claim(self, player_id: str, world: World) -> tuple[str, int] | None:
-        res = await self._client.post(
-            f"{self.base}/world/controllers/web/claim",
-            json={
+    async def claim(self, player_id: str, world: World) -> ControlClaim | None:
+        stored = load_claim_control(self.client_id, player_id)
+        headers = (
+            {"X-Bunnyland-Claim-Secret": stored.claim_secret}
+            if stored and stored.claim_secret
+            else {}
+        )
+        kwargs = {
+            "json": {
                 "character_id": player_id,
                 "client_id": self.client_id,
                 "label": "tui",
                 "fallback_controller": self.fallback_controller,
                 "timeout_seconds": self.timeout_seconds,
             },
-        )
+        }
+        if stored is not None:
+            kwargs["json"]["claim_id"] = stored.claim_id
+        if headers:
+            kwargs["headers"] = headers
+        res = await self._client.post(f"{self.base}/world/controllers/web/claim", **kwargs)
         if not res.is_success:
             logger.warning(
                 "Remote web controller claim failed for %s: HTTP %s %s",
@@ -540,4 +785,71 @@ class RemoteBackend(Backend):
             )
             return None
         data = res.json()
-        return data["controller_id"], int(data["controller_generation"])
+        control = ControlClaim(
+            controller_id=data["controller_id"],
+            generation=int(data["controller_generation"]),
+            claim_id=str(data.get("claim_id") or ""),
+            claim_secret=str(data.get("claim_secret") or ""),
+            active=True,
+        )
+        self._claims[player_id] = control
+        save_claim_control(self.client_id, player_id, control)
+        return control
+
+    async def release_controller(
+        self,
+        player_id: str,
+        control: ControlClaim,
+    ) -> ControlClaim | None:
+        res = await self._client.post(
+            f"{self.base}/world/controllers/web/release-controller",
+            headers={"X-Bunnyland-Claim-Secret": control.claim_secret},
+            json={
+                "character_id": player_id,
+                "client_id": self.client_id,
+                "claim_id": control.claim_id,
+                "fallback_controller": self.fallback_controller,
+                "timeout_seconds": self.timeout_seconds,
+            },
+        )
+        if not res.is_success:
+            logger.warning(
+                "Remote web controller release failed for %s: HTTP %s %s",
+                player_id,
+                res.status_code,
+                res.text,
+            )
+            return None
+        data = res.json()
+        released = ControlClaim(
+            controller_id=data["controller_id"],
+            generation=int(data["controller_generation"]),
+            claim_id=str(data.get("claim_id") or control.claim_id),
+            claim_secret=str(data.get("claim_secret") or control.claim_secret),
+            active=False,
+        )
+        self._claims[player_id] = released
+        save_claim_control(self.client_id, player_id, released)
+        return released
+
+    async def release_claim(self, player_id: str, control: ControlClaim) -> bool:
+        res = await self._client.post(
+            f"{self.base}/world/controllers/web/release-claim",
+            headers={"X-Bunnyland-Claim-Secret": control.claim_secret},
+            json={
+                "character_id": player_id,
+                "client_id": self.client_id,
+                "claim_id": control.claim_id,
+            },
+        )
+        if not res.is_success:
+            logger.warning(
+                "Remote web claim release failed for %s: HTTP %s %s",
+                player_id,
+                res.status_code,
+                res.text,
+            )
+            return False
+        self._claims.pop(player_id, None)
+        clear_claim_control(self.client_id, player_id)
+        return True

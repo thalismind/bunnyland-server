@@ -7,6 +7,20 @@ import random
 import pytest
 from conftest import build_scenario
 
+from bunnyland.claims import (
+    ClaimSecretRegistry,
+    add_claim,
+    character_has_claim,
+    claim_matches,
+    claimable_characters,
+    claimed_character_for,
+    controller_claim,
+    current_controller,
+    ensure_claim_secret,
+    normalize_claimed_controllers_without_secrets,
+    remove_claim,
+    transfer_claim,
+)
 from bunnyland.core import (
     ActionPointsComponent,
     CharacterComponent,
@@ -42,6 +56,8 @@ from bunnyland.core.claim_timeout import (
 )
 from bunnyland.core.controllers import (
     BehaviorControllerComponent,
+    ClaimedComponent,
+    ClaimTimeoutComponent,
     DiscordControllerComponent,
     LLMControllerComponent,
     MCPControllerComponent,
@@ -237,6 +253,114 @@ async def test_claim_timeout_can_fall_back_to_llm():
     assert llm.provider == "openrouter"
 
 
+async def test_claim_timeout_can_fall_back_to_existing_controller_with_claim():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(SuspendedComponent(reason="afk"))
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    existing = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    scenario.actor.assign_controller(scenario.character, web.id)
+    claim = add_claim(
+        web,
+        client_kind="web",
+        client_id="client",
+        character_id=str(scenario.character),
+        claim_id="claim-1",
+    )
+    timeout = apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller=str(existing.id),
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(default_timeout_seconds=1800, now=lambda: 301)
+    )
+
+    await scenario.actor.tick(0)
+
+    assert character.get_relationships(ControlledBy)[0][1] == existing.id
+    assert not character.has_component(SuspendedComponent)
+    assert controller_claim(existing) == claim
+    assert existing.get_component(ClaimTimeoutComponent) == timeout
+    assert not web.has_component(ClaimedComponent)
+    assert not web.has_component(ClaimTimeoutComponent)
+
+
+async def test_claim_timeout_ignores_unknown_existing_fallback_controller():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    unknown = spawn_entity(scenario.actor.world)
+    scenario.actor.assign_controller(scenario.character, web.id)
+    apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller=str(unknown.id),
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(default_timeout_seconds=1800, now=lambda: 301)
+    )
+
+    await scenario.actor.tick(0)
+
+    _edge, controller_id = character.get_relationships(ControlledBy)[0]
+    assert controller_id != unknown.id
+    assert scenario.actor.world.get_entity(controller_id).has_component(
+        SuspendedControllerComponent
+    )
+
+
+async def test_claim_timeout_skips_existing_fallback_claimed_by_another_client():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    unavailable = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    scenario.actor.assign_controller(scenario.character, web.id)
+    claim = add_claim(
+        web,
+        client_kind="web",
+        client_id="client",
+        character_id=str(scenario.character),
+        claim_id="claim-1",
+    )
+    other_claim = add_claim(
+        unavailable,
+        client_kind="web",
+        client_id="other",
+        character_id="other-character",
+        claim_id="claim-2",
+    )
+    apply_claim_timeout_settings(
+        web,
+        now_unix=0,
+        fallback_controller=str(unavailable.id),
+        timeout_seconds=300,
+        reset_activity=True,
+    )
+    scenario.actor.register_after_tick(
+        ClaimTimeoutSystem(default_timeout_seconds=1800, now=lambda: 301)
+    )
+
+    await scenario.actor.tick(0)
+
+    _edge, controller_id = character.get_relationships(ControlledBy)[0]
+    controller = scenario.actor.world.get_entity(controller_id)
+    assert controller.id != unavailable.id
+    assert controller.has_component(SuspendedControllerComponent)
+    assert controller_claim(controller) == claim
+    assert controller_claim(unavailable) == other_claim
+
+
 async def test_claim_timeout_llm_fallback_clears_suspended_component():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
@@ -388,7 +512,7 @@ def test_claim_timeout_controller_kind_classifies_every_controller():
         world, [DiscordControllerComponent(discord_user_id=1, default_channel_id=2)]
     )
     web = spawn_entity(world, [WebControllerComponent(client_id="c")])
-    mcp = spawn_entity(world, [MCPControllerComponent(agent_id="a")])
+    mcp = spawn_entity(world, [MCPControllerComponent(client_id="a")])
     llm = spawn_entity(world, [LLMControllerComponent(profile_name="default", model="m")])
     behavior = spawn_entity(world, [BehaviorControllerComponent(behavior_name="b")])
     scripted = spawn_entity(world, [ScriptedControllerComponent(script_name="s")])
@@ -426,17 +550,15 @@ async def test_claim_timeout_uses_player_timeout_before_server_default():
     assert character.has_component(SuspendedComponent)
 
 
-def test_claim_timeout_normalizers_accept_aliases_and_reject_bad_values():
+def test_claim_timeout_normalizers_accept_aliases_and_controller_ids():
     assert normalize_claim_fallback(None) == CLAIM_FALLBACK_SUSPEND
     assert normalize_claim_fallback(" suspended ") == CLAIM_FALLBACK_SUSPEND
     assert normalize_claim_fallback("offline") == CLAIM_FALLBACK_SUSPEND
     assert normalize_claim_fallback("AI") == CLAIM_FALLBACK_LLM
-    assert normalize_claim_fallback("agent") == CLAIM_FALLBACK_LLM
+    assert normalize_claim_fallback("client") == "client"
+    assert normalize_claim_fallback("manual") == "manual"
     assert normalize_claim_timeout(CLAIM_TIMEOUT_MIN_SECONDS) == CLAIM_TIMEOUT_MIN_SECONDS
     assert normalize_claim_timeout(CLAIM_TIMEOUT_MAX_SECONDS) == CLAIM_TIMEOUT_MAX_SECONDS
-
-    with pytest.raises(ValueError, match="fallback_controller must be one of: llm, suspend"):
-        normalize_claim_fallback("manual")
 
     with pytest.raises(
         ValueError,
@@ -487,6 +609,143 @@ def test_claim_timeout_settings_preserve_existing_values_and_record_activity():
     assert second.timeout_seconds == CLAIM_TIMEOUT_MIN_SECONDS
     assert second.claimed_at_unix == 100
     assert updated.last_command_unix == 300
+
+
+def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
+    scenario = build_scenario()
+    registry = ClaimSecretRegistry()
+    character = scenario.actor.world.get_entity(scenario.character)
+    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id=" client ")])
+    scenario.actor.assign_controller(scenario.character, web.id)
+
+    claim = add_claim(
+        web,
+        client_kind=" WEB ",
+        client_id=" client ",
+        character_id=str(scenario.character),
+        label=" player ",
+        claim_id="claim-1",
+        now_unix=123,
+    )
+    secret = registry.issue(claim.claim_id)
+
+    assert registry.has_secret(claim.claim_id)
+    assert registry.secret(claim.claim_id) == secret
+    assert registry.validate(claim.claim_id, secret)
+    assert not registry.validate(claim.claim_id, None)
+    assert not registry.validate("missing", secret)
+    assert claim_matches(claim, "web", "client")
+    assert not claim_matches(claim, "web", "other")
+    assert not claim_matches(claim, "mcp", "client")
+    assert character_has_claim(scenario.actor, character)
+    assert claimable_characters(scenario.actor, [character], allow_child_claims=True) == []
+    loose = spawn_entity(scenario.actor.world, [CharacterComponent()])
+    assert character_has_claim(scenario.actor, loose) is False
+    assert claimed_character_for(
+        scenario.actor,
+        client_kind="WEB",
+        client_id=" client ",
+    ) == (character, web, character.get_relationships(ControlledBy)[0][0], claim)
+    assert claimed_character_for(
+        scenario.actor,
+        client_kind="web",
+        client_id="missing",
+    ) is None
+    ensure_claim_secret(registry, claim, claim_id="claim-1", claim_secret=secret)
+
+    with pytest.raises(PermissionError, match="invalid claim id"):
+        ensure_claim_secret(registry, claim, claim_id="claim-2", claim_secret=secret)
+    with pytest.raises(PermissionError, match="invalid claim secret"):
+        ensure_claim_secret(registry, claim, claim_id="claim-1", claim_secret="wrong")
+
+    registry.clear()
+    assert not registry.has_secret(claim.claim_id)
+    kept = add_claim(
+        spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="kept")]),
+        client_kind="web",
+        client_id="kept",
+        character_id=str(scenario.character),
+        claim_id="kept-claim",
+    )
+    registry.issue(kept.claim_id)
+    normalize_claimed_controllers_without_secrets(scenario.actor, registry)
+    assert not web.has_component(ClaimedComponent)
+    assert claimed_character_for(
+        scenario.actor,
+        client_kind="web",
+        client_id="kept",
+    ) is None
+
+    assert controller_claim(spawn_entity(scenario.actor.world)) is None
+
+
+def test_claim_helpers_skip_dangling_controller_edges(monkeypatch):
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    original_has_entity = scenario.actor.world.has_entity
+
+    def has_entity(entity_id):
+        if entity_id == scenario.controller:
+            return False
+        return original_has_entity(entity_id)
+
+    monkeypatch.setattr(scenario.actor.world, "has_entity", has_entity)
+
+    assert current_controller(scenario.actor, character) is None
+    assert character_has_claim(scenario.actor, character) is False
+
+
+def test_claim_transfer_and_removal_cover_conflicts_and_timeouts():
+    scenario = build_scenario()
+    old = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="old")])
+    target = spawn_entity(scenario.actor.world, [LLMControllerComponent("default", "m")])
+    same_target = spawn_entity(
+        scenario.actor.world,
+        [SuspendedControllerComponent(reason="idle")],
+    )
+    conflict = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="other")])
+    registry = ClaimSecretRegistry()
+
+    assert transfer_claim(old, target) is None
+    claim = add_claim(
+        old,
+        client_kind="web",
+        client_id="old",
+        character_id=str(scenario.character),
+        claim_id="claim-1",
+    )
+    registry.issue(claim.claim_id)
+    timeout = ClaimTimeoutComponent(fallback_controller="llm", timeout_seconds=300)
+    old.add_component(timeout)
+    same_target.add_component(claim)
+    same_target.add_component(ClaimTimeoutComponent(fallback_controller="suspend"))
+    add_claim(
+        conflict,
+        client_kind="web",
+        client_id="other",
+        character_id="other-character",
+        claim_id="claim-2",
+    )
+
+    assert transfer_claim(old, old) == claim
+    with pytest.raises(RuntimeError, match="target controller is already claimed"):
+        transfer_claim(old, conflict)
+
+    assert transfer_claim(old, same_target) == claim
+    assert same_target.get_component(ClaimedComponent) == claim
+    assert same_target.get_component(ClaimTimeoutComponent) == timeout
+    plain_controller = spawn_entity(scenario.actor.world)
+    no_registry = add_claim(
+        plain_controller,
+        client_kind="web",
+        client_id="plain",
+        character_id=str(scenario.character),
+        claim_id="plain-claim",
+    )
+    assert remove_claim(old, registry) is None
+    assert remove_claim(plain_controller) == no_registry
+    assert remove_claim(same_target, registry) == claim
+    assert not registry.has_secret(claim.claim_id)
 
 
 # -- movement ---------------------------------------------------------------------------

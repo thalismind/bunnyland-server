@@ -18,11 +18,20 @@ from relics import EntityId
 
 from .. import telemetry
 from ..claims import (
+    CLIENT_KIND_MCP,
+    ClaimSecretRegistry,
+    add_claim,
+    claim_matches,
     claimable_characters,
+    claimed_character_for,
     controlled_character,
+    controller_claim,
+    ensure_claim_secret,
     is_child_character,
     match_character_by_name,
     matching_controller,
+    remove_claim,
+    transfer_claim,
 )
 from ..core import (
     CharacterComponent,
@@ -80,9 +89,16 @@ if TYPE_CHECKING:
     )
     from ..worldgen import GenOptions
 
+
+def _now_unix() -> int:
+    from time import time
+
+    return int(time())
+
 MCP_MOUNT_PATH = "/mcp"
 ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
 EVENTS_RESOURCE_URI = "bunnyland://events/recent"
+_DEFAULT_CLAIM_SECRETS = ClaimSecretRegistry()
 
 
 def mcp_enabled(plugins: Sequence[Plugin] | None) -> bool:
@@ -127,16 +143,16 @@ def _traced_tool(fn):
     return wrapper
 
 
-def _agent_events_uri(agent_id: str) -> str:
-    return f"bunnyland://agents/{quote(agent_id, safe='')}/events"
+def _client_events_uri(client_id: str) -> str:
+    return f"bunnyland://clients/{quote(client_id, safe='')}/events"
 
 
-def _agent_prompt_uri(agent_id: str) -> str:
-    return f"bunnyland://agents/{quote(agent_id, safe='')}/prompt"
+def _client_prompt_uri(client_id: str) -> str:
+    return f"bunnyland://clients/{quote(client_id, safe='')}/prompt"
 
 
-def _agent_id_from_uri(uri: str, suffix: str) -> str | None:
-    prefix = "bunnyland://agents/"
+def _client_id_from_uri(uri: str, suffix: str) -> str | None:
+    prefix = "bunnyland://clients/"
     if not uri.startswith(prefix) or not uri.endswith(suffix):
         return None
     encoded = uri[len(prefix) : -len(suffix)]
@@ -197,8 +213,8 @@ class MCPEventBridge:
     def recent_messages(self) -> list[dict[str, Any]]:
         return list(self._recent)
 
-    def recent_for_agent(self, agent_id: str) -> list[dict[str, Any]]:
-        controlled = mcp_controlled_character(self.actor, agent_id)
+    def recent_for_client(self, client_id: str) -> list[dict[str, Any]]:
+        controlled = mcp_controlled_character(self.actor, client_id)
         if controlled is None:
             return []
         character_id = str(controlled[0])
@@ -209,19 +225,19 @@ class MCPEventBridge:
                 filtered.append(message)
         return filtered
 
-    def perceived_for_agent(
-        self, agent_id: str, *, since: int | None = None, limit: int = 50
+    def perceived_for_client(
+        self, client_id: str, *, since: int | None = None, limit: int = 50
     ) -> dict[str, Any]:
-        """Return recent events the agent's character caused or perceived in its room.
+        """Return recent events the client's character caused or perceived in its room.
 
         ``since`` is a watermark cursor: only events recorded after it are returned. The
         response carries ``next_cursor`` to pass as ``since`` on the next poll so streaming
         gaps and missed notifications can be reconciled.
         """
 
-        controlled = mcp_controlled_character(self.actor, agent_id)
+        controlled = mcp_controlled_character(self.actor, client_id)
         if controlled is None:
-            return {"ok": False, "agent_id": agent_id, "events": [], "next_cursor": since or 0}
+            return {"ok": False, "client_id": client_id, "events": [], "next_cursor": since or 0}
         character_id = str(controlled[0])
         room_id = container_of(self.actor.world.get_entity(controlled[0]))
         room_key = str(room_id) if room_id is not None else None
@@ -245,7 +261,7 @@ class MCPEventBridge:
             next_cursor = self._seq
         return {
             "ok": True,
-            "agent_id": agent_id,
+            "client_id": client_id,
             "events": page,
             "next_cursor": next_cursor,
         }
@@ -274,15 +290,15 @@ class MCPEventBridge:
         uris: set[str] = {EVENTS_RESOURCE_URI}
 
         for uri in self._subscriptions:
-            if _agent_id_from_uri(uri, "/prompt") is not None:
+            if _client_id_from_uri(uri, "/prompt") is not None:
                 # Prompt context can change for indirect reasons: room events, nearby
                 # actors, conditions, and point regeneration can all alter prompt text.
                 uris.add(uri)
                 continue
-            agent_id = _agent_id_from_uri(uri, "/events")
-            if agent_id is None:
+            client_id = _client_id_from_uri(uri, "/events")
+            if client_id is None:
                 continue
-            controlled = mcp_controlled_character(self.actor, agent_id)
+            controlled = mcp_controlled_character(self.actor, client_id)
             if controlled is not None and str(controlled[0]) == event_actor_id:
                 uris.add(uri)
 
@@ -337,32 +353,39 @@ def _match_character(
             f"no character named {character_name!r} exists in the world. "
             f"Available characters: {names}"
         )
-    claimable = claimable_characters(characters, allow_child_claims=allow_child_claims)
+    claimable = claimable_characters(
+        actor,
+        characters,
+        allow_child_claims=allow_child_claims,
+    )
     if claimable:
         return claimable[0]
     raise RuntimeError("no suspended claimable character exists in the world")
 
 
-def _mcp_controller_for(actor: WorldActor, agent_id: str):
+def _mcp_controller_for(actor: WorldActor, client_id: str):
     return matching_controller(
         actor,
         MCPControllerComponent,
-        lambda controller: controller.agent_id == agent_id,
+        lambda controller: controller.client_id == client_id,
     )
 
 
-def mcp_controlled_character(actor: WorldActor, agent_id: str):
+def mcp_controlled_character(actor: WorldActor, client_id: str):
     return controlled_character(
         actor,
         MCPControllerComponent,
-        lambda controller: controller.agent_id == agent_id,
+        lambda controller: controller.client_id == client_id,
     )
 
 
 def assign_mcp_controller(
     actor: WorldActor,
     *,
-    agent_id: str,
+    claim_secrets: ClaimSecretRegistry | None = None,
+    client_id: str,
+    claim_id: str | None = None,
+    claim_secret: str | None = None,
     character_name: str | None = None,
     character_id: str | None = None,
     label: str = "",
@@ -370,9 +393,10 @@ def assign_mcp_controller(
 ) -> dict[str, Any]:
     """Assign an MCP controller to a named/id character, or the first suspended one."""
 
-    agent_id = agent_id.strip()
-    if not agent_id:
-        raise RuntimeError("agent_id is required")
+    claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    client_id = client_id.strip()
+    if not client_id:
+        raise RuntimeError("client_id is required")
     character = _match_character(
         actor,
         character_name,
@@ -383,12 +407,56 @@ def assign_mcp_controller(
         name = character.get_component(IdentityComponent).name
         raise RuntimeError(f"{name} is a child character and cannot be claimed on this server")
 
-    controller = _mcp_controller_for(actor, agent_id)
+    active_controller = None
+    for _edge, controller_id in character.get_relationships(ControlledBy):
+        if actor.world.has_entity(controller_id):
+            active_controller = actor.world.get_entity(controller_id)
+            break
+    active_claim = controller_claim(active_controller) if active_controller is not None else None
+    validated_claim_secret = False
+    if active_claim is not None:
+        if not claim_matches(active_claim, CLIENT_KIND_MCP, client_id):
+            raise RuntimeError("character is already claimed")
+        try:
+            ensure_claim_secret(
+                claim_secrets,
+                active_claim,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+        except PermissionError as exc:
+            raise RuntimeError(str(exc)) from exc
+        validated_claim_secret = True
+        claim_id = active_claim.claim_id
+        claim_secret = claim_secrets.secret(active_claim.claim_id)
+
+    controller = _mcp_controller_for(actor, client_id)
+    if controller is not None:
+        existing_claim = controller_claim(controller)
+        if existing_claim is not None and existing_claim.character_id != str(character.id):
+            controller = None
     if controller is None:
         controller = spawn_entity(
             actor.world,
-            [MCPControllerComponent(agent_id=agent_id, label=label.strip())],
+            [MCPControllerComponent(client_id=client_id, label=label.strip())],
         )
+    if active_claim is not None and active_controller is not None:
+        transfer_claim(active_controller, controller)
+    claim = add_claim(
+        controller,
+        client_kind=CLIENT_KIND_MCP,
+        client_id=client_id,
+        character_id=str(character.id),
+        label=label,
+        claim_id=claim_id,
+        now_unix=_now_unix(),
+    )
+    if (
+        not validated_claim_secret
+        or claim_secret is None
+        or not claim_secrets.has_secret(claim.claim_id)
+    ):
+        claim_secret = claim_secrets.issue(claim.claim_id)
 
     generation = actor.assign_controller(character.id, controller.id)
     if character.has_component(SuspendedComponent):
@@ -396,37 +464,73 @@ def assign_mcp_controller(
     identity = character.get_component(IdentityComponent)
     return {
         "ok": True,
-        "agent_id": agent_id,
+        "client_id": client_id,
         "character_id": str(character.id),
         "character_name": identity.name,
         "controller_id": str(controller.id),
         "controller_generation": generation,
+        "claim_id": claim.claim_id,
+        "claim_secret": claim_secret,
     }
 
 
 def release_mcp_controller(
     actor: WorldActor,
     *,
-    agent_id: str,
-    mode: str = "suspend",
+    claim_secrets: ClaimSecretRegistry | None = None,
+    client_id: str,
+    claim_id: str | None = None,
+    claim_secret: str | None = None,
+    fallback_controller: str = "suspend",
     reason: str = "released by MCP client",
     model: str | None = None,
     provider: str = "ollama",
 ) -> dict[str, Any]:
-    """Release an MCP-controlled character to suspended or LLM control."""
+    """Release active control to another controller while retaining the claim."""
 
-    found = mcp_controlled_character(actor, agent_id)
+    claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    found = mcp_controlled_character(actor, client_id)
     if found is None:
-        raise RuntimeError("agent is not controlling a character yet")
+        raise RuntimeError("client is not controlling a character yet")
     character_id, old_controller_id, _generation = found
     character = actor.world.get_entity(character_id)
     identity = character.get_component(IdentityComponent)
+    old_controller = actor.world.get_entity(old_controller_id)
+    claim = controller_claim(old_controller)
+    if claim is None or not claim_matches(claim, CLIENT_KIND_MCP, client_id):
+        raise RuntimeError("client does not hold the claim for this character")
+    try:
+        ensure_claim_secret(
+            claim_secrets,
+            claim,
+            claim_id=claim_id,
+            claim_secret=claim_secret,
+        )
+    except PermissionError as exc:
+        raise RuntimeError(str(exc)) from exc
 
-    if mode == "suspend":
+    fallback = fallback_controller.strip() or "suspend"
+    parsed = parse_entity_id(fallback)
+    if parsed is not None and actor.world.has_entity(parsed):
+        controller = actor.world.get_entity(parsed)
+        controller_kind = actor._controller_kind(parsed)
+        if controller_kind == "unknown":
+            raise RuntimeError("fallback_controller is not a controller")
+        existing_claim = controller_claim(controller)
+        if existing_claim is not None and existing_claim.claim_id != claim.claim_id:
+            raise RuntimeError("fallback controller is already claimed")
+        generation = (
+            actor.suspend(character.id, controller.id, reason=reason)
+            if controller_kind == "suspended"
+            else actor.assign_controller(character.id, controller.id)
+        )
+        if controller_kind != "suspended" and character.has_component(SuspendedComponent):
+            character.remove_component(SuspendedComponent)
+    elif fallback in {"suspend", "suspended", "offline"}:
         controller = spawn_entity(actor.world, [SuspendedControllerComponent(reason=reason)])
         generation = actor.suspend(character.id, controller.id, reason=reason)
         controller_kind = "suspended"
-    elif mode == "llm":
+    elif fallback in {"llm", "ai"}:
         controller = spawn_entity(
             actor.world,
             [
@@ -443,34 +547,77 @@ def release_mcp_controller(
             character.remove_component(SuspendedComponent)
         controller_kind = "llm"
     else:
-        raise RuntimeError("mode must be 'suspend' or 'llm'")
+        raise RuntimeError("fallback_controller is not a controller")
 
-    old_controller = actor.world.get_entity(old_controller_id)
-    # ``mcp_controlled_character`` only matches controllers carrying MCPControllerComponent,
-    # so the released controller always has it -- removal is unconditional.
-    old_controller.remove_component(MCPControllerComponent)
+    transfer_claim(old_controller, controller)
     return {
         "ok": True,
-        "agent_id": agent_id,
+        "client_id": client_id,
         "character_id": str(character.id),
         "character_name": identity.name,
         "controller_id": str(controller.id),
         "controller_generation": generation,
         "controller_kind": controller_kind,
+        "claim_id": claim.claim_id,
+        "claim_secret": claim_secrets.secret(claim.claim_id) or "",
     }
 
 
-def render_mcp_agent_prompt(
+def release_mcp_claim(
     actor: WorldActor,
     *,
-    agent_id: str,
+    claim_secrets: ClaimSecretRegistry | None = None,
+    client_id: str,
+    claim_id: str | None = None,
+    claim_secret: str | None = None,
+) -> dict[str, Any]:
+    claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    found = claimed_character_for(
+        actor,
+        client_kind=CLIENT_KIND_MCP,
+        client_id=client_id,
+    )
+    if found is None:
+        raise RuntimeError("client is not controlling a character yet")
+    character, controller, _edge, claim = found
+    try:
+        ensure_claim_secret(
+            claim_secrets,
+            claim,
+            claim_id=claim_id,
+            claim_secret=claim_secret,
+        )
+    except PermissionError as exc:
+        raise RuntimeError(str(exc)) from exc
+    remove_claim(controller, claim_secrets)
+    return {
+        "ok": True,
+        "client_id": client_id,
+        "character_id": str(character.id),
+        "controller_id": str(controller.id),
+        "claim_id": claim.claim_id,
+    }
+
+
+def render_mcp_client_prompt(
+    actor: WorldActor,
+    *,
+    claim_secrets: ClaimSecretRegistry | None = None,
+    client_id: str,
+    claim_id: str | None = None,
+    claim_secret: str | None = None,
     fragment_providers: Sequence[Any] = (),
     persona_providers: Sequence[Any] = (),
 ) -> dict[str, Any]:
-    found = mcp_controlled_character(actor, agent_id)
-    if found is None:
-        raise RuntimeError("agent is not controlling a character yet")
-    character_id, _controller_id, generation = found
+    claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    character_id, _controller_id, generation = _controlled_or_requested_character(
+        actor,
+        claim_secrets,
+        client_id,
+        None,
+        claim_id=claim_id,
+        claim_secret=claim_secret,
+    )
     builder = PromptBuilder(
         actor.world,
         fragment_providers=fragment_providers,
@@ -480,7 +627,7 @@ def render_mcp_agent_prompt(
     context = builder.build(character_id, epoch=actor.epoch)
     return {
         "ok": True,
-        "agent_id": agent_id,
+        "client_id": client_id,
         "character_id": str(character_id),
         "controller_generation": generation,
         "world_epoch": actor.epoch,
@@ -497,21 +644,42 @@ def _require_admin_token(supplied: str | None, configured: str | None) -> None:
 
 
 def _controlled_or_requested_character(
-    actor: WorldActor, agent_id: str, character_id: str | None
+    actor: WorldActor,
+    claim_secrets: ClaimSecretRegistry | None,
+    client_id: str,
+    character_id: str | None,
+    *,
+    claim_id: str | None = None,
+    claim_secret: str | None = None,
 ) -> tuple[EntityId, EntityId, int]:
+    claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    found = claimed_character_for(
+        actor,
+        client_kind=CLIENT_KIND_MCP,
+        client_id=client_id,
+    )
+    if found is None:
+        raise RuntimeError("client is not controlling a character yet")
+    character, controller, edge, claim = found
+    try:
+        ensure_claim_secret(
+            claim_secrets,
+            claim,
+            claim_id=claim_id,
+            claim_secret=claim_secret,
+        )
+    except PermissionError as exc:
+        raise RuntimeError(str(exc)) from exc
+
     if character_id is None:
-        found = mcp_controlled_character(actor, agent_id)
-        if found is None:
-            raise RuntimeError("agent is not controlling a character yet")
-        return found
+        return character.id, controller.id, edge.generation
 
     requested_id = parse_entity_id(character_id)
     if requested_id is None or not actor.world.has_entity(requested_id):
         raise RuntimeError(f"character {character_id!r} does not exist")
-    found = mcp_controlled_character(actor, agent_id)
-    if found is None or found[0] != requested_id:
-        raise RuntimeError("agent does not control the requested character")
-    return found
+    if character.id != requested_id:
+        raise RuntimeError("client does not control the requested character")
+    return character.id, controller.id, edge.generation
 
 
 def create_bunnyland_mcp_app(
@@ -550,6 +718,7 @@ def create_bunnyland_mcp_app(
     fragment_providers: Sequence[Any] = (),
     persona_providers: Sequence[Any] = (),
     worldgen_options: GenOptions | None = None,
+    claim_secrets: ClaimSecretRegistry | None = None,
 ):
     """Create the ASGI MCP app.
 
@@ -575,6 +744,7 @@ def create_bunnyland_mcp_app(
         streamable_http_path="/",
     )
     event_bridge = MCPEventBridge(actor)
+    claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
 
     def _next_tick_epoch() -> int | None:
         """Estimated world epoch a freshly-queued command resolves at (the next tick).
@@ -622,9 +792,16 @@ def create_bunnyland_mcp_app(
             request = mcp.get_context().request_context.request
         except (LookupError, AttributeError, ValueError):
             return None
-        if request is None:
+        headers = getattr(request, "headers", {}) or {}
+        return headers.get("X-Bunnyland-Admin-Token")
+
+    def _request_claim_header(name: str) -> str | None:
+        try:
+            request = mcp.get_context().request_context.request
+        except (LookupError, AttributeError, ValueError):
             return None
-        return request.headers.get("X-Bunnyland-Admin-Token")
+        headers = getattr(request, "headers", {}) or {}
+        return headers.get(name)
 
     def admin(supplied: str | None) -> None:
         # Prefer the X-Bunnyland-Admin-Token header the authenticating nginx proxy injects;
@@ -645,30 +822,49 @@ def create_bunnyland_mcp_app(
         return json.dumps({"ok": True, "events": event_bridge.recent_messages()})
 
     @mcp.resource(
-        "bunnyland://agents/{agent_id}/events",
-        name="agent_events",
-        description="Recent Bunnyland domain events for an MCP-controlled agent character.",
+        "bunnyland://clients/{client_id}/events",
+        name="client_events",
+        description="Recent Bunnyland domain events for an MCP-controlled client character.",
         mime_type="application/json",
     )
-    def agent_events_resource(agent_id: str) -> str:
+    def client_events_resource(client_id: str) -> str:
+        found = claimed_character_for(
+            actor,
+            client_kind=CLIENT_KIND_MCP,
+            client_id=client_id,
+        )
+        if found is None:
+            raise RuntimeError("client is not controlling a character yet")
+        try:
+            ensure_claim_secret(
+                claim_secrets,
+                found[3],
+                claim_id=_request_claim_header("X-Bunnyland-Claim-Id"),
+                claim_secret=_request_claim_header("X-Bunnyland-Claim-Secret"),
+            )
+        except PermissionError as exc:
+            raise RuntimeError(str(exc)) from exc
         return json.dumps(
             {
                 "ok": True,
-                "agent_id": agent_id,
-                "events": event_bridge.recent_for_agent(agent_id),
+                "client_id": client_id,
+                "events": event_bridge.recent_for_client(client_id),
             }
         )
 
     @mcp.resource(
-        "bunnyland://agents/{agent_id}/prompt",
-        name="agent_prompt",
-        description="Current Bunnyland prompt text for an MCP-controlled agent character.",
+        "bunnyland://clients/{client_id}/prompt",
+        name="client_prompt",
+        description="Current Bunnyland prompt text for an MCP-controlled client character.",
         mime_type="text/plain",
     )
-    def agent_prompt_resource(agent_id: str) -> str:
-        return render_mcp_agent_prompt(
+    def client_prompt_resource(client_id: str) -> str:
+        return render_mcp_client_prompt(
             actor,
-            agent_id=agent_id,
+            claim_secrets=claim_secrets,
+            client_id=client_id,
+            claim_id=_request_claim_header("X-Bunnyland-Claim-Id"),
+            claim_secret=_request_claim_header("X-Bunnyland-Claim-Secret"),
             fragment_providers=fragment_providers,
             persona_providers=persona_providers,
         )["prompt"]
@@ -755,13 +951,20 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     @_traced_tool
-    def agent_prompt(agent_id: str) -> dict[str, Any]:
-        """Return the current Bunnyland prompt for an MCP-controlled agent."""
+    def client_prompt(
+        client_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the current Bunnyland prompt for an MCP-controlled client."""
 
         try:
-            return render_mcp_agent_prompt(
+            return render_mcp_client_prompt(
                 actor,
-                agent_id=agent_id,
+                claim_secrets=claim_secrets,
+                client_id=client_id,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
                 fragment_providers=fragment_providers,
                 persona_providers=persona_providers,
             )
@@ -770,10 +973,15 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     @_traced_tool
-    def character_view(agent_id: str, character_id: str | None = None) -> dict[str, Any]:
-        """Return a structured, play-facing view for the agent's character.
+    def character_view(
+        client_id: str,
+        character_id: str | None = None,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a structured, play-facing view for the client's character.
 
-        Unlike ``agent_prompt`` (narrative text), this returns machine-readable data: the
+        Unlike ``client_prompt`` (narrative text), this returns machine-readable data: the
         room and its entities, inventory, action/focus points, and ``target_groups``
         resolving every targetable entity id. The full action catalogue is omitted here to
         keep the view small (progressive disclosure); use ``search_actions``/``list_actions``
@@ -783,7 +991,12 @@ def create_bunnyland_mcp_app(
 
         try:
             character, _controller, _generation = _controlled_or_requested_character(
-                actor, agent_id, character_id
+                actor,
+                claim_secrets,
+                client_id,
+                character_id,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
             )
             data = serialize_character_projection(actor, str(character)).model_dump()
             actions = data.pop("actions", [])
@@ -825,7 +1038,7 @@ def create_bunnyland_mcp_app(
     def list_actions() -> dict[str, Any]:
         """Return the entire available action catalogue (every verb and its argument schema).
 
-        This is large; prefer ``search_actions(query)`` for normal use. Useful when an agent
+        This is large; prefer ``search_actions(query)`` for normal use. Useful when a client
         wants the complete set of verbs at once.
         """
 
@@ -833,7 +1046,12 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     @_traced_tool
-    def examine(agent_id: str, entity_id: str | None = None) -> dict[str, Any]:
+    def examine(
+        client_id: str,
+        entity_id: str | None = None,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
         """Inspect one entity the character can see or carry -- or itself.
 
         Returns the relevant component values on the entity (e.g. food nutrition/spoiled,
@@ -845,7 +1063,12 @@ def create_bunnyland_mcp_app(
 
         try:
             character, _controller, _generation = _controlled_or_requested_character(
-                actor, agent_id, None
+                actor,
+                claim_secrets,
+                client_id,
+                None,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
             )
             return serialize_examine(
                 actor,
@@ -868,16 +1091,24 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def character_commands(
-        agent_id: str, character_id: str | None = None
+        client_id: str,
+        character_id: str | None = None,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
     ) -> dict[str, Any]:
-        """Return the queued (not-yet-resolved) commands for the agent's character.
+        """Return the queued (not-yet-resolved) commands for the client's character.
 
         Commands resolve on later world ticks, so this reflects what is still pending.
         """
 
         try:
             character, _controller, _generation = _controlled_or_requested_character(
-                actor, agent_id, character_id
+                actor,
+                claim_secrets,
+                client_id,
+                character_id,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
             )
             data = serialize_character_queued_commands(actor, str(character)).model_dump()
             resolves_at_epoch = _next_tick_epoch()
@@ -889,7 +1120,7 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def component_schema(types: list[str] | None = None) -> dict[str, Any]:
-        """Return JSON schemas for ECS component types, so an agent can learn what the
+        """Return JSON schemas for ECS component types, so a client can learn what the
 
         components on perceived entities mean (e.g. ``FoodComponent``). Pass ``types`` to
         filter to specific component names; omit it for the full set with live usage counts.
@@ -911,32 +1142,49 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     def perceived_events(
-        agent_id: str, since: int | None = None, limit: int = 50
+        client_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+        since: int | None = None,
+        limit: int = 50,
     ) -> dict[str, Any]:
-        """Return recent events the agent's character caused or perceived in its room.
+        """Return recent events the client's character caused or perceived in its room.
 
         Use this to observe outcomes of semi-turn-based commands: a queued command's
         execution or rejection (with reason) shows up here once it resolves. ``since`` is a
         watermark cursor; pass back the returned ``next_cursor`` to fetch only newer events.
         """
 
-        return event_bridge.perceived_for_agent(agent_id, since=since, limit=limit)
+        _controlled_or_requested_character(
+            actor,
+            claim_secrets,
+            client_id,
+            None,
+            claim_id=claim_id,
+            claim_secret=claim_secret,
+        )
+        return event_bridge.perceived_for_client(client_id, since=since, limit=limit)
 
     @mcp.tool()
     async def claim_character(
-        agent_id: str,
+        client_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
         character_name: str | None = None,
         character_id: str | None = None,
         label: str = "",
         allow_child_claims: bool = False,
     ) -> dict[str, Any]:
-        """Claim a suspended or named character for an MCP agent id."""
+        """Claim a suspended or named character for an MCP client id."""
 
         try:
             async with actor._lock:
                 claimed = assign_mcp_controller(
                     actor,
-                    agent_id=agent_id,
+                    claim_secrets=claim_secrets,
+                    client_id=client_id,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
                     character_name=character_name,
                     character_id=character_id,
                     label=label,
@@ -958,20 +1206,25 @@ def create_bunnyland_mcp_app(
 
     @mcp.tool()
     async def release_character(
-        agent_id: str,
-        mode: str = "suspend",
+        client_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+        fallback_controller: str = "suspend",
         reason: str = "released by MCP client",
         model: str | None = None,
         provider: str = "ollama",
     ) -> dict[str, Any]:
-        """Release an MCP-controlled character to suspended or LLM control."""
+        """Release active control to another controller while retaining the claim."""
 
         try:
             async with actor._lock:
                 return release_mcp_controller(
                     actor,
-                    agent_id=agent_id,
-                    mode=mode,
+                    claim_secrets=claim_secrets,
+                    client_id=client_id,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
+                    fallback_controller=fallback_controller,
                     reason=reason,
                     model=model,
                     provider=provider,
@@ -980,12 +1233,34 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()
+    async def release_claim(
+        client_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Release the client's claim without changing the active controller."""
+
+        try:
+            async with actor._lock:
+                return release_mcp_claim(
+                    actor,
+                    claim_secrets=claim_secrets,
+                    client_id=client_id,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
+                )
+        except RuntimeError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool()
     @_traced_tool
     async def send_command(
-        agent_id: str,
+        client_id: str,
         command_type: str,
         payload: dict[str, Any] | None = None,
         character_id: str | None = None,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
         cost_action: int = 1,
         cost_focus: int = 0,
         lane: str = "world",
@@ -996,7 +1271,12 @@ def create_bunnyland_mcp_app(
 
         try:
             character, controller, generation = _controlled_or_requested_character(
-                actor, agent_id, character_id
+                actor,
+                claim_secrets,
+                client_id,
+                character_id,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
             )
             if command_type not in actor.available_command_types():
                 raise ToolError(
@@ -1277,21 +1557,29 @@ def create_bunnyland_mcp_app(
     @mcp.tool()
     @_traced_tool
     async def request_scene_image(
-        agent_id: str, character_id: str | None = None
+        client_id: str,
+        character_id: str | None = None,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
     ) -> dict[str, Any]:
         """Illustrate the character's current room -- the MCP camera affordance.
 
         This is the player-facing equivalent of the camera button/reaction in the other
         clients (no admin token required): it records the character's current scene as a
         world-history event and queues an image for it, reusing one already requested this
-        tick. Resolves the agent's controlled character unless ``character_id`` is given.
+        tick. Resolves the client's controlled character unless ``character_id`` is given.
         """
 
         if scene_image is None:
             raise ToolError("image generation is not configured")
         try:
             character, _controller, _generation = _controlled_or_requested_character(
-                actor, agent_id, character_id
+                actor,
+                claim_secrets,
+                client_id,
+                character_id,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
             )
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
@@ -1319,6 +1607,7 @@ __all__ = [
     "list_mcp_characters",
     "mcp_controlled_character",
     "mcp_enabled",
+    "release_mcp_claim",
     "release_mcp_controller",
-    "render_mcp_agent_prompt",
+    "render_mcp_client_prompt",
 ]

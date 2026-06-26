@@ -12,11 +12,24 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .. import telemetry
-from ..claims import matching_controller
+from ..claims import (
+    CLIENT_KIND_WEB,
+    ClaimSecretRegistry,
+    add_claim,
+    claim_matches,
+    controller_claim,
+    current_controller,
+    ensure_claim_secret,
+    matching_controller,
+    normalize_claimed_controllers_without_secrets,
+    remove_claim,
+    transfer_claim,
+)
 from ..content import load_content_library
 from ..core import (
     CharacterComponent,
     IdentityComponent,
+    LLMControllerComponent,
     MemoryProfileComponent,
     SuspendedComponent,
     SuspendedControllerComponent,
@@ -24,8 +37,8 @@ from ..core import (
     parse_entity_id,
     spawn_entity,
 )
-from ..core.claim_timeout import apply_claim_timeout_settings
-from ..core.controllers import ClaimTimeoutComponent
+from ..core.claim_timeout import apply_claim_timeout_settings, record_claim_activity
+from ..core.controllers import ClaimedComponent, ClaimTimeoutComponent
 from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
 from ..core.world_actor import WorldActor
 from ..imagegen.media import MediaError, content_type_for
@@ -53,6 +66,7 @@ from .models import (
     CharacterListResponse,
     CharacterProjectionResponse,
     CharacterQueuedCommandsResponse,
+    ClaimReleaseResponse,
     CommandCancelResponse,
     CommandRequest,
     CommandResponse,
@@ -209,6 +223,8 @@ def create_app(
     )
     stream = EventStream(actor)
     meta = meta or WorldMeta()
+    claim_secrets = ClaimSecretRegistry()
+    normalize_claimed_controllers_without_secrets(actor, claim_secrets)
     generator_registry = collect_generators(plugins or ())
     generation_job = None
     memory_store = memory_store or getattr(actor, "memory_store", None)
@@ -284,24 +300,24 @@ def create_app(
         return serialize_character_list(actor)
 
     @app.get("/world/character/{id}", response_model=CharacterProjectionResponse)
-    async def world_character_projection(id: str) -> CharacterProjectionResponse:
-        try:
-            with telemetry.span("character.projection", {"character.id": id}):
-                return serialize_character_projection(actor, id)
-        except ValueError as exc:
-            detail = str(exc)
-            status = 400 if detail == "entity is not a character" else 404
-            raise HTTPException(status_code=status, detail=detail) from exc
+    async def world_character_projection(
+        id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> CharacterProjectionResponse:
+        with telemetry.span("character.projection", {"character.id": id}):
+            _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
+            return serialize_character_projection(actor, id)
 
     @app.get("/world/character/{id}/commands", response_model=CharacterQueuedCommandsResponse)
-    async def world_character_queued_commands(id: str) -> CharacterQueuedCommandsResponse:
-        try:
-            with telemetry.span("character.queued_commands", {"character.id": id}):
-                return serialize_character_queued_commands(actor, id, **_runtime_timing())
-        except ValueError as exc:
-            detail = str(exc)
-            status = 400 if detail == "entity is not a character" else 404
-            raise HTTPException(status_code=status, detail=detail) from exc
+    async def world_character_queued_commands(
+        id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> CharacterQueuedCommandsResponse:
+        with telemetry.span("character.queued_commands", {"character.id": id}):
+            _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
+            return serialize_character_queued_commands(actor, id, **_runtime_timing())
 
     @app.get("/world/room/{id}", response_model=RoomProjectionResponse)
     async def world_room_projection(id: str) -> RoomProjectionResponse:
@@ -319,6 +335,149 @@ def create_app(
             raise HTTPException(status_code=403, detail=f"{ADMIN_TOKEN_ENV} is not configured")
         if supplied != expected:
             raise HTTPException(status_code=403, detail="invalid admin token")
+
+    def _character_entity(character_id: str):
+        parsed = parse_entity_id(character_id)
+        if parsed is None or not actor.world.has_entity(parsed):
+            raise HTTPException(status_code=404, detail="character does not exist")
+        character = actor.world.get_entity(parsed)
+        if not character.has_component(CharacterComponent):
+            raise HTTPException(status_code=400, detail="entity is not a character")
+        return character
+
+    def _require_claim_secret(
+        character_id: str,
+        *,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> None:
+        character = _character_entity(character_id)
+        found = current_controller(actor, character)
+        if found is None:
+            return
+        controller, _edge = found
+        claim = controller_claim(controller)
+        if claim is None:
+            return
+        try:
+            ensure_claim_secret(
+                claim_secrets,
+                claim,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    def _resume_web_claim_for_command(command):
+        character = _character_entity(command.character_id)
+        found = current_controller(actor, character)
+        if found is None:
+            return command
+        controller, _edge = found
+        claim = controller_claim(controller)
+        if claim is None:
+            return command
+        if claim.client_kind != CLIENT_KIND_WEB:
+            return command
+        if controller.has_component(WebControllerComponent):
+            web = controller.get_component(WebControllerComponent)
+            if web.client_id != claim.client_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="claim is not active for this web client",
+                )
+            return command
+        web_controller = _web_controller_for_client(claim.client_id)
+        if web_controller is None:
+            web_controller = spawn_entity(
+                actor.world,
+                [WebControllerComponent(client_id=claim.client_id, label=claim.label or "web")],
+            )
+        transfer_claim(controller, web_controller)
+        generation = actor.assign_controller(character.id, web_controller.id)
+        record_claim_activity(web_controller, now_unix=int(time.time()))
+        if character.has_component(SuspendedComponent):
+            character.remove_component(SuspendedComponent)
+        return replace(
+            command,
+            controller_id=str(web_controller.id),
+            controller_generation=generation,
+        )
+
+    def _claim_secret(request) -> str | None:
+        return getattr(request, "_claim_secret", None)
+
+    def _with_claim_secret(request, claim_secret: str | None):
+        if not isinstance(claim_secret, str):
+            claim_secret = None
+        request._claim_secret = claim_secret
+        return request
+
+    def _claimed_controller_for_web_request(request: WebControllerFallbackRequest):
+        character = _character_entity(request.character_id)
+        client_id = request.client_id.strip()
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id must not be blank")
+        found = current_controller(actor, character)
+        if found is None:
+            raise HTTPException(status_code=409, detail="character has no controller")
+        controller, edge = found
+        claim = controller_claim(controller)
+        if claim is None:
+            raise HTTPException(status_code=409, detail="character is not claimed")
+        if not claim_matches(claim, CLIENT_KIND_WEB, client_id):
+            raise HTTPException(status_code=409, detail="character is claimed by another client")
+        try:
+            ensure_claim_secret(
+                claim_secrets,
+                claim,
+                claim_id=request.claim_id,
+                claim_secret=_claim_secret(request),
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return character, controller, edge, claim
+
+    def _existing_controller(controller_id: str):
+        parsed = parse_entity_id(controller_id)
+        if parsed is None or not actor.world.has_entity(parsed):
+            return None
+        kind = actor._controller_kind(parsed)
+        if kind == "unknown":
+            raise HTTPException(status_code=400, detail="entity is not a controller")
+        return actor.world.get_entity(parsed), kind
+
+    def _fallback_controller(fallback: str, timeout: ClaimTimeoutComponent):
+        selected = (
+            fallback.strip()
+            if fallback and fallback.strip()
+            else timeout.fallback_controller
+        )
+        existing = _existing_controller(selected)
+        if existing is not None:
+            return existing
+        normalized = selected.strip().lower().replace("_", "-")
+        if normalized in {"suspend", "suspended", "offline"}:
+            controller = spawn_entity(
+                actor.world,
+                [SuspendedControllerComponent(reason=timeout.fallback_reason)],
+            )
+            return controller, "suspended"
+        if normalized in {"llm", "ai", "agent"}:
+            controller = spawn_entity(
+                actor.world,
+                [
+                    LLMControllerComponent(
+                        profile_name=timeout.llm_profile_name or "default",
+                        model=timeout.llm_model
+                        or os.environ.get("BUNNYLAND_CHARACTER_MODEL", "deepseek-v4-flash"),
+                        provider=timeout.llm_provider or "ollama",
+                    )
+                ],
+            )
+            return controller, "llm"
+        raise HTTPException(status_code=400, detail="fallback_controller is not a controller")
 
     @app.get("/world/dm/{id}", response_model=DmProjectionResponse)
     async def world_dm_projection(
@@ -368,10 +527,18 @@ def create_app(
 
     @app.post("/world/character/{id}/chat", response_model=CharacterChatResponse)
     async def world_character_chat(
-        id: str, request: CharacterChatRequest
+        id: str,
+        request: CharacterChatRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> CharacterChatResponse:
+        _with_claim_secret(request, claim_secret)
         if character_chat is None:
             raise HTTPException(status_code=409, detail="character chat is not enabled")
+        _require_claim_secret(
+            id,
+            claim_id=request.claim_id,
+            claim_secret=_claim_secret(request),
+        )
         try:
             with telemetry.span("character.chat", {"character.id": id}) as span:
                 try:
@@ -396,10 +563,15 @@ def create_app(
         response_model=CharacterChatPendingResponse,
     )
     async def world_character_chat_pending(
-        id: str, command_id: str, client_id: str
+        id: str,
+        command_id: str,
+        client_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> CharacterChatPendingResponse:
         if character_chat is None:
             raise HTTPException(status_code=409, detail="character chat is not enabled")
+        _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
         try:
             with telemetry.span(
                 "character.chat.pending",
@@ -538,14 +710,12 @@ def create_app(
         command_id: str,
         controller_id: str,
         controller_generation: int,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> CommandCancelResponse:
+        _require_claim_secret(character_id, claim_id=claim_id, claim_secret=claim_secret)
         parsed_character = parse_entity_id(character_id)
         parsed_controller = parse_entity_id(controller_id)
-        if parsed_character is None or not actor.world.has_entity(parsed_character):
-            raise HTTPException(status_code=404, detail="character does not exist")
-        character = actor.world.get_entity(parsed_character)
-        if not character.has_component(CharacterComponent):
-            raise HTTPException(status_code=400, detail="entity is not a character")
         if parsed_controller is None or actor.current_generation(
             parsed_character, parsed_controller
         ) != controller_generation:
@@ -561,7 +731,14 @@ def create_app(
         return CommandCancelResponse(ok=True, command_id=command_id, cancelled=True)
 
     async def _submit_command_request(request: CommandRequest) -> CommandResponse:
+        _require_claim_secret(
+            request.character_id,
+            claim_id=request.claim_id,
+            claim_secret=_claim_secret(request),
+        )
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
+        async with actor._lock:
+            command = _resume_web_claim_for_command(command)
         outcome = await actor.submit(command)
         return CommandResponse(
             queued=outcome.accepted,
@@ -573,15 +750,19 @@ def create_app(
         request: WebControllerFallbackRequest,
         *,
         controller,
+        claim: ClaimedComponent,
         generation: int,
+        claim_secret: str,
     ) -> WebControllerFallbackResponse:
-        claim = controller.get_component(ClaimTimeoutComponent)
+        timeout = controller.get_component(ClaimTimeoutComponent)
         return WebControllerFallbackResponse(
             character_id=request.character_id,
             controller_id=str(controller.id),
             controller_generation=generation,
-            fallback_controller=claim.fallback_controller,
-            timeout_seconds=claim.timeout_seconds,
+            claim_id=claim.claim_id,
+            claim_secret=claim_secret,
+            fallback_controller=timeout.fallback_controller,
+            timeout_seconds=timeout.timeout_seconds,
         )
 
     def _web_controller_for_client(client_id: str):
@@ -616,13 +797,66 @@ def create_app(
         ) as span:
             created = False
             async with actor._lock:
+                active = current_controller(actor, character)
+                active_controller = active[0] if active is not None else None
+                active_claim = (
+                    controller_claim(active_controller)
+                    if active_controller is not None
+                    else None
+                )
+                claim_id = request.claim_id
+                claim_secret = _claim_secret(request)
+                validated_claim_secret = False
+                if active_claim is not None:
+                    if not claim_matches(active_claim, CLIENT_KIND_WEB, client_id):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="character is already claimed",
+                        )
+                    try:
+                        ensure_claim_secret(
+                            claim_secrets,
+                            active_claim,
+                            claim_id=request.claim_id,
+                            claim_secret=_claim_secret(request),
+                        )
+                    except PermissionError as exc:
+                        raise HTTPException(status_code=403, detail=str(exc)) from exc
+                    validated_claim_secret = True
+                    claim_id = active_claim.claim_id
+                    claim_secret = claim_secrets.secret(active_claim.claim_id)
+
                 controller = _web_controller_for_client(client_id)
+                if controller is not None:
+                    existing_claim = controller_claim(controller)
+                    if (
+                        existing_claim is not None
+                        and existing_claim.character_id != str(character_id)
+                    ):
+                        controller = None
                 if controller is None:
                     created = True
                     controller = spawn_entity(
                         actor.world,
                         [WebControllerComponent(client_id=client_id, label=label)],
                     )
+                if active_claim is not None and active_controller is not None:
+                    transfer_claim(active_controller, controller)
+                claim = add_claim(
+                    controller,
+                    client_kind=CLIENT_KIND_WEB,
+                    client_id=client_id,
+                    character_id=str(character_id),
+                    label=label,
+                    claim_id=claim_id,
+                    now_unix=int(time.time()),
+                )
+                if (
+                    not validated_claim_secret
+                    or claim_secret is None
+                    or not claim_secrets.has_secret(claim.claim_id)
+                ):
+                    claim_secret = claim_secrets.issue(claim.claim_id)
                 apply_claim_timeout_settings(
                     controller,
                     now_unix=int(time.time()),
@@ -661,13 +895,13 @@ def create_app(
                         )
                     )
 
-            claim = controller.get_component(ClaimTimeoutComponent)
+            timeout = controller.get_component(ClaimTimeoutComponent)
             span.set_attribute("controller.id", str(controller.id))
             span.set_attribute("controller.generation", generation)
             span.set_attribute("controller.created", created)
             span.set_attribute("controller.assigned", assigned)
-            span.set_attribute("claim.fallback_controller", claim.fallback_controller)
-            span.set_attribute("claim.timeout_seconds", claim.timeout_seconds)
+            span.set_attribute("claim.fallback_controller", timeout.fallback_controller)
+            span.set_attribute("claim.timeout_seconds", timeout.timeout_seconds)
             logger.info(
                 "web claim character=%s controller=%s generation=%s "
                 "client_id=%s label=%s assigned=%s created=%s",
@@ -682,34 +916,25 @@ def create_app(
 
             stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
             response = _web_claim_response(
-                request, controller=controller, generation=generation
+                request,
+                controller=controller,
+                claim=claim,
+                generation=generation,
+                claim_secret=claim_secret or "",
             )
             return WebControllerClaimResponse(**response.model_dump())
 
     async def _web_controller_fallback_request(
         request: WebControllerFallbackRequest,
     ) -> WebControllerFallbackResponse:
-        character_id = parse_entity_id(request.character_id)
-        if character_id is None or not actor.world.has_entity(character_id):
-            raise HTTPException(status_code=404, detail="character does not exist")
+        character, controller, edge, claim = _claimed_controller_for_web_request(request)
         client_id = request.client_id.strip()
-        if not client_id:
-            raise HTTPException(status_code=400, detail="client_id must not be blank")
 
         with telemetry.span(
             "controller.web_fallback",
             {"character.id": request.character_id, "client.id": client_id},
         ) as span:
             async with actor._lock:
-                controller = _web_controller_for_client(client_id)
-                if controller is None:
-                    raise HTTPException(status_code=404, detail="web controller does not exist")
-                generation = actor.current_generation(character_id, controller.id)
-                if generation is None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="web controller is not controlling this character",
-                    )
                 apply_claim_timeout_settings(
                     controller,
                     now_unix=int(time.time()),
@@ -721,24 +946,85 @@ def create_app(
                     timeout_seconds=request.timeout_seconds,
                     reset_activity=False,
                 )
-                claim = controller.get_component(ClaimTimeoutComponent)
+                timeout = controller.get_component(ClaimTimeoutComponent)
                 span.set_attribute("controller.id", str(controller.id))
-                span.set_attribute("controller.generation", generation)
-                span.set_attribute("claim.fallback_controller", claim.fallback_controller)
-                span.set_attribute("claim.timeout_seconds", claim.timeout_seconds)
+                span.set_attribute("controller.generation", edge.generation)
+                span.set_attribute("claim.fallback_controller", timeout.fallback_controller)
+                span.set_attribute("claim.timeout_seconds", timeout.timeout_seconds)
                 logger.info(
                     "web claim fallback character=%s controller=%s generation=%s "
                     "client_id=%s fallback=%s timeout_seconds=%s",
-                    character_id,
+                    character.id,
                     controller.id,
-                    generation,
+                    edge.generation,
                     client_id,
-                    claim.fallback_controller,
-                    claim.timeout_seconds,
+                    timeout.fallback_controller,
+                    timeout.timeout_seconds,
                 )
                 return _web_claim_response(
-                    request, controller=controller, generation=generation
+                    request,
+                    controller=controller,
+                    claim=claim,
+                    generation=edge.generation,
+                    claim_secret=claim_secrets.secret(claim.claim_id) or "",
                 )
+
+    async def _release_web_controller_to_fallback_request(
+        request: WebControllerFallbackRequest,
+    ) -> WebControllerFallbackResponse:
+        character, controller, _edge, claim = _claimed_controller_for_web_request(request)
+        timeout = (
+            controller.get_component(ClaimTimeoutComponent)
+            if controller.has_component(ClaimTimeoutComponent)
+            else apply_claim_timeout_settings(
+                controller,
+                now_unix=int(time.time()),
+                fallback_controller=request.fallback_controller,
+            )
+        )
+        fallback = request.fallback_controller or timeout.fallback_controller
+        async with actor._lock:
+            new_controller, kind = _fallback_controller(fallback, timeout)
+            transfer_claim(controller, new_controller)
+            if kind == "suspended":
+                generation = actor.suspend(
+                    character.id,
+                    new_controller.id,
+                    reason=timeout.fallback_reason,
+                )
+            else:
+                generation = actor.assign_controller(character.id, new_controller.id)
+                if character.has_component(SuspendedComponent):
+                    character.remove_component(SuspendedComponent)
+            await actor.bus.publish(
+                ControllerChangedEvent(
+                    **actor._event_base(
+                        actor_id=str(character.id),
+                        generation=generation,
+                        controller_kind=kind,
+                    )
+                )
+            )
+        return WebControllerFallbackResponse(
+            character_id=str(character.id),
+            controller_id=str(new_controller.id),
+            controller_generation=generation,
+            claim_id=claim.claim_id,
+            claim_secret=claim_secrets.secret(claim.claim_id) or "",
+            fallback_controller=kind,
+            timeout_seconds=timeout.timeout_seconds,
+        )
+
+    async def _release_web_claim_request(
+        request: WebControllerFallbackRequest,
+    ) -> ClaimReleaseResponse:
+        character, controller, _edge, claim = _claimed_controller_for_web_request(request)
+        remove_claim(controller, claim_secrets)
+        return ClaimReleaseResponse(
+            character_id=str(character.id),
+            controller_id=str(controller.id),
+            claim_id=claim.claim_id,
+        )
 
     async def _patch_world_request(request: WorldPatchRequest) -> WorldPatchResponse:
         try:
@@ -783,6 +1069,9 @@ def create_app(
                 kind = actor._controller_kind(controller_id)
                 if kind == "unknown":
                     raise HTTPException(status_code=400, detail="entity is not a controller")
+                current = current_controller(actor, character)
+                if current is not None and current[0].id != controller_id:
+                    transfer_claim(current[0], controller)
                 if kind == "suspended":
                     reason = controller.get_component(SuspendedControllerComponent).reason
                     generation = actor.suspend(character_id, controller_id, reason=reason)
@@ -1027,7 +1316,11 @@ def create_app(
         return _runtime_response()
 
     @app.post("/world/commands", response_model=CommandResponse, status_code=202)
-    async def submit_command(request: CommandRequest) -> CommandResponse:
+    async def submit_command(
+        request: CommandRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> CommandResponse:
+        _with_claim_secret(request, claim_secret)
         return await _submit_command_request(request)
 
     @app.delete(
@@ -1039,25 +1332,52 @@ def create_app(
         command_id: str,
         controller_id: str,
         controller_generation: int,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> CommandCancelResponse:
         return await _cancel_command_request(
             id,
             command_id,
             controller_id,
             controller_generation,
+            claim_id,
+            claim_secret,
         )
 
     @app.post("/world/controllers/web/claim", response_model=WebControllerClaimResponse)
     async def claim_web_controller(
         request: WebControllerClaimRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> WebControllerClaimResponse:
+        _with_claim_secret(request, claim_secret)
         return await _claim_web_controller_request(request)
 
     @app.patch("/world/controllers/web/fallback", response_model=WebControllerFallbackResponse)
     async def set_web_controller_fallback(
         request: WebControllerFallbackRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> WebControllerFallbackResponse:
+        _with_claim_secret(request, claim_secret)
         return await _web_controller_fallback_request(request)
+
+    @app.post(
+        "/world/controllers/web/release-controller",
+        response_model=WebControllerFallbackResponse,
+    )
+    async def release_web_controller_to_fallback(
+        request: WebControllerFallbackRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> WebControllerFallbackResponse:
+        _with_claim_secret(request, claim_secret)
+        return await _release_web_controller_to_fallback_request(request)
+
+    @app.post("/world/controllers/web/release-claim", response_model=ClaimReleaseResponse)
+    async def release_web_claim(
+        request: WebControllerFallbackRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> ClaimReleaseResponse:
+        _with_claim_secret(request, claim_secret)
+        return await _release_web_claim_request(request)
 
     @app.patch("/admin/world", response_model=WorldPatchResponse)
     async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:
@@ -1183,12 +1503,18 @@ def create_app(
         "/world/character/{character_id}/scene-image",
         response_model=WorldImageGenerationResponse,
     )
-    async def request_character_scene_image(character_id: str) -> WorldImageGenerationResponse:
+    async def request_character_scene_image(
+        character_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> WorldImageGenerationResponse:
         # Player-facing: illustrate the character's current room as an on-request scene event.
         _require_imagegen()
-        parsed = parse_entity_id(character_id)
-        if parsed is None or not actor.world.has_entity(parsed):
-            raise HTTPException(status_code=404, detail="character not found")
+        _require_claim_secret(
+            character_id,
+            claim_id=claim_id,
+            claim_secret=claim_secret,
+        )
         response = await _scene_image_request(character_id)
         if response is None:
             raise HTTPException(status_code=400, detail="character has no room to illustrate")
@@ -1260,6 +1586,7 @@ def create_app(
             fragment_providers=collect_prompt_fragments(plugins or ()),
             persona_providers=collect_persona_fragments(plugins or ()),
             worldgen_options=worldgen_options,
+            claim_secrets=claim_secrets,
         )
         mcp_session_manager = getattr(mcp_app, "bunnyland_mcp_session_manager", None)
         mcp_event_bridge = getattr(mcp_app, "bunnyland_mcp_event_bridge", None)

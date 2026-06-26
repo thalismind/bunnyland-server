@@ -20,15 +20,15 @@ CLAIM_TIMEOUT_DEFAULT_SECONDS = 30 * 60
 
 
 def normalize_claim_fallback(value: str | None) -> str:
-    normalized = (value or CLAIM_FALLBACK_SUSPEND).strip().lower().replace("_", "-")
+    raw = (value or CLAIM_FALLBACK_SUSPEND).strip()
+    normalized = raw.lower().replace("_", "-")
     if normalized in {"suspended", "offline"}:
         return CLAIM_FALLBACK_SUSPEND
     if normalized in {"ai", "agent"}:
         return CLAIM_FALLBACK_LLM
-    if normalized not in VALID_CLAIM_FALLBACK_CONTROLLERS:
-        valid = ", ".join(sorted(VALID_CLAIM_FALLBACK_CONTROLLERS))
-        raise ValueError(f"fallback_controller must be one of: {valid}")
-    return normalized
+    if normalized in VALID_CLAIM_FALLBACK_CONTROLLERS:
+        return normalized
+    return raw
 
 
 def normalize_claim_timeout(value: int | None) -> int | None:

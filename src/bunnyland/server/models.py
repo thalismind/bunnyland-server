@@ -21,6 +21,7 @@ class CommandRequest(BaseModel):
     character_id: str
     controller_id: str
     controller_generation: int
+    claim_id: str | None = None
     command_type: str
     payload: dict[str, Any] = Field(default_factory=dict)
     cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
@@ -84,6 +85,7 @@ class CharacterChatHistoryMessage(BaseModel):
 
 class CharacterChatRequest(BaseModel):
     client_id: str = Field(min_length=1, max_length=128)
+    claim_id: str | None = None
     message: str = Field(min_length=1, max_length=4000)
     history_summary: str = Field(default="", max_length=12000)
     history: list[CharacterChatHistoryMessage] = Field(default_factory=list, max_length=24)
@@ -448,13 +450,11 @@ class WorldLibraryResponse(ContentLibrary):
     pass
 
 
-ClaimFallbackController = Literal["suspend", "llm"]
-
-
 class WebControllerFallbackRequest(BaseModel):
     character_id: str
     client_id: str = Field(min_length=1)
-    fallback_controller: ClaimFallbackController | None = None
+    claim_id: str | None = None
+    fallback_controller: str | None = None
     fallback_reason: str | None = None
     llm_profile_name: str | None = None
     llm_model: str | None = None
@@ -473,12 +473,22 @@ class WebControllerFallbackResponse(BaseModel):
     character_id: str
     controller_id: str
     controller_generation: int
+    claim_id: str
+    claim_secret: str
     fallback_controller: str
     timeout_seconds: int
 
 
 class WebControllerClaimResponse(WebControllerFallbackResponse):
     pass
+
+
+class ClaimReleaseResponse(BaseModel):
+    ok: bool = True
+    character_id: str
+    controller_id: str
+    claim_id: str
+    released: bool = True
 
 
 class ComponentPatchSpec(BaseModel):
@@ -770,7 +780,6 @@ __all__ = [
     "ComponentPatchSpec",
     "EcsTypeSchema",
     "EdgePatchSpec",
-    "ClaimFallbackController",
     "WorldCharacterGenerationRequest",
     "WorldCharacterGenerationResponse",
     "WorldEventGenerationRequest",

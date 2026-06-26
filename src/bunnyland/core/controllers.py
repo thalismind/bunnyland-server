@@ -12,6 +12,22 @@ from relics import Component
 
 
 @dataclass(frozen=True)
+class ClaimedComponent(Component):
+    """Public claim ownership metadata for a character controller.
+
+    The bearer secret for the claim is intentionally not stored here. Admin snapshots and
+    persisted worlds may show who owns a claim, but must not reveal a reusable token.
+    """
+
+    claim_id: str
+    client_kind: str
+    client_id: str
+    character_id: str
+    label: str = ""
+    claimed_at_unix: int = 0
+
+
+@dataclass(frozen=True)
 class ClaimTimeoutComponent(Component):
     """Player-controller timeout state and fallback preference.
 
@@ -41,7 +57,7 @@ class DiscordControllerComponent(Component):
 
 @dataclass(frozen=True)
 class MCPControllerComponent(Component):
-    agent_id: str
+    client_id: str
     label: str = ""
 
 
@@ -109,6 +125,7 @@ class SuspendedControllerComponent(Component):
 
 __all__ = [
     "BehaviorControllerComponent",
+    "ClaimedComponent",
     "ClaimTimeoutComponent",
     "DiscordControllerComponent",
     "LLMControllerComponent",

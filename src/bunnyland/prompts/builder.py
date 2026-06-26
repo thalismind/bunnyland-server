@@ -235,7 +235,7 @@ class PromptBuilder:
             elif controller.has_component(LLMControllerComponent):
                 kind = "controlled by an agent"
             elif controller.has_component(MCPControllerComponent):
-                kind = "controlled by an MCP agent"
+                kind = "controlled by an MCP client"
             elif controller.has_component(BehaviorControllerComponent):
                 kind = "controlled by a behavior routine"
             elif controller.has_component(ScriptedControllerComponent):

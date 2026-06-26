@@ -23,7 +23,7 @@ from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
 from ..imagegen.feed import latest_image_completion, latest_image_failure
 from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators, format_generator_lines
-from .backend import Backend, LocalBackend, RemoteBackend
+from .backend import Backend, ControlClaim, LocalBackend, RemoteBackend
 from .events import EventNarrator
 from .model import Target, World, entity_icon, entity_name, fmt_points, has
 from .splash import IntroSplash
@@ -167,6 +167,16 @@ class FormField:
     required: bool
     candidates: tuple[Target, ...] | None = None
     initial_value: str | None = None
+
+
+def _control_claim(value) -> ControlClaim | None:
+    if value is None:
+        return None
+    if isinstance(value, ControlClaim):
+        return value
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        return ControlClaim(controller_id=str(value[0]), generation=int(value[1]))
+    return None
 
 
 class ActionForm(ModalScreen[dict | None]):
@@ -318,7 +328,7 @@ class BunnylandTUI(App[None]):
     #character-control-row { height: 3; }
     #character-label { width: 10; content-align: left middle; }
     #player { width: 1fr; }
-    #character-release { width: 10; min-width: 10; }
+    #character-release, #claim-release { width: 8; min-width: 8; }
     #play-hint { padding: 0 1; color: $text-muted; height: 1; }
     #points { padding: 0 1; height: 1; }
     #target-row { height: 3; }
@@ -357,7 +367,7 @@ class BunnylandTUI(App[None]):
         self.show_icons = show_icons
         self.world = World()
         self.player_id = ""
-        self.control: tuple[str, int] | None = None
+        self.control: ControlClaim | None = None
         self.view_room_id: str | None = None
         self.character_list: list[CharacterSummaryView] = []
         self.selected_id: str | None = None
@@ -399,7 +409,8 @@ class BunnylandTUI(App[None]):
                         allow_blank=True,
                         id="player",
                     )
-                    yield Button("Release", id="character-release", disabled=True)
+                    yield Button("Claim", id="character-release", disabled=True)
+                    yield Button("Release", id="claim-release", disabled=True)
                     if self.backend.supports_image_requests:
                         yield Button(f"{REQUEST_EMOJI} Image", id="request-image")
                     if self.backend.supports_character_sheets:
@@ -473,11 +484,29 @@ class BunnylandTUI(App[None]):
         if self.player_id and projection and projection.get("character_id") == self.player_id:
             projected_world = World.parse(projection)
             projected_control = projected_world.control(self.player_id)
+            self.control = _control_claim(self.control)
             if self.control:
-                if projected_control and projected_control[0] == self.control[0]:
-                    self.control = projected_control
+                current_control = self.control
+                if projected_control and projected_control[0] == current_control.controller_id:
+                    self.control = ControlClaim(
+                        controller_id=projected_control[0],
+                        generation=projected_control[1],
+                        claim_id=current_control.claim_id,
+                        claim_secret=current_control.claim_secret,
+                        active=current_control.active,
+                    )
                 else:
-                    self.control = None
+                    self.control = (
+                        ControlClaim(
+                            controller_id=projected_control[0] if projected_control else "",
+                            generation=projected_control[1] if projected_control else 0,
+                            claim_id=current_control.claim_id,
+                            claim_secret=current_control.claim_secret,
+                            active=False,
+                        )
+                        if current_control.claim_id and current_control.claim_secret
+                        else None
+                    )
             self.world = projected_world
             self.action_views = list(projection.get("actions") or [])
         else:
@@ -542,9 +571,17 @@ class BunnylandTUI(App[None]):
 
     def _render_play_state(self) -> None:
         playing = bool(self.player_id)
-        release = self._main_query_one("#character-release", Button)
-        release.disabled = not playing
-        release.label = "Release" if not playing or self.control else "Claim"
+        control_button = self._main_query_one("#character-release", Button)
+        control_button.disabled = not playing
+        if self.control is None:
+            control_button.label = "Claim"
+        elif self.control.active:
+            control_button.label = "Idle"
+        else:
+            control_button.label = "Resume"
+        release = self._main_query_one("#claim-release", Button)
+        release.label = "Release"
+        release.disabled = not bool(self.control)
         hint = self._main_query_one("#play-hint", Static)
         if playing:
             name = entity_name(self.world.get(self.player_id)) or self.player_id
@@ -810,10 +847,32 @@ class BunnylandTUI(App[None]):
     async def _character_release_pressed(self, _event: Button.Pressed) -> None:
         if not self.player_id:
             return
-        if self.control is None:
+        if self.control is None or not self.control.active:
             self.control = await self.backend.claim(self.player_id, self.world)
             await self.refresh_world()
             return
+        if not self.control.claim_id or not self.control.claim_secret:
+            self._drop_player()
+            await self.refresh_world()
+            return
+        control = await self.backend.release_controller(self.player_id, self.control)
+        if control is None:
+            self._append_activity(Text("Could not release controller.", style="dark_orange"))
+            return
+        self.control = control
+        await self.refresh_world()
+
+    @on(Button.Pressed, "#claim-release")
+    async def _claim_release_pressed(self, _event: Button.Pressed) -> None:
+        if not self.player_id or self.control is None:
+            return
+        if not await self.backend.release_claim(self.player_id, self.control):
+            self._append_activity(Text("Could not release claim.", style="dark_orange"))
+            return
+        self._drop_player()
+        await self.refresh_world()
+
+    def _drop_player(self) -> None:
         self.player_id = ""
         self.control = None
         self.selected_id = None
@@ -826,7 +885,6 @@ class BunnylandTUI(App[None]):
         self._queued_signature = ()
         self._points_line = ""
         self._main_query_one("#player", Select).clear()
-        await self.refresh_world()
 
     @on(Button.Pressed, "#request-image")
     async def _request_image_pressed(self, _event: Button.Pressed) -> None:
@@ -1013,11 +1071,17 @@ class BunnylandTUI(App[None]):
     async def _submit_action(self, action: dict, payload: dict) -> None:
         if not self.player_id or not self.control:
             return
+        if not self.control.active:
+            self.control = await self.backend.claim(self.player_id, self.world)
+            if self.control is None:
+                self._append_activity(Text("Could not resume this character.", style="dark_orange"))
+                return
         cost = _action_cost(action)
         result = await self.backend.submit({
             "character_id": self.player_id,
-            "controller_id": self.control[0],
-            "controller_generation": self.control[1],
+            "controller_id": self.control.controller_id,
+            "controller_generation": self.control.generation,
+            "claim_id": self.control.claim_id,
             "command_type": _action_command_type(action),
             "payload": payload,
             "cost": cost,
@@ -1037,8 +1101,8 @@ class BunnylandTUI(App[None]):
         ok = await self.backend.cancel_command(
             self.player_id,
             str(command.get("command_id") or ""),
-            self.control[0],
-            self.control[1],
+            self.control.controller_id,
+            self.control.generation,
         )
         if not ok:
             self._append_activity(Text("Could not cancel queued command.", style="dark_orange"))
@@ -1064,15 +1128,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--claim-fallback",
-        choices=("suspend", "llm"),
         default=None,
-        help="controller fallback when this TUI claim times out",
+        help="idle controller id for this TUI claim; also accepts suspend or llm",
     )
     parser.add_argument(
         "--claim-timeout-minutes",
         type=int,
         default=None,
-        help="claim timeout override in minutes, between 5 and 60",
+        help="idle timeout override in minutes, between 5 and 60",
     )
     parser.add_argument(
         "--no-icons",

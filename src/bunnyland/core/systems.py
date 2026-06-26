@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from relics import Frequency, System
 
+from ..claims import controller_claim, transfer_claim
 from .claim_timeout import (
     CLAIM_FALLBACK_LLM,
     CLAIM_TIMEOUT_DEFAULT_SECONDS,
@@ -36,7 +37,7 @@ from .controllers import (
     SuspendedControllerComponent,
     WebControllerComponent,
 )
-from .ecs import replace_component, spawn_entity
+from .ecs import parse_entity_id, replace_component, spawn_entity
 from .edges import ControlledBy
 from .events import ControllerChangedEvent
 
@@ -163,8 +164,17 @@ class ClaimTimeoutSystem:
                 if now_unix - last_active >= timeout:
                     expired.append((character, controller, claim))
 
-        for character, _controller, claim in expired:
-            if claim.fallback_controller == CLAIM_FALLBACK_LLM:
+        for character, old_controller, claim in expired:
+            active_claim = controller_claim(old_controller)
+            existing = self._existing_fallback(
+                actor,
+                claim.fallback_controller,
+                claim_id=active_claim.claim_id if active_claim is not None else "",
+            )
+            if existing is not None:
+                controller = existing
+                kind = self._controller_kind(controller)
+            elif claim.fallback_controller == CLAIM_FALLBACK_LLM:
                 controller = spawn_entity(
                     actor.world,
                     [
@@ -175,19 +185,22 @@ class ClaimTimeoutSystem:
                         )
                     ]
                 )
-                generation = actor.assign_controller(character.id, controller.id)
-                if character.has_component(SuspendedComponent):
-                    character.remove_component(SuspendedComponent)
                 kind = "llm"
             else:
                 controller = spawn_entity(
                     actor.world,
                     [SuspendedControllerComponent(reason=claim.fallback_reason)]
                 )
+                kind = "suspended"
+            transfer_claim(old_controller, controller)
+            if kind == "suspended":
                 generation = actor.suspend(
                     character.id, controller.id, reason=claim.fallback_reason
                 )
-                kind = "suspended"
+            else:
+                generation = actor.assign_controller(character.id, controller.id)
+                if character.has_component(SuspendedComponent):
+                    character.remove_component(SuspendedComponent)
             await actor.bus.publish(
                 ControllerChangedEvent(
                     **actor._event_base(
@@ -215,6 +228,24 @@ class ClaimTimeoutSystem:
         if controller.has_component(SuspendedControllerComponent):
             return "suspended"
         return "unknown"
+
+    def _existing_fallback(
+        self,
+        actor: WorldActor,
+        fallback_controller: str,
+        *,
+        claim_id: str,
+    ):
+        controller_id = parse_entity_id(fallback_controller)
+        if controller_id is None or not actor.world.has_entity(controller_id):
+            return None
+        controller = actor.world.get_entity(controller_id)
+        if self._controller_kind(controller) == "unknown":
+            return None
+        existing_claim = controller_claim(controller)
+        if existing_claim is not None and existing_claim.claim_id != claim_id:
+            return None
+        return controller
 
 
 __all__ = ["ActionFocusRegenSystem", "ClaimTimeoutSystem", "WorldClockSystem"]

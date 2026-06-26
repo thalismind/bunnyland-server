@@ -11,6 +11,7 @@ import pytest
 from conftest import build_scenario
 
 import bunnyland.server.worldgen as server_worldgen
+from bunnyland.claims import add_claim, transfer_claim
 from bunnyland.content import load_content_library
 from bunnyland.core import (
     ActionArgument,
@@ -134,6 +135,7 @@ from bunnyland.server.admin import (
 )
 from bunnyland.server.app import create_app, next_websocket_update
 from bunnyland.server.models import (
+    CharacterChatRequest,
     ClientTargetView,
     ControllerAssignmentRequest,
     WebControllerClaimRequest,
@@ -376,12 +378,12 @@ def test_client_view_describes_controller_identity(scenario):
         ),
         ([WebControllerComponent(client_id="web", label="web")], "web", "web", ""),
         (
-            [MCPControllerComponent(agent_id="agent-1", label="Operator")],
+            [MCPControllerComponent(client_id="agent-1", label="Operator")],
             "mcp",
             "Operator",
             "agent-1",
         ),
-        ([MCPControllerComponent(agent_id="agent-2", label="")], "mcp", "agent-2", ""),
+        ([MCPControllerComponent(client_id="agent-2", label="")], "mcp", "agent-2", ""),
         (
             [LLMControllerComponent(profile_name="guide", model="mixtral")],
             "llm",
@@ -1895,6 +1897,32 @@ def test_fastapi_cancel_queued_command_removes_it(scenario):
     assert stale.status_code == 409
 
 
+async def test_character_chat_endpoint_maps_service_exceptions(scenario):
+    class FakeChat:
+        allowed_tools = []
+
+        def __init__(self, exc: Exception) -> None:
+            self.exc = exc
+
+        async def chat(self, character_id, request):
+            raise self.exc
+
+    request = CharacterChatRequest(client_id="client-a", message="hello")
+
+    for exc, status, detail in (
+        (PermissionError("not allowed"), 409, "not allowed"),
+        (TypeError("bad shape"), 400, "bad shape"),
+        (ValueError("entity is not a character"), 400, "entity is not a character"),
+        (ValueError("missing character"), 404, "missing character"),
+    ):
+        app = create_app(scenario.actor, character_chat=FakeChat(exc))
+        route = next(route for route in app.routes if route.path == "/world/character/{id}/chat")
+        with pytest.raises(Exception) as raised:
+            await route.endpoint(str(scenario.character), request)
+        assert raised.value.status_code == status
+        assert raised.value.detail == detail
+
+
 def test_fastapi_world_generation_status_endpoint_reports_idle(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
@@ -2228,7 +2256,9 @@ async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
             character_id=str(scenario.character),
             client_id="client-a",
             label="toon",
-        )
+            claim_id=first.claim_id,
+        ),
+        claim_secret=first.claim_secret,
     )
 
     assert first.controller_id == second.controller_id
@@ -2267,6 +2297,81 @@ async def test_web_controller_claim_unsuspends_character(scenario):
     assert not character.has_component(SuspendedComponent)
 
 
+async def test_web_controller_claim_rejects_active_claim_conflicts(scenario):
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/world/controllers/web/claim")
+
+    claimed = await route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+
+    with pytest.raises(Exception) as wrong_secret:
+        await route.endpoint(
+            WebControllerClaimRequest(
+                character_id=str(scenario.character),
+                client_id="client-a",
+                claim_id=claimed.claim_id,
+            ),
+            claim_secret="wrong",
+        )
+    assert wrong_secret.value.status_code == 403
+    assert wrong_secret.value.detail == "invalid claim secret"
+
+    controller = scenario.actor.world.get_entity(parse_entity_id(claimed.controller_id))
+    add_claim(
+        controller,
+        client_kind="mcp",
+        client_id="client-a",
+        character_id=str(scenario.character),
+        label="toon",
+        claim_id=claimed.claim_id,
+    )
+
+    with pytest.raises(Exception) as non_web_claim:
+        await route.endpoint(
+            WebControllerClaimRequest(
+                character_id=str(scenario.character),
+                client_id="client-a",
+                claim_id=claimed.claim_id,
+            ),
+            claim_secret=claimed.claim_secret,
+        )
+    assert non_web_claim.value.status_code == 409
+    assert non_web_claim.value.detail == "character is already claimed"
+
+
+async def test_web_controller_claim_ignores_client_controller_claimed_for_other_character(
+    scenario,
+):
+    app = create_app(scenario.actor)
+    route = next(route for route in app.routes if route.path == "/world/controllers/web/claim")
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+
+    first = await route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+    second = await route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(other.id),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+
+    assert second.controller_id != first.controller_id
+
+
 async def test_web_controller_fallback_endpoint_updates_existing_claim(scenario):
     app = create_app(scenario.actor)
     claim_route = next(
@@ -2287,10 +2392,12 @@ async def test_web_controller_fallback_endpoint_updates_existing_claim(scenario)
         WebControllerFallbackRequest(
             character_id=str(scenario.character),
             client_id="client-a",
+            claim_id=claimed.claim_id,
             fallback_controller="llm",
             llm_model="claim-model",
             timeout_seconds=900,
-        )
+        ),
+        claim_secret=claimed.claim_secret,
     )
 
     assert updated.controller_id == claimed.controller_id
@@ -2302,6 +2409,374 @@ async def test_web_controller_fallback_endpoint_updates_existing_claim(scenario)
     assert claim.llm_model == "claim-model"
 
 
+async def test_web_command_submission_resumes_idle_claim(scenario):
+    app = create_app(scenario.actor)
+    claim_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/claim"
+    )
+    idle_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/release-controller"
+    )
+    submit_route = next(route for route in app.routes if route.path == "/world/commands")
+
+    claimed = await claim_route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+            fallback_controller="llm",
+        )
+    )
+    idled = await idle_route.endpoint(
+        WebControllerFallbackRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            claim_id=claimed.claim_id,
+            fallback_controller="llm",
+        ),
+        claim_secret=claimed.claim_secret,
+    )
+    assert idled.controller_id != claimed.controller_id
+
+    response = await submit_route.endpoint(
+        CommandRequest(
+            character_id=str(scenario.character),
+            controller_id=claimed.controller_id,
+            controller_generation=claimed.controller_generation,
+            claim_id=claimed.claim_id,
+            command_type="say",
+            payload={"text": "back"},
+        ),
+        claim_secret=claimed.claim_secret,
+    )
+
+    assert response.queued is False
+    assert response.reason == "no handler for say"
+    web_controller_id = parse_entity_id(claimed.controller_id)
+    assert web_controller_id is not None
+    assert scenario.actor.current_generation(scenario.character, web_controller_id) is not None
+    assert scenario.actor.current_generation(
+        scenario.character,
+        web_controller_id,
+    ) != claimed.controller_generation
+
+
+async def test_web_command_submission_with_no_controller_returns_stale_generation(scenario):
+    app = create_app(scenario.actor)
+    submit_route = next(route for route in app.routes if route.path == "/world/commands")
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.remove_relationship(ControlledBy, scenario.controller)
+
+    response = await submit_route.endpoint(
+        CommandRequest(
+            character_id=str(scenario.character),
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="say",
+            payload={"text": "hello"},
+        )
+    )
+
+    assert response.reason == "no handler for say"
+
+
+async def test_web_command_submission_keeps_active_matching_web_claim(scenario):
+    app = create_app(scenario.actor)
+    claim_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/claim"
+    )
+    submit_route = next(route for route in app.routes if route.path == "/world/commands")
+    claimed = await claim_route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+        )
+    )
+
+    response = await submit_route.endpoint(
+        CommandRequest(
+            character_id=str(scenario.character),
+            controller_id=claimed.controller_id,
+            controller_generation=claimed.controller_generation,
+            claim_id=claimed.claim_id,
+            command_type="say",
+            payload={"text": "hello"},
+        ),
+        claim_secret=claimed.claim_secret,
+    )
+
+    assert response.reason == "no handler for say"
+    assert scenario.actor.current_generation(
+        scenario.character,
+        parse_entity_id(claimed.controller_id),
+    ) == claimed.controller_generation
+
+
+async def test_web_command_submission_ignores_unclaimed_and_non_web_claims(scenario):
+    app = create_app(scenario.actor)
+    submit_route = next(route for route in app.routes if route.path == "/world/commands")
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    no_claim = await submit_route.endpoint(
+        CommandRequest(
+            character_id=str(scenario.character),
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="say",
+            payload={"text": "hello"},
+        )
+    )
+    assert no_claim.reason == "no handler for say"
+
+    claim_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/claim"
+    )
+    claimed = await claim_route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+    controller = actor_controller = scenario.actor.world.get_entity(
+        parse_entity_id(claimed.controller_id)
+    )
+    controller.remove_component(WebControllerComponent)
+    controller.add_component(MCPControllerComponent(client_id="client-a", label="toon"))
+    add_claim(
+        controller,
+        client_kind="mcp",
+        client_id="client-a",
+        character_id=str(scenario.character),
+        label="toon",
+        claim_id=claimed.claim_id,
+    )
+    non_web = await submit_route.endpoint(
+        CommandRequest(
+            character_id=str(scenario.character),
+            controller_id=claimed.controller_id,
+            controller_generation=claimed.controller_generation,
+            claim_id=claimed.claim_id,
+            command_type="say",
+            payload={"text": "hello"},
+        ),
+        claim_secret=claimed.claim_secret,
+    )
+
+    assert non_web.reason == "no handler for say"
+    assert character.get_relationships(ControlledBy)[0][1] == actor_controller.id
+
+
+async def test_web_command_submission_rejects_mismatched_active_web_claim(scenario):
+    app = create_app(scenario.actor)
+    submit_route = next(route for route in app.routes if route.path == "/world/commands")
+    claim_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/claim"
+    )
+    claimed = await claim_route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+        )
+    )
+    web = scenario.actor.world.get_entity(parse_entity_id(claimed.controller_id))
+    replace_component(web, WebControllerComponent(client_id="wrong-client"))
+
+    with pytest.raises(Exception) as exc:
+        await submit_route.endpoint(
+            CommandRequest(
+                character_id=str(scenario.character),
+                controller_id=claimed.controller_id,
+                controller_generation=claimed.controller_generation,
+                claim_id=claimed.claim_id,
+                command_type="say",
+                payload={"text": "hello"},
+            ),
+            claim_secret=claimed.claim_secret,
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "claim is not active for this web client"
+
+
+async def test_web_command_submission_resumes_idle_claim_with_new_web_controller(scenario):
+    app = create_app(scenario.actor)
+    submit_route = next(route for route in app.routes if route.path == "/world/commands")
+    claim_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/claim"
+    )
+    claimed = await claim_route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            label="toon",
+        )
+    )
+    active = scenario.actor.world.get_entity(parse_entity_id(claimed.controller_id))
+    idle = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    transfer_claim(active, idle)
+    active.remove_component(WebControllerComponent)
+    generation = scenario.actor.assign_controller(scenario.character, idle.id)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        SuspendedComponent(reason="idle")
+    )
+
+    response = await submit_route.endpoint(
+        CommandRequest(
+            character_id=str(scenario.character),
+            controller_id=str(idle.id),
+            controller_generation=generation,
+            claim_id=claimed.claim_id,
+            command_type="say",
+            payload={"text": "back"},
+        ),
+        claim_secret=claimed.claim_secret,
+    )
+
+    assert response.reason == "no handler for say"
+    character = scenario.actor.world.get_entity(scenario.character)
+    _edge, controller_id = character.get_relationships(ControlledBy)[0]
+    assert controller_id != idle.id
+    assert scenario.actor.world.get_entity(controller_id).has_component(WebControllerComponent)
+    assert not character.has_component(SuspendedComponent)
+
+
+async def test_release_web_controller_to_llm_unsuspends_character(scenario):
+    app = create_app(scenario.actor)
+    claim_route = next(
+        route for route in app.routes if route.path == "/world/controllers/web/claim"
+    )
+    release_route = next(
+        route for route in app.routes
+        if route.path == "/world/controllers/web/release-controller"
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    claimed = await claim_route.endpoint(
+        WebControllerClaimRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            fallback_controller="llm",
+        )
+    )
+    character.add_component(SuspendedComponent(reason="idle"))
+
+    released = await release_route.endpoint(
+        WebControllerFallbackRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            claim_id=claimed.claim_id,
+            fallback_controller="llm",
+        ),
+        claim_secret=claimed.claim_secret,
+    )
+
+    assert released.fallback_controller == "llm"
+    assert not character.has_component(SuspendedComponent)
+
+
+def test_fastapi_claimed_character_private_views_require_claim_secret(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    claim = client.post(
+        "/world/controllers/web/claim",
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+            "label": "toon",
+        },
+    ).json()
+
+    missing_secret = client.get(
+        f"/world/character/{scenario.character}",
+        params={"claim_id": claim["claim_id"]},
+    )
+    wrong_claim = client.get(
+        f"/world/character/{scenario.character}/commands",
+        params={"claim_id": "wrong"},
+        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
+    )
+    allowed = client.get(
+        f"/world/character/{scenario.character}",
+        params={"claim_id": claim["claim_id"]},
+        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
+    )
+
+    assert missing_secret.status_code == 403
+    assert missing_secret.json()["detail"] == "invalid claim secret"
+    assert wrong_claim.status_code == 403
+    assert wrong_claim.json()["detail"] == "invalid claim id"
+    assert allowed.status_code == 200
+
+
+def test_fastapi_release_claim_revokes_private_access(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    claim = client.post(
+        "/world/controllers/web/claim",
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+            "label": "toon",
+        },
+    ).json()
+    released = client.post(
+        "/world/controllers/web/release-claim",
+        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+            "claim_id": claim["claim_id"],
+        },
+    )
+    open_view = client.get(f"/world/character/{scenario.character}")
+
+    assert released.status_code == 200
+    assert released.json()["claim_id"] == claim["claim_id"]
+    assert open_view.status_code == 200
+
+
+def test_fastapi_release_controller_to_suspended_fallback_retains_claim(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    claim = client.post(
+        "/world/controllers/web/claim",
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+            "fallback_controller": "suspend",
+        },
+    ).json()
+    idled = client.post(
+        "/world/controllers/web/release-controller",
+        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+            "claim_id": claim["claim_id"],
+            "fallback_controller": "suspend",
+        },
+    )
+    private_view = client.get(
+        f"/world/character/{scenario.character}",
+        params={"claim_id": claim["claim_id"]},
+        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
+    )
+
+    assert idled.status_code == 200
+    assert idled.json()["fallback_controller"] == "suspended"
+    assert idled.json()["claim_id"] == claim["claim_id"]
+    assert private_view.status_code == 200
+
+
 async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
     app = create_app(scenario.actor)
     claim_route = next(
@@ -2309,6 +2784,10 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
     )
     fallback_route = next(
         route for route in app.routes if route.path == "/world/controllers/web/fallback"
+    )
+    release_route = next(
+        route for route in app.routes
+        if route.path == "/world/controllers/web/release-controller"
     )
     other = spawn_entity(
         scenario.actor.world,
@@ -2339,10 +2818,10 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
                 client_id="client-a",
             )
         )
-    assert missing_controller.value.status_code == 404
-    assert missing_controller.value.detail == "web controller does not exist"
+    assert missing_controller.value.status_code == 409
+    assert missing_controller.value.detail == "character is not claimed"
 
-    await claim_route.endpoint(
+    claimed = await claim_route.endpoint(
         WebControllerClaimRequest(
             character_id=str(scenario.character),
             client_id="client-a",
@@ -2353,10 +2832,78 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
             WebControllerFallbackRequest(
                 character_id=str(other.id),
                 client_id="client-a",
-            )
-        )
+                claim_id=claimed.claim_id,
+            ),
+            claim_secret=claimed.claim_secret,
+    )
     assert wrong_character.value.status_code == 409
-    assert wrong_character.value.detail == "web controller is not controlling this character"
+    assert wrong_character.value.detail == "character has no controller"
+
+    with pytest.raises(Exception) as wrong_client:
+        await fallback_route.endpoint(
+            WebControllerFallbackRequest(
+                character_id=str(scenario.character),
+                client_id="client-b",
+                claim_id=claimed.claim_id,
+            ),
+            claim_secret=claimed.claim_secret,
+    )
+    assert wrong_client.value.status_code == 409
+    assert wrong_client.value.detail == "character is claimed by another client"
+
+    with pytest.raises(Exception) as wrong_secret:
+        await fallback_route.endpoint(
+            WebControllerFallbackRequest(
+                character_id=str(scenario.character),
+                client_id="client-a",
+                claim_id=claimed.claim_id,
+            ),
+            claim_secret="wrong",
+    )
+    assert wrong_secret.value.status_code == 403
+    assert wrong_secret.value.detail == "invalid claim secret"
+
+    unknown = spawn_entity(scenario.actor.world)
+    with pytest.raises(Exception) as unknown_controller:
+        await release_route.endpoint(
+            WebControllerFallbackRequest(
+                character_id=str(scenario.character),
+                client_id="client-a",
+                claim_id=claimed.claim_id,
+                fallback_controller=str(unknown.id),
+            ),
+            claim_secret=claimed.claim_secret,
+    )
+    assert unknown_controller.value.status_code == 400
+    assert unknown_controller.value.detail == "entity is not a controller"
+
+    with pytest.raises(Exception) as invalid_fallback:
+        await release_route.endpoint(
+            WebControllerFallbackRequest(
+                character_id=str(scenario.character),
+                client_id="client-a",
+                claim_id=claimed.claim_id,
+                fallback_controller="manual",
+            ),
+            claim_secret=claimed.claim_secret,
+    )
+    assert invalid_fallback.value.status_code == 400
+    assert invalid_fallback.value.detail == "fallback_controller is not a controller"
+
+    existing = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    released = await release_route.endpoint(
+        WebControllerFallbackRequest(
+            character_id=str(scenario.character),
+            client_id="client-a",
+            claim_id=claimed.claim_id,
+            fallback_controller=str(existing.id),
+        ),
+        claim_secret=claimed.claim_secret,
+    )
+    assert released.controller_id == str(existing.id)
 
 
 def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):

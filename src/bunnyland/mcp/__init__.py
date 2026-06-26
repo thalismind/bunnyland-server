@@ -6,10 +6,12 @@ from .server import (
     MCPEventBridge,
     assign_mcp_controller,
     create_bunnyland_mcp_app,
+    list_mcp_characters,
     mcp_controlled_character,
     mcp_enabled,
+    release_mcp_claim,
     release_mcp_controller,
-    render_mcp_agent_prompt,
+    render_mcp_client_prompt,
 )
 
 __all__ = [
@@ -18,8 +20,10 @@ __all__ = [
     "MCPEventBridge",
     "assign_mcp_controller",
     "create_bunnyland_mcp_app",
+    "list_mcp_characters",
     "mcp_controlled_character",
     "mcp_enabled",
+    "release_mcp_claim",
     "release_mcp_controller",
-    "render_mcp_agent_prompt",
+    "render_mcp_client_prompt",
 ]

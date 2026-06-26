@@ -86,8 +86,8 @@ def _is_child_character(character) -> bool:
     return is_child_character(character)
 
 
-def _claimable_characters(characters, *, allow_child_claims: bool):
-    return claimable_characters(characters, allow_child_claims=allow_child_claims)
+def _claimable_characters(actor: WorldActor, characters, *, allow_child_claims: bool):
+    return claimable_characters(actor, characters, allow_child_claims=allow_child_claims)
 
 
 def _discord_controller_for(actor: WorldActor, discord_user_id: int, default_channel_id: int):
@@ -132,7 +132,11 @@ def assign_discord_controller(
                 f"{name} is a child character and cannot be claimed on this server"
             )
     else:
-        suspended = _claimable_characters(characters, allow_child_claims=allow_child_claims)
+        suspended = _claimable_characters(
+            actor,
+            characters,
+            allow_child_claims=allow_child_claims,
+        )
         if not suspended:
             raise RuntimeError("no suspended claimable character exists in the world")
         character = suspended[0]

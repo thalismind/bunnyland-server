@@ -15,6 +15,7 @@ import pytest
 
 import bunnyland.discord.bot as discord_bot
 import bunnyland.discord.view as discord_view
+from bunnyland.claims import add_claim
 from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
@@ -403,7 +404,20 @@ def test_assign_discord_controller_rejects_child_character(scenario):
         )
 
 
-def test_assign_discord_controller_without_name_requires_suspended_character(scenario):
+def test_assign_discord_controller_without_name_claims_first_unclaimed_character(scenario):
+    assert assign_discord_controller(scenario.actor, discord_user_id=123) == "Juniper"
+
+
+def test_assign_discord_controller_without_name_rejects_when_all_characters_claimed(scenario):
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    add_claim(
+        controller,
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+        claim_id="claim-1",
+    )
+
     with pytest.raises(RuntimeError, match="no suspended claimable character"):
         assign_discord_controller(scenario.actor, discord_user_id=123)
 

@@ -956,7 +956,7 @@ def test_status_line_covers_all_controller_kinds():
     )
 
     cases = [
-        (MCPControllerComponent(agent_id="a"), "controlled by an MCP agent"),
+        (MCPControllerComponent(client_id="a"), "controlled by an MCP client"),
         (BehaviorControllerComponent(behavior_name="wander"), "controlled by a behavior routine"),
         (ScriptedControllerComponent(), "controlled by a scripted routine"),
         # An unrecognized controller kind falls through to the suspended label.

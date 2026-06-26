@@ -13,8 +13,10 @@ from bunnyland.core import (
     CommandCost,
     IdentityComponent,
     Lane,
+    LLMControllerComponent,
     OnInsufficientPoints,
     SuspendedComponent,
+    SuspendedControllerComponent,
     WebControllerComponent,
     build_submitted_command,
     parse_entity_id,
@@ -24,13 +26,18 @@ from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
 from bunnyland.tui import app as tui_app
+from bunnyland.tui import backend as tui_backend
 from bunnyland.tui.app import ActionForm, BunnylandTUI, FormField, HelpScreen
 from bunnyland.tui.backend import (
     Backend,
+    ControlClaim,
     LocalBackend,
     RemoteBackend,
     SubmitResult,
+    clear_claim_control,
+    load_claim_control,
     persistent_client_id,
+    save_claim_control,
 )
 from bunnyland.tui.events import EventNarrator
 from bunnyland.tui.model import Target, World, entity_icon, entity_name, entity_type
@@ -458,6 +465,12 @@ async def test_backend_base_open_character_sheet_default():
     result = await _Stub().open_character_sheet(PLAYER)
     assert result.ok is False
     assert "remote server URL" in result.reason
+    control = ControlClaim("controller:1", 2, "claim-1", "secret-1")
+    assert await _Stub().release_controller(PLAYER, control) == control
+    assert await _Stub().release_claim(PLAYER, control) is False
+    image = await _Stub().request_image(PLAYER)
+    assert image.ok is False
+    assert image.status == "unavailable"
 
 
 def test_local_backend_image_capability_reflects_service():
@@ -467,6 +480,49 @@ def test_local_backend_image_capability_reflects_service():
     assert backend.supports_image_requests is False
     backend.imagegen = object()
     assert backend.supports_image_requests is True
+
+
+async def test_local_backend_request_image_reports_unconfigured_service():
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        result = await backend.request_image(player)
+    finally:
+        await backend.close()
+
+    assert result.ok is False
+    assert result.status == "unavailable"
+
+
+async def test_local_backend_request_image_reports_no_room_and_success(monkeypatch):
+    calls = []
+
+    async def request_scene_image(actor, imagegen, *, character_id):
+        calls.append((actor, imagegen, character_id))
+        if len(calls) == 1:
+            return None
+        return SimpleNamespace(status="queued", url="http://image")
+
+    monkeypatch.setattr(
+        "bunnyland.imagegen.scene.request_scene_image",
+        request_scene_image,
+    )
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        backend.imagegen = object()
+        no_room = await backend.request_image(player)
+        queued = await backend.request_image(player)
+    finally:
+        await backend.close()
+
+    assert no_room.ok is False
+    assert no_room.status == "no-room"
+    assert queued.ok is True
+    assert queued.status == "queued"
+    assert queued.url == "http://image"
 
 
 def test_parse_client_view_supports_filtered_structured_surface():
@@ -825,6 +881,128 @@ async def test_local_backend_reclaim_reuses_controller_and_skips_unsuspend():
         await backend.close()
 
 
+async def test_local_backend_release_controller_and_claim_lifecycle():
+    backend = LocalBackend(
+        generator="apartment-demo",
+        autorun=False,
+        client_id="local-client",
+        fallback_controller="llm",
+    )
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        control = await backend.claim(player, World.parse(await backend.fetch_snapshot()))
+        assert control is not None
+        backend.actor.world.get_entity(parse_entity_id(player)).add_component(
+            SuspendedComponent(reason="manual")
+        )
+
+        released = await backend.release_controller(player, control)
+        assert released is not None
+        assert released.active is False
+        controller = backend.actor.world.get_entity(parse_entity_id(released.controller_id))
+        assert controller.has_component(LLMControllerComponent)
+        assert not backend.actor.world.get_entity(parse_entity_id(player)).has_component(
+            SuspendedComponent
+        )
+
+        assert await backend.release_claim(player, released) is True
+        assert await backend.release_claim(player, released) is True
+        assert await backend.release_claim(
+            player,
+            ControlClaim(controller_id="not-an-entity", generation=0),
+        ) is False
+        assert await backend.release_controller("not-an-entity", released) is None
+        assert await backend.release_controller(
+            player,
+            ControlClaim(controller_id="not-an-entity", generation=0),
+        ) is None
+    finally:
+        await backend.close()
+
+
+async def test_local_backend_release_controller_to_existing_and_suspended():
+    backend = LocalBackend(
+        generator="apartment-demo",
+        autorun=False,
+        client_id="local-client",
+    )
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        control = await backend.claim(player, World.parse(await backend.fetch_snapshot()))
+        assert control is not None
+
+        suspended = spawn_entity(
+            backend.actor.world,
+            [SuspendedControllerComponent(reason="idle")],
+        )
+        backend.fallback_controller = str(suspended.id)
+        released = await backend.release_controller(player, control)
+        assert released is not None
+        assert released.controller_id == str(suspended.id)
+        assert backend.actor.world.get_entity(parse_entity_id(player)).has_component(
+            SuspendedComponent
+        )
+
+        backend.fallback_controller = str(spawn_entity(backend.actor.world).id)
+        assert await backend.release_controller(player, released) is None
+    finally:
+        await backend.close()
+
+
+async def test_local_backend_release_controller_to_existing_llm_without_suspended_marker():
+    backend = LocalBackend(
+        generator="apartment-demo",
+        autorun=False,
+        client_id="local-client",
+    )
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        control = await backend.claim(player, World.parse(await backend.fetch_snapshot()))
+        assert control is not None
+        llm = spawn_entity(
+            backend.actor.world,
+            [LLMControllerComponent(profile_name="idle", model="claim-model")],
+        )
+        backend.fallback_controller = str(llm.id)
+
+        released = await backend.release_controller(player, control)
+
+        assert released is not None
+        assert released.controller_id == str(llm.id)
+        assert not backend.actor.world.get_entity(parse_entity_id(player)).has_component(
+            SuspendedComponent
+        )
+    finally:
+        await backend.close()
+
+
+async def test_local_backend_release_controller_creates_suspended_fallback():
+    backend = LocalBackend(
+        generator="apartment-demo",
+        autorun=False,
+        client_id="local-client",
+    )
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        control = await backend.claim(player, World.parse(await backend.fetch_snapshot()))
+        assert control is not None
+
+        released = await backend.release_controller(player, control)
+
+        assert released is not None
+        controller = backend.actor.world.get_entity(parse_entity_id(released.controller_id))
+        assert controller.has_component(SuspendedControllerComponent)
+        assert backend.actor.world.get_entity(parse_entity_id(player)).has_component(
+            SuspendedComponent
+        )
+    finally:
+        await backend.close()
+
+
 async def test_local_backend_close_before_start_is_noop():
     # Closing a backend that was never started has no loop or task to tear down.
     backend = LocalBackend(generator="apartment-demo", autorun=False)
@@ -903,6 +1081,64 @@ def test_persistent_client_id_tolerates_unwritable_config(tmp_path):
     assert persistent_client_id(UnwritablePath())
 
 
+def test_claim_control_persistence_round_trip_and_failures(monkeypatch, tmp_path):
+    monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
+    control = ControlClaim(
+        controller_id="controller:1",
+        generation=7,
+        claim_id="claim-1",
+        claim_secret="secret-1",
+        active=False,
+    )
+
+    assert load_claim_control("client", PLAYER) is None
+    save_claim_control("client", PLAYER, ControlClaim("controller:2", 1))
+    assert load_claim_control("client", PLAYER) is None
+
+    save_claim_control("client/one", PLAYER, control)
+    assert load_claim_control("client/one", PLAYER) == control
+
+    path = tui_backend._claim_path("client/one", PLAYER)
+    path.write_text("{not json", encoding="utf-8")
+    assert load_claim_control("client/one", PLAYER) is None
+    path.write_text('{"claim_id": "claim-only"}', encoding="utf-8")
+    assert load_claim_control("client/one", PLAYER) is None
+
+    save_claim_control("client/one", PLAYER, control)
+    clear_claim_control("client/one", PLAYER)
+    assert load_claim_control("client/one", PLAYER) is None
+    clear_claim_control("client/one", PLAYER)
+
+
+def test_claim_control_persistence_logs_write_and_unlink_errors(monkeypatch, tmp_path):
+    class BadPath:
+        parent = tmp_path
+
+        def write_text(self, text, *, encoding):
+            raise OSError("cannot write")
+
+        def unlink(self):
+            raise OSError("cannot unlink")
+
+    monkeypatch.setattr(tui_backend, "_claim_path", lambda *_args: BadPath())
+    control = ControlClaim("controller:1", 2, "claim-1", "secret-1")
+
+    save_claim_control("client", PLAYER, control)
+    clear_claim_control("client", PLAYER)
+
+
+def test_control_claim_tuple_compatibility_and_mismatch():
+    control = ControlClaim("controller:1", 2, "claim-1", "secret-1", active=False)
+
+    assert list(control) == ["controller:1", 2]
+    assert control[0] == "controller:1"
+    assert control[1] == 2
+    assert control == ("controller:1", 2)
+    assert control != ("controller:1", 3)
+    assert control != "controller:1"
+    assert tui_app._control_claim(("controller:1",)) is None
+
+
 async def test_remote_backend_claims_web_controller():
     class Response:
         is_success = True
@@ -959,6 +1195,261 @@ async def test_remote_backend_failed_claim_returns_none():
     backend._client = Client()
 
     assert await backend.claim(PLAYER, World.parse(_snapshot())) is None
+
+
+async def test_remote_backend_reclaim_uses_stored_claim_secret(monkeypatch, tmp_path):
+    monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
+    stored = ControlClaim("controller:old", 2, "claim-1", "secret-1")
+    save_claim_control("remote-client", PLAYER, stored)
+
+    class Response:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "controller_id": "controller:new",
+                "controller_generation": 3,
+                "claim_id": "claim-1",
+                "claim_secret": "secret-1",
+            }
+
+    class Client:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, dict]] = []
+
+        async def post(self, url: str, **kwargs):
+            self.requests.append((url, kwargs))
+            return Response()
+
+    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend._client = Client()
+
+    control = await backend.claim(PLAYER, World.parse(_snapshot()))
+
+    assert control == ControlClaim("controller:new", 3, "claim-1", "secret-1")
+    assert backend._client.requests == [
+        (
+            "http://server.example/world/controllers/web/claim",
+            {
+                "json": {
+                    "character_id": PLAYER,
+                    "client_id": "remote-client",
+                    "label": "tui",
+                    "fallback_controller": None,
+                    "timeout_seconds": None,
+                    "claim_id": "claim-1",
+                },
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+            },
+        )
+    ]
+
+
+async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_path):
+    monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
+
+    class Response:
+        is_success = True
+        status_code = 200
+
+        def __init__(self, payload=None):
+            self.payload = payload or {"ok": True}
+
+        def raise_for_status(self) -> None: ...
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, str, dict]] = []
+
+        async def get(self, url: str, **kwargs):
+            self.requests.append(("GET", url, kwargs))
+            return Response({"world_epoch": 7})
+
+        async def post(self, url: str, **kwargs):
+            self.requests.append(("POST", url, kwargs))
+            if url.endswith("/world/commands"):
+                return Response({"queued": True, "reason": ""})
+            if url.endswith("/scene-image"):
+                return Response({"status": "queued", "url": "http://image"})
+            return Response()
+
+        async def delete(self, url: str, **kwargs):
+            self.requests.append(("DELETE", url, kwargs))
+            return Response({"cancelled": True})
+
+    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend._client = Client()
+    backend._claims[PLAYER] = ControlClaim(
+        "controller:1",
+        3,
+        claim_id="claim-1",
+        claim_secret="secret-1",
+    )
+
+    await backend.fetch_character_projection(PLAYER)
+    await backend.fetch_queued_commands(PLAYER)
+    await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 3)
+    submitted = await backend.submit({"character_id": PLAYER, "command_type": "wait"})
+    image = await backend.request_image(PLAYER)
+
+    assert submitted.accepted is True
+    assert image.ok is True
+    assert backend._client.requests == [
+        (
+            "GET",
+            f"http://server.example/world/character/{PLAYER}",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "params": {"claim_id": "claim-1"},
+            },
+        ),
+        (
+            "GET",
+            f"http://server.example/world/character/{PLAYER}/commands",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "params": {"claim_id": "claim-1"},
+            },
+        ),
+        (
+            "DELETE",
+            f"http://server.example/world/character/{PLAYER}/commands/cmd-1",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "params": {
+                    "controller_id": "controller:1",
+                    "controller_generation": 3,
+                    "claim_id": "claim-1",
+                },
+            },
+        ),
+        (
+            "POST",
+            "http://server.example/world/commands",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "json": {
+                    "character_id": PLAYER,
+                    "command_type": "wait",
+                    "claim_id": "claim-1",
+                },
+            },
+        ),
+        (
+            "POST",
+            f"http://server.example/world/character/{PLAYER}/scene-image",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "params": {"claim_id": "claim-1"},
+            },
+        ),
+    ]
+
+
+async def test_remote_backend_request_image_reports_unavailable_and_error():
+    class Response:
+        def __init__(self, *, status_code, is_success=False):
+            self.status_code = status_code
+            self.is_success = is_success
+
+    class Client:
+        def __init__(self, responses):
+            self.responses = list(responses)
+
+        async def post(self, url: str, **kwargs):
+            return self.responses.pop(0)
+
+    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend._client = Client([Response(status_code=409), Response(status_code=500)])
+
+    unavailable = await backend.request_image(PLAYER)
+    errored = await backend.request_image(PLAYER)
+
+    assert unavailable.ok is False
+    assert unavailable.status == "unavailable"
+    assert errored.ok is False
+    assert errored.status == "error"
+
+
+async def test_remote_backend_release_controller_and_claim_requests():
+    class Response:
+        status_code = 200
+        text = ""
+
+        def __init__(self, *, is_success=True, payload=None):
+            self.is_success = is_success
+            self.payload = payload or {}
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.requests: list[tuple[str, dict]] = []
+
+        async def post(self, url: str, **kwargs):
+            self.requests.append((url, kwargs))
+            return self.responses.pop(0)
+
+    control = ControlClaim("controller:1", 3, "claim-1", "secret-1")
+    backend = RemoteBackend(
+        "http://server.example",
+        client_id="remote-client",
+        fallback_controller="llm",
+        timeout_seconds=900,
+    )
+    backend._client = Client([
+        Response(
+            payload={
+                "controller_id": "controller:2",
+                "controller_generation": 4,
+                "claim_id": "claim-1",
+                "claim_secret": "secret-1",
+            }
+        ),
+        Response(payload={"ok": True}),
+    ])
+
+    released = await backend.release_controller(PLAYER, control)
+    assert released == ControlClaim("controller:2", 4, "claim-1", "secret-1", active=False)
+    assert await backend.release_claim(PLAYER, released) is True
+    assert backend._client.requests == [
+        (
+            "http://server.example/world/controllers/web/release-controller",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "json": {
+                    "character_id": PLAYER,
+                    "client_id": "remote-client",
+                    "claim_id": "claim-1",
+                    "fallback_controller": "llm",
+                    "timeout_seconds": 900,
+                },
+            },
+        ),
+        (
+            "http://server.example/world/controllers/web/release-claim",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "json": {
+                    "character_id": PLAYER,
+                    "client_id": "remote-client",
+                    "claim_id": "claim-1",
+                },
+            },
+        ),
+    ]
+
+    failed = RemoteBackend("http://server.example", client_id="remote-client")
+    failed._client = Client([Response(is_success=False), Response(is_success=False)])
+    assert await failed.release_controller(PLAYER, control) is None
+    assert await failed.release_claim(PLAYER, control) is False
 
 
 async def test_remote_backend_recent_events_reads_endpoint():
@@ -2542,6 +3033,95 @@ async def test_app_release_clears_character_selection():
         assert app.control is None
         assert app.query_one("#player", Select).value == Select.NULL
         assert app.query_one("#character-release", Button).disabled
+
+
+async def test_app_idle_and_claim_release_paths():
+    from textual.widgets import Button, OptionList, Select
+
+    class ReleaseBackend(RecordingBackend):
+        def __init__(self, snapshot: dict) -> None:
+            super().__init__(snapshot)
+            self.release_controller_result: ControlClaim | None = None
+            self.release_claim_result = False
+
+        async def release_controller(
+            self,
+            character_id: str,
+            control: ControlClaim,
+        ) -> ControlClaim | None:
+            return self.release_controller_result
+
+        async def release_claim(self, character_id: str, control: ControlClaim) -> bool:
+            return self.release_claim_result
+
+    backend = ReleaseBackend(_snapshot())
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        app.control = ControlClaim("controller:1", 2, "claim-1", "secret-1", active=False)
+        app._render_play_state()
+        assert str(app.query_one("#character-release", Button).label) == "Resume"
+
+        app.control = ControlClaim("controller:1", 2, "claim-1", "secret-1")
+        await app._character_release_pressed(SimpleNamespace())
+        activity = app.query_one("#activity", OptionList)
+        assert any("Could not release controller" in p for p in _activity_prompts(activity))
+
+        inactive = ControlClaim("controller:2", 3, "claim-1", "secret-1", active=False)
+        backend.release_controller_result = inactive
+        await app._character_release_pressed(SimpleNamespace())
+        assert app.control is not None
+        assert app.control.active is False
+
+        backend.release_claim_result = False
+        await app._claim_release_pressed(SimpleNamespace())
+        assert any("Could not release claim" in p for p in _activity_prompts(activity))
+
+        backend.release_claim_result = True
+        await app._claim_release_pressed(SimpleNamespace())
+        assert app.player_id == ""
+        assert app.control is None
+        assert app.query_one("#player", Select).value == Select.NULL
+
+
+async def test_app_submit_action_reports_failed_resume():
+    from textual.widgets import OptionList
+
+    class ResumeFailBackend(RecordingBackend):
+        async def claim(self, player_id, world):
+            self.claims.append(player_id)
+            return None
+
+    app = BunnylandTUI(ResumeFailBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        app.control = ControlClaim("controller:1", 2, "claim-1", "secret-1", active=False)
+        await app._submit_action({"command_type": "wait", "tool_name": "wait"}, {})
+
+        activity = app.query_one("#activity", OptionList)
+        assert any("Could not resume this character" in p for p in _activity_prompts(activity))
+
+
+async def test_app_release_claim_noops_without_claim():
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with app.run_test():
+        await app._claim_release_pressed(SimpleNamespace())
+
+
+async def test_app_submit_action_resumes_before_submit():
+    class ResumeBackend(RecordingBackend):
+        async def claim(self, player_id, world):
+            self.claims.append(player_id)
+            return ControlClaim("controller:1", 2, "claim-1", "secret-1")
+
+    app = BunnylandTUI(ResumeBackend(_snapshot()))
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        app.control = ControlClaim("controller:old", 1, "claim-1", "secret-1", active=False)
+        await app._submit_action({"command_type": "wait", "tool_name": "wait"}, {})
+
+        assert app.backend.claims[-1] == PLAYER
+        assert app.backend.commands[-1]["controller_id"] == "controller:1"
 
 
 async def test_app_empty_character_roster_prompts_for_playable_character():

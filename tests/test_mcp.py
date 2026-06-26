@@ -14,6 +14,7 @@ import bunnyland.mcp.server as mcp_server
 from bunnyland.cli import select_plugins
 from bunnyland.core import (
     CharacterComponent,
+    ClaimedComponent,
     ControlledBy,
     IdentityComponent,
     LLMControllerComponent,
@@ -30,8 +31,9 @@ from bunnyland.mcp import (
     create_bunnyland_mcp_app,
     mcp_controlled_character,
     mcp_enabled,
+    release_mcp_claim,
     release_mcp_controller,
-    render_mcp_agent_prompt,
+    render_mcp_client_prompt,
 )
 from bunnyland.mechanics.lifesim import LifeStageComponent
 from bunnyland.persistence import WorldMeta
@@ -61,6 +63,13 @@ def _tool_result(result) -> dict:
     if result.structuredContent is not None:
         return result.structuredContent
     return json.loads(result.content[0].text)
+
+
+def _claim_args(claimed: dict) -> dict[str, str]:
+    return {
+        "claim_id": claimed["claim_id"],
+        "claim_secret": claimed["claim_secret"],
+    }
 
 
 def test_select_plugins_can_add_mcp_without_disabling_defaults():
@@ -94,12 +103,12 @@ def test_mcp_uri_and_character_summary_helpers_cover_edge_cases():
         ],
     )
 
-    prompt_uri = mcp_server._agent_prompt_uri("agent/a b")
+    prompt_uri = mcp_server._client_prompt_uri("agent/a b")
 
-    assert prompt_uri == "bunnyland://agents/agent%2Fa%20b/prompt"
-    assert mcp_server._agent_id_from_uri(prompt_uri, "/prompt") == "agent/a b"
-    assert mcp_server._agent_id_from_uri(prompt_uri, "/events") is None
-    assert mcp_server._agent_id_from_uri("bunnyland://rooms/1/prompt", "/prompt") is None
+    assert prompt_uri == "bunnyland://clients/agent%2Fa%20b/prompt"
+    assert mcp_server._client_id_from_uri(prompt_uri, "/prompt") == "agent/a b"
+    assert mcp_server._client_id_from_uri(prompt_uri, "/events") is None
+    assert mcp_server._client_id_from_uri("bunnyland://rooms/1/prompt", "/prompt") is None
     assert mcp_server._active_controller_kind(actor, active) == "other"
     assert mcp_server._character_summary(actor, suspended)["controller_status"] == "suspended"
     assert {
@@ -141,7 +150,7 @@ def test_active_controller_kind_covers_controller_relationship_paths():
 
     mcp_controller = spawn_entity(
         actor.world,
-        [MCPControllerComponent(agent_id="agent-a")],
+        [MCPControllerComponent(client_id="client-a")],
     )
     character.add_relationship(ControlledBy(generation=2), mcp_controller.id)
 
@@ -206,20 +215,54 @@ def test_mcp_controlled_or_requested_character_validation():
         ],
     )
 
-    with pytest.raises(RuntimeError, match="agent is not controlling"):
-        mcp_server._controlled_or_requested_character(actor, "agent-a", None)
+    with pytest.raises(RuntimeError, match="client is not controlling"):
+        mcp_server._controlled_or_requested_character(actor, None, "client-a", None)
+    with pytest.raises(RuntimeError, match="client is not controlling"):
+        mcp_server._controlled_or_requested_character(actor, None, "client-a", "entity_999")
+
+    claimed = assign_mcp_controller(
+        actor,
+        client_id="client-a",
+        character_name="Juniper",
+    )
+
     with pytest.raises(RuntimeError, match="does not exist"):
-        mcp_server._controlled_or_requested_character(actor, "agent-a", "entity_999")
+        mcp_server._controlled_or_requested_character(
+            actor,
+            None,
+            "client-a",
+            "entity_999",
+            **_claim_args(claimed),
+        )
 
-    assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
-
-    assert mcp_server._controlled_or_requested_character(actor, "agent-a", None)[0] == character.id
     assert (
-        mcp_server._controlled_or_requested_character(actor, "agent-a", str(character.id))[0]
+        mcp_server._controlled_or_requested_character(
+            actor,
+            None,
+            "client-a",
+            None,
+            **_claim_args(claimed),
+        )[0]
+        == character.id
+    )
+    assert (
+        mcp_server._controlled_or_requested_character(
+            actor,
+            None,
+            "client-a",
+            str(character.id),
+            **_claim_args(claimed),
+        )[0]
         == character.id
     )
     with pytest.raises(RuntimeError, match="does not control the requested character"):
-        mcp_server._controlled_or_requested_character(actor, "agent-a", str(other.id))
+        mcp_server._controlled_or_requested_character(
+            actor,
+            None,
+            "client-a",
+            str(other.id),
+            **_claim_args(claimed),
+        )
 
 
 async def test_mcp_event_bridge_unsubscribe_and_stale_session_cleanup(scenario):
@@ -261,15 +304,19 @@ def test_assign_mcp_controller_claims_suspended_character():
         ],
     )
 
-    claimed = assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
+    claimed = assign_mcp_controller(
+        actor,
+        client_id="client-a",
+        character_name="Juniper",
+    )
 
     assert claimed["character_name"] == "Juniper"
     assert not character.has_component(SuspendedComponent)
     controller_id = character.get_relationships(ControlledBy)[0][1]
     controller = actor.world.get_entity(controller_id)
     mcp = controller.get_component(MCPControllerComponent)
-    assert mcp.agent_id == "agent-a"
-    assert mcp_controlled_character(actor, "agent-a") == (character.id, controller_id, 0)
+    assert mcp.client_id == "client-a"
+    assert mcp_controlled_character(actor, "client-a") == (character.id, controller_id, 0)
 
 
 def test_assign_mcp_controller_skips_child_character_for_default_claim():
@@ -293,12 +340,12 @@ def test_assign_mcp_controller_skips_child_character_for_default_claim():
         ],
     )
 
-    claimed = assign_mcp_controller(actor, agent_id="agent-a")
+    claimed = assign_mcp_controller(actor, client_id="client-a")
 
     assert claimed["character_name"] == "Juniper"
     assert child.has_component(SuspendedComponent)
     assert not adult.has_component(SuspendedComponent)
-    assert mcp_controlled_character(actor, "agent-a")[0] == adult.id
+    assert mcp_controlled_character(actor, "client-a")[0] == adult.id
 
 
 def test_mcp_controller_claim_validation_errors_and_child_override():
@@ -327,24 +374,24 @@ def test_mcp_controller_claim_validation_errors_and_child_override():
         ],
     )
 
-    with pytest.raises(RuntimeError, match="agent_id is required"):
-        assign_mcp_controller(actor, agent_id=" ")
+    with pytest.raises(RuntimeError, match="client_id is required"):
+        assign_mcp_controller(actor, client_id=" ")
 
     with pytest.raises(RuntimeError, match="no character with id 'entity_999' exists"):
-        assign_mcp_controller(actor, agent_id="agent-a", character_id="entity_999")
+        assign_mcp_controller(actor, client_id="client-a", character_id="entity_999")
 
     with pytest.raises(RuntimeError, match="multiple characters match 'Jun'"):
-        assign_mcp_controller(actor, agent_id="agent-a", character_name="Jun")
+        assign_mcp_controller(actor, client_id="client-a", character_name="Jun")
 
     with pytest.raises(RuntimeError, match="no character named 'Hazel' exists"):
-        assign_mcp_controller(actor, agent_id="agent-a", character_name="Hazel")
+        assign_mcp_controller(actor, client_id="client-a", character_name="Hazel")
 
     with pytest.raises(RuntimeError, match="child character"):
-        assign_mcp_controller(actor, agent_id="agent-a", character_id=str(child.id))
+        assign_mcp_controller(actor, client_id="client-a", character_id=str(child.id))
 
     claimed = assign_mcp_controller(
         actor,
-        agent_id="agent-a",
+        client_id="client-a",
         character_id=str(child.id),
         allow_child_claims=True,
     )
@@ -362,20 +409,79 @@ def test_mcp_release_validation_and_llm_fallback(monkeypatch):
         ],
     )
 
-    with pytest.raises(RuntimeError, match="agent is not controlling a character yet"):
-        release_mcp_controller(actor, agent_id="agent-a")
+    with pytest.raises(RuntimeError, match="client is not controlling a character yet"):
+        release_mcp_controller(actor, client_id="client-a")
 
-    assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
-    with pytest.raises(RuntimeError, match="mode must be 'suspend' or 'llm'"):
-        release_mcp_controller(actor, agent_id="agent-a", mode="manual")
+    claimed = assign_mcp_controller(
+        actor,
+        client_id="client-a",
+        character_name="Juniper",
+    )
+    with pytest.raises(RuntimeError, match="character is already claimed"):
+        assign_mcp_controller(
+            actor,
+            client_id="client-b",
+            character_name="Juniper",
+        )
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        assign_mcp_controller(
+            actor,
+            client_id="client-a",
+            character_name="Juniper",
+            claim_id=claimed["claim_id"],
+            claim_secret="wrong",
+        )
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        release_mcp_controller(
+            actor,
+            client_id="client-a",
+            claim_id=claimed["claim_id"],
+            claim_secret="wrong",
+        )
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        release_mcp_claim(
+            actor,
+            client_id="client-a",
+            claim_id=claimed["claim_id"],
+            claim_secret="wrong",
+        )
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        render_mcp_client_prompt(
+            actor,
+            client_id="client-a",
+            claim_id=claimed["claim_id"],
+            claim_secret="wrong",
+        )
 
-    assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
+    unknown = spawn_entity(actor.world)
+    with pytest.raises(RuntimeError, match="fallback_controller is not a controller"):
+        release_mcp_controller(
+            actor,
+            client_id="client-a",
+            fallback_controller=str(unknown.id),
+            **_claim_args(claimed),
+        )
+    with pytest.raises(RuntimeError, match="fallback_controller is not a controller"):
+        release_mcp_controller(
+            actor,
+            client_id="client-a",
+            fallback_controller="manual",
+            **_claim_args(claimed),
+        )
+
+    claimed = assign_mcp_controller(
+        actor,
+        client_id="client-a",
+        character_name="Juniper",
+        **_claim_args(claimed),
+    )
     monkeypatch.setenv("BUNNYLAND_CHARACTER_MODEL", "env-model")
     released = release_mcp_controller(
         actor,
-        agent_id="agent-a",
-        mode="llm",
+        client_id="client-a",
+        fallback_controller="llm",
         provider="openrouter",
+        **_claim_args(claimed),
     )
     controller_id = character.get_relationships(ControlledBy)[0][1]
     controller = actor.world.get_entity(controller_id)
@@ -385,6 +491,171 @@ def test_mcp_release_validation_and_llm_fallback(monkeypatch):
     assert released["controller_id"] == str(controller_id)
     assert llm.model == "env-model"
     assert llm.provider == "openrouter"
+    assert not character.has_component(SuspendedComponent)
+
+
+def test_mcp_release_to_existing_controller_and_claim_release():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    existing = spawn_entity(
+        actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    claimed = assign_mcp_controller(
+        actor,
+        client_id="client-a",
+        character_name="Juniper",
+    )
+    character.add_component(SuspendedComponent(reason="manual"))
+
+    released = release_mcp_controller(
+        actor,
+        client_id="client-a",
+        fallback_controller=str(existing.id),
+        **_claim_args(claimed),
+    )
+    prompt = render_mcp_client_prompt(actor, client_id="client-a", **_claim_args(claimed))
+    claim_released = release_mcp_claim(actor, client_id="client-a", **_claim_args(claimed))
+
+    assert released["controller_id"] == str(existing.id)
+    assert released["controller_kind"] == "llm"
+    assert not character.has_component(SuspendedComponent)
+    assert prompt["character_id"] == str(character.id)
+    assert claim_released["claim_id"] == claimed["claim_id"]
+    with pytest.raises(RuntimeError, match="client is not controlling a character yet"):
+        release_mcp_controller(actor, client_id="client-a", **_claim_args(claimed))
+    with pytest.raises(RuntimeError, match="client is not controlling a character yet"):
+        release_mcp_claim(actor, client_id="client-a", **_claim_args(claimed))
+
+
+def test_mcp_release_rejects_active_controller_missing_claim():
+    actor = WorldActor()
+    spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    claimed = assign_mcp_controller(actor, client_id="client-a", character_name="Juniper")
+    controller = actor.world.get_entity(parse_entity_id(claimed["controller_id"]))
+    controller.remove_component(ClaimedComponent)
+
+    with pytest.raises(RuntimeError, match="client does not hold the claim"):
+        release_mcp_controller(actor, client_id="client-a", **_claim_args(claimed))
+
+
+def test_mcp_release_rejects_fallback_controller_claimed_by_another_client():
+    actor = WorldActor()
+    spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    first = assign_mcp_controller(actor, client_id="client-a", character_name="Juniper")
+    other = assign_mcp_controller(actor, client_id="client-b", character_name="Hazel")
+    other_controller_id = parse_entity_id(other["controller_id"])
+
+    with pytest.raises(RuntimeError, match="fallback controller is already claimed"):
+        release_mcp_controller(
+            actor,
+            client_id="client-a",
+            fallback_controller=str(other_controller_id),
+            **_claim_args(first),
+        )
+
+
+def test_mcp_same_client_claims_second_character_with_new_controller():
+    actor = WorldActor()
+    spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+
+    first = assign_mcp_controller(actor, client_id="client-a", character_name="Juniper")
+    second = assign_mcp_controller(actor, client_id="client-a", character_name="Hazel")
+
+    assert first["controller_id"] != second["controller_id"]
+
+
+def test_mcp_claim_skips_dangling_active_controller_edge(monkeypatch, scenario):
+    original_has_entity = scenario.actor.world.has_entity
+
+    def has_entity(entity_id):
+        if entity_id == scenario.controller:
+            return False
+        return original_has_entity(entity_id)
+
+    monkeypatch.setattr(scenario.actor.world, "has_entity", has_entity)
+
+    claimed = assign_mcp_controller(
+        scenario.actor,
+        client_id="client-a",
+        character_name="Juniper",
+    )
+
+    assert claimed["client_id"] == "client-a"
+
+
+def test_mcp_release_to_existing_llm_keeps_active_character_active():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="Juniper", kind="character"),
+            CharacterComponent(species="bunny"),
+            SuspendedComponent(reason="unclaimed"),
+        ],
+    )
+    existing = spawn_entity(
+        actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    claimed = assign_mcp_controller(
+        actor,
+        client_id="client-a",
+        character_name="Juniper",
+    )
+
+    released = release_mcp_controller(
+        actor,
+        client_id="client-a",
+        fallback_controller=str(existing.id),
+        **_claim_args(claimed),
+    )
+
+    assert released["controller_id"] == str(existing.id)
     assert not character.has_component(SuspendedComponent)
 
 
@@ -399,11 +670,11 @@ def test_mcp_admin_token_and_prompt_errors(monkeypatch, scenario):
         mcp_server._require_admin_token("wrong", None)
     mcp_server._require_admin_token("secret", None)
 
-    with pytest.raises(RuntimeError, match="agent is not controlling a character yet"):
-        render_mcp_agent_prompt(scenario.actor, agent_id="agent-a")
+    with pytest.raises(RuntimeError, match="client is not controlling a character yet"):
+        render_mcp_client_prompt(scenario.actor, client_id="client-a")
 
 
-async def test_mcp_event_bridge_filters_and_notifies_agent_resources(scenario):
+async def test_mcp_event_bridge_filters_and_notifies_client_resources(scenario):
     class Session:
         def __init__(self, *, fail: bool = False) -> None:
             self.fail = fail
@@ -414,16 +685,16 @@ async def test_mcp_event_bridge_filters_and_notifies_agent_resources(scenario):
                 raise RuntimeError("gone")
             self.updated.append(str(uri))
 
-    assign_mcp_controller(scenario.actor, agent_id="agent-a", character_name="Juniper")
+    assign_mcp_controller(scenario.actor, client_id="client-a", character_name="Juniper")
     bridge = mcp_server.MCPEventBridge(scenario.actor)
     world_session = Session()
-    agent_session = Session()
+    client_session = Session()
     prompt_session = Session()
     stale_session = Session(fail=True)
     bridge.subscribe(EVENTS_RESOURCE_URI, world_session)
-    bridge.subscribe(mcp_server._agent_events_uri("agent-a"), agent_session)
-    bridge.subscribe(mcp_server._agent_prompt_uri("agent-a"), prompt_session)
-    bridge.subscribe(mcp_server._agent_events_uri("missing"), stale_session)
+    bridge.subscribe(mcp_server._client_events_uri("client-a"), client_session)
+    bridge.subscribe(mcp_server._client_prompt_uri("client-a"), prompt_session)
+    bridge.subscribe(mcp_server._client_events_uri("missing"), stale_session)
 
     try:
         event = ActorMovedEvent(
@@ -437,11 +708,11 @@ async def test_mcp_event_bridge_filters_and_notifies_agent_resources(scenario):
         await bridge.record(event)
 
         assert bridge.recent_messages()
-        assert bridge.recent_for_agent("agent-a")
-        assert bridge.recent_for_agent("missing") == []
+        assert bridge.recent_for_client("client-a")
+        assert bridge.recent_for_client("missing") == []
         assert world_session.updated == [EVENTS_RESOURCE_URI]
-        assert agent_session.updated == [mcp_server._agent_events_uri("agent-a")]
-        assert prompt_session.updated == [mcp_server._agent_prompt_uri("agent-a")]
+        assert client_session.updated == [mcp_server._client_events_uri("client-a")]
+        assert prompt_session.updated == [mcp_server._client_prompt_uri("client-a")]
         assert stale_session.updated == []
     finally:
         bridge.close()
@@ -551,16 +822,24 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     assert "claim_character" in registered_tools
     assert "release_character" in registered_tools
     assert "send_command" in registered_tools
-    assert "agent_prompt" in registered_tools
+    assert "client_prompt" in registered_tools
     assert "patch_world_admin" in registered_tools
     assert registered_resources[EVENTS_RESOURCE_URI].__name__ == "recent_world_events_resource"
     recent_events = json.loads(registered_resources[EVENTS_RESOURCE_URI]())
     assert recent_events == {"ok": True, "events": []}
+    claimed = asyncio.run(
+        registered_tools["claim_character"](client_id="client-a", character_name="Juniper")
+    )
+    assert claimed["claim_id"]
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        registered_resources["bunnyland://clients/{client_id}/events"]("client-a")
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        registered_resources["bunnyland://clients/{client_id}/prompt"]("client-a")
     assert registered_low_server["unsubscribe_resource"].__name__ == "unsubscribe_resource"
     asyncio.run(registered_low_server["unsubscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
 
-    with pytest.raises(RuntimeError, match="agent is not controlling"):
-        registered_tools["agent_prompt"](agent_id="missing")
+    with pytest.raises(RuntimeError, match="client is not controlling"):
+        registered_tools["client_prompt"](client_id="missing")
 
     patch_world_admin = registered_tools["patch_world_admin"]
     with pytest.raises(RuntimeError, match="invalid MCP admin token"):
@@ -743,16 +1022,19 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     }
 
     claimed = await registered_tools["claim_character"](
-        agent_id="agent-a",
+        client_id="client-a",
         character_name="Juniper",
     )
     assert claimed["character_id"] == str(scenario.character)
 
-    prompt = registered_tools["agent_prompt"](agent_id="agent-a")
+    prompt = registered_tools["client_prompt"](client_id="client-a", **_claim_args(claimed))
     assert prompt["character_id"] == str(scenario.character)
     assert "You are Juniper" in prompt["prompt"]
 
-    released = await registered_tools["release_character"](agent_id="agent-a")
+    released = await registered_tools["release_character"](
+        client_id="client-a",
+        **_claim_args(claimed),
+    )
     assert released["controller_kind"] == "suspended"
 
     patched = await registered_tools["patch_world_admin"](admin_token="secret", operations=[])
@@ -828,7 +1110,11 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         )
 
     # Player-facing scene-image request (camera affordance, no admin token required).
-    await registered_tools["claim_character"](agent_id="agent-a", character_name="Juniper")
+    claimed = await registered_tools["claim_character"](
+        client_id="client-a",
+        character_name="Juniper",
+        **_claim_args(claimed),
+    )
 
     async def scene_image(character_id):
         calls["scene_image"] = character_id
@@ -841,12 +1127,15 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         )
 
     create_bunnyland_mcp_app(scene_image=scene_image, **create_kwargs)
-    scene = await registered_tools["request_scene_image"](agent_id="agent-a")
+    scene = await registered_tools["request_scene_image"](
+        client_id="client-a",
+        **_claim_args(claimed),
+    )
     assert scene["job_id"] == "scene-1"
     assert calls["scene_image"] == str(scenario.character)
 
     with pytest.raises(RuntimeError, match="not controlling"):
-        await registered_tools["request_scene_image"](agent_id="ghost")
+        await registered_tools["request_scene_image"](client_id="ghost")
 
     # The character has no room to illustrate: the callback returns None.
     async def scene_image_none(_character_id):
@@ -854,12 +1143,18 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
 
     create_bunnyland_mcp_app(scene_image=scene_image_none, **create_kwargs)
     with pytest.raises(RuntimeError, match="no room"):
-        await registered_tools["request_scene_image"](agent_id="agent-a")
+        await registered_tools["request_scene_image"](
+            client_id="client-a",
+            **_claim_args(claimed),
+        )
 
     # Without the callback the tool reports image generation is off.
     create_bunnyland_mcp_app(**create_kwargs)
     with pytest.raises(RuntimeError, match="not configured"):
-        await registered_tools["request_scene_image"](agent_id="agent-a")
+        await registered_tools["request_scene_image"](
+            client_id="client-a",
+            **_claim_args(claimed),
+        )
 
 
 async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
@@ -943,34 +1238,39 @@ async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
         generate_event=generate_room,
     )
 
-    with pytest.raises(FakeToolError, match="agent is not controlling") as prompt_error:
-        registered_tools["agent_prompt"](agent_id="missing")
+    with pytest.raises(FakeToolError, match="client is not controlling") as prompt_error:
+        registered_tools["client_prompt"](client_id="missing")
     assert isinstance(prompt_error.value.__cause__, RuntimeError)
 
-    with pytest.raises(FakeToolError, match="agent_id is required") as claim_error:
-        await registered_tools["claim_character"](agent_id=" ")
+    with pytest.raises(FakeToolError, match="client_id is required") as claim_error:
+        await registered_tools["claim_character"](client_id=" ")
     assert isinstance(claim_error.value.__cause__, RuntimeError)
 
-    with pytest.raises(FakeToolError, match="agent is not controlling") as release_error:
-        await registered_tools["release_character"](agent_id="missing")
+    with pytest.raises(FakeToolError, match="client is not controlling") as release_error:
+        await registered_tools["release_character"](client_id="missing")
     assert isinstance(release_error.value.__cause__, RuntimeError)
 
-    with pytest.raises(FakeToolError, match="agent is not controlling") as command_error:
+    with pytest.raises(FakeToolError, match="client is not controlling") as claim_release_error:
+        await registered_tools["release_claim"](client_id="missing")
+    assert isinstance(claim_release_error.value.__cause__, RuntimeError)
+
+    with pytest.raises(FakeToolError, match="client is not controlling") as command_error:
         await registered_tools["send_command"](
-            agent_id="missing",
+            client_id="missing",
             command_type="move",
         )
     assert isinstance(command_error.value.__cause__, RuntimeError)
 
-    await registered_tools["claim_character"](
-        agent_id="agent-a",
+    claimed = await registered_tools["claim_character"](
+        client_id="client-a",
         character_name="Juniper",
     )
     with pytest.raises(FakeToolError, match="'not-a-lane' is not a valid Lane") as lane_error:
         await registered_tools["send_command"](
-            agent_id="agent-a",
+            client_id="client-a",
             command_type="move",
             lane="not-a-lane",
+            **_claim_args(claimed),
         )
     assert isinstance(lane_error.value.__cause__, ValueError)
 
@@ -985,11 +1285,16 @@ def test_mcp_release_to_llm_clears_resuspended_character(monkeypatch):
             SuspendedComponent(reason="unclaimed"),
         ],
     )
-    assign_mcp_controller(actor, agent_id="agent-a", character_name="Juniper")
+    claimed = assign_mcp_controller(actor, client_id="client-a", character_name="Juniper")
     # Claiming clears suspension; re-add it so the LLM release path removes it (line 425).
     character.add_component(SuspendedComponent(reason="napping"))
 
-    released = release_mcp_controller(actor, agent_id="agent-a", mode="llm")
+    released = release_mcp_controller(
+        actor,
+        client_id="client-a",
+        fallback_controller="llm",
+        **_claim_args(claimed),
+    )
 
     assert released["controller_kind"] == "llm"
     assert not character.has_component(SuspendedComponent)
@@ -1000,7 +1305,7 @@ async def test_mcp_event_bridge_skips_events_from_other_actors(scenario):
         scenario.actor.world,
         [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
     )
-    assign_mcp_controller(scenario.actor, agent_id="agent-a", character_name="Juniper")
+    assign_mcp_controller(scenario.actor, client_id="client-a", character_name="Juniper")
     bridge = mcp_server.MCPEventBridge(scenario.actor)
     try:
         # An event by another actor must be skipped (190->188 continue path).
@@ -1025,9 +1330,9 @@ async def test_mcp_event_bridge_skips_events_from_other_actors(scenario):
             )
         )
 
-        agent_events = bridge.recent_for_agent("agent-a")
-        assert len(agent_events) == 1
-        assert agent_events[0]["data"]["event"]["event_id"] == "own-move"
+        client_events = bridge.recent_for_client("client-a")
+        assert len(client_events) == 1
+        assert client_events[0]["data"]["event"]["event_id"] == "own-move"
     finally:
         bridge.close()
 
@@ -1045,7 +1350,7 @@ def test_mcp_event_bridge_unsubscribe_keeps_uri_with_remaining_sessions(scenario
         assert EVENTS_RESOURCE_URI in bridge._subscriptions
 
         # Unsubscribing an unknown uri is a no-op.
-        bridge.unsubscribe("bunnyland://agents/none/events", first)
+        bridge.unsubscribe("bunnyland://clients/none/events", first)
     finally:
         bridge.close()
 
@@ -1199,7 +1504,7 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(
         )
 
     with pytest.raises(RuntimeError, match="not controlling"):
-        await registered_tools["character_commands"](agent_id="missing")
+        await registered_tools["character_commands"](client_id="missing")
 
 
 async def test_mcp_controller_definition_tools_report_when_unconfigured(monkeypatch, scenario):
@@ -1288,16 +1593,20 @@ async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenar
         generate_event=boom,
     )
 
-    await registered_tools["claim_character"](agent_id="agent-a", character_name="Juniper")
+    claimed = await registered_tools["claim_character"](
+        client_id="client-a",
+        character_name="Juniper",
+    )
 
     # An unaffordable command under DENY is rejected synchronously (line 977 path) instead
     # of being queued.
     result = await registered_tools["send_command"](
-        agent_id="agent-a",
+        client_id="client-a",
         command_type="move",
         payload={"direction": "north"},
         cost_action=100,
         on_insufficient_points="deny",
+        **_claim_args(claimed),
     )
 
     assert result["ok"] is False
@@ -1306,9 +1615,10 @@ async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenar
 
     # A valid move queues successfully (the accepted branch).
     queued = await registered_tools["send_command"](
-        agent_id="agent-a",
+        client_id="client-a",
         command_type="move",
         payload={"direction": "north"},
+        **_claim_args(claimed),
     )
     assert queued["ok"] is True
     assert queued["queued"] is True
@@ -1404,34 +1714,39 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 assert init.capabilities.resources is not None
                 assert init.capabilities.resources.subscribe is True
 
-                agent_id = "e2e-agent"
-                agent_events_uri = f"bunnyland://agents/{agent_id}/events"
-                agent_prompt_uri = f"bunnyland://agents/{agent_id}/prompt"
+                client_id = "e2e-client"
+                client_events_uri = f"bunnyland://clients/{client_id}/events"
+                client_prompt_uri = f"bunnyland://clients/{client_id}/prompt"
                 await session.subscribe_resource(AnyUrl(EVENTS_RESOURCE_URI))
-                await session.subscribe_resource(AnyUrl(agent_events_uri))
-                await session.subscribe_resource(AnyUrl(agent_prompt_uri))
+                await session.subscribe_resource(AnyUrl(client_events_uri))
+                await session.subscribe_resource(AnyUrl(client_prompt_uri))
 
                 claimed = _tool_result(
                     await session.call_tool(
                         "claim_character",
-                        {"agent_id": agent_id, "character_name": "Juniper"},
+                        {"client_id": client_id, "character_name": "Juniper"},
                     )
                 )
                 assert claimed["character_name"] == "Juniper"
+                claim_payload = _claim_args(claimed)
 
                 prompt = _tool_result(
-                    await session.call_tool("agent_prompt", {"agent_id": agent_id})
+                    await session.call_tool(
+                        "client_prompt",
+                        {"client_id": client_id, **claim_payload},
+                    )
                 )
                 assert "You are Juniper" in prompt["prompt"]
-                assert "controlled by an MCP agent" in prompt["prompt"]
+                assert "controlled by an MCP client" in prompt["prompt"]
 
                 queued = _tool_result(
                     await session.call_tool(
                         "send_command",
                         {
-                            "agent_id": agent_id,
+                            "client_id": client_id,
                             "command_type": "move",
                             "payload": {"direction": "north"},
+                            **claim_payload,
                         },
                     )
                 )
@@ -1455,25 +1770,37 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                     and isinstance(message.root, ResourceUpdatedNotification)
                 ]
                 assert EVENTS_RESOURCE_URI in updated_uris
-                assert agent_events_uri in updated_uris
-                assert agent_prompt_uri in updated_uris
+                assert client_events_uri in updated_uris
+                assert client_prompt_uri in updated_uris
 
-                agent_events = await session.read_resource(AnyUrl(agent_events_uri))
-                events_payload = json.loads(agent_events.contents[0].text)
+                events_payload = _tool_result(
+                    await session.call_tool(
+                        "perceived_events",
+                        {"client_id": client_id, **claim_payload},
+                    )
+                )
                 event_types = {
                     message["data"]["event_type"] for message in events_payload["events"]
                 }
                 assert "ActorMovedEvent" in event_types
                 assert "ActionPointsChangedEvent" in event_types
 
-                prompt_resource = await session.read_resource(AnyUrl(agent_prompt_uri))
-                assert "North Tunnel" in prompt_resource.contents[0].text
+                prompt = _tool_result(
+                    await session.call_tool(
+                        "client_prompt",
+                        {"client_id": client_id, **claim_payload},
+                    )
+                )
+                assert "North Tunnel" in prompt["prompt"]
 
                 released = _tool_result(
-                    await session.call_tool("release_character", {"agent_id": agent_id})
+                    await session.call_tool(
+                        "release_character",
+                        {"client_id": client_id, **claim_payload},
+                    )
                 )
                 assert released["controller_kind"] == "suspended"
-                assert mcp_controlled_character(scenario.actor, agent_id) is None
+                assert mcp_controlled_character(scenario.actor, client_id) is None
                 assert scenario.actor.world.get_entity(scenario.character).has_component(
                     SuspendedComponent
                 )
@@ -1489,6 +1816,7 @@ def _capture_mcp_tools(
     admin_token: str = "secret",
     loop=None,
     request_headers=None,
+    registered_resources: dict | None = None,
     save_path=None,
 ) -> dict:
     """Build the MCP app with a fake FastMCP and return its registered tool closures.
@@ -1523,7 +1851,12 @@ def _capture_mcp_tools(
             return decorate
 
         def resource(self, uri, **_kwargs):
-            return lambda func: func
+            def decorate(func):
+                if registered_resources is not None:
+                    registered_resources[uri] = func
+                return func
+
+            return decorate
 
         def get_context(self):
             if request_headers is None:
@@ -1577,6 +1910,33 @@ def test_runtime_status_reports_tick_cadence(monkeypatch, scenario):
     assert no_loop["game_seconds_per_tick"] is None
 
 
+def test_mcp_client_resources_require_and_accept_claim_headers(monkeypatch, scenario):
+    resources: dict = {}
+    headers: dict[str, str] = {}
+    tools = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        request_headers=headers,
+        registered_resources=resources,
+    )
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="client-a", character_name="Juniper")
+    )
+
+    with pytest.raises(RuntimeError, match="client is not controlling"):
+        resources["bunnyland://clients/{client_id}/events"]("missing")
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        resources["bunnyland://clients/{client_id}/events"]("client-a")
+
+    headers["X-Bunnyland-Claim-Id"] = claimed["claim_id"]
+    headers["X-Bunnyland-Claim-Secret"] = claimed["claim_secret"]
+    events = json.loads(resources["bunnyland://clients/{client_id}/events"]("client-a"))
+    prompt = resources["bunnyland://clients/{client_id}/prompt"]("client-a")
+    assert events["ok"] is True
+    assert events["client_id"] == "client-a"
+    assert "You are Juniper" in prompt
+
+
 def test_save_world_admin_uses_configured_path(monkeypatch, scenario, tmp_path):
     path = tmp_path / "mcp-save.json"
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, save_path=path)
@@ -1616,24 +1976,39 @@ def test_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):
         running=True, paused=False, tick_seconds=2.0, time_scale=1800.0
     )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, loop=loop)
-    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="a", character_name="Juniper")
+    )
 
     expected = scenario.actor.epoch + 3600  # tick_seconds * time_scale
     queued = asyncio.run(
         tools["send_command"](
-            agent_id="a", command_type="move", payload={"direction": "north"}
+            client_id="a",
+            command_type="move",
+            payload={"direction": "north"},
+            **_claim_args(claimed),
         )
     )
     assert queued["resolves_at_epoch"] == expected
 
-    pending = tools["character_commands"](agent_id="a")
+    pending = tools["character_commands"](client_id="a", **_claim_args(claimed))
     assert pending["commands"][0]["resolves_at_epoch"] == expected
 
     # With no loop attached, the estimate is null rather than wrong.
     no_loop = _capture_mcp_tools(monkeypatch, scenario.actor, loop=None)
+    claimed_no_loop = asyncio.run(
+        no_loop["claim_character"](
+            client_id="a",
+            character_name="Juniper",
+            **_claim_args(claimed),
+        )
+    )
     queued_no_loop = asyncio.run(
         no_loop["send_command"](
-            agent_id="a", command_type="move", payload={"direction": "north"}
+            client_id="a",
+            command_type="move",
+            payload={"direction": "north"},
+            **_claim_args(claimed_no_loop),
         )
     )
     assert queued_no_loop["resolves_at_epoch"] is None
@@ -1652,9 +2027,11 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
         Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
     )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="a", character_name="Juniper")
+    )
 
-    view = tools["character_view"](agent_id="a")
+    view = tools["character_view"](client_id="a", **_claim_args(claimed))
     assert view["character_name"] == "Juniper"
     # Progressive disclosure: the full action catalogue is omitted here.
     assert "actions" not in view
@@ -1667,7 +2044,7 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
     assert str(scenario.room_b) in exit_ids
 
     with pytest.raises(RuntimeError, match="not controlling"):
-        tools["character_view"](agent_id="missing")
+        tools["character_view"](client_id="missing")
 
 
 def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
@@ -1688,10 +2065,12 @@ def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
     )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="a", character_name="Juniper")
+    )
 
     # Examining a perceivable item exposes its component values.
-    item = tools["examine"](agent_id="a", entity_id=str(bun.id))
+    item = tools["examine"](client_id="a", entity_id=str(bun.id), **_claim_args(claimed))
     assert item["is_self"] is False
     assert item["name"] == "steamed bun"
     assert item["details"]["food"]["satiety"] == 10.0
@@ -1699,14 +2078,14 @@ def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
     assert item["points"] is None
 
     # Examining yourself (default target) adds points + the is_self flag.
-    me = tools["examine"](agent_id="a")
+    me = tools["examine"](client_id="a", **_claim_args(claimed))
     assert me["is_self"] is True
     assert me["name"] == "Juniper"
     assert me["points"]["action"] == 5.0
 
     # An entity the character cannot perceive (an adjacent room) is rejected.
     with pytest.raises(RuntimeError, match="not perceivable"):
-        tools["examine"](agent_id="a", entity_id=str(scenario.room_b))
+        tools["examine"](client_id="a", entity_id=str(scenario.room_b), **_claim_args(claimed))
 
 
 def test_serialize_examine_self_needs_and_targets(scenario):
@@ -1957,24 +2336,34 @@ def test_room_view_and_component_schema_tools(monkeypatch, scenario):
 
 def test_character_commands_reflects_queue(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="a", character_name="Juniper")
+    )
 
     asyncio.run(
         tools["send_command"](
-            agent_id="a", command_type="move", payload={"direction": "north"}
+            client_id="a",
+            command_type="move",
+            payload={"direction": "north"},
+            **_claim_args(claimed),
         )
     )
-    pending = tools["character_commands"](agent_id="a")
+    pending = tools["character_commands"](client_id="a", **_claim_args(claimed))
     assert [command["command_type"] for command in pending["commands"]] == ["move"]
 
 
 def test_send_command_returns_outcome_hint(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="a", character_name="Juniper")
+    )
 
     queued = asyncio.run(
         tools["send_command"](
-            agent_id="a", command_type="move", payload={"direction": "north"}
+            client_id="a",
+            command_type="move",
+            payload={"direction": "north"},
+            **_claim_args(claimed),
         )
     )
     assert queued["queued"] is True
@@ -1983,15 +2372,26 @@ def test_send_command_returns_outcome_hint(monkeypatch, scenario):
 
 def test_send_command_rejects_unknown_command_type(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="a", character_name="Juniper")
+    )
 
     # Fail fast on a typo'd verb instead of queuing it for a tick-later rejection.
     with pytest.raises(RuntimeError, match="unknown command_type"):
-        asyncio.run(tools["send_command"](agent_id="a", command_type="flibber"))
+        asyncio.run(
+            tools["send_command"](
+                client_id="a",
+                command_type="flibber",
+                **_claim_args(claimed),
+            )
+        )
 
     queued = asyncio.run(
         tools["send_command"](
-            agent_id="a", command_type="move", payload={"direction": "north"}
+            client_id="a",
+            command_type="move",
+            payload={"direction": "north"},
+            **_claim_args(claimed),
         )
     )
     assert queued["queued"] is True
@@ -1999,17 +2399,22 @@ def test_send_command_rejects_unknown_command_type(monkeypatch, scenario):
 
 def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="a", character_name="Juniper")
+    )
 
     # A valid verb that the handler rejects on resolution (no exit in that direction).
     asyncio.run(
         tools["send_command"](
-            agent_id="a", command_type="move", payload={"direction": "west"}
+            client_id="a",
+            command_type="move",
+            payload={"direction": "west"},
+            **_claim_args(claimed),
         )
     )
     asyncio.run(scenario.actor.tick(0.0))
 
-    first = tools["perceived_events"](agent_id="a")
+    first = tools["perceived_events"](client_id="a", **_claim_args(claimed))
     assert first["ok"] is True
     rejected = [
         message["data"]["event"]
@@ -2019,15 +2424,19 @@ def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
     assert rejected and rejected[0]["command_type"] == "move"
     assert first["next_cursor"] > 0
     # The watermark advances: re-polling from it yields nothing new.
-    second = tools["perceived_events"](agent_id="a", since=first["next_cursor"])
+    second = tools["perceived_events"](
+        client_id="a",
+        since=first["next_cursor"],
+        **_claim_args(claimed),
+    )
     assert second["events"] == []
     assert second["next_cursor"] == first["next_cursor"]
 
 
-async def test_perceived_for_agent_scopes_and_paginates(scenario):
+async def test_perceived_for_client_scopes_and_paginates(scenario):
     from bunnyland.core.events import CommandRejectedEvent
 
-    assign_mcp_controller(scenario.actor, agent_id="a", character_name="Juniper")
+    assign_mcp_controller(scenario.actor, client_id="a", character_name="Juniper")
     bridge = mcp_server.MCPEventBridge(scenario.actor)
     character_id = str(scenario.character)
 
@@ -2048,16 +2457,16 @@ async def test_perceived_for_agent_scopes_and_paginates(scenario):
     await bridge.record(rejection("someone-else", str(scenario.room_a)))
     await bridge.record(rejection("someone-else", str(scenario.room_b)))
 
-    first = bridge.perceived_for_agent("a", limit=1)
+    first = bridge.perceived_for_client("a", limit=1)
     assert len(first["events"]) == 1  # paginated: more remain
     assert first["next_cursor"] == 1
 
-    rest = bridge.perceived_for_agent("a", since=first["next_cursor"])
+    rest = bridge.perceived_for_client("a", since=first["next_cursor"])
     actor_ids = {message["data"]["event"]["actor_id"] for message in rest["events"]}
     assert actor_ids == {"someone-else"}  # only the same-room event, not room_b
     assert rest["next_cursor"] == 3
 
-    assert bridge.perceived_for_agent("missing")["ok"] is False
+    assert bridge.perceived_for_client("missing")["ok"] is False
     bridge.close()
 
 
