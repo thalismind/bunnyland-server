@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from argparse import Namespace
 
@@ -44,6 +45,16 @@ from bunnyland.plugins.builtin import (
     WORLDGEN,
 )
 from bunnyland.prompts.builder import PromptBuilder
+
+
+def test_cli_imports_in_fresh_interpreter():
+    result = subprocess.run(
+        [sys.executable, "-c", "from bunnyland.cli import main; print('ok')"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "ok"
 
 
 def _serve_args(**overrides):

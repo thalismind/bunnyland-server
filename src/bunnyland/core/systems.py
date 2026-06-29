@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 
 from relics import Frequency, System
 
-from ..claims import controller_claim, transfer_claim
 from .claim_timeout import (
     CLAIM_FALLBACK_LLM,
     CLAIM_TIMEOUT_DEFAULT_SECONDS,
@@ -141,6 +140,8 @@ class ClaimTimeoutSystem:
         self.now = now
 
     async def __call__(self, actor: WorldActor) -> None:
+        from ..claims import controller_claim, transfer_claim
+
         if not self.controller_kinds:
             return
         now_unix = int(self.now())
@@ -236,6 +237,8 @@ class ClaimTimeoutSystem:
         *,
         claim_id: str,
     ):
+        from ..claims import controller_claim
+
         controller_id = parse_entity_id(fallback_controller)
         if controller_id is None or not actor.world.has_entity(controller_id):
             return None
