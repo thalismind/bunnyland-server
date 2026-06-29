@@ -21,7 +21,7 @@ from bunnyland.imagegen.wiring import build_image_service, select_enhancer
 from bunnyland.mechanics.history import record_world_history
 from bunnyland.mechanics.toonsim import SpriteImage
 from bunnyland.persistence import WorldMeta
-from bunnyland.server.app import create_app
+from bunnyland.server.app import MAX_UPLOAD_IMAGE_BYTES, create_app
 
 testclient = pytest.importorskip("fastapi.testclient")
 
@@ -180,6 +180,13 @@ def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeypatch):
         headers={**ADMIN, "Content-Type": "image/png"},
     )
     assert empty.status_code == 400
+
+    too_large = client.post(
+        f"/admin/world/character/{scenario.character}/image/portrait",
+        content=b"P" * (MAX_UPLOAD_IMAGE_BYTES + 1),
+        headers={**ADMIN, "Content-Type": "image/png"},
+    )
+    assert too_large.status_code == 413
 
 
 # --- player event image --------------------------------------------------------------
