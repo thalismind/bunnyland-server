@@ -305,6 +305,16 @@ class ClientImageView(BaseModel):
     alpha_url: str = ""
 
 
+class CharacterImageUploadResponse(BaseModel):
+    ok: bool = True
+    schema_version: int = 1
+    world_epoch: int
+    character_id: str
+    purpose: str
+    url: str
+    content_type: str
+
+
 class RoomProjectionEntityView(BaseModel):
     id: str
     name: str
@@ -759,6 +769,7 @@ __all__ = [
     "ClientActionArgumentView",
     "ClientActionView",
     "ClientCharacterSheetView",
+    "CharacterImageUploadResponse",
     "CharacterProjectionResponse",
     "CharacterQueuedCommandsResponse",
     "ClientControllerView",

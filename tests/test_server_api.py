@@ -135,6 +135,7 @@ from bunnyland.server.admin import (
     start_world_generation,
 )
 from bunnyland.server.app import create_app, next_websocket_update
+from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
     CharacterChatRequest,
     ClientTargetView,
@@ -181,6 +182,10 @@ from bunnyland.worldgen import (
 #: the secret nginx injects after Basic auth in production.
 _ADMIN_TOKEN = "secret"
 _ADMIN_SECRET_HEADERS = {"X-Bunnyland-Admin-Secret": _ADMIN_TOKEN}
+_ADMIN_CLIENT_HEADERS = {
+    "X-Bunnyland-Admin-Secret": _ADMIN_TOKEN,
+    CLIENT_ID_HEADER: "admin-a",
+}
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -1252,6 +1257,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/admin/world/generate-character" in paths
     assert "/admin/world/generate-item" in paths
     assert "/admin/world/generate-event" in paths
+    assert "/admin/world/character/{character_id}/image/{purpose}" in paths
     assert "/admin/world/save" in paths
     assert "/admin/memory/characters" in paths
     assert "/admin/memory/collections/{collection}/documents" in paths
@@ -1472,6 +1478,7 @@ def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     assert {parameter["name"] for parameter in dm_operation["parameters"]} == {
         "id",
         "X-Bunnyland-Admin-Secret",
+        "X-Bunnyland-Client-Id",
     }
     assert dm_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/DmProjectionResponse"
@@ -1858,6 +1865,29 @@ def test_fastapi_dm_projection_rejects_when_admin_token_unconfigured(monkeypatch
     assert response.json()["detail"] == "BUNNYLAND_ADMIN_TOKEN is not configured"
 
 
+def test_fastapi_admin_client_id_allowlist_gates_admin_routes(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(
+        scenario.actor,
+        admin_token=_ADMIN_TOKEN,
+        admin_client_ids=["admin-a"],
+    )
+    client = testclient.TestClient(app)
+
+    missing = client.get("/world/overview", headers=_ADMIN_SECRET_HEADERS)
+    rejected = client.get(
+        "/world/overview",
+        headers={"X-Bunnyland-Admin-Secret": _ADMIN_TOKEN, CLIENT_ID_HEADER: "admin-b"},
+    )
+    allowed = client.get("/world/overview", headers=_ADMIN_CLIENT_HEADERS)
+
+    assert missing.status_code == 403
+    assert missing.json()["detail"] == "admin client_id is required"
+    assert rejected.status_code == 403
+    assert rejected.json()["detail"] == "admin client_id is not allowed"
+    assert allowed.status_code == 200
+
+
 def test_room_description_prefers_long_then_short_description(scenario):
     world = scenario.actor.world
     bare = spawn_entity(world, [RoomComponent(title="Bare Room")])
@@ -2189,6 +2219,26 @@ def test_fastapi_web_controller_claim_bounds_client_id_length(scenario):
     )
 
     assert oversized.status_code == 422
+
+
+def test_fastapi_player_client_id_allowlist_gates_claims(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor, player_client_ids="client-a,,\n client-c")
+    client = testclient.TestClient(app)
+
+    rejected = client.post(
+        "/world/controllers/web/claim",
+        json={"character_id": str(scenario.character), "client_id": "client-b"},
+    )
+    allowed = client.post(
+        "/world/controllers/web/claim",
+        json={"character_id": str(scenario.character), "client_id": "client-a"},
+    )
+
+    assert rejected.status_code == 403
+    assert rejected.json()["detail"] == "player client_id is not allowed"
+    assert allowed.status_code == 200
+    assert allowed.json()["claim_secret"]
 
 
 def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):

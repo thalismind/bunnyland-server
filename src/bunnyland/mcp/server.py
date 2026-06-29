@@ -51,6 +51,13 @@ from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..plugins.builtin import MCP
 from ..prompts import PromptBuilder, render_prompt
 from ..server.admin import save_configured_world
+from ..server.client_ids import (
+    ADMIN_CLIENT_IDS_ENV,
+    CLIENT_ID_HEADER,
+    PLAYER_CLIENT_IDS_ENV,
+    configured_client_id_allowlist,
+    require_allowed_client_id,
+)
 from ..server.models import (
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
@@ -688,6 +695,8 @@ def create_bunnyland_mcp_app(
     meta: WorldMeta,
     loop: GameLoop | None,
     admin_token: str | None,
+    player_client_ids: str | Sequence[str] | None = None,
+    admin_client_ids: str | Sequence[str] | None = None,
     save_path: str | Path | None = None,
     patch_world: Callable[[WorldPatchRequest], Awaitable[WorldPatchResponse]],
     generate_world: Callable[[WorldGenerateRequest], Awaitable[WorldGenerateResponse]],
@@ -745,6 +754,12 @@ def create_bunnyland_mcp_app(
     )
     event_bridge = MCPEventBridge(actor)
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    allowed_player_client_ids = configured_client_id_allowlist(
+        player_client_ids, PLAYER_CLIENT_IDS_ENV
+    )
+    allowed_admin_client_ids = configured_client_id_allowlist(
+        admin_client_ids, ADMIN_CLIENT_IDS_ENV
+    )
 
     def _next_tick_epoch() -> int | None:
         """Estimated world epoch a freshly-queued command resolves at (the next tick).
@@ -795,6 +810,14 @@ def create_bunnyland_mcp_app(
         headers = getattr(request, "headers", {}) or {}
         return headers.get("X-Bunnyland-Admin-Secret")
 
+    def _request_client_id_header() -> str | None:
+        try:
+            request = mcp.get_context().request_context.request
+        except (LookupError, AttributeError, ValueError):
+            return None
+        headers = getattr(request, "headers", {}) or {}
+        return headers.get(CLIENT_ID_HEADER)
+
     def _request_claim_header(name: str) -> str | None:
         try:
             request = mcp.get_context().request_context.request
@@ -809,8 +832,36 @@ def create_bunnyland_mcp_app(
         resolved = supplied or _request_admin_header()
         try:
             _require_admin_token(resolved, admin_token)
+            require_allowed_client_id(
+                _request_client_id_header(), allowed_admin_client_ids, "admin"
+            )
         except PermissionError as exc:
             raise ToolError(str(exc)) from exc
+
+    def player(client_id: str | None) -> str | None:
+        try:
+            return require_allowed_client_id(
+                client_id, allowed_player_client_ids, "player"
+            )
+        except PermissionError as exc:
+            raise ToolError(str(exc)) from exc
+
+    def controlled_or_requested_player(
+        client_id: str,
+        character_id: str | None,
+        *,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> tuple[EntityId, EntityId, int]:
+        player(client_id)
+        return _controlled_or_requested_character(
+            actor,
+            claim_secrets,
+            client_id,
+            character_id,
+            claim_id=claim_id,
+            claim_secret=claim_secret,
+        )
 
     @mcp.resource(
         EVENTS_RESOURCE_URI,
@@ -828,6 +879,7 @@ def create_bunnyland_mcp_app(
         mime_type="application/json",
     )
     def client_events_resource(client_id: str) -> str:
+        player(client_id)
         found = claimed_character_for(
             actor,
             client_id=client_id,
@@ -858,6 +910,7 @@ def create_bunnyland_mcp_app(
         mime_type="text/plain",
     )
     def client_prompt_resource(client_id: str) -> str:
+        player(client_id)
         return render_mcp_client_prompt(
             actor,
             claim_secrets=claim_secrets,
@@ -958,6 +1011,7 @@ def create_bunnyland_mcp_app(
         """Return the current Bunnyland prompt for an MCP-controlled client."""
 
         try:
+            player(client_id)
             return render_mcp_client_prompt(
                 actor,
                 claim_secrets=claim_secrets,
@@ -989,9 +1043,7 @@ def create_bunnyland_mcp_app(
         """
 
         try:
-            character, _controller, _generation = _controlled_or_requested_character(
-                actor,
-                claim_secrets,
+            character, _controller, _generation = controlled_or_requested_player(
                 client_id,
                 character_id,
                 claim_id=claim_id,
@@ -1061,9 +1113,7 @@ def create_bunnyland_mcp_app(
         """
 
         try:
-            character, _controller, _generation = _controlled_or_requested_character(
-                actor,
-                claim_secrets,
+            character, _controller, _generation = controlled_or_requested_player(
                 client_id,
                 None,
                 claim_id=claim_id,
@@ -1101,9 +1151,7 @@ def create_bunnyland_mcp_app(
         """
 
         try:
-            character, _controller, _generation = _controlled_or_requested_character(
-                actor,
-                claim_secrets,
+            character, _controller, _generation = controlled_or_requested_player(
                 client_id,
                 character_id,
                 claim_id=claim_id,
@@ -1154,9 +1202,7 @@ def create_bunnyland_mcp_app(
         watermark cursor; pass back the returned ``next_cursor`` to fetch only newer events.
         """
 
-        _controlled_or_requested_character(
-            actor,
-            claim_secrets,
+        controlled_or_requested_player(
             client_id,
             None,
             claim_id=claim_id,
@@ -1178,6 +1224,7 @@ def create_bunnyland_mcp_app(
 
         try:
             async with actor._lock:
+                player(client_id)
                 claimed = assign_mcp_controller(
                     actor,
                     claim_secrets=claim_secrets,
@@ -1217,6 +1264,7 @@ def create_bunnyland_mcp_app(
 
         try:
             async with actor._lock:
+                player(client_id)
                 return release_mcp_controller(
                     actor,
                     claim_secrets=claim_secrets,
@@ -1241,6 +1289,7 @@ def create_bunnyland_mcp_app(
 
         try:
             async with actor._lock:
+                player(client_id)
                 return release_mcp_claim(
                     actor,
                     claim_secrets=claim_secrets,
@@ -1269,9 +1318,7 @@ def create_bunnyland_mcp_app(
         """Queue a world command from an MCP-controlled character."""
 
         try:
-            character, controller, generation = _controlled_or_requested_character(
-                actor,
-                claim_secrets,
+            character, controller, generation = controlled_or_requested_player(
                 client_id,
                 character_id,
                 claim_id=claim_id,
@@ -1581,9 +1628,7 @@ def create_bunnyland_mcp_app(
         if scene_image is None:
             raise ToolError("image generation is not configured")
         try:
-            character, _controller, _generation = _controlled_or_requested_character(
-                actor,
-                claim_secrets,
+            character, _controller, _generation = controlled_or_requested_player(
                 client_id,
                 character_id,
                 claim_id=claim_id,

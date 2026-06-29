@@ -672,6 +672,8 @@ async def _run_api_runtime(
                 plugins=plugins,
                 admin_token=args.admin_token
                 or os.environ.get("BUNNYLAND_ADMIN_TOKEN"),
+                player_client_ids=getattr(args, "player_client_id", None),
+                admin_client_ids=getattr(args, "admin_client_id", None),
                 imagegen=imagegen,
                 character_chat=character_chat,
                 claim_secrets=claim_secrets,
@@ -979,6 +981,24 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="admin token gating snapshot/overview/DM projections, the world-updates "
         "stream, and MCP world mutation tools (or BUNNYLAND_ADMIN_TOKEN)",
+    )
+    serve.add_argument(
+        "--player-client-id",
+        action="append",
+        default=None,
+        help=(
+            "allow this player client_id; repeat or use comma-separated values "
+            "(env: BUNNYLAND_PLAYER_CLIENT_IDS)"
+        ),
+    )
+    serve.add_argument(
+        "--admin-client-id",
+        action="append",
+        default=None,
+        help=(
+            "allow this admin client_id; repeat or use comma-separated values "
+            "(env: BUNNYLAND_ADMIN_CLIENT_IDS)"
+        ),
     )
 
     tui = sub.add_parser("tui", help="open the terminal client (needs the tui extra)")

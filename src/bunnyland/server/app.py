@@ -35,13 +35,21 @@ from ..core import (
     SuspendedControllerComponent,
     WebControllerComponent,
     parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from ..core.claim_timeout import apply_claim_timeout_settings, record_claim_activity
 from ..core.controllers import ClaimedComponent, ClaimTimeoutComponent
 from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
 from ..core.world_actor import CONTROL_COMMANDS, WorldActor
-from ..imagegen.media import MediaError, content_type_for
+from ..imagegen.components import PortraitImageComponent
+from ..imagegen.media import (
+    SEGMENT_PORTRAITS,
+    SEGMENT_SPRITES,
+    MediaError,
+    MediaStore,
+    content_type_for,
+)
 from ..imagegen.scene import request_scene_image
 from ..imagegen.spec import ImagePurpose
 from ..llm_agents import (
@@ -53,16 +61,25 @@ from ..llm_agents import (
 )
 from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
+from ..mechanics.toonsim import SpriteImage
 from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .character_chat import CharacterChatService
+from .client_ids import (
+    ADMIN_CLIENT_IDS_ENV,
+    CLIENT_ID_HEADER,
+    PLAYER_CLIENT_IDS_ENV,
+    configured_client_id_allowlist,
+    require_allowed_client_id,
+)
 from .models import (
     CharacterChatPendingResponse,
     CharacterChatRequest,
     CharacterChatResponse,
     CharacterChatStatusResponse,
+    CharacterImageUploadResponse,
     CharacterListResponse,
     CharacterProjectionResponse,
     CharacterQueuedCommandsResponse,
@@ -133,6 +150,12 @@ from .worldgen import (
 )
 
 WEBSOCKET_HEARTBEAT_SECONDS = 30.0
+UPLOAD_IMAGE_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+}
+MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
 
 if TYPE_CHECKING:
     from ..engine import GameLoop
@@ -191,6 +214,8 @@ def create_app(
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
     admin_token: str | None = None,
+    player_client_ids: str | list[str] | None = None,
+    admin_client_ids: str | list[str] | None = None,
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
     claim_secrets: ClaimSecretRegistry | None = None,
@@ -238,9 +263,20 @@ def create_app(
     meta = meta or WorldMeta()
     claim_secrets = claim_secrets or ClaimSecretRegistry()
     normalize_claimed_controllers_without_secrets(actor, claim_secrets)
+    allowed_player_client_ids = configured_client_id_allowlist(
+        player_client_ids, PLAYER_CLIENT_IDS_ENV
+    )
+    allowed_admin_client_ids = configured_client_id_allowlist(
+        admin_client_ids, ADMIN_CLIENT_IDS_ENV
+    )
     generator_registry = collect_generators(plugins or ())
     generation_job = None
     memory_store = memory_store or getattr(actor, "memory_store", None)
+    media_store = (
+        getattr(imagegen, "media", None)
+        if imagegen is not None
+        else None
+    ) or MediaStore(os.environ.get("BUNNYLAND_MEDIA_DIR", "media").strip() or "media")
     # Editor-loaded scripted/behavioral controller definitions: register any already on disk
     # so a restarted server keeps the scripts and behavior trees the editor previously saved.
     definition_store = ControllerDefinitionStore(definitions_path)
@@ -263,6 +299,20 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail=f"invalid image purpose {value!r}"
             ) from exc
+
+    def _require_allowed_player_client_id(client_id: str | None) -> str | None:
+        try:
+            return require_allowed_client_id(
+                client_id, allowed_player_client_ids, "player"
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    def _require_allowed_admin_client_id(client_id: str | None) -> str | None:
+        try:
+            return require_allowed_client_id(client_id, allowed_admin_client_ids, "admin")
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     def _image_response(job) -> WorldImageGenerationResponse:
         return WorldImageGenerationResponse(
@@ -299,10 +349,11 @@ def create_app(
             default=None,
             alias=ADMIN_SECRET_HEADER,
         ),
+        admin_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> dict:
         # The raw ECS dump reveals the whole world; gate it like the DM/overview
         # projections so it is not a back door around the per-room player views.
-        _require_projection_admin(admin_token)
+        _require_projection_admin(admin_token, admin_client_id)
         with telemetry.span("world.snapshot"):
             return serialize_world(actor, meta)
 
@@ -342,12 +393,15 @@ def create_app(
             status = 400 if detail == "entity is not a room" else 404
             raise HTTPException(status_code=status, detail=detail) from exc
 
-    def _require_projection_admin(supplied: str | None) -> None:
+    def _require_projection_admin(
+        supplied: str | None, admin_client_id: str | None = None
+    ) -> None:
         expected = (admin_token or os.environ.get(ADMIN_TOKEN_ENV) or "").strip()
         if not expected:
             raise HTTPException(status_code=403, detail=f"{ADMIN_TOKEN_ENV} is not configured")
         if supplied != expected:
             raise HTTPException(status_code=403, detail="invalid admin token")
+        _require_allowed_admin_client_id(admin_client_id)
 
     @app.middleware("http")
     async def _enforce_admin_secret(request: Request, call_next):
@@ -360,7 +414,10 @@ def create_app(
         # the admin secret after Basic auth; direct callers must supply it themselves.
         if request.url.path.startswith("/admin"):
             try:
-                _require_projection_admin(request.headers.get(ADMIN_SECRET_HEADER.lower()))
+                _require_projection_admin(
+                    request.headers.get(ADMIN_SECRET_HEADER.lower()),
+                    request.headers.get(CLIENT_ID_HEADER.lower()),
+                )
             except HTTPException as exc:
                 return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         return await call_next(request)
@@ -402,6 +459,7 @@ def create_app(
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        _require_allowed_player_client_id(claim.client_id)
         return character, controller, claim
 
     def _resume_web_claim_for_command(command, claim_context):
@@ -454,6 +512,7 @@ def create_app(
         client_id = request.client_id.strip()
         if not client_id:
             raise HTTPException(status_code=400, detail="client_id must not be blank")
+        _require_allowed_player_client_id(client_id)
         found = current_controller(actor, character)
         if found is None:
             raise HTTPException(status_code=409, detail="character has no controller")
@@ -521,8 +580,9 @@ def create_app(
             default=None,
             alias=ADMIN_SECRET_HEADER,
         ),
+        admin_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> DmProjectionResponse:
-        _require_projection_admin(admin_token)
+        _require_projection_admin(admin_token, admin_client_id)
         try:
             with telemetry.span("dm.projection", {"dm.id": id}):
                 return serialize_dm_projection(actor, id)
@@ -535,8 +595,9 @@ def create_app(
             default=None,
             alias=ADMIN_SECRET_HEADER,
         ),
+        admin_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> WorldOverviewResponse:
-        _require_projection_admin(admin_token)
+        _require_projection_admin(admin_token, admin_client_id)
         with telemetry.span("world.overview"):
             return serialize_world_overview(actor)
 
@@ -569,6 +630,7 @@ def create_app(
         _with_claim_secret(request, claim_secret)
         if character_chat is None:
             raise HTTPException(status_code=409, detail="character chat is not enabled")
+        _require_allowed_player_client_id(request.client_id)
         _require_claim_secret(
             id,
             claim_id=request.claim_id,
@@ -606,6 +668,7 @@ def create_app(
     ) -> CharacterChatPendingResponse:
         if character_chat is None:
             raise HTTPException(status_code=409, detail="character chat is not enabled")
+        _require_allowed_player_client_id(client_id)
         _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
         try:
             with telemetry.span(
@@ -838,6 +901,7 @@ def create_app(
         client_id = request.client_id.strip()
         if not client_id:
             raise HTTPException(status_code=400, detail="client_id must not be blank")
+        _require_allowed_player_client_id(client_id)
         label = request.label.strip() or "web"
 
         with telemetry.span(
@@ -1518,6 +1582,57 @@ def create_app(
         return _image_response(job)
 
     @app.post(
+        "/admin/world/character/{character_id}/image/{purpose}",
+        response_model=CharacterImageUploadResponse,
+    )
+    async def upload_character_image(
+        character_id: str, purpose: str, request: Request
+    ) -> CharacterImageUploadResponse:
+        if purpose not in {"portrait", "sprite"}:
+            raise HTTPException(status_code=400, detail="purpose must be portrait or sprite")
+
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+        extension = UPLOAD_IMAGE_TYPES.get(content_type)
+        if extension is None:
+            raise HTTPException(status_code=400, detail="upload must be a PNG, JPEG, or WebP image")
+
+        data = await request.body()
+        if not data:
+            raise HTTPException(status_code=400, detail="upload body is empty")
+        if len(data) > MAX_UPLOAD_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="upload image is too large")
+
+        async with actor._lock:
+            _character_entity(character_id)
+
+        segment = SEGMENT_PORTRAITS if purpose == "portrait" else SEGMENT_SPRITES
+        name = media_store.new_name(extension)
+        media_store.write(segment, name, data)
+        url = media_store.url_for(segment, name)
+
+        async with actor._lock:
+            character = _character_entity(character_id)
+            if purpose == "portrait":
+                replace_component(
+                    character,
+                    PortraitImageComponent(
+                        url=url,
+                        prompt="uploaded",
+                        generated_at_epoch=actor.epoch,
+                    ),
+                )
+            else:
+                replace_component(character, SpriteImage(url=url))
+
+        return CharacterImageUploadResponse(
+            world_epoch=actor.epoch,
+            character_id=character_id,
+            purpose=purpose,
+            url=url,
+            content_type=content_type,
+        )
+
+    @app.post(
         "/world/event/{record_id}/image",
         response_model=WorldImageGenerationResponse,
     )
@@ -1553,9 +1668,8 @@ def create_app(
 
     @app.get("/media/{segment}/{name}")
     async def get_media(segment: str, name: str) -> Response:
-        service = _require_imagegen()
         try:
-            data = service.media.read(segment, name)
+            data = media_store.read(segment, name)
             content_type = content_type_for(name)
         except MediaError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1579,7 +1693,11 @@ def create_app(
         # string. Direct (non-proxied) clients must set the header themselves. (The /admin
         # middleware does not cover WebSocket handshakes, so this guard stays explicit.)
         try:
-            _require_projection_admin(websocket.headers.get(ADMIN_SECRET_HEADER.lower()))
+            _require_projection_admin(
+                websocket.headers.get(ADMIN_SECRET_HEADER.lower()),
+                websocket.headers.get(CLIENT_ID_HEADER.lower())
+                or getattr(websocket, "query_params", {}).get("client_id"),
+            )
         except HTTPException:
             await websocket.close(code=1008)  # policy violation
             return
@@ -1602,6 +1720,8 @@ def create_app(
             meta=meta,
             loop=loop,
             admin_token=admin_token,
+            player_client_ids=allowed_player_client_ids,
+            admin_client_ids=allowed_admin_client_ids,
             save_path=save_path,
             patch_world=_patch_world_request,
             generate_world=_generate_world_request,

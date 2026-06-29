@@ -12,13 +12,14 @@ from conftest import build_scenario
 from bunnyland.core import CharacterComponent, IdentityComponent, spawn_entity
 from bunnyland.imagegen.components import PortraitImageComponent
 from bunnyland.imagegen.config import ImageGenConfig
-from bunnyland.imagegen.media import SEGMENT_PORTRAITS, MediaStore
+from bunnyland.imagegen.media import SEGMENT_PORTRAITS, SEGMENT_SPRITES, MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
 from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.wiring import build_image_service, select_enhancer
 from bunnyland.mechanics.history import record_world_history
+from bunnyland.mechanics.toonsim import SpriteImage
 from bunnyland.persistence import WorldMeta
 from bunnyland.server.app import create_app
 
@@ -106,7 +107,79 @@ def test_endpoints_409_when_imagegen_disabled():
         "/admin/world/generate-image", headers=ADMIN, json={"entity_id": "x"}
     ).status_code == 409
     assert client.post("/world/event/rec_1/image").status_code == 409
-    assert client.get("/media/portraits/x.png").status_code == 409
+    assert client.get("/media/portraits/x.png").status_code == 404
+
+
+def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypatch):
+    monkeypatch.setenv("BUNNYLAND_MEDIA_DIR", str(tmp_path))
+    scenario = build_scenario()
+    client = testclient.TestClient(
+        create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    )
+
+    denied = client.post(
+        f"/admin/world/character/{scenario.character}/image/portrait",
+        content=b"PNG",
+        headers={"Content-Type": "image/png"},
+    )
+    assert denied.status_code == 403
+
+    portrait = client.post(
+        f"/admin/world/character/{scenario.character}/image/portrait",
+        content=b"PNG",
+        headers={**ADMIN, "Content-Type": "image/png"},
+    )
+    assert portrait.status_code == 200
+    portrait_payload = portrait.json()
+    assert portrait_payload["purpose"] == "portrait"
+    assert portrait_payload["url"].startswith("/media/portraits/")
+    component = scenario.actor.world.get_entity(scenario.character).get_component(
+        PortraitImageComponent
+    )
+    assert component.url == portrait_payload["url"]
+    media = client.get(component.url)
+    assert media.status_code == 200
+    assert media.content == b"PNG"
+
+    sprite = client.post(
+        f"/admin/world/character/{scenario.character}/image/sprite",
+        content=b"WEBP",
+        headers={**ADMIN, "Content-Type": "image/webp"},
+    )
+    assert sprite.status_code == 200
+    sprite_component = scenario.actor.world.get_entity(scenario.character).get_component(
+        SpriteImage
+    )
+    assert sprite_component.url.startswith(f"/media/{SEGMENT_SPRITES}/")
+
+
+def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeypatch):
+    monkeypatch.setenv("BUNNYLAND_MEDIA_DIR", str(tmp_path))
+    scenario = build_scenario()
+    client = testclient.TestClient(
+        create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    )
+
+    bad_purpose = client.post(
+        f"/admin/world/character/{scenario.character}/image/avatar",
+        content=b"PNG",
+        headers={**ADMIN, "Content-Type": "image/png"},
+    )
+    assert bad_purpose.status_code == 400
+
+    bad_type = client.post(
+        f"/admin/world/character/{scenario.character}/image/portrait",
+        content=b"GIF",
+        headers={**ADMIN, "Content-Type": "image/gif"},
+    )
+    assert bad_type.status_code == 400
+
+    empty = client.post(
+        f"/admin/world/character/{scenario.character}/image/portrait",
+        content=b"",
+        headers={**ADMIN, "Content-Type": "image/png"},
+    )
+    assert empty.status_code == 400
 
 
 # --- player event image --------------------------------------------------------------

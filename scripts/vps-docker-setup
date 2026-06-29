@@ -366,6 +366,8 @@ render_server_service() {
   if [[ "$enable_mcp" == "1" ]]; then
     printf '      BUNNYLAND_ADMIN_TOKEN: %s\n' "$(yaml_quote "$admin_token")"
   fi
+  printf '      BUNNYLAND_PLAYER_CLIENT_IDS: %s\n' "$(yaml_quote "${BUNNYLAND_PLAYER_CLIENT_IDS:-}")"
+  printf '      BUNNYLAND_ADMIN_CLIENT_IDS: %s\n' "$(yaml_quote "${BUNNYLAND_ADMIN_CLIENT_IDS:-}")"
   if [[ "$enable_llm" == "1" || "$enable_character_chat" == "1" ]]; then
     if [[ "$llm_provider" == "ollama" || "$worldgen_provider" == "ollama" ]]; then
       printf '      OLLAMA_CLOUD_API_KEY: %s\n' "$(yaml_quote "$OLLAMA_CLOUD_API_KEY")"

@@ -147,6 +147,8 @@ uv run bunnyland serve --llm --generator recursive \
 | `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
 | `--mcp`          | off            | Mount the MCP endpoint at `/mcp` on the existing API server.    |
 | `--admin-token`  | env            | Admin secret gating the whole `/admin/*` surface plus snapshot/overview/DM projections, the world-updates stream, and MCP admin tools; defaults to `BUNNYLAND_ADMIN_TOKEN`. |
+| `--player-client-id` | env        | Allow one player `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_PLAYER_CLIENT_IDS`; unset allows any player client ID. |
+| `--admin-client-id` | env         | Allow one admin `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_ADMIN_CLIENT_IDS`; unset allows any admin client ID with the admin token. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
 | `--starter-pack` | (none)         | Enable a startup preset: `peaceful`, `fantastic`, or `futuristic`. |
 | `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](./).   |
@@ -167,6 +169,13 @@ per-player claim secret. The production nginx config performs Basic auth and the
 `X-Bunnyland-Admin-Secret` header (clients can never supply their own), so browser admins log
 in once. Do **not** publish the API container's port directly — keep nginx the only ingress so
 the admin surface is never reachable without passing Basic auth first.
+
+Optional client-ID allowlists add a second role-scoped check. Set
+`BUNNYLAND_PLAYER_CLIENT_IDS` and/or `BUNNYLAND_ADMIN_CLIENT_IDS` to comma-separated
+client IDs, or repeat `--player-client-id` / `--admin-client-id`. When configured, player
+claims and claim-secret-backed player requests must match the player list. Admin HTTP,
+WebSocket, and MCP requests must match the admin list via `X-Bunnyland-Client-Id`; the
+production nginx config overwrites that header with the authenticated Basic-auth username.
 
 Player commands (`POST /world/commands`) and the MCP `send_command` tool reject the control
 verbs (`take-control`, `release-to-llm`, `suspend`, `resume`); controller changes go through

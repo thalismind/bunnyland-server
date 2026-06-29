@@ -42,6 +42,7 @@ from bunnyland.persistence import WorldMeta
 from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.plugins.builtin import MCP, WORLDGEN
 from bunnyland.server.app import create_app
+from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
     WorldCharacterGenerationResponse,
     WorldEventGenerationResponse,
@@ -1911,6 +1912,8 @@ def _capture_mcp_tools(
     actor,
     *,
     admin_token: str = "secret",
+    player_client_ids=None,
+    admin_client_ids=None,
     loop=None,
     request_headers=None,
     registered_resources: dict | None = None,
@@ -1983,6 +1986,8 @@ def _capture_mcp_tools(
         actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
         admin_token=admin_token,
+        player_client_ids=player_client_ids,
+        admin_client_ids=admin_client_ids,
         loop=loop,
         save_path=save_path,
     )
@@ -2412,6 +2417,60 @@ def test_admin_tool_falls_back_to_argument_without_header(monkeypatch, scenario)
 
     with pytest.raises(RuntimeError, match="invalid MCP admin token"):
         tools["world_overview_admin"]()
+
+
+def test_mcp_admin_client_id_allowlist_uses_injected_header(monkeypatch, scenario):
+    missing = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        admin_token="secret",
+        admin_client_ids=["admin-a"],
+    )
+    with pytest.raises(RuntimeError, match="admin client_id is required"):
+        missing["world_overview_admin"](admin_token="secret")
+
+    rejected = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        admin_token="secret",
+        admin_client_ids=["admin-a"],
+        request_headers={
+            "X-Bunnyland-Admin-Secret": "secret",
+            CLIENT_ID_HEADER: "admin-b",
+        },
+    )
+    with pytest.raises(RuntimeError, match="admin client_id is not allowed"):
+        rejected["world_overview_admin"]()
+
+    allowed = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        admin_token="secret",
+        admin_client_ids=["admin-a"],
+        request_headers={
+            "X-Bunnyland-Admin-Secret": "secret",
+            CLIENT_ID_HEADER: "admin-a",
+        },
+    )
+    assert allowed["world_overview_admin"]()["room_count"] == 2
+
+
+def test_mcp_player_client_id_allowlist_gates_claim_tool(monkeypatch, scenario):
+    tools = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        player_client_ids=["client-a"],
+    )
+
+    with pytest.raises(RuntimeError, match="player client_id is not allowed"):
+        asyncio.run(
+            tools["claim_character"](client_id="client-b", character_name="Juniper")
+        )
+
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="client-a", character_name="Juniper")
+    )
+    assert claimed["client_id"] == "client-a"
 
 
 def test_room_view_and_component_schema_tools(monkeypatch, scenario):

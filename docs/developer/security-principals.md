@@ -18,6 +18,8 @@ The current claim fields are:
   This is metadata about the attached client/controller kind, not the ownership proof.
 - `client_id`: public persistent client identifier. This is safe to store in ECS and
   show in admin snapshots. The same `client_id` can move between client kinds.
+  Server admins may optionally restrict accepted player and admin client IDs with
+  role-scoped allowlists; this is a coarse admission check, not the ownership proof.
 - `claim_id`: public server-issued claim identifier. This is safe to store in ECS and
   persist. Clients must never choose claim IDs for new claims.
 - `claim_secret`: private bearer secret for the claim. This is only held by the client

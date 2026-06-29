@@ -6,8 +6,9 @@
 # Admin surfaces share ONE Basic-auth realm ("Bunnyland admin") so a single browser login
 # carries to every admin path -- including the same-origin /world/updates WebSocket, whose
 # handshake replays the cached credentials. After Basic auth passes, nginx injects the single
-# X-Bunnyland-Admin-Secret the app checks; clients can never supply their own (proxy_set_header
-# overrides any inbound value). Player-facing /api/ paths stay open.
+# X-Bunnyland-Admin-Secret the app checks and the X-Bunnyland-Client-Id admin allowlist
+# key (the Basic-auth username); clients can never supply their own values because
+# proxy_set_header overrides inbound headers. Player-facing /api/ paths stay open.
 
 location = /api/world/snapshot {
     auth_basic "Bunnyland admin";
@@ -20,6 +21,7 @@ location = /api/world/snapshot {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
+    proxy_set_header X-Bunnyland-Client-Id $remote_user;
 }
 
 location = /api/world/overview {
@@ -33,6 +35,7 @@ location = /api/world/overview {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
+    proxy_set_header X-Bunnyland-Client-Id $remote_user;
 }
 
 location ^~ /api/world/dm/ {
@@ -46,6 +49,7 @@ location ^~ /api/world/dm/ {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
+    proxy_set_header X-Bunnyland-Client-Id $remote_user;
 }
 
 location = /api/world/updates {
@@ -61,6 +65,7 @@ location = /api/world/updates {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
     proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
+    proxy_set_header X-Bunnyland-Client-Id $remote_user;
     proxy_read_timeout 3600s;
 }
 
@@ -75,6 +80,7 @@ location /api/admin/ {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
+    proxy_set_header X-Bunnyland-Client-Id $remote_user;
 }
 
 location = /api/mcp {
@@ -89,6 +95,7 @@ location = /api/mcp {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
+    proxy_set_header X-Bunnyland-Client-Id $remote_user;
     proxy_read_timeout 3600s;
 }
 
@@ -104,6 +111,7 @@ location /api/mcp/ {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
+    proxy_set_header X-Bunnyland-Client-Id $remote_user;
     proxy_read_timeout 3600s;
 }
 
