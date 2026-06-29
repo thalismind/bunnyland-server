@@ -70,6 +70,8 @@ location = /api/world/updates {
 }
 
 location /api/admin/ {
+    client_max_body_size 10m;
+
     auth_basic "Bunnyland admin";
     auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
 
