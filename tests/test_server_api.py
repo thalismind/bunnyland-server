@@ -1822,6 +1822,25 @@ def test_admin_routes_require_admin_secret(scenario):
         assert response.json()["detail"] == "invalid admin token"
 
 
+def test_admin_routes_allow_cors_preflight_without_admin_secret(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
+    client = testclient.TestClient(app)
+
+    response = client.options(
+        "/admin/memory/characters",
+        headers={
+            "Origin": "http://127.0.0.1:8091",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "X-Bunnyland-Admin-Secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "X-Bunnyland-Admin-Secret" in response.headers["access-control-allow-headers"]
+
+
 def test_admin_gate_fails_closed_when_token_unset(scenario, monkeypatch):
     # With no admin token configured (arg unset and env cleared), the gate must reject rather
     # than fall open — the /admin surface can never be reachable without a secret.

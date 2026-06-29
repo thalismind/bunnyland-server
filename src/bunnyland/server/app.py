@@ -412,7 +412,7 @@ def create_app(
         # privileged /world/{snapshot,dm,overview} projections and the /world/updates
         # WebSocket are not under /admin and keep their own explicit guard. nginx injects
         # the admin secret after Basic auth; direct callers must supply it themselves.
-        if request.url.path.startswith("/admin"):
+        if request.url.path.startswith("/admin") and request.method != "OPTIONS":
             try:
                 _require_projection_admin(
                     request.headers.get(ADMIN_SECRET_HEADER.lower()),
