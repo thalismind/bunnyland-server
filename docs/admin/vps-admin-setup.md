@@ -200,12 +200,15 @@ Verify the public route and admin auth:
 BUNNYLAND_DOMAIN='sandbox.example.com' \
 BUNNYLAND_ADMIN_USER='editor' \
 BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_PLAYER_USER='player1' \
+BUNNYLAND_PLAYER_PASSWORD='player-one-password' \
   scripts/vps-docker-verify
 ```
 
 The verifier checks the web client, world editor, `/config.json`, `/api/health`,
-`/api/world/snapshot`, websocket upgrades through `/api/world/updates`, admin rejection
-with bad credentials (`401`), and admin success with the supplied credentials (`200`).
+player auth on `/api/world/characters`, `/api/world/snapshot`, websocket upgrades through
+`/api/world/updates`, admin rejection with bad credentials (`401`), and admin success with
+the supplied credentials (`200`).
 
 ## Full deployment
 
@@ -346,6 +349,8 @@ and expected text:
 BUNNYLAND_DOMAIN='sandbox.example.com' \
 BUNNYLAND_ADMIN_USER='editor' \
 BUNNYLAND_ADMIN_PASSWORD='change-this' \
+BUNNYLAND_PLAYER_USER='player1' \
+BUNNYLAND_PLAYER_PASSWORD='player-one-password' \
 BUNNYLAND_HOME_DOMAIN='example.com' \
 BUNNYLAND_HOME_EXPECT_TEXT='A social simulation sandbox built as an ECS graph.' \
   scripts/vps-docker-verify

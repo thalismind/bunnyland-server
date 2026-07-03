@@ -2288,6 +2288,31 @@ def test_fastapi_player_client_id_allowlist_gates_claims(scenario):
     assert allowed.json()["claim_secret"]
 
 
+def test_fastapi_player_client_id_header_populates_web_claim_request(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor, player_client_ids="client-a")
+    client = testclient.TestClient(app)
+
+    rejected = client.post(
+        "/world/controllers/web/claim",
+        headers={CLIENT_ID_HEADER: "client-b"},
+        json={"character_id": str(scenario.character), "client_id": "client-a"},
+    )
+    response = client.post(
+        "/world/controllers/web/claim",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character), "client_id": "client-b"},
+    )
+
+    assert rejected.status_code == 403
+    assert rejected.json()["detail"] == "player client_id is not allowed"
+    assert response.status_code == 200
+    controller, _edge = current_controller(
+        scenario.actor, scenario.actor.world.get_entity(scenario.character)
+    )
+    assert controller.get_component(ClaimedComponent).client_id == "client-a"
+
+
 def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
@@ -3007,6 +3032,50 @@ def test_fastapi_release_claim_revokes_private_access(scenario):
     assert released.status_code == 200
     assert released.json()["claim_id"] == claim["claim_id"]
     assert open_view.status_code == 200
+
+
+def test_fastapi_player_client_id_header_keeps_claim_secret_guard(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    claim = client.post(
+        "/world/controllers/web/claim",
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-a",
+            "label": "toon",
+        },
+    ).json()
+    wrong_secret = client.post(
+        "/world/controllers/web/release-claim",
+        headers={
+            CLIENT_ID_HEADER: "client-a",
+            "X-Bunnyland-Claim-Secret": "wrong",
+        },
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-b",
+            "claim_id": claim["claim_id"],
+        },
+    )
+    released = client.post(
+        "/world/controllers/web/release-claim",
+        headers={
+            CLIENT_ID_HEADER: "client-a",
+            "X-Bunnyland-Claim-Secret": claim["claim_secret"],
+        },
+        json={
+            "character_id": str(scenario.character),
+            "client_id": "client-b",
+            "claim_id": claim["claim_id"],
+        },
+    )
+
+    assert wrong_secret.status_code == 403
+    assert wrong_secret.json()["detail"] == "invalid claim secret"
+    assert released.status_code == 200
+    assert released.json()["claim_id"] == claim["claim_id"]
 
 
 def test_fastapi_release_controller_to_suspended_fallback_retains_claim(scenario):

@@ -4,10 +4,16 @@ set -euo pipefail
 : "${BUNNYLAND_DOMAIN:?set BUNNYLAND_DOMAIN to your public domain, for example sandbox.example.com}"
 : "${BUNNYLAND_ADMIN_USER:?set BUNNYLAND_ADMIN_USER to the admin username}"
 : "${BUNNYLAND_ADMIN_PASSWORD:?set BUNNYLAND_ADMIN_PASSWORD to the admin password}"
+: "${BUNNYLAND_PLAYER_USER:?set BUNNYLAND_PLAYER_USER to a player username}"
+: "${BUNNYLAND_PLAYER_PASSWORD:?set BUNNYLAND_PLAYER_PASSWORD to a player password}"
 
 export BUNNYLAND_DOMAIN
 export BUNNYLAND_ADMIN_USER
 export BUNNYLAND_ADMIN_PASSWORD
+export BUNNYLAND_PLAYER_USER
+export BUNNYLAND_PLAYER_PASSWORD
+export BUNNYLAND_PLAYER2_USER="${BUNNYLAND_PLAYER2_USER:-}"
+export BUNNYLAND_PLAYER2_PASSWORD="${BUNNYLAND_PLAYER2_PASSWORD:-}"
 export BUNNYLAND_VERIFY_CONNECT_HOST="${BUNNYLAND_VERIFY_CONNECT_HOST:-$BUNNYLAND_DOMAIN}"
 export BUNNYLAND_VERIFY_PORT="${BUNNYLAND_VERIFY_PORT:-443}"
 export BUNNYLAND_VERIFY_SCHEME="${BUNNYLAND_VERIFY_SCHEME:-https}"
@@ -37,12 +43,20 @@ admin_unauth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS"])
 admin_auth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS"])
 admin_user = os.environ["BUNNYLAND_ADMIN_USER"]
 admin_password = os.environ["BUNNYLAND_ADMIN_PASSWORD"]
+player_credentials = [
+    (os.environ["BUNNYLAND_PLAYER_USER"], os.environ["BUNNYLAND_PLAYER_PASSWORD"]),
+]
+if os.environ["BUNNYLAND_PLAYER2_USER"] or os.environ["BUNNYLAND_PLAYER2_PASSWORD"]:
+    player_credentials.append(
+        (os.environ["BUNNYLAND_PLAYER2_USER"], os.environ["BUNNYLAND_PLAYER2_PASSWORD"])
+    )
 verify_admin_data = os.environ["BUNNYLAND_VERIFY_ADMIN_DATA"] == "1"
 home_domain = os.environ["BUNNYLAND_HOME_DOMAIN"]
 home_expect_text = os.environ["BUNNYLAND_HOME_EXPECT_TEXT"]
 base_url = f"{scheme}://{domain}"
 good_auth = f"{admin_user}:{admin_password}"
 bad_auth = f"{admin_user}:definitely-not-the-right-password"
+bad_player_auth = f"{player_credentials[0][0]}:definitely-not-the-right-password"
 
 
 def fail(message: str) -> None:
@@ -56,6 +70,10 @@ def ok(message: str) -> None:
 
 if scheme not in {"http", "https"}:
     fail(f"BUNNYLAND_VERIFY_SCHEME must be http or https, got {scheme!r}")
+
+for index, (username, password) in enumerate(player_credentials, start=1):
+    if not username or not password:
+        fail(f"player {index}: set both username and password")
 
 
 def decode_chunked(body: bytes) -> bytes:
@@ -158,9 +176,26 @@ health = json.loads(expect_status("REST health", "GET", "/api/health", 200).deco
 if health.get("ok") is not True:
     fail(f"REST health: expected ok=true, got {health!r}")
 
-# The claim lobby is the public liveness signal -- no admin needed to pick a character.
-lobby = json.loads(expect_status("world characters", "GET", "/api/world/characters", 200).decode())
-ok(f"world characters: {len(lobby.get('characters', []))} claimable")
+# Health is public, but the player API requires player Basic auth.
+expect_status("world characters require player auth", "GET", "/api/world/characters", 401)
+expect_status(
+    "world characters reject bad player credentials",
+    "GET",
+    "/api/world/characters",
+    401,
+    auth=bad_player_auth,
+)
+for index, (username, password) in enumerate(player_credentials, start=1):
+    lobby = json.loads(
+        expect_status(
+            f"world characters player {index}",
+            "GET",
+            "/api/world/characters",
+            200,
+            auth=f"{username}:{password}",
+        ).decode()
+    )
+    ok(f"world characters player {index}: {len(lobby.get('characters', []))} claimable")
 
 # The raw snapshot is admin-gated now: an unauthenticated caller gets the Basic-auth gate.
 expect_status(

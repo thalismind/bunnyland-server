@@ -143,6 +143,42 @@ def test_home_nginx_template_denies_hidden_paths() -> None:
     assert "return 404;" in text
 
 
+def test_api_nginx_template_gates_player_api_without_reusing_basic_auth_user() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    text = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
+
+    health_location = text.index("location = /api/health")
+    player_location = text.index("location /api/ {")
+
+    assert health_location < player_location
+    assert 'auth_basic "Bunnyland player";' in text
+    assert "auth_basic_user_file /etc/nginx/bunnyland/players.htpasswd;" in text
+    assert "proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;" in text
+    assert "proxy_set_header X-Bunnyland-Client-Id $remote_user;" not in text
+    assert 'auth_basic "Bunnyland admin";' in text
+    assert 'proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";' in text
+
+
+def test_vps_ansible_manages_separate_player_htpasswd_without_client_allowlist() -> None:
+    workspace_root = Path(__file__).resolve().parents[2]
+    vps_root = workspace_root / "bunnyland-vps"
+    vars_text = (
+        vps_root / "ansible" / "inventory" / "group_vars" / "bunnyland_vps.yml"
+    ).read_text()
+    tasks_text = (vps_root / "ansible" / "tasks" / "compose.yml").read_text()
+    overlay_text = (
+        vps_root / "ansible" / "templates" / "compose.admin-auth.yml.j2"
+    ).read_text()
+
+    assert "bunnyland_manage_player_htpasswd: true" in vars_text
+    assert "bunnyland_player_credentials: []" in vars_text
+    assert "BUNNYLAND_PLAYER_CLIENT_IDS: \"\"" in overlay_text
+    assert "players.htpasswd" in tasks_text
+    assert "openssl\", \"passwd\", \"-apr1\"" in tasks_text
+    assert "no_log: true" in tasks_text
+    assert "bunnyland_player_credentials | length > 0" in tasks_text
+
+
 def test_vps_docker_wizard_uses_stdin_answers_for_prompted_setup_values(
     tmp_path: Path,
 ) -> None:

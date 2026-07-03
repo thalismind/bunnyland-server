@@ -165,17 +165,20 @@ requires the admin secret in the `X-Bunnyland-Admin-Secret` header, and if no ad
 configured (`--admin-token` / `BUNNYLAND_ADMIN_TOKEN`) those routes return `403` rather than
 falling open. This matters because routes such as `POST /admin/controllers/assign` and
 `PATCH /admin/world` reassign controllers and mutate the world directly, bypassing the
-per-player claim secret. The production nginx config performs Basic auth and then injects the
-`X-Bunnyland-Admin-Secret` header (clients can never supply their own), so browser admins log
-in once. Do **not** publish the API container's port directly — keep nginx the only ingress so
-the admin surface is never reachable without passing Basic auth first.
+per-player claim secret. The production nginx config performs admin Basic auth and then
+injects the `X-Bunnyland-Admin-Secret` header (clients can never supply their own), so
+browser admins log in once. Generic player `/api/` routes are protected by a separate
+player Basic-auth file. Basic-auth usernames are not Bunnyland `client_id` values; nginx
+forwards `X-Bunnyland-Client-Id` when a client provides it, and otherwise the server keeps
+using the request body or query `client_id`. Do **not** publish the API container's port
+directly — keep nginx the only ingress so the admin surface is never reachable without
+passing Basic auth first.
 
 Optional client-ID allowlists add a second role-scoped check. Set
 `BUNNYLAND_PLAYER_CLIENT_IDS` and/or `BUNNYLAND_ADMIN_CLIENT_IDS` to comma-separated
 client IDs, or repeat `--player-client-id` / `--admin-client-id`. When configured, player
 claims and claim-secret-backed player requests must match the player list. Admin HTTP,
-WebSocket, and MCP requests must match the admin list via `X-Bunnyland-Client-Id`; the
-production nginx config overwrites that header with the authenticated Basic-auth username.
+WebSocket, and MCP requests must match the admin list via `X-Bunnyland-Client-Id`.
 
 Player commands (`POST /world/commands`) and the MCP `send_command` tool reject the control
 verbs (`take-control`, `release-to-llm`, `suspend`, `resume`); controller changes go through

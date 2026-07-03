@@ -11,6 +11,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError
+
 from .. import telemetry
 from ..claims import (
     CLIENT_KIND_WEB,
@@ -520,6 +522,31 @@ def create_app(
         request._claim_secret = claim_secret
         return request
 
+    def _client_id_header_value(client_id: str | None) -> str | None:
+        if not isinstance(client_id, str):
+            return None
+        normalized = client_id.strip()
+        return normalized or None
+
+    def _with_player_client_id(request, client_id: str | None):
+        normalized = _client_id_header_value(client_id)
+        if normalized is None:
+            return request
+        data = request.model_dump()
+        data["client_id"] = normalized
+        try:
+            return request.__class__.model_validate(data)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+    def _with_player_request_context(
+        request,
+        claim_secret: str | None,
+        client_id: str | None,
+    ):
+        request = _with_player_client_id(request, client_id)
+        return _with_claim_secret(request, claim_secret)
+
     def _claimed_controller_for_web_request(request: WebControllerFallbackRequest):
         character = _character_entity(request.character_id)
         client_id = request.client_id.strip()
@@ -639,8 +666,9 @@ def create_app(
         id: str,
         request: CharacterChatRequest,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> CharacterChatResponse:
-        _with_claim_secret(request, claim_secret)
+        request = _with_player_request_context(request, claim_secret, player_client_id)
         if character_chat is None:
             raise HTTPException(status_code=409, detail="character chat is not enabled")
         _require_allowed_player_client_id(request.client_id)
@@ -678,9 +706,11 @@ def create_app(
         client_id: str,
         claim_id: str | None = None,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> CharacterChatPendingResponse:
         if character_chat is None:
             raise HTTPException(status_code=409, detail="character chat is not enabled")
+        client_id = _client_id_header_value(player_client_id) or client_id
         _require_allowed_player_client_id(client_id)
         _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
         try:
@@ -1462,16 +1492,18 @@ def create_app(
     async def claim_web_controller(
         request: WebControllerClaimRequest,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> WebControllerClaimResponse:
-        _with_claim_secret(request, claim_secret)
+        request = _with_player_request_context(request, claim_secret, player_client_id)
         return await _claim_web_controller_request(request)
 
     @app.patch("/world/controllers/web/fallback", response_model=WebControllerFallbackResponse)
     async def set_web_controller_fallback(
         request: WebControllerFallbackRequest,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> WebControllerFallbackResponse:
-        _with_claim_secret(request, claim_secret)
+        request = _with_player_request_context(request, claim_secret, player_client_id)
         return await _web_controller_fallback_request(request)
 
     @app.post(
@@ -1481,16 +1513,18 @@ def create_app(
     async def release_web_controller_to_fallback(
         request: WebControllerFallbackRequest,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> WebControllerFallbackResponse:
-        _with_claim_secret(request, claim_secret)
+        request = _with_player_request_context(request, claim_secret, player_client_id)
         return await _release_web_controller_to_fallback_request(request)
 
     @app.post("/world/controllers/web/release-claim", response_model=ClaimReleaseResponse)
     async def release_web_claim(
         request: WebControllerFallbackRequest,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> ClaimReleaseResponse:
-        _with_claim_secret(request, claim_secret)
+        request = _with_player_request_context(request, claim_secret, player_client_id)
         return await _release_web_claim_request(request)
 
     @app.patch("/admin/world", response_model=WorldPatchResponse)
