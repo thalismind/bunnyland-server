@@ -227,7 +227,8 @@ plan is in [`PLAN.md`](docs/PLAN.md).
 Mechanics ship as **plugins** you enable per world, so a world is whatever bundle you turn
 on. Each sim package adds its own components, verbs, systems, and prompt fragments without
 touching the others — emergence comes from small systems reacting to shared events. The
-full catalogue is in [`bunnyland_mechanics.md`](docs/bunnyland_mechanics.md).
+full catalogue is in [`bunnyland_mechanics.md`](docs/bunnyland_mechanics.md), with plugin
+IDs and out-of-tree plugin notes in [`PLUGINS.md`](PLUGINS.md).
 
 | Package         | Status      | Inspired by      | Key mechanics it introduces |
 |-----------------|-------------|------------------|-----------------------------|
