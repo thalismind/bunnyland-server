@@ -40,6 +40,7 @@ from bunnyland.llm_agents import (
     name_candidates,
     parse_natural_command,
     persona_contradictions,
+    register_autonomous_controller,
     resolve_reference,
     resolve_reference_args,
     suggest_names,
@@ -1058,6 +1059,54 @@ async def test_dispatch_throttles_controller_by_act_every_ticks():
     assert await dispatch.run_once() == []
     second = await dispatch.run_once()
     assert [decision.tool for decision in second] == ["move"]
+
+
+async def test_dispatch_uses_registered_autonomous_controller_factory():
+    from pydantic.dataclasses import dataclass
+    from relics import Component
+
+    @dataclass(frozen=True)
+    class TestControllerComponent(Component):
+        act_every_ticks: int = 1
+
+    def test_agent_factory(dispatch, character_id: str, component: object):
+        assert isinstance(dispatch, ControllerDispatch)
+        assert character_id
+        assert isinstance(component, TestControllerComponent)
+        return ScriptedAgent([ToolCall("move", {"direction": "north"})]), "test-model", "test"
+
+    scenario = build_scenario()
+    controller = spawn_entity(scenario.actor.world, [TestControllerComponent()])
+    scenario.actor.assign_controller(scenario.character, controller.id)
+    register_autonomous_controller(TestControllerComponent, test_agent_factory)
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([]),
+    )
+
+    decisions = await dispatch.run_once()
+
+    assert [decision.tool for decision in decisions] == ["move"]
+
+
+async def test_dispatch_rejects_unregistered_autonomous_controller():
+    from pydantic.dataclasses import dataclass
+    from relics import Component
+
+    @dataclass(frozen=True)
+    class UnregisteredControllerComponent(Component):
+        act_every_ticks: int = 1
+
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([]),
+    )
+
+    with pytest.raises(ValueError, match="unregistered autonomous controller"):
+        dispatch._agent_for(str(scenario.character), UnregisteredControllerComponent())
 
 
 class _FakeOllamaClient:

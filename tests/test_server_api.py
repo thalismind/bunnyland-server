@@ -114,7 +114,7 @@ from bunnyland.mechanics.toonsim import (
 )
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.persistence import WorldMeta, load_world
-from bunnyland.plugins import bunnyland_plugins, select
+from bunnyland.plugins import Plugin, RuntimeContribution, bunnyland_plugins, select
 from bunnyland.plugins.builtin import MCP
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import (
@@ -1266,6 +1266,34 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/admin/pause" in paths
     assert "/admin/resume" in paths
     assert "/world/updates" in paths
+
+
+def test_fastapi_app_factory_installs_plugin_server_routers(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    seen = {}
+
+    def install_router(app, actor, **context):
+        seen["actor"] = actor
+        seen["meta"] = context["meta"]
+
+        @app.get("/plugin/ping")
+        async def plugin_ping():
+            return {"ok": True, "seed": context["meta"].seed}
+
+    plugin = Plugin(
+        id="test.router",
+        name="Router Test",
+        runtime=RuntimeContribution(server_routers=(install_router,)),
+    )
+    meta = WorldMeta(seed="moss")
+    app = create_app(scenario.actor, meta=meta, plugins=(plugin,))
+    client = testclient.TestClient(app)
+
+    response = client.get("/plugin/ping")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "seed": "moss"}
+    assert seen == {"actor": scenario.actor, "meta": meta}
 
 
 def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, monkeypatch):
