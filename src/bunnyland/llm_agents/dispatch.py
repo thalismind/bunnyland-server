@@ -51,18 +51,62 @@ from .tools import (
     tool_schemas,
 )
 
+logger = logging.getLogger("bunnyland.dispatch")
+
+ControllerAgentFactory = Callable[
+    ["ControllerDispatch", str, object],
+    tuple[CharacterAgent, str | None, str | None],
+]
+
+
+def _llm_agent_factory(
+    dispatch: ControllerDispatch, _character_id: str, component: object
+) -> tuple[CharacterAgent, str | None, str | None]:
+    controller = component
+    assert isinstance(controller, LLMControllerComponent)
+    return dispatch.agent, controller.model, controller.provider
+
+
+def _behavior_agent_factory(
+    dispatch: ControllerDispatch, _character_id: str, component: object
+) -> tuple[CharacterAgent, str | None, str | None]:
+    controller = component
+    assert isinstance(controller, BehaviorControllerComponent)
+    return dispatch._behavior_agent(controller.behavior_name), None, None
+
+
+def _scripted_agent_factory(
+    dispatch: ControllerDispatch, character_id: str, component: object
+) -> tuple[CharacterAgent, str | None, str | None]:
+    controller = component
+    assert isinstance(controller, ScriptedControllerComponent)
+    return (
+        dispatch._scripted_agent(character_id, controller.script_name, controller.loop),
+        None,
+        None,
+    )
+
+
 #: Controller components whose actions the engine proposes (as opposed to human/external
 #: controllers like Discord/web/MCP, or the suspended no-op controller).
-_AUTONOMOUS_COMPONENTS = (
-    LLMControllerComponent,
-    BehaviorControllerComponent,
-    ScriptedControllerComponent,
-)
-AutonomousController = (
-    LLMControllerComponent | BehaviorControllerComponent | ScriptedControllerComponent
-)
+_CONTROLLER_AGENT_FACTORIES: dict[type, ControllerAgentFactory] = {
+    LLMControllerComponent: _llm_agent_factory,
+    BehaviorControllerComponent: _behavior_agent_factory,
+    ScriptedControllerComponent: _scripted_agent_factory,
+}
+_AUTONOMOUS_COMPONENTS = tuple(_CONTROLLER_AGENT_FACTORIES)
+AutonomousController = object
 
-logger = logging.getLogger("bunnyland.dispatch")
+
+def register_autonomous_controller(
+    component_type: type,
+    agent_factory: ControllerAgentFactory,
+) -> None:
+    """Register an engine-driven controller component contributed by a plugin."""
+
+    _CONTROLLER_AGENT_FACTORIES[component_type] = agent_factory
+    global _AUTONOMOUS_COMPONENTS
+    _AUTONOMOUS_COMPONENTS = tuple(_CONTROLLER_AGENT_FACTORIES)
 
 
 def name_candidates(world: World, character: Entity) -> list[tuple[str, EntityId]]:
@@ -437,11 +481,10 @@ class ControllerDispatch:
         Raises ``ValueError`` if a behavior/script name is not registered, so the caller can
         skip the character for this turn rather than crash the dispatch loop.
         """
-        if isinstance(component, LLMControllerComponent):
-            return self.agent, component.model, component.provider
-        if isinstance(component, BehaviorControllerComponent):
-            return self._behavior_agent(component.behavior_name), None, None
-        return self._scripted_agent(character_id, component.script_name, component.loop), None, None
+        factory = _CONTROLLER_AGENT_FACTORIES.get(type(component))
+        if factory is None:
+            raise ValueError(f"unregistered autonomous controller {type(component).__name__}")
+        return factory(self, character_id, component)
 
     def _behavior_agent(self, behavior_name: str) -> BehaviorTreeAgent:
         agent = self._behavior_agents.get(behavior_name)

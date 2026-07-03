@@ -422,6 +422,19 @@ def create_app(
                 return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         return await call_next(request)
 
+    for plugin in plugins or ():
+        for router_factory in plugin.runtime.server_routers:
+            router_factory(
+                app,
+                actor,
+                meta=meta,
+                loop=loop,
+                save_path=save_path,
+                definitions_path=definitions_path,
+                worldgen_options=worldgen_options,
+                plugins=plugins or (),
+            )
+
     def _character_entity(character_id: str):
         parsed = parse_entity_id(character_id)
         if parsed is None or not actor.world.has_entity(parsed):
