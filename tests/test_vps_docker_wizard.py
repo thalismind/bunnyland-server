@@ -132,6 +132,9 @@ def test_vps_docker_setup_renders_memory_flags_and_env_values() -> None:
     assert "--memory-path %s" in text
     assert "BUNNYLAND_MEMORY_BACKEND: %s" in text
     assert "BUNNYLAND_MEMORY_PATH: %s" in text
+    assert "BUNNYLAND_PLAYER_USER" in text
+    assert "players.htpasswd" in text
+    assert 'openssl passwd -apr1 "$player_password"' in text
 
 
 def test_home_nginx_template_denies_hidden_paths() -> None:

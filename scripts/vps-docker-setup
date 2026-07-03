@@ -18,12 +18,25 @@ cd "$repo_dir"
 reuse_admin="${BUNNYLAND_REUSE_ADMIN:-0}"
 admin_user="${BUNNYLAND_ADMIN_USER:-}"
 admin_password="${BUNNYLAND_ADMIN_PASSWORD:-}"
+player_user="${BUNNYLAND_PLAYER_USER:-}"
+player_password="${BUNNYLAND_PLAYER_PASSWORD:-}"
+player2_user="${BUNNYLAND_PLAYER2_USER:-}"
+player2_password="${BUNNYLAND_PLAYER2_PASSWORD:-}"
 if [[ "$reuse_admin" == "1" ]]; then
   if [[ -n "$admin_user" || -n "$admin_password" ]]; then
     die "set either BUNNYLAND_REUSE_ADMIN=1 or BUNNYLAND_ADMIN_USER/BUNNYLAND_ADMIN_PASSWORD, not both"
   fi
 elif [[ -z "$admin_user" || -z "$admin_password" ]]; then
   die "set BUNNYLAND_ADMIN_USER and BUNNYLAND_ADMIN_PASSWORD (or BUNNYLAND_REUSE_ADMIN=1 to keep the existing world-editor login)"
+fi
+if [[ -n "$player_user$player_password" && ( -z "$player_user" || -z "$player_password" ) ]]; then
+  die "set both BUNNYLAND_PLAYER_USER and BUNNYLAND_PLAYER_PASSWORD, or leave both empty"
+fi
+if [[ -n "$player2_user$player2_password" && ( -z "$player2_user" || -z "$player2_password" ) ]]; then
+  die "set both BUNNYLAND_PLAYER2_USER and BUNNYLAND_PLAYER2_PASSWORD, or leave both empty"
+fi
+if [[ -n "$player_user" && "$player_user" == "$player2_user" ]]; then
+  die "BUNNYLAND_PLAYER_USER and BUNNYLAND_PLAYER2_USER must be different"
 fi
 
 world_save="${BUNNYLAND_WORLD_SAVE:-}"
@@ -505,6 +518,7 @@ configure_firewall() {
 }
 
 htpasswd_file="$auth_dir/world-editor.htpasswd"
+players_htpasswd_file="$auth_dir/players.htpasswd"
 sudo install -d -o root -g root -m 0755 "$auth_dir"
 if [[ "$reuse_admin" == "1" ]]; then
   sudo test -f "$htpasswd_file" || die "BUNNYLAND_REUSE_ADMIN=1 but no existing credentials at $htpasswd_file"
@@ -515,6 +529,19 @@ else
   printf '%s:%s\n' "$admin_user" "$(openssl passwd -apr1 "$admin_password")" \
     | sudo tee "$htpasswd_file" >/dev/null
   sudo chmod 0644 "$htpasswd_file"
+fi
+if [[ -n "$player_user" ]]; then
+  {
+    printf '%s:%s\n' "$player_user" "$(openssl passwd -apr1 "$player_password")"
+    if [[ -n "$player2_user" ]]; then
+      printf '%s:%s\n' "$player2_user" "$(openssl passwd -apr1 "$player2_password")"
+    fi
+  } | sudo tee "$players_htpasswd_file" >/dev/null
+  sudo chmod 0644 "$players_htpasswd_file"
+elif ! sudo test -f "$players_htpasswd_file"; then
+  printf 'warning: no player credentials supplied; writing empty %s.\n' "$players_htpasswd_file" >&2
+  printf '' | sudo tee "$players_htpasswd_file" >/dev/null
+  sudo chmod 0644 "$players_htpasswd_file"
 fi
 
 render_user_compose

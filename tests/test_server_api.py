@@ -2313,6 +2313,20 @@ def test_fastapi_player_client_id_header_populates_web_claim_request(scenario):
     assert controller.get_component(ClaimedComponent).client_id == "client-a"
 
 
+def test_fastapi_player_client_id_header_is_validated(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+
+    response = client.post(
+        "/world/controllers/web/claim",
+        headers={CLIENT_ID_HEADER: "x" * 200},
+        json={"character_id": str(scenario.character), "client_id": "client-a"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])

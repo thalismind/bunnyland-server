@@ -202,6 +202,10 @@ jobs:
           BUNNYLAND_HTTP_BIND: 127.0.0.1:18080
           BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth-dry-run
           BUNNYLAND_SERVER_TAG: main
+          BUNNYLAND_PLAYER_USER: player1
+          BUNNYLAND_PLAYER_PASSWORD: local-player-one
+          BUNNYLAND_PLAYER2_USER: player2
+          BUNNYLAND_PLAYER2_PASSWORD: local-player-two
         run: |
           data_dir="${{ runner.temp }}/bunnyland-vps-data-dry-run"
           favicon_file="${{ runner.temp }}/bunnyland-favicon-dry-run.png"
@@ -240,6 +244,10 @@ jobs:
           BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth
           BUNNYLAND_ADMIN_USER: editor
           BUNNYLAND_ADMIN_PASSWORD: local
+          BUNNYLAND_PLAYER_USER: player1
+          BUNNYLAND_PLAYER_PASSWORD: local-player-one
+          BUNNYLAND_PLAYER2_USER: player2
+          BUNNYLAND_PLAYER2_PASSWORD: local-player-two
           BUNNYLAND_SERVER_TAG: main
           BUNNYLAND_ENABLE_LLM: "0"
           BUNNYLAND_ENABLE_DISCORD: "0"
@@ -265,6 +273,10 @@ jobs:
           BUNNYLAND_DOMAIN: localhost
           BUNNYLAND_ADMIN_USER: editor
           BUNNYLAND_ADMIN_PASSWORD: local
+          BUNNYLAND_PLAYER_USER: player1
+          BUNNYLAND_PLAYER_PASSWORD: local-player-one
+          BUNNYLAND_PLAYER2_USER: player2
+          BUNNYLAND_PLAYER2_PASSWORD: local-player-two
           # A token was configured above, so assert the authenticated snapshot/stream too.
           BUNNYLAND_VERIFY_ADMIN_DATA: "1"
         run: |
