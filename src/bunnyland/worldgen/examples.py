@@ -12,9 +12,21 @@ build on life-sim needs, which every character already gets from ``instantiate``
 
 from __future__ import annotations
 
-from ..core.components import RegionComponent
+from ..core.components import (
+    DescriptionComponent,
+    ReadableComponent,
+    RegionComponent,
+    SuspendedComponent,
+    WritableComponent,
+)
 from ..core.ecs import replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains
+from ..llm_agents.scripts import register_script
+from ..llm_agents.tools import ToolCall
+from ..mechanics.meter import Meter, with_value
+from ..mechanics.needs import HungerComponent
+from ..mechanics.persona import GoalComponent
+from ..mechanics.tutorial import HungryCourierControllerComponent
 from .generators import GenOptions, WorldGenerator
 from .instantiate import InstantiatedWorld, instantiate
 from .proposal import CharacterSpec, ExitSpec, ObjectSpec, RoomSpec, WorldProposal
@@ -70,6 +82,176 @@ def _with_regions(generate, levels):
 # --------------------------------------------------------------------------------------
 # life-sim — needs, careers, money, relationships, aspirations
 # --------------------------------------------------------------------------------------
+
+
+async def hungry_courier_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    del options
+
+    register_script(
+        "hungry-courier-intro",
+        (
+            ToolCall(
+                "say",
+                {
+                    "text": (
+                        "Welcome to Bunnyland. Moss the courier wants to deliver this "
+                        "letter, but wants do not bypass world rules. Find food, bring it "
+                        "back, and watch what happens."
+                    ),
+                    "intent": "inform",
+                    "approach": "friendly",
+                },
+            ),
+        ),
+    )
+
+    proposal = WorldProposal(
+        seed=seed,
+        rooms=[
+            RoomSpec(
+                key="post_office",
+                title="Clover Post Office",
+                biome="town",
+                indoor=True,
+                light=0.75,
+                celsius=20.0,
+                description=(
+                    "A tiny post office with a claim desk, a waiting courier, and a "
+                    "letter ready for delivery."
+                ),
+            ),
+            RoomSpec(
+                key="market_lane",
+                title="Market Lane",
+                biome="town",
+                light=0.9,
+                celsius=19.0,
+                description="A bright lane with a fruit crate and a kiosk path to the south.",
+            ),
+            RoomSpec(
+                key="kiosk",
+                title="Moss Kiosk",
+                biome="town",
+                indoor=True,
+                light=0.7,
+                celsius=20.0,
+                description="A counter with a public delivery ledger.",
+            ),
+        ],
+        exits=[
+            ExitSpec(from_key="post_office", direction="east", to_key="market_lane"),
+            ExitSpec(from_key="market_lane", direction="west", to_key="post_office"),
+            ExitSpec(from_key="market_lane", direction="south", to_key="kiosk"),
+            ExitSpec(from_key="kiosk", direction="north", to_key="market_lane"),
+        ],
+        objects=[
+            ObjectSpec(
+                key="letter",
+                room_key="post_office",
+                name="courier letter",
+                kind="paper",
+                writable=True,
+                portable=True,
+            ),
+            ObjectSpec(
+                key="apple",
+                room_key="market_lane",
+                name="red market apple",
+                kind="food",
+                nutrition=4.0,
+                satiety=55.0,
+                portable=True,
+            ),
+            ObjectSpec(
+                key="ledger",
+                room_key="kiosk",
+                name="delivery ledger",
+                kind="paper",
+                writable=True,
+                portable=False,
+            ),
+        ],
+        characters=[
+            CharacterSpec(
+                key="player",
+                name="Juniper",
+                room_key="post_office",
+                controller="suspended",
+                traits=("curious", "helpful"),
+                goals=("Help Moss the hungry courier deliver the letter.",),
+            ),
+            CharacterSpec(
+                key="postmaster",
+                name="Postmaster Wren",
+                room_key="post_office",
+                controller="scripted",
+                script_name="hungry-courier-intro",
+                traits=("clear", "patient"),
+            ),
+            CharacterSpec(
+                key="courier",
+                name="Moss",
+                room_key="post_office",
+                controller="suspended",
+                traits=("earnest", "hungry"),
+                goals=("Deliver the courier letter to Moss Kiosk after eating real food.",),
+            ),
+            CharacterSpec(
+                key="recipient",
+                name="Kip",
+                room_key="kiosk",
+                controller="suspended",
+                traits=("watchful",),
+            ),
+        ],
+    )
+    world = await instantiate(actor, proposal)
+
+    async with actor._lock:
+        player = actor.world.get_entity(world.characters["player"])
+        _augment(
+            actor,
+            player.id,
+            GoalComponent(
+                active_goals=(
+                    "Help Moss deliver the courier letter. Find food in Market Lane, "
+                    "bring or leave it where Moss can reach it, then watch Moss act.",
+                )
+            ),
+        )
+        letter = actor.world.get_entity(world.objects["letter"])
+        _augment(
+            actor,
+            letter.id,
+            DescriptionComponent(
+                short="A sealed first-run demo letter addressed to the kiosk."
+            ),
+            ReadableComponent(text="Please deliver this to Moss Kiosk."),
+        )
+        ledger = actor.world.get_entity(world.objects["ledger"])
+        _augment(
+            actor,
+            ledger.id,
+            DescriptionComponent(short="A public ledger that records completed deliveries."),
+            ReadableComponent(text="Delivery ledger entries:"),
+            WritableComponent(remaining_space=1000),
+        )
+        courier = actor.world.get_entity(world.characters["courier"])
+        _augment(
+            actor,
+            courier.id,
+            HungerComponent(meter=with_value(Meter(), 80.0), metabolism=0.0),
+            GoalComponent(
+                active_goals=(
+                    "Deliver the courier letter, but eat real food first if hungry.",
+                )
+            ),
+        )
+        courier.remove_component(SuspendedComponent)
+        controller = spawn_entity(actor.world, [HungryCourierControllerComponent()])
+        actor.assign_controller(courier.id, controller.id)
+
+    return world
 
 
 async def lifesim_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
@@ -2627,6 +2809,18 @@ async def county_fair_example(actor, seed: str, options: GenOptions) -> Instanti
     return world
 
 
+HUNGRY_COURIER_DEMO = WorldGenerator(
+    name="hungry-courier-demo",
+    generate=_with_regions(
+        hungry_courier_example,
+        (("Cloverbrook Vale", "region"), ("Clover Market", "area")),
+    ),
+    description=(
+        "A guided first session where a hungry courier must eat through normal world "
+        "actions before delivering a letter."
+    ),
+    group="first-run",
+    uses_seed=False)
 LIFESIM_DEMO = WorldGenerator(
     name="lifesim-demo",
     generate=_with_regions(
@@ -2829,6 +3023,7 @@ DUNGEON_DEMOS = (
 )
 
 SCENE_DEMOS = (
+    HUNGRY_COURIER_DEMO,
     STORM_LIGHTHOUSE_DEMO,
     VACANCY_MOTEL_DEMO,
     FROZEN_GREENHOUSE_DEMO,
@@ -2854,6 +3049,7 @@ __all__ = [
     "FROZEN_GREENHOUSE_DEMO",
     "GARDENSIM_DEMO",
     "GOTHIC_COUNT_DEMO",
+    "HUNGRY_COURIER_DEMO",
     "LIFESIM_DEMO",
     "MAPLE_FARM_DEMO",
     "MIDNIGHT_BURGER_DEMO",
@@ -2881,6 +3077,7 @@ __all__ = [
     "frozen_greenhouse_example",
     "gardensim_example",
     "gothic_count_example",
+    "hungry_courier_example",
     "lifesim_example",
     "maple_farm_example",
     "midnight_burger_example",

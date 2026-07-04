@@ -426,6 +426,12 @@ class ExamineResponse(BaseModel):
     points: ClientPointsView | None = None
 
 
+class ClientChecklistItemView(BaseModel):
+    id: str
+    text: str
+    completed: bool = False
+
+
 class CharacterProjectionResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1
@@ -439,6 +445,9 @@ class CharacterProjectionResponse(BaseModel):
     points: ClientPointsView = Field(default_factory=ClientPointsView)
     controller: ClientControllerView | None = None
     sheet: ClientCharacterSheetView = Field(default_factory=ClientCharacterSheetView)
+    current_goal: str = ""
+    suggested_actions: list[str] = Field(default_factory=list)
+    checklist: list[ClientChecklistItemView] = Field(default_factory=list)
     target_groups: dict[str, list[ClientTargetView]] = Field(default_factory=dict)
     actions: list[ClientActionView] = Field(default_factory=list)
 
@@ -769,6 +778,7 @@ __all__ = [
     "ClientActionArgumentView",
     "ClientActionView",
     "ClientCharacterSheetView",
+    "ClientChecklistItemView",
     "CharacterImageUploadResponse",
     "CharacterProjectionResponse",
     "CharacterQueuedCommandsResponse",

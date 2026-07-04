@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,8 @@ from bunnyland.core import (
     CharacterComponent,
     CommandCost,
     ContainerComponent,
+    ContainmentMode,
+    Contains,
     ControlledBy,
     EditorDisplayComponent,
     ExitTo,
@@ -27,16 +30,35 @@ from bunnyland.core import (
     build_submitted_command,
     container_of,
     parse_entity_id,
+    spawn_entity,
 )
 from bunnyland.core.components import ReadableComponent, WritableComponent
+from bunnyland.core.ecs import replace_component
 from bunnyland.core.events import (
     CharacterGeneratedEvent,
     ObjectGeneratedEvent,
     RoomGeneratedEvent,
     WorldGeneratedEvent,
 )
+from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
+from bunnyland.mechanics.meter import Meter, with_value
+from bunnyland.mechanics.needs import HungerComponent
+from bunnyland.mechanics.persona import GoalComponent
+from bunnyland.mechanics.tutorial import (
+    DELIVERY_MARK,
+    HungryCourierAgent,
+    HungryCourierControllerComponent,
+)
 from bunnyland.plugins import ContentContribution, Plugin, apply_plugins, bunnyland_plugins
+from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.server import serialize_character_projection
+from bunnyland.server.models import ClientRoomView
+from bunnyland.server.serialization import (
+    _first_run_suggestions,
+    _has_named_inventory,
+    _room_has_named_entity,
+)
 from bunnyland.worldgen import (
     CharacterProposal,
     CharacterSpec,
@@ -55,9 +77,272 @@ from bunnyland.worldgen import (
     validate_proposal,
     waiting_room_generator,
 )
+from bunnyland.worldgen.examples import HUNGRY_COURIER_DEMO
 from bunnyland.worldgen.ollama_builder import OllamaWorldBuilder, repair_world_proposal
 
 HOUR = 3600.0
+
+
+async def _hungry_courier_world():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    world = await HUNGRY_COURIER_DEMO.generate(actor, "hungry", GenOptions())
+    return actor, world
+
+
+def _hungry_courier_agent(actor: WorldActor) -> HungryCourierAgent:
+    dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), ScriptedAgent([]))
+    return HungryCourierAgent(dispatch, HungryCourierControllerComponent())
+
+
+def _move_entity(actor: WorldActor, entity_id, destination_id) -> None:
+    entity = actor.world.get_entity(entity_id)
+    source_id = container_of(entity)
+    if source_id is not None:
+        actor.world.get_entity(source_id).remove_relationship(Contains, entity_id)
+    actor.world.get_entity(destination_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), entity_id
+    )
+
+
+def _feed_character(character) -> None:
+    replace_component(
+        character,
+        HungerComponent(meter=with_value(Meter(), 0.0), metabolism=0.0),
+    )
+
+
+class _WorldWithMissingEntities:
+    def __init__(self, world, missing_ids) -> None:
+        self._world = world
+        self._missing_ids = set(missing_ids)
+
+    def has_entity(self, entity_id) -> bool:
+        if entity_id in self._missing_ids:
+            return False
+        return self._world.has_entity(entity_id)
+
+    def __getattr__(self, name: str):
+        return getattr(self._world, name)
+
+
+async def test_hungry_courier_demo_surfaces_first_run_guidance():
+    actor, world = await _hungry_courier_world()
+    projection = serialize_character_projection(actor, str(world.characters["player"]))
+
+    assert "Moss" in projection.current_goal
+    assert [item.id for item in projection.checklist] == [
+        "claim",
+        "look",
+        "room-action",
+        "move",
+        "say",
+        "help-courier",
+        "watch-courier",
+        "inspect-consequence",
+    ]
+    assert any("Market Lane" in action for action in projection.suggested_actions)
+
+
+async def test_hungry_courier_demo_delivers_through_validated_actions():
+    actor, world = await _hungry_courier_world()
+
+    # Simulate the golden-path player help: food becomes physically reachable to Moss.
+    _move_entity(actor, world.objects["apple"], world.rooms["post_office"])
+
+    dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), ScriptedAgent([]))
+    decisions = []
+    for _ in range(8):
+        await actor.tick(HOUR)
+        decisions.extend(await dispatch.run_once())
+
+    tools = [decision.tool for decision in decisions]
+    assert "eat" in tools
+    assert "take" in tools
+    assert tools.count("move") >= 2
+    assert "write" in tools
+
+    ledger = actor.world.get_entity(world.objects["ledger"])
+    assert DELIVERY_MARK in ledger.get_component(ReadableComponent).text
+
+
+async def test_hungry_courier_agent_handles_invalid_done_and_hungry_states():
+    actor, world = await _hungry_courier_world()
+    agent = _hungry_courier_agent(actor)
+    courier_id = str(world.characters["courier"])
+    courier = actor.world.get_entity(world.characters["courier"])
+
+    assert agent.decide("", None, character_id="not-an-entity") is None
+    assert agent.decide("", None, character_id="entity_999999") is None
+
+    decision = agent.decide("", None, character_id=courier_id)
+    assert decision is not None
+    assert decision.name == "say"
+    assert "cannot just declare myself fed" in decision.arguments["text"]
+
+    ledger = actor.world.get_entity(world.objects["ledger"])
+    readable = ledger.get_component(ReadableComponent)
+    replace_component(ledger, replace(readable, text=f"{readable.text}\n{DELIVERY_MARK}"))
+
+    assert agent.decide("", None, character_id=courier_id) is None
+    assert agent._room(courier) is not None
+
+
+async def test_hungry_courier_agent_branches_on_real_world_state():
+    actor, world = await _hungry_courier_world()
+    agent = _hungry_courier_agent(actor)
+    courier = actor.world.get_entity(world.characters["courier"])
+    courier_id = str(courier.id)
+    letter = actor.world.get_entity(world.objects["letter"])
+    ledger = actor.world.get_entity(world.objects["ledger"])
+
+    _feed_character(courier)
+    _move_entity(actor, letter.id, world.rooms["market_lane"])
+
+    missing_letter = agent.decide("", None, character_id=courier_id)
+    assert missing_letter is not None
+    assert missing_letter.name == "say"
+    assert "letter is not where I can reach it" in missing_letter.arguments["text"]
+
+    _move_entity(actor, letter.id, world.rooms["post_office"])
+    take_letter = agent.decide("", None, character_id=courier_id)
+    assert take_letter is not None
+    assert take_letter.name == "take"
+
+    actor.world.get_entity(world.rooms["post_office"]).remove_relationship(
+        Contains, letter.id
+    )
+    courier.add_relationship(Contains(mode=ContainmentMode.INVENTORY), letter.id)
+    _move_entity(actor, courier.id, world.rooms["market_lane"])
+
+    move = agent.decide("", None, character_id=courier_id)
+    assert move is not None
+    assert move.name == "move"
+    assert move.arguments["direction"] == "south"
+
+    _move_entity(actor, courier.id, world.rooms["kiosk"])
+    _move_entity(actor, ledger.id, world.rooms["market_lane"])
+    drop = agent.decide("", None, character_id=courier_id)
+    assert drop is not None
+    assert drop.name == "drop"
+
+    _move_entity(actor, courier.id, world.rooms["market_lane"])
+    actor.world.get_entity(world.rooms["market_lane"]).remove_relationship(
+        Contains, courier.id
+    )
+    no_room = agent._room(courier)
+    assert no_room is None
+    assert agent._route_direction(no_room) is None
+
+    actor.world.get_entity(world.rooms["market_lane"]).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), courier.id
+    )
+    plain_room = spawn_entity(actor.world, [IdentityComponent(name="Plain", kind="room")])
+    assert agent._room_title(plain_room) == str(plain_room.id)
+    _move_entity(actor, courier.id, plain_room.id)
+
+    confused = agent.decide("", None, character_id=courier_id)
+    assert confused is not None
+    assert confused.name == "say"
+    assert "need a route" in confused.arguments["text"]
+
+
+async def test_hungry_courier_agent_finds_food_by_state_not_script():
+    actor, world = await _hungry_courier_world()
+    agent = _hungry_courier_agent(actor)
+    courier = actor.world.get_entity(world.characters["courier"])
+    post_office = actor.world.get_entity(world.rooms["post_office"])
+
+    apple_sign = spawn_entity(
+        actor.world, [IdentityComponent(name="apple sign", kind="sign")]
+    )
+    cracker = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="cracker", kind="food"),
+            FoodComponent(nutrition=1.0, satiety=1.0),
+        ],
+    )
+    post_office.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), apple_sign.id)
+    post_office.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), cracker.id)
+
+    assert agent._reachable_food(courier) == cracker
+
+    post_office.remove_relationship(Contains, cracker.id)
+    assert agent._reachable_food(courier) is None
+    assert agent._is_hungry(spawn_entity(actor.world, [])) is False
+    assert agent._matches(spawn_entity(actor.world, []), "apple") is False
+
+    stale_item = spawn_entity(actor.world, [IdentityComponent(name="stale", kind="prop")])
+    decoy_item = spawn_entity(actor.world, [IdentityComponent(name="decoy", kind="prop")])
+    courier.add_relationship(Contains(mode=ContainmentMode.INVENTORY), stale_item.id)
+    courier.add_relationship(Contains(mode=ContainmentMode.INVENTORY), decoy_item.id)
+
+    fake_actor = SimpleNamespace(
+        world=_WorldWithMissingEntities(actor.world, {stale_item.id})
+    )
+    fake_agent = HungryCourierAgent(
+        SimpleNamespace(actor=fake_actor), HungryCourierControllerComponent()
+    )
+    assert fake_agent._carried_match(courier, "missing") is None
+
+
+async def test_first_run_suggestions_cover_courier_states():
+    actor, world = await _hungry_courier_world()
+    player = actor.world.get_entity(world.characters["player"])
+    apple = actor.world.get_entity(world.objects["apple"])
+    post = actor.world.get_entity(world.rooms["post_office"])
+    market = actor.world.get_entity(world.rooms["market_lane"])
+
+    post_view = ClientRoomView(id=str(post.id), title="Clover Post Office")
+    market_view = ClientRoomView(id=str(market.id), title="Market Lane")
+    kiosk_view = ClientRoomView(id=str(world.rooms["kiosk"]), title="Moss Kiosk")
+    unknown_view = ClientRoomView(id=str(post.id), title="Unknown Room")
+
+    assert _room_has_named_entity(actor, post.id, "courier letter") is True
+    assert _room_has_named_entity(actor, None, "anything") is False
+    assert _room_has_named_entity(actor, parse_entity_id("entity_999999"), "anything") is False
+
+    stale_item = spawn_entity(actor.world, [IdentityComponent(name="stale", kind="prop")])
+    post.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), stale_item.id)
+    fake_actor = SimpleNamespace(
+        world=_WorldWithMissingEntities(actor.world, {stale_item.id})
+    )
+    assert _room_has_named_entity(fake_actor, post.id, "missing") is False
+
+    assert "Go east" in _first_run_suggestions(actor, player, post_view)[0]
+
+    _move_entity(actor, apple.id, player.id)
+    assert _has_named_inventory(actor, player, "apple") is True
+    assert "Drop the apple" in _first_run_suggestions(actor, player, post_view)[0]
+    assert "Go west" in _first_run_suggestions(actor, player, market_view)[0]
+
+    stale_inventory_item = spawn_entity(
+        actor.world, [IdentityComponent(name="stale inventory", kind="prop")]
+    )
+    player.add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), stale_inventory_item.id
+    )
+    fake_actor = SimpleNamespace(
+        world=_WorldWithMissingEntities(actor.world, {stale_inventory_item.id})
+    )
+    assert _has_named_inventory(fake_actor, player, "missing") is False
+
+    player.remove_relationship(Contains, apple.id)
+    market.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), apple.id)
+    assert "Take the red market apple" in _first_run_suggestions(
+        actor, player, market_view
+    )[0]
+
+    market.remove_relationship(Contains, apple.id)
+    assert "apple is gone" in _first_run_suggestions(actor, player, market_view)[0]
+    assert "Inspect the delivery ledger" in _first_run_suggestions(
+        actor, player, kiosk_view
+    )[0]
+    assert "Watch Moss choose" in _first_run_suggestions(actor, player, unknown_view)[0]
+
+    replace_component(player, GoalComponent(active_goals=()))
+    assert _first_run_suggestions(actor, player, post_view) == []
 
 
 def test_validate_rejects_dangling_references():

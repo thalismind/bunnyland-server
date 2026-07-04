@@ -115,6 +115,7 @@ from .models import (
     ClientActionArgumentView,
     ClientActionView,
     ClientCharacterSheetView,
+    ClientChecklistItemView,
     ClientControllerView,
     ClientEntityView,
     ClientExitView,
@@ -590,6 +591,84 @@ def _points_view(character) -> ClientPointsView:
         focus=focus.current if focus is not None else 0.0,
         focus_max=focus.maximum if focus is not None else 0.0,
     )
+
+
+_FIRST_RUN_CHECKLIST = (
+    ("claim", "Claim a character."),
+    ("look", "Look around."),
+    ("room-action", "Use one available room action."),
+    ("move", "Move once."),
+    ("say", "Say something."),
+    ("help-courier", "Help Moss the hungry courier."),
+    ("watch-courier", "Watch Moss act through world rules."),
+    ("inspect-consequence", "Check the activity feed, memory, or history."),
+)
+
+
+def _current_goal(character) -> str:
+    if not character.has_component(GoalComponent):
+        return ""
+    goals = character.get_component(GoalComponent).active_goals
+    return goals[0] if goals else ""
+
+
+def _first_run_checklist() -> list[ClientChecklistItemView]:
+    return [
+        ClientChecklistItemView(id=item_id, text=text)
+        for item_id, text in _FIRST_RUN_CHECKLIST
+    ]
+
+
+def _has_named_inventory(actor: WorldActor, character, query: str) -> bool:
+    needle = query.lower()
+    for item_id in contents(character):
+        if not actor.world.has_entity(item_id):
+            continue
+        if needle in entity_name(actor.world.get_entity(item_id)).lower():
+            return True
+    return False
+
+
+def _room_has_named_entity(actor: WorldActor, room_id, query: str) -> bool:
+    needle = query.lower()
+    if room_id is None or not actor.world.has_entity(room_id):
+        return False
+    for entity_id in contents(actor.world.get_entity(room_id)):
+        if not actor.world.has_entity(entity_id):
+            continue
+        if needle in entity_name(actor.world.get_entity(entity_id)).lower():
+            return True
+    return False
+
+
+def _first_run_suggestions(actor: WorldActor, character, room: ClientRoomView) -> list[str]:
+    goal = _current_goal(character)
+    if "Moss" not in goal and "courier" not in goal:
+        return []
+
+    has_apple = _has_named_inventory(actor, character, "apple")
+    room_id = parse_entity_id(room.id)
+    suggestions: list[str] = []
+    if room.title == "Clover Post Office":
+        if has_apple:
+            suggestions.append("Drop the apple so Moss can eat it through the normal eat action.")
+        else:
+            suggestions.append("Go east to Market Lane and look for food Moss can reach.")
+        suggestions.append("Leave the courier letter where Moss can take it after eating.")
+    elif room.title == "Market Lane":
+        if has_apple:
+            suggestions.append("Go west to return the apple to Moss.")
+        elif _room_has_named_entity(actor, room_id, "apple"):
+            suggestions.append("Take the red market apple, then bring it west to Moss.")
+        else:
+            suggestions.append(
+                "If the apple is gone, tell Moss what happened and watch the fallback."
+            )
+    elif room.title == "Moss Kiosk":
+        suggestions.append("Inspect the delivery ledger or activity feed for the consequence.")
+    if not suggestions:
+        suggestions.append("Watch Moss choose eat, take, move, or write only when state allows it.")
+    return suggestions
 
 
 def _flatten_perceived(entities: Iterable[PerceivedEntity]) -> list[PerceivedEntity]:
@@ -1106,6 +1185,9 @@ def serialize_character_projection(
         points=_points_view(character),
         controller=_controller_view(actor, character),
         sheet=_character_sheet_projection(actor, character),
+        current_goal=_current_goal(character),
+        suggested_actions=_first_run_suggestions(actor, character, room),
+        checklist=_first_run_checklist(),
         target_groups=groups,
         actions=[
             _action_view(

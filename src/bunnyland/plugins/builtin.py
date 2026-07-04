@@ -1353,6 +1353,10 @@ from ..mechanics.toonsim import (
     ToonWorldgenHook,
     install_toonsim,
 )
+from ..mechanics.tutorial import (
+    HungryCourierControllerComponent,
+    install_tutorial,
+)
 from ..mechanics.voidsim import (
     AcceptContractHandler,
     AcceptTradeProtocolHandler,
@@ -1975,6 +1979,8 @@ def worldgen_plugin() -> Plugin:
     return Plugin(
         id=WORLDGEN,
         name="World Generators",
+        ecs=EcsContribution(components=(HungryCourierControllerComponent,)),
+        runtime=RuntimeContribution(service_factories=(install_tutorial,)),
         content=ContentContribution(
             world_generators=(
                 WorldGenerator(

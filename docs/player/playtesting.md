@@ -1,243 +1,190 @@
-# Playtesting checklist
+# Hungry Courier playtesting guide
 
-Use this guide during a hosted Bunnyland playtest. It is a timed pass through the public
-site, sandbox, clients, character sheet, character chat, admin world generation, world
-inspection, and final feedback.
+Use this guide for the public-preview first-session pass. The pass starts at the welcome
+page, uses the Toon client as the canonical first-user path, and validates the working
+quest: **The Hungry Courier**.
 
-The whole pass takes about 45 to 60 minutes. Spend longer anywhere you find confusing,
-broken, or especially promising behavior.
+The product goal is that a fresh tester can finish the demo in under 10 minutes and say:
 
-## 1. Public site
+> The NPC wanted to do something, but had to solve the same world problems I did.
 
-Start at [bunnyland.dev/#world](https://bunnyland.dev/#world). Read the current world and
-sandbox entry point before opening any clients.
+## Product success metrics
 
-What to try:
+- New user can start the Toon client without help.
+- New user can complete Hungry Courier in under 10 minutes.
+- New user can explain the core mechanic: agents act through the same world rules.
+- User sees at least one visible consequence: delivery, memory, history, activity, or reply.
 
-- Check whether the page explains what the sandbox is and where to begin.
-- Find the current world description, sandbox link, and any guide links.
-- Note what you expect to happen before you open the sandbox.
+## Technical readiness metrics
 
-What to report:
+- Hosted deployment acceptance checklist passes.
+- Backup/restore drill passes.
+- Non-admin player path passes.
+- Discord path passes if enabled.
+- Feature flags match public disclosure.
+- Release manifest exists.
+- Known issues are classified.
 
-- Anything that made the sandbox purpose unclear.
-- Any dead, misleading, or surprising links.
-- Any wording that set the wrong expectation before play began.
+## Tester setup
 
-## 2. Sandbox client chooser
+Start a timer before opening the public welcome page. Do not read source code or admin
+tools first.
 
-Open [sandbox.bunnyland.dev](https://sandbox.bunnyland.dev/) and note the available
-clients and admin tools.
+Record:
 
-What to try:
+- Tester name or initials.
+- Date and hosted URL tested.
+- Browser and device.
+- Time to first successful Toon connection.
+- Time to character claim.
+- Time to courier delivery consequence.
+- The first moment of confusion, quoted as closely as possible.
+- The tester's explanation of the core mechanic after the run.
 
-- Identify the Web TUI, Toon client, Web REPL, character sheet, character chat, world
-  generator, and inspector links.
-- Check whether one client looks like the recommended starting point.
-- Confirm whether the page mentions the API server it will use.
+## 1. Welcome page
 
-What to report:
-
-- Missing, duplicate, or surprising client links.
-- Tools that look player-facing but require admin access.
-- Any page text that does not match the clients you can actually open.
-
-## 3. Guide index
-
-Open [bunnyland.dev/guides](https://bunnyland.dev/guides/). Skim
-[Getting started](getting-started.md), [Client guides](clients/README.md), and the guide
-for the client you plan to try first.
+Open the sandbox welcome page.
 
 What to try:
 
-- Find the basic actions for looking, moving, speaking, taking items, and using items.
-- Compare the client guide list with the client links on the sandbox page.
-- Keep the guides open so you can check commands while playing.
+- Identify the primary first step without help.
+- Confirm that **Play in Toon Client** is the obvious primary action.
+- Read the "Start here" actions before opening a client.
 
-What to report:
+Pass criteria:
 
-- Missing links between guides and live clients.
-- Places where a guide assumes too much prior knowledge.
-- Any command examples that do not match what the client accepts.
+- Tester opens Toon first without being told.
+- Tester can name the first action they expect to take.
 
-## 4. Web clients
+Report:
 
-Spend about 5 minutes each with the browser clients before trying terminal clients.
+- Any equal-weight client-choice confusion.
+- Any wording that makes the demo sound like a scripted movie instead of a live world.
 
-What to try:
+## 2. Toon client start
 
-- In [Web TUI](https://sandbox.bunnyland.dev/web-tui.html), choose or claim a character,
-  read the room, search for an action, choose a target, submit it, and watch the queue.
-- In [Toon client](https://sandbox.bunnyland.dev/toon-client.html), identify your sprite,
-  move around, click nearby sprites or objects, and try an action menu command.
-- In [Web REPL](https://sandbox.bunnyland.dev/web-repl.html), use `who`, `look`,
-  `inventory`, `points`, `queued`, and one action you already tried elsewhere.
-- Move to another room and return in at least one web client.
-
-What to report:
-
-- Whether you could tell what was clickable and what was only informational.
-- Any action form that lacked enough labels, targets, or feedback.
-- Any sprite, room, or door that was hard to identify.
-- Whether command output, queued results, and rejection messages matched across clients.
-- Commands that were hard to discover without reading the guide.
-
-## 5. Terminal clients
-
-Try terminal clients after the browser clients. Connect to the sandbox server when the
-playtest instructions provide a command or server URL; otherwise run them locally and note
-that you could not reach the hosted sandbox from the terminal.
+Open the Toon client from the welcome page.
 
 What to try:
 
-- Run the Terminal TUI and compare its panels with the Web TUI.
-- Run the Terminal REPL and compare command entry with the Web REPL.
-- Use the same character and repeat one action sequence from a browser client if possible.
+- Connect to the hosted server if it does not auto-connect.
+- Claim Juniper or the obvious available player character.
+- Find the current goal, checklist, suggested actions, AP/FP, inventory, actions, and
+  activity feed.
 
-What to report:
+Pass criteria:
 
-- Whether the setup instructions were enough to connect to the sandbox.
-- Any difference in available actions, targets, or command results.
-- Terminal layout, keyboard, or color issues that made play harder.
+- Tester can claim a character without synchronous help.
+- Checklist shows progress or can be reset for another run.
 
-## 6. Character sheet
+Report:
 
-Open [Character Sheet](https://sandbox.bunnyland.dev/character-sheet.html) from a client
-button or direct link.
+- Any claim, controller, auth, or reconnect issue.
+- Any first-run guidance that is hidden below too much UI.
 
-What to try:
+## 3. Hungry Courier golden path
 
-- Inspect portrait, identity, description, status, needs, and profile details.
-- Check current room, visible characters, exits, inventory, relationships, and actions.
-- Open sheets for another visible character if the client allows it.
+Complete the golden path without using admin tools.
 
-What to report:
+Expected beats:
 
-- Missing or stale character data after moving or acting.
-- Any section whose label was unclear.
-- Any portrait, relationship, inventory, or action detail that contradicted the client.
+1. Postmaster Wren introduces Moss and the delivery problem.
+2. Player looks around in Clover Post Office.
+3. Player goes east to Market Lane.
+4. Player takes the red market apple.
+5. Player returns west.
+6. Player drops or otherwise leaves food where Moss can reach it.
+7. Moss eats through the normal `eat` action.
+8. Moss takes the courier letter.
+9. Moss moves through exits toward Moss Kiosk.
+10. Moss writes to the delivery ledger or creates an equivalent visible consequence.
+11. Player checks activity, history, memory, ledger, or another consequence surface.
 
-## 7. Character chat
+Pass criteria:
 
-Open [Character Chat](https://sandbox.bunnyland.dev/character-chat.html) from the sandbox
-client chooser. Use it only when the page says character chat is available on the current
-server.
+- Completion time is under 10 minutes.
+- Moss visibly acts through normal validated actions.
+- The tester can explain that Moss wanted to deliver, but could not bypass hunger.
 
-What to try:
+Report:
 
-- Pick an LLM-controlled character and send a short greeting.
-- Ask where they are, what room they are in, and what they can see nearby.
-- Ask about one item, exit, or visible character from the character sheet or another client.
-- Try one conversational suggestion, such as asking them to look around, speak, or wait.
-- Send a message with simple Markdown formatting, such as bold text or a short list, and
-  check whether the transcript stays readable.
+- The exact step where the tester hesitated.
+- Any action that lacked a clear target, unavailable reason, or useful result.
+- Whether the visible consequence was obvious enough.
 
-What to report:
+## 4. Branch checks
 
-- Characters that cannot be selected, never answer, or show a controller conflict.
-- Replies that ignore their profile, current room, visible items, or nearby characters.
-- Any answer that claims game state contradicted by the sheet, client, or inspector.
-- Action status lines that are unclear, stale, or missing after the character uses a tool.
-- Transcript formatting issues, especially raw HTML rendering, unsafe links, or unreadable
-  Markdown.
+Run these as short follow-up passes after the golden path has been tested.
 
-## 8. Optional Discord play
+Player eats the food:
 
-Use Discord only when the guide says the current playtest has a live channel and
-bot available.
+- Take the apple and eat it before Moss can.
+- Moss should remain hungry and ask, adapt, or fail visibly.
 
-What to try:
+Player takes the letter:
 
-- Claim or control a character using the channel instructions.
-- Try the same basic sequence from [Getting started](getting-started.md).
-- Compare Discord responses with the web or terminal client output.
+- Take the courier letter before Moss can.
+- Moss should notice it is not reachable and react.
 
-What to report:
+Player ignores the quest:
 
-- Any message syntax that was not obvious.
-- Bot responses that were delayed, missing, too noisy, or missing useful links.
-- Any Discord-only blocker that prevented normal play.
+- Wait or explore without helping.
+- The world should continue; Moss should not declare success without state support.
 
-## 9. Admin password
+Player follows Moss:
 
-Ask the guide for the admin password when the playtest reaches the admin portion.
-Do not publish, paste into notes, or hard-code the password in any feedback.
+- After feeding Moss, follow room by room.
+- Moss should move through real exits and remain observable.
 
-What to try:
+Pass criteria:
 
-- Confirm which username, password, and sandbox URL the guide wants you to use.
-- Sign in only on the deployed admin pages for this playtest.
+- Branches fail or adapt through normal command validation, not silent script breaks.
+- Rejections or stalled behavior produce understandable feedback.
 
-What to report:
+## 5. Multiclient check
 
-- Any login prompt or authentication failure that blocked the admin steps.
-- Any place where the password appeared visible after submission.
-
-## 10. World Generator
-
-Open [World Generator](https://sandbox.bunnyland.dev/world-generator.html). Create a new
-world for the sandbox after confirming with the guide that replacing the current
-world is expected.
+Open Web REPL or Web TUI as a second client during or after the run.
 
 What to try:
 
-- Pick a generator and enter a short seed or prompt.
-- Set a small room budget for a quick test.
-- Use the required reset confirmation, start generation, and watch progress.
-- Wait for the generator to finish before inspecting or playing the new world.
+- Inspect the same character, room, inventory, or ledger state.
+- Confirm the courier consequence is visible outside Toon.
+- Submit one harmless command from the second client if using a separate claimed character.
 
-What to report:
+Pass criteria:
 
-- Any generator option whose purpose was unclear.
-- Progress states that got stuck, skipped useful details, or failed silently.
-- Generated-world failures, partial resets, or confusing completion messages.
+- Both clients show the same world state.
+- No client claims impossible state or hides the consequence.
 
-## 11. World Inspector
+## 6. Optional Discord check
 
-Open [World Inspector](https://sandbox.bunnyland.dev/inspector.html) and inspect the world
-you generated.
+Run this section only if Discord is enabled for the release manifest.
 
 What to try:
 
-- Check rooms, exits, characters, inventory, containers, and obvious interactable items.
-- Follow edges between rooms and characters.
-- Look for broken links, missing names, empty rooms, unreachable exits, or orphaned items.
-- Toggle the event feed if available and watch whether activity appears while you play.
+- Claim or play from a non-admin Discord account.
+- Reconnect after leaving and returning.
+- Compare Discord command output with Toon or Web REPL state.
 
-What to report:
+Pass criteria:
 
-- Rooms with no useful exits or no clear reason to exist.
-- Characters without enough identity, location, or playable actions.
-- Items that looked important but had no apparent use.
-- Any graph, inspector panel, or event feed display that contradicted player-client output.
+- Non-admin claim/play/reconnect works.
+- Discord feature state matches public disclosure.
 
-## 12. Play the generated world
+## 7. Release acceptance record
 
-Open [Web TUI](https://sandbox.bunnyland.dev/web-tui.html) again and explore the newly
-generated world as a player.
+Attach this result to the release manifest.
 
-What to try:
+Record:
 
-- Claim a character in the generated world.
-- Move through several rooms and interact with at least two objects or characters.
-- Check whether the generated setting gives you a reason to keep exploring.
-- Open a character sheet again after playing for a few turns.
+- Hosted deployment URL.
+- Release manifest id/tag.
+- Feature flags observed: LLM, imagegen, Discord, MCP.
+- Non-admin path result.
+- Discord path result, if enabled.
+- Save/restart/reload result.
+- Backup/restore drill result.
+- Known issues discovered or reclassified.
 
-What to report:
-
-- The first point where you felt blocked or unsure what to do.
-- Whether generated rooms, exits, characters, and objects supported actual play.
-- Any difference between what the inspector suggested and what the player client allowed.
-
-## 13. Submit feedback
-
-Submit feedback in the form, issue, thread, or document the guide provides.
-
-Include:
-
-- Bugs, crashes, broken links, and error messages.
-- Confusing moments and the exact client or page where they happened.
-- Which client you preferred and why.
-- Missing affordances, labels, buttons, shortcuts, or feedback.
-- Generated-world quality: rooms, exits, characters, objects, goals, and broken links.
-- Anything that blocked play or required guide help.
+Overall pass requires the golden path, non-admin path, release manifest, feature-flag
+disclosure, and known-issues classification to be complete.
