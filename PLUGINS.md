@@ -57,25 +57,80 @@ bunnyland serve --module bunnyland_3d --module bunnyland_rl ...
   containment panic, tracking, taming, companion commands, enclosures, escapes,
   and kaiju incidents.
 
-`fortresssim` is still planned rather than shipped.
-
 Starter packs provide coarse bundles:
 
-- `peaceful`: core verbs, worldgen, life-sim, colony-sim, and garden-sim.
-- `fantastic`: peaceful plus barbarian-sim and dragon-sim.
-- `futuristic`: peaceful plus barbarian-sim, void-sim, and nuke-sim.
+- `peaceful`: `bunnyland.core_verbs`, `bunnyland.worldgen`, `bunnyland.lifesim`,
+  `bunnyland.colonysim`, and `bunnyland.gardensim`.
+- `fantastic`: `peaceful` plus `bunnyland.barbariansim` and `bunnyland.dragonsim`.
+- `futuristic`: `peaceful` plus `bunnyland.barbariansim`, `bunnyland.voidsim`, and
+  `bunnyland.nukesim`.
 
 ## Out-of-Tree Plugins
 
-- `bunnyland-3d`: adds 3D transform, velocity, collider, render, and room-bounds
-  components, a movement/collision system, 3D worldgen enrichment, and standalone
-  `/3d/` admin/player dashboards. Repository:
-  `thalis-github:thalismind/bunnyland-3d.git`.
-- `bunnyland-rl`: adds reinforcement-learning controller components, RL controller
-  dispatch registration, offline arena training, saved safetensors model artifacts,
-  W&B tracking support, admin training/model APIs, and a standalone `/rl/` admin
-  dashboard. It requires Bunnyland server `0.2.0` or newer. Repository:
-  `thalis-github:thalismind/bunnyland-rl.git`.
+Out-of-tree plugins live in their own repositories and are loaded with repeated `--module`
+flags (for example `--module bunnyland_spectersim`). Their plugin ids use the same
+`bunnyland.*` namespace as the builtins.
+
+### Addons
+
+Larger standalone extensions, each shipping its own client/dashboard and a substantial
+feature set:
+
+- **`bunnyland.3d`** — [bunnyland-3d](https://github.com/thalismind/bunnyland-3d): 3D
+  transform/velocity/collider/render/room-bounds components, a movement and collision
+  system, 3D worldgen enrichment, and standalone `/3d/` admin and player dashboards. Load
+  with `--module bunnyland_3d`.
+- **`bunnyland.rl`** — [bunnyland-rl](https://github.com/thalismind/bunnyland-rl):
+  reinforcement-learning controller components, RL controller dispatch, offline arena
+  training, safetensors model artifacts, Weights & Biases tracking, admin training/model
+  APIs, and a standalone `/rl/` admin dashboard. Requires Bunnyland server `0.2.0` or newer.
+  Load with `--module bunnyland_rl`.
+
+### Sim packs
+
+Focused content packs built on the shared plugin template (frozen ECS components, per-tick
+consequences, prompt fragments, worldgen hooks, and player/AI verbs). Each is hosted at
+`github.com/thalismind/bunnyland-plugin-<name>` and loaded with `--module bunnyland_<name>`:
+
+- **`bunnyland.spectersim`** — [repo](https://github.com/thalismind/bunnyland-plugin-spectersim):
+  Silent Hill / Ghost Hunters-style monster-detecting devices (ghost detector + radio), plus
+  a sanity dread meter and banishing rituals and wards.
+- **`bunnyland.wildsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-wildsim):
+  wilderness survival — scent trails, cold/warmth exposure, campfires, and foraging.
+- **`bunnyland.petsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-petsim):
+  companion creatures — following, taming, bonding and loyalty, tricks, and danger reactions.
+- **`bunnyland.bardsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-bardsim):
+  music and performance — instruments, performing (audible through the hearing system), mood
+  shifts, busking tips, and a learnable repertoire.
+- **`bunnyland.anglersim`** — [repo](https://github.com/thalismind/bunnyland-plugin-anglersim):
+  fishing — fishing spots, a deterministic catch table by biome and time of day, rarity
+  tiers, bait, and a trophy log.
+- **`bunnyland.hearthsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-hearthsim):
+  cooking and meals — recipes, stoves, timed meal buffs, freshness and spoilage, and shared
+  feasts.
+- **`bunnyland.dreamsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-dreamsim):
+  sleep and dreams — deterministic dreams on sleep, insight and omens, nightmares, and sleep
+  quality.
+- **`bunnyland.cartographysim`** — [repo](https://github.com/thalismind/bunnyland-plugin-cartographysim):
+  maps and navigation — a field map, compass, landmarks, fast-travel, and fog of war.
+- **`bunnyland.postsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-postsim):
+  mail and couriers — letters and parcels, mailboxes, couriers that carry mail across rooms
+  over time, care packages, and return-to-sender.
+- **`bunnyland.museumsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-museumsim):
+  collections and curation — collectible tagging, donation, appraisal, exhibits, and display
+  cases.
+- **`bunnyland.festivalsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-festivalsim):
+  seasonal festivals — a festival calendar, decorations, gift-giving, contests, and seasonal
+  mood.
+- **`bunnyland.fortunesim`** — [repo](https://github.com/thalismind/bunnyland-plugin-fortunesim):
+  luck and superstition — a luck stat other packs can read, charms and talismans, omens,
+  fortune-telling, and luck-warding rituals.
+- **`bunnyland.aquasim`** — [repo](https://github.com/thalismind/bunnyland-plugin-aquasim):
+  swimming and diving — submerged rooms, a breath meter with drowning, diving for treasure,
+  currents and hazards, and a swim skill.
+- **`bunnyland.starsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-starsim):
+  stargazing and astronomy — a calendar-driven night sky, constellations, celestial events
+  with make-a-wish, and star navigation.
 
 The plugin server image should extend `ghcr.io/thalismind/bunnyland-server:main`.
 Dashboard images should extend the published Bunnyland web image and copy their static
