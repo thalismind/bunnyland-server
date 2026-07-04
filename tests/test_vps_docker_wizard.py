@@ -135,6 +135,10 @@ def test_vps_docker_setup_renders_memory_flags_and_env_values() -> None:
     assert "BUNNYLAND_PLAYER_USER" in text
     assert "players.htpasswd" in text
     assert 'openssl passwd -apr1 "$player_password"' in text
+    assert 'web_theme="${BUNNYLAND_WEB_THEME:-}"' in text
+    assert 'web_themes="${BUNNYLAND_WEB_THEMES:-[]}"' in text
+    assert "BUNNYLAND_WEB_THEME: %s" in text
+    assert "BUNNYLAND_WEB_THEMES: %s" in text
 
 
 def test_home_nginx_template_denies_hidden_paths() -> None:

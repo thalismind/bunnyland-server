@@ -155,6 +155,17 @@ Discord link is shown anywhere.
 BUNNYLAND_DISCORD_URL='https://discord.gg/your-invite' \
 ```
 
+To add custom web UI themes to the shared theme selector, set `BUNNYLAND_WEB_THEMES` to a
+JSON array of `{ "value", "label" }` objects. The value becomes `bl-theme-<value>`, so
+serve matching CSS after `assets/bunnyland-ui.css`. Set `BUNNYLAND_WEB_THEME` to make one
+of those theme values the deployment default when a visitor has no saved preference; links
+can also choose a theme with `?theme=<value>`.
+
+```bash
+BUNNYLAND_WEB_THEME='server-night' \
+BUNNYLAND_WEB_THEMES='[{"value":"server-night","label":"Server Night"}]' \
+```
+
 To serve a separate static homepage from the same frontend nginx container, add
 `BUNNYLAND_HOME_DOMAIN` and `BUNNYLAND_HOME_DIR`. The homepage directory must contain its
 own `index.html`. The setup script requests or reuses a separate Let's Encrypt certificate
@@ -191,8 +202,8 @@ elsewhere), rerun setup with `BUNNYLAND_CONFIGURE_FIREWALL=0`.
 
 After the smoke test, open `https://sandbox.example.com/`. The frontend renders
 `/config.json` from its environment at container start; by default it points the browser at
-same-origin `/api/` (and carries the optional `discordUrl`), so the web UI and API proxy
-come up together.
+same-origin `/api/` (and carries the optional `discordUrl` and custom `themes`), so the web
+UI and API proxy come up together.
 
 Verify the public route and admin auth:
 
