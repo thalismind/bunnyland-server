@@ -93,7 +93,7 @@ consequences, prompt fragments, worldgen hooks, and player/AI verbs). Each is ho
 `github.com/thalismind/bunnyland-plugin-<name>` and loaded with `--module bunnyland_<name>`:
 
 - **`bunnyland.spectersim`** — [repo](https://github.com/thalismind/bunnyland-plugin-spectersim):
-  Silent Hill / Ghost Hunters-style monster-detecting devices (ghost detector + radio), plus
+  paranormal monster-detecting devices (ghost detector + radio), plus
   a sanity dread meter and banishing rituals and wards.
 - **`bunnyland.wildsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-wildsim):
   wilderness survival — scent trails, cold/warmth exposure, campfires, and foraging.
