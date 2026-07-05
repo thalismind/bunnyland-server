@@ -131,6 +131,13 @@ consequences, prompt fragments, worldgen hooks, and player/AI verbs). Each is ho
 - **`bunnyland.starsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-starsim):
   stargazing and astronomy — a calendar-driven night sky, constellations, celestial events
   with make-a-wish, and star navigation.
+- **`bunnyland.cryptidsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-cryptidsim):
+  cryptozoology — rare, elusive creatures confirmed only through deterministic uncertain
+  sightings, case files, and hedged field reports until enough clear looks confirm them.
+- **`bunnyland.loresim`** — [repo](https://github.com/thalismind/bunnyland-plugin-loresim):
+  pacifist field-naturalist observation — a bestiary journal, deterministic lore notes,
+  discovery credit, expeditions, and published field guides, without ever capturing or
+  harming a subject.
 
 The plugin server image should extend `ghcr.io/thalismind/bunnyland-server:main`.
 Dashboard images should extend the published Bunnyland web image and copy their static
