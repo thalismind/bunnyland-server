@@ -14,7 +14,8 @@ import argparse
 import asyncio
 import logging
 import os
-from collections.abc import Awaitable
+import sys
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from .memory import install_memory
 from .persistence import WorldMeta, load_world, save_world
 from .plugins import (
     PluginError,
+    PluginRuntimeContext,
     apply_plugins,
     bunnyland_plugins,
     collect_persona_fragments,
@@ -38,6 +40,7 @@ from .plugins import (
     load_modules,
     resolve_order,
     select,
+    validate_plugin_config,
 )
 from .plugins.builtin import (
     BARBARIANSIM,
@@ -257,7 +260,7 @@ def _validate_serve_args(args) -> None:
         raise SystemExit("--character-chat mounts on the HTTP API and needs --api-port")
 
 
-def _load_serve_plugins(args) -> tuple[list, list]:
+def _load_serve_plugins(args) -> tuple[list, list, PluginRuntimeContext]:
     try:
         plugins = select_plugins(
             args.module,
@@ -266,11 +269,21 @@ def _load_serve_plugins(args) -> tuple[list, list]:
             starter_pack=args.starter_pack or os.environ.get("BUNNYLAND_STARTER_PACK") or None,
         )
         ordered_plugins = resolve_order(plugins)
+        plugin_config = validate_plugin_config(
+            ordered_plugins, getattr(args, "plugin_config", None)
+        )
     except PluginError as exc:
         logging.getLogger(__name__).error("plugin loading failed: %s", exc)
         raise SystemExit(2) from exc
     # TODO: add --auto-load-requires to include missing required plugins automatically.
-    return plugins, ordered_plugins
+    return (
+        plugins,
+        ordered_plugins,
+        PluginRuntimeContext(
+            plugin_config=plugin_config,
+            addon_config=getattr(args, "addon_config", None) or {},
+        ),
+    )
 
 
 def _lifesim_natural_aging_setting(args) -> bool | None:
@@ -296,10 +309,17 @@ def _serve_credentials(args) -> ServeCredentials:
     openrouter_api_key = openrouter_server_url = None
 
     if args.llm or getattr(args, "character_chat", False):
-        openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
-        openrouter_server_url = os.environ.get("OPENROUTER_SERVER_URL")
-        host = os.environ.get("OLLAMA_HOST", OLLAMA_CLOUD_HOST)
-        api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
+        openrouter_api_key = (
+            getattr(args, "openrouter_api_key", None) or os.environ.get("OPENROUTER_API_KEY")
+        )
+        openrouter_server_url = (
+            getattr(args, "openrouter_server_url", None)
+            or os.environ.get("OPENROUTER_SERVER_URL")
+        )
+        host = getattr(args, "ollama_host", None) or os.environ.get(
+            "OLLAMA_HOST", OLLAMA_CLOUD_HOST
+        )
+        api_key = getattr(args, "ollama_api_key", None) or os.environ.get("OLLAMA_CLOUD_API_KEY")
         if args.llm_provider == "openrouter" and not openrouter_api_key:
             raise SystemExit("--llm-provider openrouter needs OPENROUTER_API_KEY")
         if args.llm_provider == "ollama" and not api_key:
@@ -317,7 +337,7 @@ def _serve_credentials(args) -> ServeCredentials:
         worldgen_api_key = openrouter_api_key if worldgen_provider == "openrouter" else api_key
 
     if args.discord:
-        discord_token = os.environ.get("DISCORD_TOKEN")
+        discord_token = getattr(args, "discord_token", None) or os.environ.get("DISCORD_TOKEN")
         if not discord_token:
             raise SystemExit("--discord needs DISCORD_TOKEN (set it in .env or the environment)")
 
@@ -346,10 +366,12 @@ async def _load_or_generate_world(
     ordered_plugins: list,
     credentials: ServeCredentials,
     models: ServeModels,
+    plugin_context: PluginRuntimeContext | None = None,
 ) -> tuple[WorldActor, WorldMeta]:
+    plugin_context = plugin_context or PluginRuntimeContext()
     if args.load:
         try:
-            actor, meta = load_world(args.load, plugins=plugins)
+            actor, meta = load_world(args.load, plugins=plugins, plugin_context=plugin_context)
         except PluginError as exc:
             logging.getLogger(__name__).error("plugin loading failed: %s", exc)
             raise SystemExit(2) from exc
@@ -360,7 +382,7 @@ async def _load_or_generate_world(
         return actor, meta
 
     actor = WorldActor()
-    apply_plugins(plugins, actor)
+    apply_plugins(plugins, actor, plugin_context)
     print("Loaded plugins:")
     for plugin in ordered_plugins:
         print(f"  - {plugin.id} ({plugin.name}) v{plugin.version}")
@@ -686,21 +708,102 @@ async def _run_api_runtime(
         raise SystemExit(str(exc)) from exc
 
 
-def _build_imagegen_service(actor, plugins):
+def _build_imagegen_service(actor, plugins, config_block=None):
     """Build the image generation service when ``COMFYUI_SERVER_URL`` is configured."""
     from .imagegen.config import ImageGenConfig
     from .imagegen.wiring import build_image_service
 
-    config = ImageGenConfig.from_env()
+    if config_block is None:
+        config = ImageGenConfig.from_env()
+    else:
+        config = ImageGenConfig(
+            server_url=config_block.server_url.rstrip("/"),
+            use_websocket=config_block.use_websocket,
+            poll_interval_seconds=config_block.poll_interval_seconds,
+            timeout_seconds=config_block.timeout_seconds,
+            backfill_interval_seconds=config_block.backfill_interval_seconds,
+            media_root=config_block.media_root,
+            public_base_url=config_block.public_base_url.rstrip("/"),
+            templates_path=config_block.templates_path,
+            workflows=config_block.workflows,
+            prompt_style=config_block.prompt_style,
+            enhancer=config_block.enhancer,
+            model=config_block.model,
+        )
     if config is None:
         return None
     print(f"Image generation enabled via ComfyUI at {config.server_url}.")
     return build_image_service(actor, config, plugins=plugins)
 
 
+_CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
+    "module": ("--module", "--import"),
+    "plugin": ("--plugin",),
+    "starter_pack": ("--starter-pack",),
+    "seed": ("--seed",),
+    "llm": ("--llm",),
+    "llm_provider": ("--llm-provider",),
+    "worldgen_provider": ("--worldgen-provider",),
+    "worldgen_model": ("--worldgen-model",),
+    "character_model": ("--character-model",),
+    "generator": ("--generator",),
+    "max_rooms": ("--max-rooms",),
+    "load": ("--load",),
+    "load_paused": ("--load-paused",),
+    "memory_backend": ("--memory-backend",),
+    "memory_path": ("--memory-path",),
+    "save": ("--save",),
+    "controller_definitions": ("--controller-definitions",),
+    "autosave_every": ("--autosave-every",),
+    "ticks": ("--ticks",),
+    "tick_seconds": ("--tick-seconds",),
+    "time_scale": ("--time-scale",),
+    "claim_timeout_seconds": ("--claim-timeout-seconds",),
+    "claim_timeout_controller": ("--claim-timeout-controller",),
+    "lifesim_natural_aging": ("--lifesim-natural-aging", "--no-lifesim-natural-aging"),
+    "api_host": ("--api-host",),
+    "api_port": ("--api-port",),
+    "discord": ("--discord",),
+    "discord_user_id": ("--discord-user-id",),
+    "discord_channel_id": ("--discord-channel-id",),
+    "discord_character": ("--discord-character",),
+    "discord_allow_child_claims": ("--discord-allow-child-claims",),
+    "discord_allowed_guild_id": ("--discord-allowed-guild-id",),
+    "discord_allowed_channel_id": ("--discord-allowed-channel-id",),
+    "discord_allowed_dm_user_id": ("--discord-allowed-dm-user-id",),
+    "mcp": ("--mcp",),
+    "character_chat": ("--character-chat",),
+    "admin_token": ("--admin-token",),
+    "player_client_id": ("--player-client-id",),
+    "admin_client_id": ("--admin-client-id",),
+}
+
+
+def _raw_flag_present(raw_argv: Sequence[str], flags: tuple[str, ...]) -> bool:
+    for arg in raw_argv:
+        for flag in flags:
+            if arg == flag or arg.startswith(f"{flag}="):
+                return True
+    return False
+
+
+def _apply_config_to_serve_args(args, raw_argv: Sequence[str]) -> None:
+    if not getattr(args, "config", None):
+        return
+    from .config import BunnylandConfig
+
+    config = BunnylandConfig.load(args.config)
+    values = config.to_serve_args()
+    for name, value in values.items():
+        flags = _CONFIG_ARG_FLAGS.get(name)
+        if flags is not None and _raw_flag_present(raw_argv, flags):
+            continue
+        setattr(args, name, value)
+
+
 async def _serve(args) -> None:
     _validate_serve_args(args)
-    plugins, ordered_plugins = _load_serve_plugins(args)
+    plugins, ordered_plugins, plugin_context = _load_serve_plugins(args)
     load_dotenv()
     telemetry.init_telemetry()
     lifesim_natural_aging = _lifesim_natural_aging_setting(args)
@@ -713,10 +816,11 @@ async def _serve(args) -> None:
         ordered_plugins,
         credentials,
         models,
+        plugin_context,
     )
     telemetry.register_world_gauges(actor)
     _configure_actor_backends(actor, args, lifesim_natural_aging)
-    imagegen = _build_imagegen_service(actor, plugins)
+    imagegen = _build_imagegen_service(actor, plugins, getattr(args, "imagegen_config", None))
     agent = _build_serve_agent(args, credentials, models)
     autosave = _make_autosave(actor, args, meta)
     builder = PromptBuilder(
@@ -765,10 +869,12 @@ async def _serve(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog="bunnyland")
     sub = parser.add_subparsers(dest="command")
 
     serve = sub.add_parser("serve", help="generate a world and run the game loop")
+    serve.add_argument("--config", default=None, help="read server settings from YAML")
     serve.add_argument(
         "--module",
         "--import",
@@ -1025,7 +1131,31 @@ def main(argv: list[str] | None = None) -> int:
     chat.add_argument("--server", default="http://127.0.0.1:8765")
     chat.add_argument("--character", default="", help="character id or exact name")
 
-    args = parser.parse_args(argv)
+    config_wizard = sub.add_parser("config-wizard", help="create or validate bunnyland.yml")
+    config_wizard.add_argument("--config", default="bunnyland.yml")
+    config_wizard.add_argument("--write-config", default=None)
+    config_wizard.add_argument("--write-web-config", default=None)
+    config_wizard.add_argument("--dry-run", action="store_true")
+    config_wizard.add_argument("--non-interactive", action="store_true")
+    config_wizard.add_argument(
+        "--cli", action="store_true", help="use prompt mode instead of Textual"
+    )
+    config_wizard.add_argument(
+        "--module",
+        "--import",
+        dest="module",
+        action="append",
+        default=[],
+        help="import a plugin module for the Textual checklist",
+    )
+    config_wizard.add_argument(
+        "--plugin",
+        action="append",
+        default=None,
+        help="preselect a plugin id in the Textual checklist",
+    )
+
+    args = parser.parse_args(raw_argv)
 
     if args.command == "chat":
         from .chat import main as chat_main
@@ -1053,9 +1183,31 @@ def main(argv: list[str] | None = None) -> int:
             tui_args.append("--no-icons")
         return tui_main(tui_args)
 
+    if args.command == "config-wizard":
+        from .config_wizard import main as config_wizard_main
+
+        wizard_args = ["--config", args.config]
+        if args.write_config:
+            wizard_args.extend(["--write-config", args.write_config])
+        if args.write_web_config:
+            wizard_args.extend(["--write-web-config", args.write_web_config])
+        if args.dry_run:
+            wizard_args.append("--dry-run")
+        if args.non_interactive:
+            wizard_args.append("--non-interactive")
+        if args.cli:
+            wizard_args.append("--cli")
+        for module in args.module:
+            wizard_args.extend(["--import", module])
+        for plugin in args.plugin or []:
+            wizard_args.extend(["--plugin", plugin])
+        return config_wizard_main(wizard_args)
+
     if args.command != "serve":
         parser.print_help()
         return 0
+
+    _apply_config_to_serve_args(args, raw_argv)
 
     if args.verbose:
         logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")

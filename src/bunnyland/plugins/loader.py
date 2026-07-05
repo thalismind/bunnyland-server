@@ -11,12 +11,14 @@ import importlib
 import inspect
 import logging
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from pydantic import TypeAdapter, ValidationError
 
 from ..core.actions import action_definition_for_command_type, inferred_action_definition
 from ..core.events import GeneratedEntityEvent
 from .contributions import collect_content_items
-from .model import Plugin
+from .model import Plugin, PluginRuntimeContext
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -130,6 +132,47 @@ def _instantiate(item):
     return item() if isinstance(item, type) else item
 
 
+def _call_runtime_factory(factory, actor: WorldActor, context: PluginRuntimeContext) -> None:
+    params = list(inspect.signature(factory).parameters.values())
+    positional = [
+        param
+        for param in params
+        if param.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    context_param = next((param for param in params if param.name == "context"), None)
+    if context_param is not None and context_param.kind is inspect.Parameter.KEYWORD_ONLY:
+        factory(actor, context=context)
+        return
+    if len(positional) >= 2 or context_param is not None:
+        factory(actor, context)
+        return
+    factory(actor)
+
+
+def validate_plugin_config(
+    plugins: Sequence[Plugin],
+    raw_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate YAML plugin config blocks against enabled plugin schemas."""
+    if not raw_config:
+        return {}
+
+    by_id = {plugin.id: plugin for plugin in plugins}
+    validated: dict[str, Any] = {}
+    for requested_id, value in raw_config.items():
+        plugin = _match_plugin_id(by_id, requested_id)
+        model = plugin.config.model
+        if model is None:
+            validated[plugin.id] = value
+            continue
+        try:
+            validated[plugin.id] = TypeAdapter(model).validate_python(value)
+        except ValidationError as exc:
+            raise PluginError(f"invalid config for plugin {plugin.id!r}: {exc}") from exc
+    return validated
+
+
 def _subscribe_worldgen_hook(actor: WorldActor, hook) -> None:
     """Register a generation hook contributed by plugin content."""
 
@@ -148,8 +191,13 @@ def _subscribe_worldgen_hook(actor: WorldActor, hook) -> None:
     raise PluginError(f"worldgen hook {hook!r} is not callable and has no subscribe()")
 
 
-def apply_plugin(plugin: Plugin, actor: WorldActor) -> None:
+def apply_plugin(
+    plugin: Plugin,
+    actor: WorldActor,
+    context: PluginRuntimeContext | None = None,
+) -> None:
     """Wire a single plugin's contributions into the actor."""
+    context = context or PluginRuntimeContext()
     for system in plugin.ecs.systems:
         actor.world.register_system(_instantiate(system))
     for observer in plugin.ecs.observers:
@@ -170,14 +218,19 @@ def apply_plugin(plugin: Plugin, actor: WorldActor) -> None:
     for hook in plugin.content.worldgen_hooks:
         _subscribe_worldgen_hook(actor, hook)
     for factory in plugin.runtime.all_factories():
-        factory(actor)
+        _call_runtime_factory(factory, actor, context)
 
 
-def apply_plugins(plugins: Sequence[Plugin], actor: WorldActor) -> list[Plugin]:
+def apply_plugins(
+    plugins: Sequence[Plugin],
+    actor: WorldActor,
+    context: PluginRuntimeContext | None = None,
+) -> list[Plugin]:
     """Resolve order and apply each plugin. Returns the applied order."""
     ordered = resolve_order(plugins)
+    context = context or PluginRuntimeContext()
     for plugin in ordered:
-        apply_plugin(plugin, actor)
+        apply_plugin(plugin, actor, context)
     return ordered
 
 
@@ -204,4 +257,5 @@ __all__ = [
     "load_modules",
     "resolve_order",
     "select",
+    "validate_plugin_config",
 ]

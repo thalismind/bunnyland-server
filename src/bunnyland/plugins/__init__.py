@@ -12,24 +12,29 @@ from .loader import (
     load_modules,
     resolve_order,
     select,
+    validate_plugin_config,
 )
 from .model import (
     CommandContribution,
+    ConfigContribution,
     ContentContribution,
     DependencyContribution,
     EcsContribution,
     Plugin,
+    PluginRuntimeContext,
     PolicyContribution,
     RuntimeContribution,
 )
 
 __all__ = [
     "CommandContribution",
+    "ConfigContribution",
     "ContentContribution",
     "DependencyContribution",
     "EcsContribution",
     "Plugin",
     "PluginError",
+    "PluginRuntimeContext",
     "PolicyContribution",
     "RuntimeContribution",
     "apply_plugin",
@@ -42,4 +47,5 @@ __all__ = [
     "load_modules",
     "resolve_order",
     "select",
+    "validate_plugin_config",
 ]

@@ -1,7 +1,8 @@
 # VPS Docker setup guide
 
 For a ready-to-run container deployment, keep the public edge in one frontend container and
-keep the Bunnyland API private on the Compose network:
+keep the Bunnyland API private on the Compose network. This is the flow used for the
+maintained public sandbox, but it still configures a regular Bunnyland server instance:
 
 - `server`: runs `bunnyland serve` on `0.0.0.0:8765`, with no host port published;
 - `frontend`: runs nginx, serves the static web checkout, and proxies `/api/` to
@@ -18,7 +19,7 @@ The server repo owns the Compose files:
 - `compose.user.yml.template` is rendered by setup into `compose.user.yml`, which publishes
   the frontend port, sets the domain, binds the data directory, configures TLS/homepage and
   favicon mounts, loads an existing world when requested, and injects LLM, Discord, and
-  optional MCP secrets for the full deployment;
+  optional MCP secrets for live services;
 - `deploy/nginx/frontend-tls.conf` and `deploy/nginx/frontend-tls-home.conf` are the TLS
   nginx templates mounted by the generated `compose.user.yml`.
 
@@ -51,7 +52,7 @@ this server:
    On Ubuntu, install Docker Engine from Docker's external apt repository by following
    Docker's [Install using the repository](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository)
    guide. Do not rely on the older Ubuntu `docker.io` package for this setup.
-5. **For the full deployment only:** an [Ollama Cloud](https://ollama.com) API key, an
+5. **For live services:** an [Ollama Cloud](https://ollama.com) API key, an
    OpenRouter API key, or both, depending on the LLM providers you choose. Discord
    deployments also need a Discord bot token; create and invite the bot with the
    [Discord bot guide](discord-bot.md#2-create-the-bot-in-discord).
@@ -61,15 +62,21 @@ editor. There is no recovery if you forget them — you simply rerun setup to re
 
 ## Setup wizard
 
-The fastest path is the setup wizard. It supports Debian and Ubuntu, detects an installed
-Docker, nerdctl, or Podman runtime with Compose support, prompts for the required values,
-lets you choose Ollama or OpenRouter for world generation and character controllers, writes
-`compose.user.yml`, and starts the checked-in Compose files. If existing Bunnyland
-containers are present, it asks before removing those containers. It does not delete bind
-mounts or named volumes, and the lower-level setup script backs up the selected world save
-before starting containers. The wizard also prompts for an optional non-default Ollama or
-OpenRouter endpoint, and for an optional community Discord invite URL to surface in the web
-clients (see `BUNNYLAND_DISCORD_URL` under Optional setup inputs).
+The fastest path is the Python config wizard. It writes a private `bunnyland.yml`, renders
+the deployment from that typed config, and follows the Ubuntu container setup flow. It
+prompts for the required values, lets you choose Ollama or OpenRouter for world generation
+and character controllers, and starts the checked-in Compose files. The Textual wizard
+uses sectioned screens for server settings, admin access, world setup, web options, live
+services, plugin selection, add-ons, and review. The plugin screen lists built-in plugins
+and already-loaded plugin modules with checkboxes inside a scrollable list and a search
+field for narrowing by id or name. To inspect plugins from a module that is not already
+loaded, pass it explicitly, for example `uv run bunnyland config-wizard --import
+examples.plugins.motd_claim --plugin motd_claim`. Importing a Python module executes its
+code; only import modules you trust, even if their package name looks related to
+Bunnyland. The wizard may list unloaded module-name suggestions that contain `bunnyland`,
+but it does not import them for you. The wizard also prompts for an optional non-default
+Ollama or OpenRouter endpoint, and for an optional community Discord invite URL to surface
+in the web clients.
 
 ```bash
 sudo apt-get update
@@ -81,13 +88,19 @@ if [ ! -d server ]; then
 fi
 cd server
 git pull --ff-only
-scripts/vps-docker-wizard
+uv run bunnyland config-wizard
+```
+
+For CI or repeatable validation, run the same path without prompts:
+
+```bash
+uv run bunnyland config-wizard --config bunnyland.yml --dry-run --non-interactive
 ```
 
 The rest of this section shows the same setup in copy-pasteable steps. Start with a
 container/routing smoke test if you need to isolate DNS, TLS, firewall, and admin auth.
-That smoke test is not a complete Bunnyland deployment. The full deployment requires both
-the LLM provider key and the Discord bot token.
+That smoke test is not a complete live server. Live services require both the LLM provider
+key and the Discord bot token.
 
 ## Offline smoke test
 

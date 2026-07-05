@@ -9,6 +9,7 @@ from argparse import Namespace
 
 import pytest
 from conftest import install_plugin_module
+from pydantic import BaseModel
 
 import bunnyland.cli as cli
 from bunnyland.claims import ClaimSecretRegistry
@@ -19,6 +20,7 @@ from bunnyland.cli import (
     main,
     select_plugins,
 )
+from bunnyland.config import BunnylandConfig, ImageGenConfigBlock, WorldConfig
 from bunnyland.core import (
     CharacterComponent,
     ControlledBy,
@@ -31,7 +33,17 @@ from bunnyland.core import (
 from bunnyland.discord.claim import discord_controlled_character, list_character_names
 from bunnyland.mechanics.lifesim import LifeStageComponent
 from bunnyland.persistence import WorldMeta, load_world, save_world
-from bunnyland.plugins import DependencyContribution, Plugin, PluginError, bunnyland_plugins
+from bunnyland.plugins import (
+    ConfigContribution,
+    DependencyContribution,
+    Plugin,
+    PluginError,
+    PluginRuntimeContext,
+    RuntimeContribution,
+    apply_plugins,
+    bunnyland_plugins,
+    validate_plugin_config,
+)
 from bunnyland.plugins.builtin import (
     BARBARIANSIM,
     COLONYSIM,
@@ -212,6 +224,180 @@ def test_cli_starter_pack_records_loaded_plugins(tmp_path):
     assert result == 0
     _actor, meta = load_world(path)
     assert meta.plugins == (CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM)
+
+
+def test_cli_serve_can_load_yaml_config(tmp_path):
+    path = tmp_path / "world.json"
+    config_path = tmp_path / "bunnyland.yml"
+    BunnylandConfig(
+        world=WorldConfig(generator="empty", ticks=1, save=str(path))
+    ).save(config_path)
+
+    result = main(["serve", "--config", str(config_path)])
+
+    assert result == 0
+    assert path.exists()
+
+
+def test_cli_flag_overrides_yaml_config(tmp_path):
+    path = tmp_path / "world.json"
+    config_path = tmp_path / "bunnyland.yml"
+    BunnylandConfig(
+        world=WorldConfig(generator="missing", ticks=1, save=str(path))
+    ).save(config_path)
+
+    result = main(["serve", "--config", str(config_path), "--generator", "empty"])
+
+    assert result == 0
+    assert path.exists()
+
+
+class ExamplePluginConfig(BaseModel):
+    greeting: str
+
+
+def test_plugin_config_contribution_validates_and_reaches_runtime_factory():
+    seen = {}
+
+    def factory(_actor, context: PluginRuntimeContext):
+        seen["config"] = context.config_for("example.plugin")
+
+    plugin = Plugin(
+        id="example.plugin",
+        name="Example",
+        config=ConfigContribution(model=ExamplePluginConfig),
+        runtime=RuntimeContribution(service_factories=(factory,)),
+    )
+
+    plugin_config = validate_plugin_config([plugin], {"example.plugin": {"greeting": "hello"}})
+    actor = WorldActor()
+    apply_plugins([plugin], actor, PluginRuntimeContext(plugin_config=plugin_config))
+
+    assert seen["config"] == ExamplePluginConfig(greeting="hello")
+
+
+def test_plugin_runtime_context_can_be_keyword_only():
+    seen = {}
+
+    def factory(_actor, *, context):
+        seen["context"] = context
+
+    plugin = Plugin(
+        id="example.keyword",
+        name="Example",
+        runtime=RuntimeContribution(service_factories=(factory,)),
+    )
+    context = PluginRuntimeContext(plugin_config={"example.keyword": {"enabled": True}})
+
+    apply_plugins([plugin], WorldActor(), context)
+
+    assert seen["context"] is context
+
+
+def test_plugin_config_without_model_is_passed_through():
+    plugin = Plugin(id="example.raw", name="Raw")
+
+    assert validate_plugin_config([plugin], {"example.raw": {"enabled": True}}) == {
+        "example.raw": {"enabled": True}
+    }
+
+
+def test_plugin_config_rejects_invalid_model_config():
+    plugin = Plugin(
+        id="example.plugin",
+        name="Example",
+        config=ConfigContribution(model=ExamplePluginConfig),
+    )
+
+    with pytest.raises(PluginError, match="invalid config"):
+        validate_plugin_config([plugin], {"example.plugin": {}})
+
+
+def test_plugin_config_rejects_unknown_plugin_id():
+    with pytest.raises(PluginError, match="unknown plugin id"):
+        validate_plugin_config([], {"ghost": {}})
+
+
+def test_cli_config_wizard_dispatches_to_config_wizard(monkeypatch):
+    import bunnyland.config_wizard as config_wizard
+
+    calls = {}
+
+    def fake_main(args):
+        calls["args"] = args
+        return 9
+
+    monkeypatch.setattr(config_wizard, "main", fake_main)
+
+    result = main(
+        [
+            "config-wizard",
+            "--config",
+            "in.yml",
+            "--write-config",
+            "out.yml",
+            "--write-web-config",
+            "web.json",
+            "--dry-run",
+            "--non-interactive",
+            "--cli",
+            "--import",
+            "module_foo",
+            "--plugin",
+            "bar",
+        ]
+    )
+
+    assert result == 9
+    assert calls["args"] == [
+        "--config",
+        "in.yml",
+        "--write-config",
+        "out.yml",
+        "--write-web-config",
+        "web.json",
+        "--dry-run",
+        "--non-interactive",
+        "--cli",
+        "--import",
+        "module_foo",
+        "--plugin",
+        "bar",
+    ]
+
+    result = main(["config-wizard"])
+
+    assert result == 9
+    assert calls["args"] == ["--config", "bunnyland.yml"]
+
+
+def test_cli_builds_imagegen_service_from_yaml_config(monkeypatch):
+    import bunnyland.imagegen.wiring as wiring
+
+    calls = {}
+
+    def fake_build_image_service(actor, config, *, plugins):
+        calls["actor"] = actor
+        calls["config"] = config
+        calls["plugins"] = plugins
+        return "service"
+
+    monkeypatch.setattr(wiring, "build_image_service", fake_build_image_service)
+    actor = WorldActor()
+
+    service = cli._build_imagegen_service(
+        actor,
+        [],
+        ImageGenConfigBlock(
+            server_url="http://comfy.local/",
+            public_base_url="https://cdn.example.com/",
+        ),
+    )
+
+    assert service == "service"
+    assert calls["actor"] is actor
+    assert calls["config"].server_url == "http://comfy.local"
+    assert calls["config"].public_base_url == "https://cdn.example.com"
 
 
 def test_cli_autosaves_during_game_loop(tmp_path, capsys):

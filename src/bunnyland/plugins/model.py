@@ -83,6 +83,12 @@ class PolicyContribution(BaseModel):
     config_schema: type | None = None
 
 
+class ConfigContribution(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    model: type | None = None
+
+
 class DependencyContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
@@ -105,14 +111,27 @@ class Plugin(BaseModel):
     runtime: RuntimeContribution = Field(default_factory=RuntimeContribution)
     content: ContentContribution = Field(default_factory=ContentContribution)
     policy: PolicyContribution = Field(default_factory=PolicyContribution)
+    config: ConfigContribution = Field(default_factory=ConfigContribution)
+
+
+class PluginRuntimeContext(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    plugin_config: dict[str, Any] = Field(default_factory=dict)
+    addon_config: dict[str, Any] = Field(default_factory=dict)
+
+    def config_for(self, plugin_id: str, default: Any = None) -> Any:
+        return self.plugin_config.get(plugin_id, default)
 
 
 __all__ = [
     "CommandContribution",
+    "ConfigContribution",
     "ContentContribution",
     "DependencyContribution",
     "EcsContribution",
     "Plugin",
+    "PluginRuntimeContext",
     "PolicyContribution",
     "RuntimeContribution",
 ]

@@ -40,6 +40,8 @@ if [[ -n "$player_user" && "$player_user" == "$player2_user" ]]; then
 fi
 
 world_save="${BUNNYLAND_WORLD_SAVE:-}"
+config_file="${BUNNYLAND_CONFIG_FILE:-}"
+web_config_file="${BUNNYLAND_WEB_CONFIG_FILE:-}"
 favicon_file="${BUNNYLAND_FAVICON_FILE:-}"
 home_domain="${BUNNYLAND_HOME_DOMAIN:-}"
 home_dir="${BUNNYLAND_HOME_DIR:-}"
@@ -59,6 +61,8 @@ admin_token="${BUNNYLAND_ADMIN_TOKEN:-}"
 discord_url="${BUNNYLAND_DISCORD_URL:-}"
 web_theme="${BUNNYLAND_WEB_THEME:-}"
 web_themes="${BUNNYLAND_WEB_THEMES:-[]}"
+web_replace_themes="${BUNNYLAND_WEB_REPLACE_THEMES:-false}"
+web_theme_css_files="${BUNNYLAND_WEB_THEME_CSS_FILES:-}"
 llm_provider="${BUNNYLAND_LLM_PROVIDER:-ollama}"
 worldgen_provider="${BUNNYLAND_WORLDGEN_PROVIDER:-$llm_provider}"
 enable_tls="${BUNNYLAND_TLS:-1}"
@@ -234,6 +238,10 @@ select_container_runtime() {
 
 container_world_file="/data/worlds/main.json"
 host_world_file="$BUNNYLAND_DATA_DIR/worlds/main.json"
+container_config_file="/data/bunnyland.yml"
+host_config_file="$BUNNYLAND_DATA_DIR/bunnyland.yml"
+host_web_config_file="$BUNNYLAND_DATA_DIR/web-config.json"
+host_theme_css_file="$BUNNYLAND_DATA_DIR/web-themes.css"
 load_existing_world=0
 compose_files=(-f compose.yml -f compose.user.yml)
 
@@ -255,6 +263,30 @@ run_compose_quiet() {
 
 sudo install -d -m 0755 "$BUNNYLAND_DATA_DIR"
 sudo install -d -m 0755 "$BUNNYLAND_DATA_DIR/worlds"
+
+if [[ -n "$config_file" ]]; then
+  [[ -f "$config_file" ]] || die "BUNNYLAND_CONFIG_FILE does not exist: $config_file"
+  sudo install -m 0600 "$config_file" "$host_config_file"
+fi
+
+if [[ -n "$web_config_file" ]]; then
+  [[ -f "$web_config_file" ]] || die "BUNNYLAND_WEB_CONFIG_FILE does not exist: $web_config_file"
+  sudo install -m 0644 "$web_config_file" "$host_web_config_file"
+fi
+
+if [[ -n "$web_theme_css_files" ]]; then
+  : | sudo tee "$host_theme_css_file" >/dev/null
+  while IFS= read -r theme_css_file; do
+    [[ -n "$theme_css_file" ]] || continue
+    [[ -f "$theme_css_file" ]] || die "web theme CSS file does not exist: $theme_css_file"
+    {
+      printf '\n/* %s */\n' "$theme_css_file"
+      cat "$theme_css_file"
+      printf '\n'
+    } | sudo tee -a "$host_theme_css_file" >/dev/null
+  done <<< "$web_theme_css_files"
+  sudo chmod 0644 "$host_theme_css_file"
+fi
 
 if [[ -n "$world_save" ]]; then
   [[ -f "$world_save" ]] || die "BUNNYLAND_WORLD_SAVE does not exist: $world_save"
@@ -321,7 +353,16 @@ render_server_service() {
   printf '      - -ec\n'
   printf '      - |\n'
   printf '        exec bunnyland serve \\\n'
-  if [[ "$enable_llm" == "1" ]]; then
+  if [[ -n "$config_file" ]]; then
+    printf '          --config %s \\\n' "$(shell_quote "$container_config_file")"
+    if [[ "$load_existing_world" == "1" ]]; then
+      printf '          --load %s \\\n' "$(shell_quote "$container_world_file")"
+    fi
+    printf '          --api-host 0.0.0.0 \\\n'
+    printf '          --api-port 8765 \\\n'
+    printf '          --ticks 0 \\\n'
+    printf '          --save %s\n' "$(shell_quote "$container_world_file")"
+  elif [[ "$enable_llm" == "1" ]]; then
     printf '          --llm \\\n'
     printf '          --llm-provider %s \\\n' "$(shell_quote "$llm_provider")"
     printf '          --worldgen-provider %s \\\n' "$(shell_quote "$worldgen_provider")"
@@ -331,34 +372,38 @@ render_server_service() {
     printf '          --llm-provider %s \\\n' "$(shell_quote "$llm_provider")"
     printf '          --character-model %s \\\n' "$(shell_quote "$character_model")"
   fi
-  if [[ "$enable_discord" == "1" ]]; then
+  if [[ -z "$config_file" && "$enable_discord" == "1" ]]; then
     printf '          --discord \\\n'
   fi
-  if [[ "$enable_mcp" == "1" ]]; then
+  if [[ -z "$config_file" && "$enable_mcp" == "1" ]]; then
     printf '          --mcp \\\n'
   fi
-  if [[ "$enable_character_chat" == "1" ]]; then
+  if [[ -z "$config_file" && "$enable_character_chat" == "1" ]]; then
     printf '          --character-chat \\\n'
   fi
-  if [[ -n "$starter_pack" ]]; then
+  if [[ -z "$config_file" && -n "$starter_pack" ]]; then
     printf '          --starter-pack %s \\\n' "$(shell_quote "$starter_pack")"
   fi
-  if [[ "$load_existing_world" == "1" ]]; then
+  if [[ -z "$config_file" && "$load_existing_world" == "1" ]]; then
     printf '          --load %s \\\n' "$(shell_quote "$container_world_file")"
-  else
+  elif [[ -z "$config_file" ]]; then
     printf '          --generator %s \\\n' "$(shell_quote "$generator")"
   fi
-  printf '          --memory-backend %s \\\n' "$(shell_quote "$memory_backend")"
-  if [[ -n "$memory_path" ]]; then
+  if [[ -z "$config_file" ]]; then
+    printf '          --memory-backend %s \\\n' "$(shell_quote "$memory_backend")"
+  fi
+  if [[ -z "$config_file" && -n "$memory_path" ]]; then
     printf '          --memory-path %s \\\n' "$(shell_quote "$memory_path")"
   fi
-  printf '          --ticks 0 \\\n'
-  printf '          --tick-seconds %s \\\n' "$(shell_quote "$tick_seconds")"
-  printf '          --time-scale %s \\\n' "$(shell_quote "$time_scale")"
-  printf '          --api-host 0.0.0.0 \\\n'
-  printf '          --api-port 8765 \\\n'
-  printf '          --save %s \\\n' "$(shell_quote "$container_world_file")"
-  printf '          --autosave-every %s\n' "$(shell_quote "$autosave_every")"
+  if [[ -z "$config_file" ]]; then
+    printf '          --ticks 0 \\\n'
+    printf '          --tick-seconds %s \\\n' "$(shell_quote "$tick_seconds")"
+    printf '          --time-scale %s \\\n' "$(shell_quote "$time_scale")"
+    printf '          --api-host 0.0.0.0 \\\n'
+    printf '          --api-port 8765 \\\n'
+    printf '          --save %s \\\n' "$(shell_quote "$container_world_file")"
+    printf '          --autosave-every %s\n' "$(shell_quote "$autosave_every")"
+  fi
   printf '    volumes:\n'
   printf '      - type: bind\n'
   printf '        source: %s\n' "$(yaml_quote "$BUNNYLAND_DATA_DIR")"
@@ -442,6 +487,8 @@ render_frontend_service() {
   printf '      BUNNYLAND_DISCORD_URL: %s\n' "$(yaml_quote "$discord_url")"
   # Default theme value rendered into config.json at frontend start.
   printf '      BUNNYLAND_WEB_THEME: %s\n' "$(yaml_quote "$web_theme")"
+  # When true, deployment config.json replaces built-in theme choices instead of appending.
+  printf '      BUNNYLAND_WEB_REPLACE_THEMES: %s\n' "$(yaml_quote "$web_replace_themes")"
   # JSON array of custom web theme options rendered into config.json at frontend start.
   printf '      BUNNYLAND_WEB_THEMES: %s\n' "$(yaml_quote "$web_themes")"
   if [[ "$enable_tls" == "1" ]]; then
@@ -462,6 +509,12 @@ render_frontend_service() {
   printf '        source: %s\n' "$(yaml_quote "./deploy/nginx/api-locations.inc")"
   printf '        target: /etc/nginx/templates/api-locations.inc.template\n'
   printf '        read_only: true\n'
+  if [[ -n "$web_config_file" ]]; then
+    printf '      - type: bind\n'
+    printf '        source: %s\n' "$(yaml_quote "$host_web_config_file")"
+    printf '        target: /usr/share/nginx/config/config.json.template\n'
+    printf '        read_only: true\n'
+  fi
   printf '      - type: bind\n'
   printf '        source: %s\n' "$(yaml_quote "$auth_dir")"
   printf '        target: /etc/nginx/bunnyland\n'
@@ -482,6 +535,12 @@ render_frontend_service() {
     printf '      - type: bind\n'
     printf '        source: %s\n' "$(yaml_quote "$favicon_file")"
     printf '        target: /usr/share/nginx/html/favicon.png\n'
+    printf '        read_only: true\n'
+  fi
+  if [[ -n "$web_theme_css_files" ]]; then
+    printf '      - type: bind\n'
+    printf '        source: %s\n' "$(yaml_quote "$host_theme_css_file")"
+    printf '        target: /usr/share/nginx/html/assets/bunnyland-themes.css\n'
     printf '        read_only: true\n'
   fi
   printf '    ports:\n'

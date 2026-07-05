@@ -32,7 +32,7 @@ from relics import Component, Edge
 from . import telemetry
 from .core.world_actor import WorldActor
 from .persistence_yaml import YAMLPersistenceDriver
-from .plugins import PluginError, apply_plugins
+from .plugins import PluginError, PluginRuntimeContext, apply_plugins
 from .plugins.contributions import collect_ecs_types
 
 if TYPE_CHECKING:
@@ -198,6 +198,7 @@ def load_world(
     path: str | Path,
     *,
     plugins: Sequence[Plugin] | None = None,
+    plugin_context: PluginRuntimeContext | None = None,
     format: PersistenceFormat | None = None,
 ) -> tuple[WorldActor, WorldMeta]:
     """Reload a world from ``path``. Applies ``plugins`` (handlers/systems) before loading."""
@@ -225,7 +226,7 @@ def load_world(
                 if missing:
                     names = ", ".join(repr(plugin_id) for plugin_id in missing)
                     raise PluginError(f"saved world depends on missing plugin(s): {names}")
-                apply_plugins(plugins, actor)
+                apply_plugins(plugins, actor, plugin_context)
 
             component_registry, edge_registry = type_registries(plugins)
             if yaml_driver is not None:

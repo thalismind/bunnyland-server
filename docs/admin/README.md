@@ -22,6 +22,9 @@ A **character** is a persistent entity. Who acts for it is a separate, swappable
   and is affected by the world, but takes no actions. A freshly generated "claimable"
   character starts suspended.
 
+For server setup, use the [config wizard](config-wizard.md) to generate the YAML and web
+config files consumed by the deployment scripts.
+
 Every control change bumps a **generation** counter on the edge. Commands carry the
 generation they were created under, so a command from a controller that has since been
 replaced is rejected as stale. This is what makes hand-off safe.

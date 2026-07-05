@@ -78,9 +78,10 @@ commands. World patching and generation tools require the MCP admin token.
 
 See [MCP server](mcp-server.md) for tool details.
 
-For a step-by-step Linux VPS deployment, use the containerized
-[VPS Docker setup guide](vps-admin-setup.md). The older host-level setup is kept in
-[host dev setup](host-dev-setup.md) for development and debugging.
+For a step-by-step Linux VPS deployment, including the flow used by the maintained public
+sandbox server, use the containerized [VPS Docker setup guide](vps-admin-setup.md). The
+older host-level setup is kept in [host dev setup](host-dev-setup.md) for development and
+debugging.
 
 ## Connecting an LLM
 
@@ -129,8 +130,15 @@ uv run bunnyland serve --llm --generator recursive \
 
 ## Options
 
+Server runtime settings can also be read from a private YAML file:
+
+```bash
+uv run bunnyland serve --config bunnyland.yml
+```
+
 | Flag             | Default        | Meaning                                                        |
 |------------------|----------------|----------------------------------------------------------------|
+| `--config`       | (none)         | Read server settings, credentials, plugins, and addon config from YAML. |
 | `--seed`         | `a quiet marsh`| World-generation seed (free text; flavours LLM generation).    |
 | `--generator`    | `oneshot`      | Which world generator to use. See [world creation](../developer/world-creation.md). |
 | `--max-rooms`    | `6`            | Room budget for graph-based generators (`recursive`).          |
