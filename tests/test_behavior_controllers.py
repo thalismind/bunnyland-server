@@ -261,6 +261,7 @@ def test_script_registry_round_trip_and_unknown():
     assert resolve_script("custom-test-script") == calls
     assert "custom-test-script" in script_names()
     assert "wait" in script_names()
+    assert "hungry-courier-intro" in script_names()
     with pytest.raises(ValueError, match="unknown script"):
         resolve_script("no-such-script")
 

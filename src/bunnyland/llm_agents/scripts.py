@@ -26,6 +26,22 @@ BUILTIN_SCRIPTS: dict[str, tuple[ToolCall, ...]] = {
     "greeter": (
         ToolCall("say", {"text": "Welcome.", "intent": "praise", "approach": "friendly"}),
     ),
+    # First-run demo intro. Saved Hungry Courier worlds persist only this script name, so
+    # it must exist before a saved world is reloaded.
+    "hungry-courier-intro": (
+        ToolCall(
+            "say",
+            {
+                "text": (
+                    "Welcome to Bunnyland. Moss the courier wants to deliver this "
+                    "letter, but wants do not bypass world rules. Find food, bring it "
+                    "back, and watch what happens."
+                ),
+                "intent": "inform",
+                "approach": "friendly",
+            },
+        ),
+    ),
 }
 
 _REGISTRY: dict[str, tuple[ToolCall, ...]] = {
