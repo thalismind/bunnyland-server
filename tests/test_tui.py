@@ -60,7 +60,8 @@ def _snapshot() -> dict:
         "world_epoch": 42,
         "entities": [
             {
-                "id": PARLOR, "components": {"RoomComponent": {"title": "Parlor"}},
+                "id": PARLOR,
+                "components": {"RoomComponent": {"title": "Parlor"}},
                 "relationships": {
                     "Contains": [
                         {"target_id": PLAYER, "edge": {}},
@@ -70,8 +71,11 @@ def _snapshot() -> dict:
                     "ExitTo": [{"target_id": HALL, "edge": {"direction": "north"}}],
                 },
             },
-            {"id": HALL, "components": {"RoomComponent": {"title": "Hallway"}},
-             "relationships": {}},
+            {
+                "id": HALL,
+                "components": {"RoomComponent": {"title": "Hallway"}},
+                "relationships": {},
+            },
             {
                 "id": PLAYER,
                 "components": {
@@ -79,7 +83,7 @@ def _snapshot() -> dict:
                     "IdentityComponent": {"name": "Pib", "kind": "character"},
                     "ActionPointsComponent": {"current": 5, "maximum": 5},
                     "FocusPointsComponent": {"current": 3, "maximum": 3},
-                    "SpriteLayer": {"layer": 30},
+                    "SpriteLayerComponent": {"layer": 30},
                 },
                 "relationships": {
                     "Holding": [{"target_id": KEY, "edge": {}}],
@@ -99,7 +103,7 @@ def _snapshot() -> dict:
                 "components": {
                     "PortableComponent": {},
                     "IdentityComponent": {"name": "an apple", "kind": "food"},
-                    "SpriteLayer": {"layer": 20},
+                    "SpriteLayerComponent": {"layer": 20},
                 },
                 "relationships": {},
             },
@@ -272,15 +276,17 @@ def test_event_narrator_renders_arrival_room_for_own_move():
 
     narrator = EventNarrator()
     plain = narrator.drain_events(
-        [_event(
-            "m1",
-            event_type="ActorMovedEvent",
-            visibility="system",
-            actor_id=PLAYER,
-            from_room_id=PARLOR,
-            to_room_id=HALL,
-            arrival_summary="Hallway\nHere: Pib.\nExits: south.",
-        )],
+        [
+            _event(
+                "m1",
+                event_type="ActorMovedEvent",
+                visibility="system",
+                actor_id=PLAYER,
+                from_room_id=PARLOR,
+                to_room_id=HALL,
+                arrival_summary="Hallway\nHere: Pib.\nExits: south.",
+            )
+        ],
         player_id=PLAYER,
         room_of=world.room_of,
         name_for=lambda entity_id: entity_name(world.get(entity_id)),
@@ -326,9 +332,9 @@ def test_event_narrator_uses_normal_style_for_activity_and_dim_for_system():
         ],
         player_id=PLAYER,
         room_of=world.room_of,
-        name_for=lambda entity_id: entity_name(world.get(entity_id))
-        if world.get(entity_id)
-        else None,
+        name_for=lambda entity_id: (
+            entity_name(world.get(entity_id)) if world.get(entity_id) else None
+        ),
     )
 
     assert [item.plain for item in shown] == [
@@ -410,8 +416,7 @@ def test_character_sheet_url_derives_frontend_from_api_base():
     assert frontend_base_for_api("https://play.test/prefix/api/") == "https://play.test/prefix"
     assert frontend_base_for_api("https://play.test/raw") == "https://play.test/raw"
     assert character_sheet_url("https://play.test/api", PLAYER) == (
-        "https://play.test/character-sheet.html?server=https%3A%2F%2Fplay.test%2Fapi"
-        "#character:1"
+        "https://play.test/character-sheet.html?server=https%3A%2F%2Fplay.test%2Fapi#character:1"
     )
 
 
@@ -639,7 +644,7 @@ def test_entity_presentation_fallbacks():
         "id": "custom:1",
         "components": {
             "IdentityComponent": {"name": "", "kind": "mystery"},
-            "EditorDisplayComponent": {"emoji": "?" },
+            "EditorDisplayComponent": {"emoji": "?"},
         },
         "relationships": {},
     }
@@ -733,25 +738,24 @@ async def test_local_backend_hosts_claims_and_submits(monkeypatch, tmp_path):
         controller_id, _generation = control
         # The claim attaches our reusable web controller.
         assert backend.actor._controller_kind(backend._controller.id) == "web"
-        assert (
-            backend._controller.get_component(WebControllerComponent).client_id
-            == "local-client"
-        )
+        assert backend._controller.get_component(WebControllerComponent).client_id == "local-client"
         claim = backend._controller.get_component(ClaimTimeoutComponent)
         assert claim.fallback_controller == "llm"
         assert claim.timeout_seconds == 900
 
         epoch_before = backend.actor.epoch
-        ok = await backend.submit({
-            "character_id": player,
-            "controller_id": controller_id,
-            "controller_generation": control[1],
-            "command_type": "wait",
-            "payload": {},
-            "cost": {"action": 0, "focus": 0},
-            "lane": "world",
-            "on_insufficient_points": "queue",
-        })
+        ok = await backend.submit(
+            {
+                "character_id": player,
+                "controller_id": controller_id,
+                "controller_generation": control[1],
+                "command_type": "wait",
+                "payload": {},
+                "cost": {"action": 0, "focus": 0},
+                "lane": "world",
+                "on_insufficient_points": "queue",
+            }
+        )
         assert ok
         await backend.actor.tick(60.0)  # process the queued command
         assert backend.actor.epoch > epoch_before  # the world advanced
@@ -853,8 +857,7 @@ async def test_local_backend_cancel_command_validates_ids_and_generation():
 
         # A live generation but an unknown command id resolves to no cancellation.
         assert (
-            await backend.cancel_command(player, "no-such-cmd", controller_id, generation)
-            is False
+            await backend.cancel_command(player, "no-such-cmd", controller_id, generation) is False
         )
         # A mismatched generation short-circuits before reaching the actor.
         assert (
@@ -915,15 +918,21 @@ async def test_local_backend_release_controller_and_claim_lifecycle():
 
         assert await backend.release_claim(player, released) is True
         assert await backend.release_claim(player, released) is True
-        assert await backend.release_claim(
-            player,
-            ControlClaim(controller_id="not-an-entity", generation=0),
-        ) is False
+        assert (
+            await backend.release_claim(
+                player,
+                ControlClaim(controller_id="not-an-entity", generation=0),
+            )
+            is False
+        )
         assert await backend.release_controller("not-an-entity", released) is None
-        assert await backend.release_controller(
-            player,
-            ControlClaim(controller_id="not-an-entity", generation=0),
-        ) is None
+        assert (
+            await backend.release_controller(
+                player,
+                ControlClaim(controller_id="not-an-entity", generation=0),
+            )
+            is None
+        )
     finally:
         await backend.close()
 
@@ -1411,17 +1420,19 @@ async def test_remote_backend_release_controller_and_claim_requests():
         fallback_controller="llm",
         timeout_seconds=900,
     )
-    backend._client = Client([
-        Response(
-            payload={
-                "controller_id": "controller:2",
-                "controller_generation": 4,
-                "claim_id": "claim-1",
-                "claim_secret": "secret-1",
-            }
-        ),
-        Response(payload={"ok": True}),
-    ])
+    backend._client = Client(
+        [
+            Response(
+                payload={
+                    "controller_id": "controller:2",
+                    "controller_generation": 4,
+                    "claim_id": "claim-1",
+                    "claim_secret": "secret-1",
+                }
+            ),
+            Response(payload={"ok": True}),
+        ]
+    )
 
     released = await backend.release_controller(PLAYER, control)
     assert released == ControlClaim("controller:2", 4, "claim-1", "secret-1", active=False)
@@ -1681,9 +1692,7 @@ async def test_backend_base_defaults_are_empty():
     assert await backend.fetch_character_list() == []
     assert await backend.fetch_character_projection(PLAYER) is None
     assert await backend.fetch_room_projection(PARLOR) is None
-    assert (
-        await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 0) is False
-    )
+    assert await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 0) is False
     assert await backend.recent_events() == []
 
 
@@ -1834,7 +1843,10 @@ async def test_action_form_dropdown_selects_and_cancels():
 
     candidates = World.parse(_snapshot()).target_candidates(PLAYER, "exits")
     field = FormField(
-        key="exit_id", label="exit", kind="entity", required=True,
+        key="exit_id",
+        label="exit",
+        kind="entity",
+        required=True,
         candidates=tuple(candidates),
     )
     app = BunnylandTUI(RecordingBackend(_snapshot()))
@@ -1859,8 +1871,10 @@ async def test_image_activity_surfaces_scene_images_and_failures():
     app = BunnylandTUI(RecordingBackend(_snapshot()))
 
     def completed(epoch, url):
-        return {"event_type": "ImageGenerationCompletedEvent",
-                "event": {"world_epoch": epoch, "purpose": "event", "url": url}}
+        return {
+            "event_type": "ImageGenerationCompletedEvent",
+            "event": {"world_epoch": epoch, "purpose": "event", "url": url},
+        }
 
     # Priming records the current image without emitting a line.
     assert app._image_activity([completed(5, "/media/events/a.png")], prime=True) == []
@@ -1892,10 +1906,12 @@ async def test_refresh_appends_scene_image_activity():
     async with app.run_test() as pilot:
         await _wait_for_tui_ready(app, pilot)
         await _select_player(app, pilot)
-        backend.events = [{
-            "event_type": "ImageGenerationCompletedEvent",
-            "event": {"world_epoch": 99, "purpose": "event", "url": "/media/events/z.png"},
-        }]
+        backend.events = [
+            {
+                "event_type": "ImageGenerationCompletedEvent",
+                "event": {"world_epoch": 99, "purpose": "event", "url": "/media/events/z.png"},
+            }
+        ]
         await app.refresh_world()
         await pilot.pause()
         assert any("scene image ready" in line.plain for line in app.activity_lines)
@@ -1987,9 +2003,7 @@ async def test_action_form_boolean_field_initial_value_and_cancel_button():
     # pre-filled; on mount the first field is focused and later fields are not reassigned.
     fields = [
         FormField(key="confirm", label="confirm", kind="boolean", required=False),
-        FormField(
-            key="note", label="note", kind="string", required=False, initial_value="hi"
-        ),
+        FormField(key="note", label="note", kind="string", required=False, initial_value="hi"),
     ]
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     results = []
@@ -2196,7 +2210,9 @@ async def test_app_uses_projected_actions_and_target_groups(monkeypatch):
             return {"target_id": APPLE}
 
         monkeypatch.setattr(app, "push_screen_wait", fake_form)
-        app._verb_selected(SimpleNamespace(option=SimpleNamespace(id=verbs.get_option_at_index(0).id)))
+        app._verb_selected(
+            SimpleNamespace(option=SimpleNamespace(id=verbs.get_option_at_index(0).id))
+        )
         await pilot.pause()
 
         command = app.backend.commands[-1]
@@ -2223,7 +2239,9 @@ async def test_app_preselects_selected_entity_in_action_form(monkeypatch):
 
         monkeypatch.setattr(app, "push_screen_wait", fake_form)
         verbs = app.query_one("#verbs", OptionList)
-        app._verb_selected(SimpleNamespace(option=SimpleNamespace(id=verbs.get_option_at_index(0).id)))
+        app._verb_selected(
+            SimpleNamespace(option=SimpleNamespace(id=verbs.get_option_at_index(0).id))
+        )
         await pilot.pause()
         assert app.backend.commands[-1]["payload"] == {"target_id": APPLE}
 
@@ -2436,7 +2454,7 @@ async def test_app_points_line_colors_values_and_dims_zero_pips():
         line = app.query_one("#points", Static).render()
 
     assert line.plain == "⚡ 0/5 AP   🔹 2/3 FP"
-    spans = {line.plain[span.start:span.end]: str(span.style) for span in line.spans}
+    spans = {line.plain[span.start : span.end]: str(span.style) for span in line.spans}
     assert "dim" in spans["⚡"]
     assert "255,135,0" in spans[" 0/5 AP"]
     assert "cyan" in spans["🔹"]
@@ -2464,23 +2482,27 @@ async def test_app_covers_defensive_selection_and_action_branches(monkeypatch):
         app._queued_selected(SimpleNamespace(option=SimpleNamespace(id="queued:99")))
         assert run_calls == []
 
-        fields = app._action_fields({
-            "arguments": [
-                {"title": "missing key", "required": True},
-                {"key": "optional", "required": False},
-                {"key": "target_id", "required": False, "target_group": "characters"},
-            ],
-        })
+        fields = app._action_fields(
+            {
+                "arguments": [
+                    {"title": "missing key", "required": True},
+                    {"key": "optional", "required": False},
+                    {"key": "target_id", "required": False, "target_group": "characters"},
+                ],
+            }
+        )
         assert [field.key for field in fields] == ["target_id"]
 
         app.action_views = []
         await app._move_through_exit("missing-exit")
 
-        app.action_views = [{
-            "command_type": "move",
-            "tool_name": "move",
-            "arguments": [{"key": "exit_id", "target_group": "elsewhere", "required": True}],
-        }]
+        app.action_views = [
+            {
+                "command_type": "move",
+                "tool_name": "move",
+                "arguments": [{"key": "exit_id", "target_group": "elsewhere", "required": True}],
+            }
+        ]
         await app._move_through_exit("missing-exit")
 
         app.player_id = ""
@@ -2640,7 +2662,9 @@ async def test_app_selecting_queued_command_cancels_it():
         await _select_player(app, pilot)
         queued = app.query_one("#queued", OptionList)
 
-        app._queued_selected(SimpleNamespace(option=SimpleNamespace(id=queued.get_option_at_index(0).id)))
+        app._queued_selected(
+            SimpleNamespace(option=SimpleNamespace(id=queued.get_option_at_index(0).id))
+        )
         await pilot.pause()
 
         assert backend.cancelled_commands == [(PLAYER, "cmd-1", "controller:1", 3)]
@@ -2725,7 +2749,9 @@ async def test_app_selecting_door_queues_move():
         await _select_player(app, pilot)
         doors = app.query_one("#doors", OptionList)
 
-        app._door_selected(SimpleNamespace(option=SimpleNamespace(id=doors.get_option_at_index(0).id)))
+        app._door_selected(
+            SimpleNamespace(option=SimpleNamespace(id=doors.get_option_at_index(0).id))
+        )
         await pilot.pause()
 
         assert app.backend.commands[-1]["command_type"] == "move"
@@ -2943,19 +2969,30 @@ async def test_app_deemphasizes_unavailable_verbs_but_keeps_them_selectable():
     projection = _client_view()
     projection["actions"] = [
         _projected_action(
-            command_type="move", tool_name="move", title="Move",
-            cost={"action": 1, "focus": 0}, arguments=[],
-            available=False, enough_action_points=False,
+            command_type="move",
+            tool_name="move",
+            title="Move",
+            cost={"action": 1, "focus": 0},
+            arguments=[],
+            available=False,
+            enough_action_points=False,
             unavailable_reason="not enough action points",
         ),
         _projected_action(
-            command_type="wait", tool_name="wait", title="Wait",
-            cost={"action": 0, "focus": 0}, arguments=[],
+            command_type="wait",
+            tool_name="wait",
+            title="Wait",
+            cost={"action": 0, "focus": 0},
+            arguments=[],
         ),
         _projected_action(
-            command_type="pick-lock", tool_name="pick_lock", title="Pick Lock",
-            cost={"action": 1, "focus": 0}, arguments=[],
-            available=False, meets_requirements=False,
+            command_type="pick-lock",
+            tool_name="pick_lock",
+            title="Pick Lock",
+            cost={"action": 1, "focus": 0},
+            arguments=[],
+            available=False,
+            meets_requirements=False,
             unavailable_reason="missing a required skill or item",
         ),
     ]
@@ -2986,8 +3023,11 @@ async def test_app_surfaces_submit_rejection_reason():
     projection = _client_view()
     projection["actions"] = [
         _projected_action(
-            command_type="wait", tool_name="wait", title="Wait",
-            cost={"action": 0, "focus": 0}, arguments=[],
+            command_type="wait",
+            tool_name="wait",
+            title="Wait",
+            cost={"action": 0, "focus": 0},
+            arguments=[],
         ),
     ]
 
@@ -2999,12 +3039,8 @@ async def test_app_surfaces_submit_rejection_reason():
     app = BunnylandTUI(RejectingBackend(_snapshot(), character_projection=projection))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
-        await app._do_action(
-            next(a for a in app.action_views if a["command_type"] == "wait")
-        )
-        assert any(
-            "character is asleep" in line.plain for line in app.activity_lines
-        )
+        await app._do_action(next(a for a in app.action_views if a["command_type"] == "wait"))
+        assert any("character is asleep" in line.plain for line in app.activity_lines)
 
 
 async def test_app_clears_missing_player_after_refresh():
@@ -3134,9 +3170,7 @@ async def test_app_submit_action_resumes_before_submit():
 async def test_app_empty_character_roster_prompts_for_playable_character():
     from textual.widgets import Button, Static
 
-    app = BunnylandTUI(
-        RecordingBackend(_snapshot(), character_projection=None, character_list=[])
-    )
+    app = BunnylandTUI(RecordingBackend(_snapshot(), character_projection=None, character_list=[]))
     async with app.run_test():
         assert app.query_one("#character-release", Button).disabled
         hint = str(app.query_one("#play-hint", Static).render())
@@ -3165,11 +3199,19 @@ def test_main_runs_remote_backend(monkeypatch):
     monkeypatch.setattr(tui_app, "RemoteBackend", BackendStub)
     monkeypatch.setattr(tui_app, "BunnylandTUI", AppStub)
 
-    assert tui_app.main([
-        "--server", "http://example.test",
-        "--claim-fallback", "llm",
-        "--claim-timeout-minutes", "10",
-    ]) == 0
+    assert (
+        tui_app.main(
+            [
+                "--server",
+                "http://example.test",
+                "--claim-fallback",
+                "llm",
+                "--claim-timeout-minutes",
+                "10",
+            ]
+        )
+        == 0
+    )
     assert runs == backends
     assert backends[0].server == "http://example.test"
     assert backends[0].fallback_controller == "llm"
@@ -3198,11 +3240,19 @@ def test_main_runs_local_backend(monkeypatch):
     monkeypatch.setattr(tui_app, "LocalBackend", BackendStub)
     monkeypatch.setattr(tui_app, "BunnylandTUI", AppStub)
 
-    assert tui_app.main([
-        "--seed", "test seed",
-        "--generator", "empty",
-        "--claim-fallback", "suspend",
-    ]) == 0
+    assert (
+        tui_app.main(
+            [
+                "--seed",
+                "test seed",
+                "--generator",
+                "empty",
+                "--claim-fallback",
+                "suspend",
+            ]
+        )
+        == 0
+    )
     assert backends[0].seed == "test seed"
     assert backends[0].generator == "empty"
     assert backends[0].fallback_controller == "suspend"

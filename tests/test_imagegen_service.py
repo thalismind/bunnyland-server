@@ -32,7 +32,7 @@ from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.subject import subject_for_entity, subject_for_event
 from bunnyland.mechanics.history import record_world_history
-from bunnyland.mechanics.toonsim import SpriteImage
+from bunnyland.mechanics.toonsim import SpriteImageComponent
 
 
 class _FakeClient:
@@ -240,9 +240,11 @@ async def test_start_force_regenerates(tmp_path):
 
     job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT, force=True)
     await service.wait_idle()
-    new_url = scenario.actor.world.get_entity(scenario.character).get_component(
-        PortraitImageComponent
-    ).url
+    new_url = (
+        scenario.actor.world.get_entity(scenario.character)
+        .get_component(PortraitImageComponent)
+        .url
+    )
     assert new_url != "/media/portraits/old.png"
     assert job.status in {"queued", "running", "succeeded"}
     await service.aclose()
@@ -271,12 +273,12 @@ async def test_start_duplicate_when_in_flight(tmp_path):
 async def test_start_sprite_sets_sprite_image(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(SpriteImage())  # toonsim backfilled, empty url
+    entity.add_component(SpriteImageComponent())  # toonsim backfilled, empty url
     service = _service(scenario.actor, tmp_path)
 
     await service.start(str(scenario.character), ImagePurpose.SPRITE)
     await service.wait_idle()
-    sprite = scenario.actor.world.get_entity(scenario.character).get_component(SpriteImage)
+    sprite = scenario.actor.world.get_entity(scenario.character).get_component(SpriteImageComponent)
     assert sprite.url.startswith("/media/sprites/")
     await service.aclose()
 
@@ -341,9 +343,7 @@ async def test_backfill_recovers_after_failure_clears(tmp_path):
 async def test_unknown_template_fails(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    job = await service.start(
-        str(scenario.character), ImagePurpose.PORTRAIT, template_name="ghost"
-    )
+    job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT, template_name="ghost")
     await service.wait_idle()
     assert job.status == "failed"
     assert "unknown workflow template" in job.error
@@ -392,9 +392,7 @@ async def test_enqueue_one_missing_picks_portrait(tmp_path):
     assert job is not None
     assert job.purpose is ImagePurpose.PORTRAIT
     await service.wait_idle()
-    assert scenario.actor.world.get_entity(scenario.character).has_component(
-        PortraitImageComponent
-    )
+    assert scenario.actor.world.get_entity(scenario.character).has_component(PortraitImageComponent)
     await service.aclose()
 
 
@@ -423,7 +421,7 @@ async def test_enqueue_one_missing_picks_sprite_when_portrait_done(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
     entity.add_component(PortraitImageComponent(url="/media/portraits/x.png"))
-    entity.add_component(SpriteImage())  # empty url -> needs a sprite
+    entity.add_component(SpriteImageComponent())  # empty url -> needs a sprite
     service = _service(scenario.actor, tmp_path)
     job = await service.enqueue_one_missing()
     assert job is not None
@@ -487,7 +485,7 @@ def test_existing_image_url_all_purposes():
     assert _existing_image_url(entity, ImagePurpose.SPRITE) == ""
     assert _existing_image_url(entity, ImagePurpose.EVENT) == ""
     assert _existing_image_url(entity, ImagePurpose.PORTRAIT) == ""
-    entity.add_component(SpriteImage(url="/media/sprites/s.png"))
+    entity.add_component(SpriteImageComponent(url="/media/sprites/s.png"))
     entity.add_component(EventImageComponent(url="/media/events/e.png"))
     entity.add_component(PortraitImageComponent(url="/media/portraits/p.png"))
     assert _existing_image_url(entity, ImagePurpose.SPRITE) == "/media/sprites/s.png"
@@ -507,7 +505,7 @@ def test_clear_request_both_branches():
 def test_first_missing_sprite_skips_filled_sprites():
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(SpriteImage(url="/media/sprites/done.png"))
+    entity.add_component(SpriteImageComponent(url="/media/sprites/done.png"))
     # Only character already has a sprite url, so nothing is missing.
     assert _first_missing_sprite(scenario.actor, set()) is None
 
@@ -522,5 +520,5 @@ def test_first_missing_portrait_skips_failed_set():
 def test_first_missing_sprite_skips_failed_set():
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(SpriteImage())  # empty url -> needs a sprite
+    entity.add_component(SpriteImageComponent())  # empty url -> needs a sprite
     assert _first_missing_sprite(scenario.actor, {str(scenario.character)}) is None

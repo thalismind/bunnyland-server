@@ -37,12 +37,12 @@ from bunnyland.mechanics.lifesim import SkillSetComponent
 
 
 @dataclass(frozen=True)
-class _Spellbook(Component):
+class _SpellbookComponent(Component):
     pass
 
 
 @dataclass(frozen=True)
-class _Anvil(Component):
+class _AnvilComponent(Component):
     pass
 
 
@@ -144,7 +144,7 @@ def test_required_target_tracks_candidate_lists():
 def test_requirement_met_via_character_component():
     scenario = build_scenario()
     character = _character(scenario)
-    requirement = ActionRequirement(character_components=("_Spellbook",))
+    requirement = ActionRequirement(character_components=("_SpellbookComponent",))
 
     unmet = evaluate_availability(
         scenario.actor, character, _definition(requirement=requirement), target_groups={}
@@ -152,7 +152,7 @@ def test_requirement_met_via_character_component():
     assert unmet.meets_requirements is False
     assert unmet.reason == "missing a required skill or item"
 
-    character.add_component(_Spellbook())
+    character.add_component(_SpellbookComponent())
     met = evaluate_availability(
         scenario.actor, character, _definition(requirement=requirement), target_groups={}
     )
@@ -175,11 +175,11 @@ def test_requirement_met_via_character_edge():
 def test_requirement_met_via_reachable_component():
     scenario = build_scenario()
     character = _character(scenario)
-    requirement = ActionRequirement(reachable_components=("_Anvil",))
+    requirement = ActionRequirement(reachable_components=("_AnvilComponent",))
 
     assert meets_requirement(scenario.actor.world, character, requirement) is False
 
-    anvil = spawn_entity(scenario.actor.world, [_Anvil()])
+    anvil = spawn_entity(scenario.actor.world, [_AnvilComponent()])
     room = scenario.actor.world.get_entity(scenario.room_a)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), anvil.id)
     assert meets_requirement(scenario.actor.world, character, requirement) is True
@@ -191,13 +191,13 @@ def test_reachable_requirement_false_when_no_entity_has_component():
     # check falls through to ``return False``.
     scenario = build_scenario()
     character = _character(scenario)
-    requirement = ActionRequirement(reachable_components=("_Anvil",))
+    requirement = ActionRequirement(reachable_components=("_AnvilComponent",))
 
-    # Spawn an _Anvil somewhere unreachable so the component type is registered
+    # Spawn an _AnvilComponent somewhere unreachable so the component type is registered
     # (otherwise the check short-circuits before scanning reachable entities).
-    spawn_entity(scenario.actor.world, [_Anvil()])
+    spawn_entity(scenario.actor.world, [_AnvilComponent()])
     # A reachable bystander that does NOT carry the required component.
-    bystander = spawn_entity(scenario.actor.world, [_Spellbook()])
+    bystander = spawn_entity(scenario.actor.world, [_SpellbookComponent()])
     room = scenario.actor.world.get_entity(scenario.room_a)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bystander.id)
 

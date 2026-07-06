@@ -74,30 +74,32 @@ def _queued_command_cost(command: dict) -> str:
 def _queued_command_detail(command: dict) -> str:
     payload = command.get("payload") or {}
     return ", ".join(
-        f"{key}: {value}"
-        for key, value in payload.items()
-        if value is not None and value != ""
+        f"{key}: {value}" for key, value in payload.items() if value is not None and value != ""
     )
 
 
 def _legacy_action_view(verb: Verb) -> dict:
     arguments = []
     if verb.target_key and verb.target_kind:
-        arguments.append({
-            "key": verb.target_key,
-            "title": verb.target_key.removesuffix("_id").replace("_", " "),
-            "kind": "entity",
-            "required": True,
-            "target_group": verb.target_kind,
-        })
+        arguments.append(
+            {
+                "key": verb.target_key,
+                "title": verb.target_key.removesuffix("_id").replace("_", " "),
+                "kind": "entity",
+                "required": True,
+                "target_group": verb.target_kind,
+            }
+        )
     if verb.prompt:
-        arguments.append({
-            "key": verb.prompt,
-            "title": verb.prompt.replace("_", " "),
-            "kind": "string",
-            "required": True,
-            "target_group": None,
-        })
+        arguments.append(
+            {
+                "key": verb.prompt,
+                "title": verb.prompt.replace("_", " "),
+                "kind": "string",
+                "required": True,
+                "target_group": None,
+            }
+        )
     return {
         "command_type": verb.cmd,
         "tool_name": verb.tool,
@@ -111,10 +113,7 @@ def _legacy_action_view(verb: Verb) -> dict:
 
 def _action_title(action: dict) -> str:
     return str(
-        action.get("title")
-        or action.get("tool_name")
-        or action.get("command_type")
-        or "Action"
+        action.get("title") or action.get("tool_name") or action.get("command_type") or "Action"
     )
 
 
@@ -602,11 +601,16 @@ class BunnylandTUI(App[None]):
         members.clear_options()
         if room:
             shown = [
-                m for m in self.world.room_members(self.view_room_id)
+                m
+                for m in self.world.room_members(self.view_room_id)
                 if not has(m, "DoorComponent") and not has(m, "RoomComponent")
             ]
-            shown.sort(key=lambda m: (m["components"].get("SpriteLayer", {}).get("layer", 20),
-                                      entity_name(m).lower()))
+            shown.sort(
+                key=lambda m: (
+                    m["components"].get("SpriteLayerComponent", {}).get("layer", 20),
+                    entity_name(m).lower(),
+                )
+            )
             for m in shown:
                 me = "  ← you" if m["id"] == self.player_id else ""
                 members.add_option(Option(f"{entity_icon(m)} {entity_name(m)}{me}", id=m["id"]))
@@ -632,7 +636,8 @@ class BunnylandTUI(App[None]):
         items = self.world.target_groups.get("inventory", []) if self.player_id else []
         if not items:
             hint = (
-                "Nothing carried." if self.player_id
+                "Nothing carried."
+                if self.player_id
                 else "Select a character to see what they carry."
             )
             inventory.add_option(Option(hint, disabled=True))
@@ -682,10 +687,13 @@ class BunnylandTUI(App[None]):
                 and pts["fp"] >= cost_view["focus"]
             )
             available = _action_available(action, fallback=bool(affordable))
-            cost = (" · ".join(
-                [f"{cost_view['action']} AP"] * bool(cost_view["action"])
-                + [f"{cost_view['focus']} FP"] * bool(cost_view["focus"])
-            ) or "free")
+            cost = (
+                " · ".join(
+                    [f"{cost_view['action']} AP"] * bool(cost_view["action"])
+                    + [f"{cost_view['focus']} FP"] * bool(cost_view["focus"])
+                )
+                or "free"
+            )
             tgt = " ⌖" if any(arg.get("target_group") for arg in _action_arguments(action)) else ""
             option_id = _action_tool(action)
             if option_id in action_options:
@@ -712,11 +720,7 @@ class BunnylandTUI(App[None]):
             verbs = self._main_query_one("#verbs", OptionList)
             highlighted_id = None
             highlighted = verbs.highlighted
-            if (
-                highlighted is not None
-                and highlighted >= 0
-                and highlighted < verbs.option_count
-            ):
+            if highlighted is not None and highlighted >= 0 and highlighted < verbs.option_count:
                 highlighted_id = verbs.get_option_at_index(highlighted).id
             verbs.clear_options()
             for option_id, label, _plain in verb_entries:
@@ -760,7 +764,8 @@ class BunnylandTUI(App[None]):
         query = self.action_filter.strip().lower()
         if query:
             actions = [
-                action for action in actions
+                action
+                for action in actions
                 if query in _action_title(action).lower()
                 or query in _action_tool(action).lower()
                 or query in str(action.get("command_type", "")).lower()
@@ -1039,7 +1044,8 @@ class BunnylandTUI(App[None]):
     async def _move_through_exit(self, exit_id: str) -> None:
         action = next(
             (
-                action for action in self._available_actions()
+                action
+                for action in self._available_actions()
                 if any(arg.get("target_group") == "exits" for arg in _action_arguments(action))
             ),
             None,
@@ -1077,17 +1083,19 @@ class BunnylandTUI(App[None]):
                 self._append_activity(Text("Could not resume this character.", style="dark_orange"))
                 return
         cost = _action_cost(action)
-        result = await self.backend.submit({
-            "character_id": self.player_id,
-            "controller_id": self.control.controller_id,
-            "controller_generation": self.control.generation,
-            "claim_id": self.control.claim_id,
-            "command_type": _action_command_type(action),
-            "payload": payload,
-            "cost": cost,
-            "lane": _action_lane(action),
-            "on_insufficient_points": "queue",
-        })
+        result = await self.backend.submit(
+            {
+                "character_id": self.player_id,
+                "controller_id": self.control.controller_id,
+                "controller_generation": self.control.generation,
+                "claim_id": self.control.claim_id,
+                "command_type": _action_command_type(action),
+                "payload": payload,
+                "cost": cost,
+                "lane": _action_lane(action),
+                "on_insufficient_points": "queue",
+            }
+        )
         if not result.accepted:
             reason = result.reason or "command rejected"
             self._append_activity(
@@ -1114,9 +1122,7 @@ class BunnylandTUI(App[None]):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bunnyland-tui", description=__doc__)
-    parser.add_argument(
-        "--server", help="connect to a running server (e.g. http://localhost:8765)"
-    )
+    parser.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
     parser.add_argument("--seed", default="a quiet marsh", help="seed for a locally hosted world")
     parser.add_argument(
         "--generator", default="apartment-demo", help="generator for a locally hosted world"
@@ -1159,7 +1165,8 @@ def main(argv: list[str] | None = None) -> int:
             args.server,
             fallback_controller=args.claim_fallback,
             timeout_seconds=timeout_seconds,
-        ) if args.server
+        )
+        if args.server
         else LocalBackend(
             seed=args.seed,
             generator=args.generator,

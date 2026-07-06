@@ -63,7 +63,7 @@ from ..llm_agents import (
 )
 from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
-from ..mechanics.toonsim import SpriteImage
+from ..mechanics.toonsim import SpriteImageComponent
 from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
@@ -281,9 +281,7 @@ def create_app(
     generation_job = None
     memory_store = memory_store or getattr(actor, "memory_store", None)
     media_store = (
-        getattr(imagegen, "media", None)
-        if imagegen is not None
-        else None
+        getattr(imagegen, "media", None) if imagegen is not None else None
     ) or MediaStore(os.environ.get("BUNNYLAND_MEDIA_DIR", "media").strip() or "media")
     # Editor-loaded scripted/behavioral controller definitions: register any already on disk
     # so a restarted server keeps the scripts and behavior trees the editor previously saved.
@@ -304,15 +302,11 @@ def create_app(
         try:
             return ImagePurpose(value)
         except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail=f"invalid image purpose {value!r}"
-            ) from exc
+            raise HTTPException(status_code=400, detail=f"invalid image purpose {value!r}") from exc
 
     def _require_allowed_player_client_id(client_id: str | None) -> str | None:
         try:
-            return require_allowed_client_id(
-                client_id, allowed_player_client_ids, "player"
-            )
+            return require_allowed_client_id(client_id, allowed_player_client_ids, "player")
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -401,9 +395,7 @@ def create_app(
             status = 400 if detail == "entity is not a room" else 404
             raise HTTPException(status_code=status, detail=detail) from exc
 
-    def _require_projection_admin(
-        supplied: str | None, admin_client_id: str | None = None
-    ) -> None:
+    def _require_projection_admin(supplied: str | None, admin_client_id: str | None = None) -> None:
         expected = (admin_token or os.environ.get(ADMIN_TOKEN_ENV) or "").strip()
         if not expected:
             raise HTTPException(status_code=403, detail=f"{ADMIN_TOKEN_ENV} is not configured")
@@ -590,9 +582,7 @@ def create_app(
 
     def _fallback_controller(fallback: str, timeout: ClaimTimeoutComponent):
         selected = (
-            fallback.strip()
-            if fallback and fallback.strip()
-            else timeout.fallback_controller
+            fallback.strip() if fallback and fallback.strip() else timeout.fallback_controller
         )
         existing = _existing_controller(selected)
         if existing is not None:
@@ -739,9 +729,7 @@ def create_app(
         now = time.time()
         tick_seconds = getattr(loop, "tick_seconds", None) if loop is not None else None
         time_scale = getattr(loop, "time_scale", None) if loop is not None else None
-        next_tick_at_unix = (
-            getattr(loop, "next_tick_at_unix", None) if loop is not None else None
-        )
+        next_tick_at_unix = getattr(loop, "next_tick_at_unix", None) if loop is not None else None
         if (
             next_tick_at_unix is None
             and tick_seconds is not None
@@ -801,8 +789,7 @@ def create_app(
     def _memory_documents_response(collection: str) -> MemoryDocumentsResponse:
         store = _require_memory_store()
         documents = [
-            _memory_document_view(document)
-            for document in store.list_documents(collection)
+            _memory_document_view(document) for document in store.list_documents(collection)
         ]
         return MemoryDocumentsResponse(
             world_epoch=actor.epoch,
@@ -868,9 +855,11 @@ def create_app(
         )
         parsed_character = parse_entity_id(character_id)
         parsed_controller = parse_entity_id(controller_id)
-        if parsed_controller is None or actor.current_generation(
-            parsed_character, parsed_controller
-        ) != controller_generation:
+        if (
+            parsed_controller is None
+            or actor.current_generation(parsed_character, parsed_controller)
+            != controller_generation
+        ):
             raise HTTPException(status_code=409, detail="stale controller generation")
         command = await actor.cancel_command(character_id, command_id)
         if command is None:
@@ -966,9 +955,7 @@ def create_app(
                 active = current_controller(actor, character)
                 active_controller = active[0] if active is not None else None
                 active_claim = (
-                    controller_claim(active_controller)
-                    if active_controller is not None
-                    else None
+                    controller_claim(active_controller) if active_controller is not None else None
                 )
                 claim_id = None
                 claim_secret = _claim_secret(request)
@@ -995,9 +982,8 @@ def create_app(
                 controller = _web_controller_for_client(client_id)
                 if controller is not None:
                     existing_claim = controller_claim(controller)
-                    if (
-                        existing_claim is not None
-                        and existing_claim.character_id != str(character_id)
+                    if existing_claim is not None and existing_claim.character_id != str(
+                        character_id
                     ):
                         controller = None
                 if controller is None:
@@ -1675,7 +1661,7 @@ def create_app(
                     ),
                 )
             else:
-                replace_component(character, SpriteImage(url=url))
+                replace_component(character, SpriteImageComponent(url=url))
 
         return CharacterImageUploadResponse(
             world_epoch=actor.epoch,

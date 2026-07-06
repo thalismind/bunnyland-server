@@ -17,7 +17,7 @@ from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
 from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
-from bunnyland.mechanics.toonsim import SpriteImage
+from bunnyland.mechanics.toonsim import SpriteImageComponent
 
 
 @pytest.fixture(autouse=True)
@@ -128,12 +128,12 @@ async def test_portrait_alpha_writes_both_variants(tmp_path):
 async def test_sprite_alpha_is_the_sprite(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(SpriteImage())
+    entity.add_component(SpriteImageComponent())
     service = _service(scenario.actor, tmp_path, alpha=_fake_alpha)
     # Sprites get alpha automatically (no explicit alpha=True needed).
     await service.start(str(scenario.character), ImagePurpose.SPRITE)
     await service.wait_idle()
-    sprite = scenario.actor.world.get_entity(scenario.character).get_component(SpriteImage)
+    sprite = scenario.actor.world.get_entity(scenario.character).get_component(SpriteImageComponent)
     name = sprite.url.split("/")[-1]
     assert MediaStore(tmp_path).read(SEGMENT_SPRITES, name) == b"ALPHA:RAW"
     await service.aclose()

@@ -94,11 +94,11 @@ from ..mechanics.persona import (
 from ..mechanics.toonsim import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
-    SpriteBounds,
-    SpriteImage,
-    SpriteLayer,
-    SpritePosition,
-    SpriteScale,
+    SpriteBoundsComponent,
+    SpriteImageComponent,
+    SpriteLayerComponent,
+    SpritePositionComponent,
+    SpriteScaleComponent,
     ToonRoomComponent,
     default_bounds_for,
     default_layer_for,
@@ -151,11 +151,7 @@ def jsonable(value: Any) -> Any:
         fields = getattr(value, "__pydantic_fields__", None) or getattr(
             value, "__dataclass_fields__", {}
         )
-        return {
-            name: jsonable(getattr(value, name))
-            for name in fields
-            if not name.startswith("_")
-        }
+        return {name: jsonable(getattr(value, name)) for name in fields if not name.startswith("_")}
     if isinstance(value, dict):
         return {str(key): jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -172,15 +168,12 @@ def serialize_entity(actor: WorldActor, entity) -> dict[str, Any]:
 
     exported = actor.world.export_entity(entity.id)
     identity = (
-        entity.get_component(IdentityComponent)
-        if entity.has_component(IdentityComponent)
-        else None
+        entity.get_component(IdentityComponent) if entity.has_component(IdentityComponent) else None
     )
     relationships: dict[str, list[dict[str, Any]]] = {}
     for edge_name, edges in exported.get("relationships", {}).items():
         relationships[edge_name] = [
-            {"target_id": str(edge["target"]), "edge": jsonable(edge["edge"])}
-            for edge in edges
+            {"target_id": str(edge["target"]), "edge": jsonable(edge["edge"])} for edge in edges
         ]
     return {
         "id": str(entity.id),
@@ -225,10 +218,7 @@ def _character_entity(actor: WorldActor, character_id: str):
 def serialize_queued_commands(actor: WorldActor) -> list[dict[str, Any]]:
     """Return volatile queued commands grouped by character and lane."""
 
-    return [
-        serialize_queued_command(command)
-        for command in actor.pending_submissions()
-    ] + [
+    return [serialize_queued_command(command) for command in actor.pending_submissions()] + [
         serialize_queued_command(command)
         for character_id in sorted(actor.queues.characters_with_pending())
         for lane in Lane
@@ -335,18 +325,22 @@ def _perceived_entity_view(entity: PerceivedEntity) -> ClientEntityView:
 
 
 def _sprite_position_view(entity) -> ClientSpritePositionView:
-    if entity.has_component(SpritePosition):
-        position = entity.get_component(SpritePosition)
+    if entity.has_component(SpritePositionComponent):
+        position = entity.get_component(SpritePositionComponent)
         return ClientSpritePositionView(x=position.x, y=position.y)
     return ClientSpritePositionView(x=ROOM_WIDTH / 2, y=ROOM_HEIGHT / 2)
 
 
 def _sprite_bounds_view(entity) -> ClientSpriteBoundsView:
-    bounds = entity.get_component(SpriteBounds) if entity.has_component(SpriteBounds) else None
+    bounds = (
+        entity.get_component(SpriteBoundsComponent)
+        if entity.has_component(SpriteBoundsComponent)
+        else None
+    )
     if bounds is None:
         bounds = default_bounds_for(entity)
     if bounds is None:
-        bounds = SpriteBounds()
+        bounds = SpriteBoundsComponent()
     return ClientSpriteBoundsView(
         width=bounds.width,
         height=bounds.height,
@@ -355,9 +349,21 @@ def _sprite_bounds_view(entity) -> ClientSpriteBoundsView:
 
 
 def _sprite_view(entity) -> ClientSpriteView:
-    image = entity.get_component(SpriteImage) if entity.has_component(SpriteImage) else None
-    layer = entity.get_component(SpriteLayer).layer if entity.has_component(SpriteLayer) else None
-    scale = entity.get_component(SpriteScale).scale if entity.has_component(SpriteScale) else 1.0
+    image = (
+        entity.get_component(SpriteImageComponent)
+        if entity.has_component(SpriteImageComponent)
+        else None
+    )
+    layer = (
+        entity.get_component(SpriteLayerComponent).layer
+        if entity.has_component(SpriteLayerComponent)
+        else None
+    )
+    scale = (
+        entity.get_component(SpriteScaleComponent).scale
+        if entity.has_component(SpriteScaleComponent)
+        else 1.0
+    )
     display = (
         entity.get_component(EditorDisplayComponent)
         if entity.has_component(EditorDisplayComponent)
@@ -614,8 +620,7 @@ def _current_goal(character) -> str:
 
 def _first_run_checklist() -> list[ClientChecklistItemView]:
     return [
-        ClientChecklistItemView(id=item_id, text=text)
-        for item_id, text in _FIRST_RUN_CHECKLIST
+        ClientChecklistItemView(id=item_id, text=text) for item_id, text in _FIRST_RUN_CHECKLIST
     ]
 
 
@@ -699,10 +704,7 @@ def _target_groups(
     characters = [target for target in visible if target.kind == "character"]
     reachable = list({**visible_by_id, **carried_by_id}.values())
     return {
-        "exits": [
-            ClientTargetView(id=exit.id, label=exit.label, kind="exit")
-            for exit in exits
-        ],
+        "exits": [ClientTargetView(id=exit.id, label=exit.label, kind="exit") for exit in exits],
         "roomItems": sorted(room_items, key=lambda target: target.label.lower()),
         "inventory": inventory,
         "characters": sorted(characters, key=lambda target: target.label.lower()),
@@ -1117,9 +1119,7 @@ def serialize_action_search(
         definitions = smart_action_search(definitions, query=query.strip())
     elif needle:
         definitions = [
-            definition
-            for definition in definitions
-            if _action_matches(definition, needle, mode)
+            definition for definition in definitions if _action_matches(definition, needle, mode)
         ]
     total_available = len(definitions)
     if limit and limit > 0:

@@ -107,11 +107,11 @@ from bunnyland.mechanics.persona import (
 from bunnyland.mechanics.social import SocialBond
 from bunnyland.mechanics.storyteller import IncidentComponent
 from bunnyland.mechanics.toonsim import (
-    SpriteBounds,
-    SpriteImage,
-    SpriteLayer,
-    SpritePosition,
-    SpriteScale,
+    SpriteBoundsComponent,
+    SpriteImageComponent,
+    SpriteLayerComponent,
+    SpritePositionComponent,
+    SpriteScaleComponent,
     ToonRoomComponent,
 )
 from bunnyland.memory import InMemoryStore, install_memory
@@ -275,6 +275,7 @@ async def _websocket_outputs(app, path: str, *, headers: dict[str, str] | None =
     await communicator.wait(timeout=1)
     return outputs
 
+
 #: The /admin/* surface is gated by the admin-secret middleware (fail-closed). Tests that
 #: drive admin routes build the app with this token and send the matching header, mirroring
 #: the secret nginx injects after Basic auth in production.
@@ -299,8 +300,7 @@ def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario)
     assert room["components"]["RoomComponent"]["title"] == "Mosslit Burrow"
     assert character["components"]["IdentityComponent"]["name"] == "Juniper"
     assert any(
-        edge["target_id"] == str(scenario.character)
-        for edge in room["relationships"]["Contains"]
+        edge["target_id"] == str(scenario.character) for edge in room["relationships"]["Contains"]
     )
 
 
@@ -447,12 +447,8 @@ def test_client_view_scopes_visible_state_points_controller_and_actions(scenario
     assert "remote candle" not in rendered
     assert "components" not in rendered
     assert "relationships" not in rendered
-    assert {target["id"] for target in view["target_groups"]["roomItems"]} == {
-        str(visible_item.id)
-    }
-    assert {target["id"] for target in view["target_groups"]["inventory"]} == {
-        str(carried_item.id)
-    }
+    assert {target["id"] for target in view["target_groups"]["roomItems"]} == {str(visible_item.id)}
+    assert {target["id"] for target in view["target_groups"]["inventory"]} == {str(carried_item.id)}
     move = next(action for action in view["actions"] if action["command_type"] == "move")
     assert move["cost"] == {"action": 1, "focus": 0}
     assert any(
@@ -536,6 +532,7 @@ def test_client_view_describes_controller_identity(scenario):
             "name": name,
             "detail": detail,
         }
+
 
 def test_character_projection_includes_curated_character_sheet_data(scenario):
     actor = scenario.actor
@@ -626,9 +623,7 @@ def test_character_projection_includes_curated_character_sheet_data(scenario):
     )
     character.add_relationship(SocialBond(trust=4.0, familiarity=2.0), marlow.id)
 
-    view = serialize_character_projection(actor, str(scenario.character)).model_dump(
-        mode="json"
-    )
+    view = serialize_character_projection(actor, str(scenario.character)).model_dump(mode="json")
     sheet = view["sheet"]
 
     assert sheet["species"] == "hare"
@@ -652,14 +647,10 @@ def test_character_projection_includes_curated_character_sheet_data(scenario):
     assert {row["label"]: row["value"] for row in sheet["skills"]}["Survival"] == "level 3"
     assert "goal: keep everyone safe" in sheet["traits"]
     assert any(
-        row["label"] == "Social Bond" and row["value"] == "Marlow"
-        for row in sheet["relations"]
+        row["label"] == "Social Bond" and row["value"] == "Marlow" for row in sheet["relations"]
     )
     assert any(row["label"] == "left paw" for row in sheet["injuries"])
-    assert any(
-        row["label"] == "Thought" and row["value"] == "worried"
-        for row in sheet["notes"]
-    )
+    assert any(row["label"] == "Thought" and row["value"] == "worried" for row in sheet["notes"])
 
     rendered = json.dumps(view)
     assert "components" not in rendered
@@ -682,9 +673,9 @@ def test_character_sheet_projection_handles_sparse_optional_fields(scenario):
     non_thought = spawn_entity(world, [IdentityComponent(name="not a thought", kind="note")])
     character.add_relationship(HasThought(), non_thought.id)
 
-    sheet = serialize_character_projection(actor, str(scenario.character)).model_dump(
-        mode="json"
-    )["sheet"]
+    sheet = serialize_character_projection(actor, str(scenario.character)).model_dump(mode="json")[
+        "sheet"
+    ]
 
     assert {row["label"]: row["value"] for row in sheet["profile"]}["Kind"] == "character"
     assert "reserved" in sheet["traits"]
@@ -695,21 +686,17 @@ def test_character_sheet_projection_handles_sparse_optional_fields(scenario):
 
 def test_character_projection_action_availability_reflects_points():
     affordable = build_scenario(action_current=5.0)
-    rich = serialize_character_projection(
-        affordable.actor, str(affordable.character)
-    ).model_dump(mode="json")
+    rich = serialize_character_projection(affordable.actor, str(affordable.character)).model_dump(
+        mode="json"
+    )
     move = next(action for action in rich["actions"] if action["command_type"] == "move")
     assert move["available"] is True
     assert move["enough_action_points"] is True
     assert move["unavailable_reason"] == ""
 
     broke = build_scenario(action_current=0.0)
-    poor = serialize_character_projection(broke.actor, str(broke.character)).model_dump(
-        mode="json"
-    )
-    move_poor = next(
-        action for action in poor["actions"] if action["command_type"] == "move"
-    )
+    poor = serialize_character_projection(broke.actor, str(broke.character)).model_dump(mode="json")
+    move_poor = next(action for action in poor["actions"] if action["command_type"] == "move")
     assert move_poor["available"] is False
     assert move_poor["enough_action_points"] is False
     assert move_poor["unavailable_reason"] == "not enough action points"
@@ -737,9 +724,9 @@ def test_character_projection_action_availability_reflects_requirements(scenario
     scenario.actor.world.get_entity(scenario.character).add_component(
         SkillSetComponent(levels={"lockpicking": 1})
     )
-    with_skill = serialize_character_projection(
-        scenario.actor, str(scenario.character)
-    ).model_dump(mode="json")
+    with_skill = serialize_character_projection(scenario.actor, str(scenario.character)).model_dump(
+        mode="json"
+    )
     pick_ready = next(
         action for action in with_skill["actions"] if action["command_type"] == "pick-lock"
     )
@@ -751,17 +738,17 @@ def test_room_projection_scopes_visible_state_and_sprite_facts(scenario):
     world = scenario.actor.world
     room = world.get_entity(scenario.room_a)
     room.add_component(ToonRoomComponent(default_start=True))
-    room.add_component(SpriteImage(url="/rooms/moss.png"))
-    room.add_component(SpriteBounds(width=120.0, height=80.0))
+    room.add_component(SpriteImageComponent(url="/rooms/moss.png"))
+    room.add_component(SpriteBoundsComponent(width=120.0, height=80.0))
     visible_item = spawn_entity(
         world,
         [
             IdentityComponent(name="Painted Stool", kind="stool"),
             PortableComponent(),
-            SpritePosition(x=12.0, y=34.0),
-            SpriteLayer(layer=10),
-            SpriteScale(scale=1.25),
-            SpriteBounds(width=8.0, height=6.0, solid=True),
+            SpritePositionComponent(x=12.0, y=34.0),
+            SpriteLayerComponent(layer=10),
+            SpriteScaleComponent(scale=1.25),
+            SpriteBoundsComponent(width=8.0, height=6.0, solid=True),
         ],
     )
     hidden_item = spawn_entity(
@@ -770,7 +757,7 @@ def test_room_projection_scopes_visible_state_and_sprite_facts(scenario):
             IdentityComponent(name="hidden ledger", kind="item"),
             PortableComponent(),
             StealthComponent(hiding=True, visibility_level=0.0),
-            SpritePosition(x=50.0, y=50.0),
+            SpritePositionComponent(x=50.0, y=50.0),
         ],
     )
     remote_item = spawn_entity(
@@ -778,7 +765,7 @@ def test_room_projection_scopes_visible_state_and_sprite_facts(scenario):
         [
             IdentityComponent(name="remote candle", kind="item"),
             PortableComponent(),
-            SpritePosition(x=10.0, y=10.0),
+            SpritePositionComponent(x=10.0, y=10.0),
         ],
     )
     world.get_entity(scenario.room_a).add_relationship(
@@ -858,9 +845,9 @@ def test_character_queued_commands_scopes_commands_to_character(scenario):
     scenario.actor.queues.enqueue(excluded)
     scenario.actor.submit_nowait(pending)
 
-    view = serialize_character_queued_commands(
-        scenario.actor, str(scenario.character)
-    ).model_dump(mode="json")
+    view = serialize_character_queued_commands(scenario.actor, str(scenario.character)).model_dump(
+        mode="json"
+    )
 
     assert view["character_id"] == str(scenario.character)
     assert [command["command_id"] for command in view["commands"]] == [
@@ -905,28 +892,22 @@ def test_client_view_action_menu_uses_advisory_target_groups(scenario):
     actions = {action["command_type"]: action for action in view["actions"]}
 
     take_args = {
-        argument["key"]: argument["target_group"]
-        for argument in actions["take"]["arguments"]
+        argument["key"]: argument["target_group"] for argument in actions["take"]["arguments"]
     }
     drop_args = {
-        argument["key"]: argument["target_group"]
-        for argument in actions["drop"]["arguments"]
+        argument["key"]: argument["target_group"] for argument in actions["drop"]["arguments"]
     }
     put_args = {
-        argument["key"]: argument["target_group"]
-        for argument in actions["put"]["arguments"]
+        argument["key"]: argument["target_group"] for argument in actions["put"]["arguments"]
     }
     tell_args = {
-        argument["key"]: argument["target_group"]
-        for argument in actions["tell"]["arguments"]
+        argument["key"]: argument["target_group"] for argument in actions["tell"]["arguments"]
     }
     sip_args = {
-        argument["key"]: argument["target_group"]
-        for argument in actions["sip"]["arguments"]
+        argument["key"]: argument["target_group"] for argument in actions["sip"]["arguments"]
     }
     mark_args = {
-        argument["key"]: argument["target_group"]
-        for argument in actions["mark"]["arguments"]
+        argument["key"]: argument["target_group"] for argument in actions["mark"]["arguments"]
     }
     assert take_args["item_id"] == "reachableItems"
     assert drop_args["item_id"] == "inventory"
@@ -995,9 +976,7 @@ def test_client_view_handles_unperceiving_character_and_errors():
             PerceptionComponent(active=False),
         ],
     )
-    unplaced_view = serialize_character_projection(
-        actor, str(unplaced.id)
-    ).model_dump(mode="json")
+    unplaced_view = serialize_character_projection(actor, str(unplaced.id)).model_dump(mode="json")
     assert unplaced_view["room"] == {"id": None, "title": "", "entities": [], "exits": []}
 
     with pytest.raises(ValueError, match="character does not exist"):
@@ -1068,8 +1047,7 @@ async def test_event_stream_records_recent_events_and_fans_out_to_subscribers(sc
     assert moved["type"] == "event"
     assert moved["data"]["event"]["to_room_id"] == str(scenario.room_b)
     assert any(
-        message["data"]["event_type"] == "ActorMovedEvent"
-        for message in stream.recent_messages()
+        message["data"]["event_type"] == "ActorMovedEvent" for message in stream.recent_messages()
     )
 
 
@@ -1197,16 +1175,14 @@ def test_target_groups_separate_perceived_characters_from_room_items(scenario):
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
     )
-    stone = spawn_entity(
-        world, [IdentityComponent(name="rock", kind="item"), PortableComponent()]
-    )
+    stone = spawn_entity(world, [IdentityComponent(name="rock", kind="item"), PortableComponent()])
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), stone.id
     )
 
-    groups = serialize_character_projection(
-        scenario.actor, str(scenario.character)
-    ).model_dump(mode="json")["target_groups"]
+    groups = serialize_character_projection(scenario.actor, str(scenario.character)).model_dump(
+        mode="json"
+    )["target_groups"]
 
     assert "Bramble" in [target["label"] for target in groups["characters"]]
     assert "Bramble" not in [target["label"] for target in groups["roomItems"]]
@@ -1214,11 +1190,11 @@ def test_target_groups_separate_perceived_characters_from_room_items(scenario):
 
 
 def test_sprite_bounds_view_falls_back_to_default_when_no_bounds(scenario):
-    # An entity with neither explicit SpriteBounds nor a kind that maps to default bounds
-    # forces the ``bounds = SpriteBounds()`` fallback in ``_sprite_bounds_view``.
+    # An entity with neither explicit SpriteBoundsComponent nor a kind that maps to default bounds
+    # forces the ``bounds = SpriteBoundsComponent()`` fallback in ``_sprite_bounds_view``.
     world = scenario.actor.world
     # kind="trinket" maps to no default footprint and the entity carries no PortableComponent,
-    # so default_bounds_for returns None and _sprite_bounds_view falls back to SpriteBounds().
+    # so default_bounds_for returns None and _sprite_bounds_view uses the fallback component.
     plain = spawn_entity(world, [IdentityComponent(name="speck", kind="trinket")])
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), plain.id
@@ -1227,9 +1203,9 @@ def test_sprite_bounds_view_falls_back_to_default_when_no_bounds(scenario):
     view = serialize_room_projection(scenario.actor, str(scenario.room_a)).model_dump(mode="json")
     speck = next(e for e in view["room"]["entities"] if e["id"] == str(plain.id))
     assert speck["sprite"]["bounds"] == {
-        "width": SpriteBounds().width,
-        "height": SpriteBounds().height,
-        "solid": SpriteBounds().solid,
+        "width": SpriteBoundsComponent().width,
+        "height": SpriteBoundsComponent().height,
+        "solid": SpriteBoundsComponent().solid,
     }
 
 
@@ -1691,9 +1667,7 @@ def test_fastapi_world_snapshot_requires_admin_token(scenario):
     assert missing.status_code == 403
     assert wrong.status_code == 403
     assert allowed.status_code == 200
-    assert any(
-        entity["id"] == str(scenario.character) for entity in allowed.json()["entities"]
-    )
+    assert any(entity["id"] == str(scenario.character) for entity in allowed.json()["entities"])
 
 
 def test_fastapi_admin_memory_lists_characters_and_documents_without_backend_type(scenario):
@@ -2096,14 +2070,11 @@ def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
     assert scenario.character_room() == scenario.room_b
     assert recent.status_code == 200
     assert any(
-        message["data"]["event_type"] == "ActorMovedEvent"
-        for message in recent.json()["events"]
+        message["data"]["event_type"] == "ActorMovedEvent" for message in recent.json()["events"]
     )
 
 
-@pytest.mark.parametrize(
-    "verb", ["take-control", "release-to-llm", "suspend", "resume"]
-)
+@pytest.mark.parametrize("verb", ["take-control", "release-to-llm", "suspend", "resume"])
 def test_fastapi_command_endpoint_rejects_control_verbs(scenario, verb):
     # A claim holder must not be able to repoint their character at an arbitrary controller
     # through the generic command surface; control transitions go through the dedicated web
@@ -2618,7 +2589,8 @@ async def test_run_loop_with_api_stops_game_when_server_finishes(monkeypatch, sc
 
 
 async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
-    scenario, caplog,
+    scenario,
+    caplog,
 ):
     caplog.set_level("INFO", logger="bunnyland.server")
     app = create_app(scenario.actor)
@@ -2849,10 +2821,13 @@ async def test_web_command_submission_resumes_idle_claim(scenario):
     web_controller_id = parse_entity_id(claimed.controller_id)
     assert web_controller_id is not None
     assert scenario.actor.current_generation(scenario.character, web_controller_id) is not None
-    assert scenario.actor.current_generation(
-        scenario.character,
-        web_controller_id,
-    ) != claimed.controller_generation
+    assert (
+        scenario.actor.current_generation(
+            scenario.character,
+            web_controller_id,
+        )
+        != claimed.controller_generation
+    )
 
 
 async def test_web_command_submission_with_no_controller_returns_stale_generation(scenario):
@@ -2902,10 +2877,13 @@ async def test_web_command_submission_keeps_active_matching_web_claim(scenario):
     )
 
     assert response.reason == "no handler for say"
-    assert scenario.actor.current_generation(
-        scenario.character,
-        parse_entity_id(claimed.controller_id),
-    ) == claimed.controller_generation
+    assert (
+        scenario.actor.current_generation(
+            scenario.character,
+            parse_entity_id(claimed.controller_id),
+        )
+        == claimed.controller_generation
+    )
 
 
 async def test_web_command_submission_rejects_unclaimed_and_resumes_portable_claims(
@@ -3054,8 +3032,7 @@ async def test_release_web_controller_to_llm_unsuspends_character(scenario):
         route for route in app.routes if route.path == "/world/controllers/web/claim"
     )
     release_route = next(
-        route for route in app.routes
-        if route.path == "/world/controllers/web/release-controller"
+        route for route in app.routes if route.path == "/world/controllers/web/release-controller"
     )
     character = scenario.actor.world.get_entity(scenario.character)
     claimed = await claim_route.endpoint(
@@ -3234,8 +3211,7 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
         route for route in app.routes if route.path == "/world/controllers/web/fallback"
     )
     release_route = next(
-        route for route in app.routes
-        if route.path == "/world/controllers/web/release-controller"
+        route for route in app.routes if route.path == "/world/controllers/web/release-controller"
     )
     other = spawn_entity(
         scenario.actor.world,
@@ -3283,7 +3259,7 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
                 claim_id=claimed.claim_id,
             ),
             claim_secret=claimed.claim_secret,
-    )
+        )
     assert wrong_character.value.status_code == 409
     assert wrong_character.value.detail == "character has no controller"
 
@@ -3295,7 +3271,7 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
                 claim_id=claimed.claim_id,
             ),
             claim_secret=claimed.claim_secret,
-    )
+        )
     assert wrong_client.value.status_code == 409
     assert wrong_client.value.detail == "character is claimed by another client"
 
@@ -3307,7 +3283,7 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
                 claim_id=claimed.claim_id,
             ),
             claim_secret="wrong",
-    )
+        )
     assert wrong_secret.value.status_code == 403
     assert wrong_secret.value.detail == "invalid claim secret"
 
@@ -3321,7 +3297,7 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
                 fallback_controller=str(unknown.id),
             ),
             claim_secret=claimed.claim_secret,
-    )
+        )
     assert unknown_controller.value.status_code == 400
     assert unknown_controller.value.detail == "entity is not a controller"
 
@@ -3334,7 +3310,7 @@ async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
                 fallback_controller="manual",
             ),
             claim_secret=claimed.claim_secret,
-    )
+        )
     assert invalid_fallback.value.status_code == 400
     assert invalid_fallback.value.detail == "fallback_controller is not a controller"
 
@@ -3420,13 +3396,7 @@ async def test_admin_world_generate_replaces_world_and_updates_metadata(scenario
     assert scenario.actor.world is not old_world
     assert len(list(scenario.actor.world.query().with_all([RoomComponent]).execute_entities())) == 2
     assert (
-        len(
-            list(
-                scenario.actor.world.query()
-                .with_all([CharacterComponent])
-                .execute_entities()
-            )
-        )
+        len(list(scenario.actor.world.query().with_all([CharacterComponent]).execute_entities()))
         == 2
     )
 
@@ -3625,9 +3595,7 @@ async def test_admin_world_generate_defaults_to_recursive_when_available(scenari
     app = create_app(scenario.actor, meta=meta, plugins=plugins)
     route = next(route for route in app.routes if route.path == "/admin/world/generate")
 
-    response = await route.endpoint(
-        WorldGenerateRequest(confirm_reset=True, seed="rain port")
-    )
+    response = await route.endpoint(WorldGenerateRequest(confirm_reset=True, seed="rain port"))
 
     assert response.generator == "recursive"
 
@@ -3694,9 +3662,7 @@ async def test_admin_controller_assign_to_unsuspended_character(scenario):
         scenario.actor.world,
         [WebControllerComponent(client_id="op2", label="graph")],
     )
-    assert not scenario.actor.world.get_entity(scenario.character).has_component(
-        SuspendedComponent
-    )
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(SuspendedComponent)
 
     app = create_app(scenario.actor)
     route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
@@ -3726,9 +3692,7 @@ def test_fastapi_dm_projection_translates_value_errors_to_400(scenario):
     client = testclient.TestClient(app)
 
     # A whitespace-only dm id strips to empty and raises ValueError from the serializer.
-    response = client.get(
-        "/world/dm/%20", headers={"X-Bunnyland-Admin-Secret": "secret"}
-    )
+    response = client.get("/world/dm/%20", headers={"X-Bunnyland-Admin-Secret": "secret"})
 
     assert response.status_code == 400
     assert response.json()["detail"] == "dm id must not be blank"
@@ -3832,9 +3796,7 @@ async def test_admin_patch_endpoint_translates_unexpected_errors_to_400(scenario
 
 async def test_register_script_endpoint_persists_valid_spec(scenario, tmp_path):
     app = create_app(scenario.actor, definitions_path=tmp_path / "definitions.json")
-    route = next(
-        route for route in app.routes if route.path == "/admin/controllers/scripts"
-    )
+    route = next(route for route in app.routes if route.path == "/admin/controllers/scripts")
 
     response = await route.endpoint(
         ScriptSpec(name="greeter", calls=(ToolCallSpec(name="wait", arguments={}),))
@@ -3845,9 +3807,7 @@ async def test_register_script_endpoint_persists_valid_spec(scenario, tmp_path):
 
 async def test_register_behavior_endpoint_persists_valid_spec(scenario, tmp_path):
     app = create_app(scenario.actor, definitions_path=tmp_path / "definitions.json")
-    route = next(
-        route for route in app.routes if route.path == "/admin/controllers/behaviors"
-    )
+    route = next(route for route in app.routes if route.path == "/admin/controllers/behaviors")
 
     response = await route.endpoint(
         BehaviorTreeSpec(
@@ -3861,9 +3821,7 @@ async def test_register_behavior_endpoint_persists_valid_spec(scenario, tmp_path
 
 async def test_register_behavior_endpoint_translates_value_errors(scenario):
     app = create_app(scenario.actor)
-    route = next(
-        route for route in app.routes if route.path == "/admin/controllers/behaviors"
-    )
+    route = next(route for route in app.routes if route.path == "/admin/controllers/behaviors")
 
     # A behavior leaf referencing an unknown condition fails to compile -> ValueError -> 400.
     bad = BehaviorTreeSpec(
@@ -3878,9 +3836,7 @@ async def test_register_behavior_endpoint_translates_value_errors(scenario):
 
 async def test_register_script_endpoint_translates_value_errors(scenario):
     app = create_app(scenario.actor)
-    route = next(
-        route for route in app.routes if route.path == "/admin/controllers/scripts"
-    )
+    route = next(route for route in app.routes if route.path == "/admin/controllers/scripts")
 
     # A script call referencing an unknown tool fails to compile -> ValueError -> 400.
     bad = ScriptSpec(
@@ -3925,9 +3881,7 @@ async def test_world_generation_status_endpoint_reports_running_job(scenario):
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
     app = create_app(scenario.actor, plugins=plugins)
     generate = next(route for route in app.routes if route.path == "/admin/world/generate")
-    status = next(
-        route for route in app.routes if route.path == "/admin/world/generation"
-    )
+    status = next(route for route in app.routes if route.path == "/admin/world/generation")
 
     started = await generate.endpoint(
         WorldGenerateRequest(confirm_reset=True, generator="recursive", max_rooms=2)
@@ -3939,9 +3893,7 @@ async def test_world_generation_status_endpoint_reports_running_job(scenario):
 
     # A second generate while running is rejected with a conflict.
     with pytest.raises(Exception) as conflict:
-        await generate.endpoint(
-            WorldGenerateRequest(confirm_reset=True, generator="recursive")
-        )
+        await generate.endpoint(WorldGenerateRequest(confirm_reset=True, generator="recursive"))
     assert conflict.value.status_code == 409
     assert conflict.value.detail == "world generation is already running"
 
@@ -4533,9 +4485,7 @@ def test_world_patch_can_reference_client_ids_within_one_request(scenario):
         (
             {
                 "op": "add_entity",
-                "components": [
-                    {"type": "IdentityComponent", "fields": {"name": "bad"}}
-                ],
+                "components": [{"type": "IdentityComponent", "fields": {"name": "bad"}}],
             },
             "invalid IdentityComponent",
         ),
@@ -4709,7 +4659,7 @@ def test_world_patch_preflight_prevents_partial_mutation(scenario):
                     "op": "remove_component",
                     "entity_id": "$new",
                     "component_type": "IdentityComponent",
-                }
+                },
             ],
             r"entity '\$new' does not have component IdentityComponent",
         ),
@@ -4745,9 +4695,7 @@ def test_world_patch_preflight_rejects_alias_component_errors_atomically(
 
 
 def test_world_patch_preflight_rejects_duplicate_existing_component_atomically(scenario):
-    identity = scenario.actor.world.get_entity(scenario.character).get_component(
-        IdentityComponent
-    )
+    identity = scenario.actor.world.get_entity(scenario.character).get_component(IdentityComponent)
 
     with pytest.raises(WorldPatchError, match="already has component IdentityComponent"):
         apply_world_patch(
@@ -4768,9 +4716,10 @@ def test_world_patch_preflight_rejects_duplicate_existing_component_atomically(s
             ),
         )
 
-    assert scenario.actor.world.get_entity(scenario.character).get_component(
-        IdentityComponent
-    ) == identity
+    assert (
+        scenario.actor.world.get_entity(scenario.character).get_component(IdentityComponent)
+        == identity
+    )
 
 
 def test_world_patch_preflight_allows_pending_component_add_then_remove(scenario):
@@ -4798,9 +4747,7 @@ def test_world_patch_preflight_allows_pending_component_add_then_remove(scenario
     )
 
     assert response.ok is True
-    assert not scenario.actor.world.get_entity(scenario.character).has_component(
-        SuspendedComponent
-    )
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(SuspendedComponent)
 
 
 def test_world_patch_set_component_on_new_alias_entity(scenario):
@@ -4853,9 +4800,10 @@ def test_world_patch_set_component_adds_new_type_to_existing_entity(scenario):
     )
 
     assert response.ok is True
-    assert scenario.actor.world.get_entity(scenario.character).get_component(
-        SuspendedComponent
-    ).reason == "editor"
+    assert (
+        scenario.actor.world.get_entity(scenario.character).get_component(SuspendedComponent).reason
+        == "editor"
+    )
 
 
 def test_world_patch_remove_component_from_new_alias_entity(scenario):
@@ -4894,9 +4842,7 @@ def test_world_patch_remove_component_from_new_alias_entity(scenario):
 def test_world_patch_remove_component_rejects_pending_missing_on_existing_entity(scenario):
     # The character lacks SuspendedComponent; removing it must fail in preflight via the
     # pending-component "does not have component" branch, leaving the world untouched.
-    with pytest.raises(
-        WorldPatchError, match="does not have component SuspendedComponent"
-    ):
+    with pytest.raises(WorldPatchError, match="does not have component SuspendedComponent"):
         apply_world_patch(
             scenario.actor,
             WorldPatchRequest.model_validate(
@@ -4934,9 +4880,7 @@ def test_world_patch_removes_existing_component_from_existing_entity(scenario):
     )
 
     assert response.ok is True
-    assert not scenario.actor.world.get_entity(scenario.character).has_component(
-        IdentityComponent
-    )
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(IdentityComponent)
 
 
 def test_world_patch_removes_existing_edge(scenario):
@@ -5111,9 +5055,7 @@ async def test_worldgen_character_patch_places_character_in_selected_room(scenar
     response = apply_world_patch(scenario.actor, generated.patch)
 
     assert generated.generated_name == "Mossy Sage"
-    room_contains = scenario.actor.world.get_entity(scenario.room_a).get_relationships(
-        Contains
-    )
+    room_contains = scenario.actor.world.get_entity(scenario.room_a).get_relationships(Contains)
     character_ids = [
         target
         for edge, target in room_contains
@@ -5274,9 +5216,7 @@ async def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
 
     assert generated.generated_title == "a bell rings"
     assert response.ok is True
-    room_contains = scenario.actor.world.get_entity(scenario.room_a).get_relationships(
-        Contains
-    )
+    room_contains = scenario.actor.world.get_entity(scenario.room_a).get_relationships(Contains)
     incidents = [
         scenario.actor.world.get_entity(target)
         for _edge, target in room_contains

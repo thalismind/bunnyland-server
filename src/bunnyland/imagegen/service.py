@@ -27,7 +27,7 @@ from ..core.ecs import parse_entity_id, replace_component
 from ..core.events import event_base
 from ..core.world_actor import WorldActor
 from ..mechanics.history import WorldHistoryRecordComponent
-from ..mechanics.toonsim import SpriteImage
+from ..mechanics.toonsim import SpriteImageComponent
 from .client import ComfyClient
 from .components import (
     EventImageComponent,
@@ -206,9 +206,9 @@ class ImageGenService:
         if not self.idle:
             return None
         async with self._actor._lock:
-            target = _first_missing_portrait(
+            target = _first_missing_portrait(self._actor, self._failed) or _first_missing_sprite(
                 self._actor, self._failed
-            ) or _first_missing_sprite(self._actor, self._failed)
+            )
         if target is None:
             return None
         entity_id, purpose = target
@@ -229,9 +229,7 @@ class ImageGenService:
         interval = (
             self._config.backfill_interval_seconds if interval_seconds is None else interval_seconds
         )
-        self._backfill = asyncio.create_task(
-            self._run_backfill(interval), name="imagegen-backfill"
-        )
+        self._backfill = asyncio.create_task(self._run_backfill(interval), name="imagegen-backfill")
 
     async def _run_backfill(self, interval: float) -> None:
         while True:
@@ -279,9 +277,7 @@ class ImageGenService:
             job.status = "running"
             seed = _seed_for(job.entity_id)
             prompt = await self._enhance(subject, template, job.purpose, extra)
-            graph = substitute(
-                template, prompt=prompt.prompt, seed=seed, negative=prompt.negative
-            )
+            graph = substitute(template, prompt=prompt.prompt, seed=seed, negative=prompt.negative)
             data = await self._client.generate(graph, output_node_id=template.output_node_id)
             do_alpha = self._alpha is not None and (
                 alpha_requested or job.purpose is ImagePurpose.SPRITE
@@ -374,7 +370,7 @@ class ImageGenService:
     ) -> None:
         epoch = self._actor.epoch
         if purpose is ImagePurpose.SPRITE:
-            _set_component(entity, SpriteImage(url=url))
+            _set_component(entity, SpriteImageComponent(url=url))
             return
         if purpose is ImagePurpose.EVENT:
             # EVENT jobs always target a history-record entity (subject assembly requires it).
@@ -443,8 +439,8 @@ class ImageGenError(RuntimeError):
 
 def _existing_image_url(entity: Entity, purpose: ImagePurpose) -> str:
     if purpose is ImagePurpose.SPRITE:
-        if entity.has_component(SpriteImage):
-            return entity.get_component(SpriteImage).url
+        if entity.has_component(SpriteImageComponent):
+            return entity.get_component(SpriteImageComponent).url
         return ""
     if purpose is ImagePurpose.EVENT:
         if entity.has_component(EventImageComponent):
@@ -460,9 +456,7 @@ def _clear_request(entity: Entity) -> None:
         entity.remove_component(ImageRequestComponent)
 
 
-def _first_missing_portrait(
-    actor: WorldActor, skip: set[str]
-) -> tuple[str, ImagePurpose] | None:
+def _first_missing_portrait(actor: WorldActor, skip: set[str]) -> tuple[str, ImagePurpose] | None:
     for entity in (
         actor.world.query()
         .with_all([CharacterComponent])
@@ -474,16 +468,14 @@ def _first_missing_portrait(
     return None
 
 
-def _first_missing_sprite(
-    actor: WorldActor, skip: set[str]
-) -> tuple[str, ImagePurpose] | None:
+def _first_missing_sprite(actor: WorldActor, skip: set[str]) -> tuple[str, ImagePurpose] | None:
     for entity in (
         actor.world.query()
-        .with_all([CharacterComponent, SpriteImage])
+        .with_all([CharacterComponent, SpriteImageComponent])
         .with_none([ImageRequestComponent])
         .execute_entities()
     ):
-        if str(entity.id) not in skip and not entity.get_component(SpriteImage).url:
+        if str(entity.id) not in skip and not entity.get_component(SpriteImageComponent).url:
             return (str(entity.id), ImagePurpose.SPRITE)
     return None
 

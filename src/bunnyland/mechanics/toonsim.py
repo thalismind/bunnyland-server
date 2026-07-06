@@ -3,9 +3,9 @@
 This pack attaches the data a graphical client needs to draw the world as stacked
 sprites, without the engine itself caring about any of it:
 
-- :class:`SpritePosition` -- float X/Y placement within the entity's room.
-- :class:`SpriteImage` -- the sprite asset (a URL and/or inline data).
-- :class:`SpriteLayer` -- integer draw order (z-index), low draws first.
+- :class:`SpritePositionComponent` -- float X/Y placement within the entity's room.
+- :class:`SpriteImageComponent` -- the sprite asset (a URL and/or inline data).
+- :class:`SpriteLayerComponent` -- integer draw order (z-index), low draws first.
 - :class:`ToonRoomComponent` -- room-level hints for toon-client presentation.
 
 A single consequence backfills these components on renderable entities (rooms,
@@ -80,7 +80,7 @@ SURFACE_KINDS = frozenset({"table", "desk", "shelf", "counter", "workbench", "wo
 
 
 @pydantic_dataclass(frozen=True)
-class SpritePosition(Component):
+class SpritePositionComponent(Component):
     """Float X/Y placement of the sprite within its room's background."""
 
     x: float = 0.0
@@ -88,7 +88,7 @@ class SpritePosition(Component):
 
 
 @pydantic_dataclass(frozen=True)
-class SpriteImage(Component):
+class SpriteImageComponent(Component):
     """The sprite asset: a URL, inline data (e.g. a data URI), or both."""
 
     url: str = ""
@@ -96,14 +96,14 @@ class SpriteImage(Component):
 
 
 @pydantic_dataclass(frozen=True)
-class SpriteLayer(Component):
+class SpriteLayerComponent(Component):
     """Integer draw order. Lower layers render first (further back)."""
 
     layer: int = LAYER_ITEM
 
 
 @pydantic_dataclass(frozen=True)
-class SpriteScale(Component):
+class SpriteScaleComponent(Component):
     """Uniform display scale for the sprite when compositing the scene.
 
     ``1.0`` is the image's natural size. Because sprites come from different sources at
@@ -115,8 +115,8 @@ class SpriteScale(Component):
 
 
 @pydantic_dataclass(frozen=True)
-class SpriteBounds(Component):
-    """Axis-aligned sprite footprint in the same coordinate space as ``SpritePosition``."""
+class SpriteBoundsComponent(Component):
+    """Axis-aligned sprite footprint in the same coordinate space as ``SpritePositionComponent``."""
 
     width: float = 4.0
     height: float = 4.0
@@ -161,12 +161,12 @@ def default_layer_for(entity: Entity) -> int | None:
     return None
 
 
-def default_bounds_for(entity: Entity) -> SpriteBounds | None:
+def default_bounds_for(entity: Entity) -> SpriteBoundsComponent | None:
     """Return the default sprite footprint for ``entity``."""
     if entity.has_component(RoomComponent):
-        return SpriteBounds(width=ROOM_WIDTH, height=ROOM_HEIGHT)
+        return SpriteBoundsComponent(width=ROOM_WIDTH, height=ROOM_HEIGHT)
     if entity.has_component(CharacterComponent):
-        return SpriteBounds(width=5.0, height=8.0, solid=True)
+        return SpriteBoundsComponent(width=5.0, height=8.0, solid=True)
 
     kind = (
         entity.get_component(IdentityComponent).kind
@@ -174,20 +174,20 @@ def default_bounds_for(entity: Entity) -> SpriteBounds | None:
         else None
     )
     if kind in SURFACE_KINDS:
-        return SpriteBounds(width=22.0, height=12.0, solid=True)
+        return SpriteBoundsComponent(width=22.0, height=12.0, solid=True)
     if kind in FURNITURE_KINDS or entity.has_component(ContainerComponent):
-        return SpriteBounds(width=14.0, height=10.0, solid=True)
+        return SpriteBoundsComponent(width=14.0, height=10.0, solid=True)
     if entity.has_component(DoorComponent):
-        return SpriteBounds(width=10.0, height=8.0)
+        return SpriteBoundsComponent(width=10.0, height=8.0)
     if entity.has_component(PortableComponent):
-        return SpriteBounds(width=4.0, height=4.0)
+        return SpriteBoundsComponent(width=4.0, height=4.0)
     return None
 
 
 class SpriteBackfillConsequence:
     """Attach sprite components to renderable entities that are missing them.
 
-    Querying ``with_none([SpriteLayer])`` keeps this cheap: once an entity is tagged it
+    Querying ``with_none([SpriteLayerComponent])`` keeps this cheap: once an entity is tagged it
     drops out of the scan. Non-renderable entities are skipped (and re-checked on later
     ticks, which is fine -- they are few and the check is a handful of component lookups).
     Each component is added independently and only when absent, so positions or images
@@ -195,18 +195,18 @@ class SpriteBackfillConsequence:
     """
 
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
-        for entity in list(world.query().with_none([SpriteLayer]).execute_entities()):
+        for entity in list(world.query().with_none([SpriteLayerComponent]).execute_entities()):
             layer = default_layer_for(entity)
             if layer is None:
                 continue
-            entity.add_component(SpriteLayer(layer=layer))
-            if not entity.has_component(SpritePosition):
-                entity.add_component(SpritePosition())
-            if not entity.has_component(SpriteImage):
-                entity.add_component(SpriteImage())
-            if not entity.has_component(SpriteScale):
-                entity.add_component(SpriteScale())
-            if not entity.has_component(SpriteBounds):
+            entity.add_component(SpriteLayerComponent(layer=layer))
+            if not entity.has_component(SpritePositionComponent):
+                entity.add_component(SpritePositionComponent())
+            if not entity.has_component(SpriteImageComponent):
+                entity.add_component(SpriteImageComponent())
+            if not entity.has_component(SpriteScaleComponent):
+                entity.add_component(SpriteScaleComponent())
+            if not entity.has_component(SpriteBoundsComponent):
                 bounds = default_bounds_for(entity)
                 if bounds is not None:
                     entity.add_component(bounds)
@@ -228,10 +228,10 @@ def _stable_range(low: float, high: float, *parts: object) -> float:
     return low + (high - low) * _stable_unit(*parts)
 
 
-def _clamp_position(x: float, y: float, bounds: SpriteBounds) -> SpritePosition:
+def _clamp_position(x: float, y: float, bounds: SpriteBoundsComponent) -> SpritePositionComponent:
     half_w = bounds.width / 2.0
     half_h = bounds.height / 2.0
-    return SpritePosition(
+    return SpritePositionComponent(
         x=max(half_w, min(ROOM_WIDTH - half_w, x)),
         y=max(half_h, min(ROOM_HEIGHT - half_h, y)),
     )
@@ -243,15 +243,15 @@ def _surface_entities(world: World, room: Entity, exclude_id) -> list[Entity]:
         if child_id == exclude_id or not world.has_entity(child_id):
             continue
         child = world.get_entity(child_id)
-        if _kind(child) in SURFACE_KINDS and child.has_component(SpritePosition):
+        if _kind(child) in SURFACE_KINDS and child.has_component(SpritePositionComponent):
             surfaces.append(child)
     return sorted(surfaces, key=lambda entity: str(entity.id))
 
 
-def _position_on_surface(entity: Entity, surface: Entity) -> SpritePosition:
-    surface_pos = surface.get_component(SpritePosition)
-    surface_bounds = surface.get_component(SpriteBounds)
-    entity_bounds = entity.get_component(SpriteBounds)
+def _position_on_surface(entity: Entity, surface: Entity) -> SpritePositionComponent:
+    surface_pos = surface.get_component(SpritePositionComponent)
+    surface_bounds = surface.get_component(SpriteBoundsComponent)
+    entity_bounds = entity.get_component(SpriteBoundsComponent)
     usable_w = max(0.0, surface_bounds.width - entity_bounds.width)
     usable_h = max(0.0, surface_bounds.height - entity_bounds.height)
     x = surface_pos.x - usable_w / 2.0 + _stable_range(0.0, usable_w, entity.id, "x")
@@ -259,7 +259,9 @@ def _position_on_surface(entity: Entity, surface: Entity) -> SpritePosition:
     return _clamp_position(x, y, entity_bounds)
 
 
-def _aabb(position: SpritePosition, bounds: SpriteBounds) -> tuple[float, float, float, float]:
+def _aabb(
+    position: SpritePositionComponent, bounds: SpriteBoundsComponent
+) -> tuple[float, float, float, float]:
     half_w = bounds.width / 2.0
     half_h = bounds.height / 2.0
     return (
@@ -276,13 +278,14 @@ def _aabb_overlaps(
     return left[0] < right[2] and left[2] > right[0] and left[1] < right[3] and left[3] > right[1]
 
 
-def _inside_room(position: SpritePosition, bounds: SpriteBounds, room_bounds: SpriteBounds) -> bool:
+def _inside_room(
+    position: SpritePositionComponent,
+    bounds: SpriteBoundsComponent,
+    room_bounds: SpriteBoundsComponent,
+) -> bool:
     left, top, right, bottom = _aabb(position, bounds)
     return (
-        left >= 0.0
-        and top >= 0.0
-        and right <= room_bounds.width
-        and bottom <= room_bounds.height
+        left >= 0.0 and top >= 0.0 and right <= room_bounds.width and bottom <= room_bounds.height
     )
 
 
@@ -290,32 +293,34 @@ def _solid_collision(
     world: World,
     character: Entity,
     room: Entity,
-    position: SpritePosition,
-    bounds: SpriteBounds,
+    position: SpritePositionComponent,
+    bounds: SpriteBoundsComponent,
 ) -> bool:
     moving = _aabb(position, bounds)
     for _edge, child_id in room.get_relationships(Contains):
         if child_id == character.id or not world.has_entity(child_id):
             continue
         child = world.get_entity(child_id)
-        if not child.has_component(SpritePosition):
+        if not child.has_component(SpritePositionComponent):
             continue
         child_bounds = (
-            child.get_component(SpriteBounds)
-            if child.has_component(SpriteBounds)
+            child.get_component(SpriteBoundsComponent)
+            if child.has_component(SpriteBoundsComponent)
             else default_bounds_for(child)
         )
         if child_bounds is None or not child_bounds.solid:
             continue
-        if _aabb_overlaps(moving, _aabb(child.get_component(SpritePosition), child_bounds)):
+        if _aabb_overlaps(
+            moving, _aabb(child.get_component(SpritePositionComponent), child_bounds)
+        ):
             return True
     return False
 
 
 def _generated_position(
     world: World, entity: Entity, room: Entity, event_key: str
-) -> SpritePosition:
-    bounds = entity.get_component(SpriteBounds)
+) -> SpritePositionComponent:
+    bounds = entity.get_component(SpriteBoundsComponent)
     kind = _kind(entity)
     if entity.has_component(CharacterComponent):
         return _clamp_position(
@@ -372,13 +377,13 @@ class ToonWorldgenHook:
 
     def _ensure_renderable(self, entity: Entity) -> None:
         layer = default_layer_for(entity)
-        if layer is not None and not entity.has_component(SpriteLayer):
-            replace_component(entity, SpriteLayer(layer=layer))
-        if not entity.has_component(SpriteImage):
-            replace_component(entity, SpriteImage())
-        if not entity.has_component(SpriteScale):
-            replace_component(entity, SpriteScale())
-        if not entity.has_component(SpriteBounds):
+        if layer is not None and not entity.has_component(SpriteLayerComponent):
+            replace_component(entity, SpriteLayerComponent(layer=layer))
+        if not entity.has_component(SpriteImageComponent):
+            replace_component(entity, SpriteImageComponent())
+        if not entity.has_component(SpriteScaleComponent):
+            replace_component(entity, SpriteScaleComponent())
+        if not entity.has_component(SpriteBoundsComponent):
             bounds = default_bounds_for(entity)
             if bounds is not None:
                 replace_component(entity, bounds)
@@ -391,8 +396,8 @@ class ToonWorldgenHook:
         self._ensure_renderable(room)
         if not room.has_component(ToonRoomComponent):
             replace_component(room, ToonRoomComponent())
-        if not room.has_component(SpritePosition):
-            replace_component(room, SpritePosition())
+        if not room.has_component(SpritePositionComponent):
+            replace_component(room, SpritePositionComponent())
 
     def _on_object(self, event: ObjectGeneratedEvent) -> None:
         if event.room_id is None or event.container_id != event.room_id:
@@ -409,7 +414,9 @@ class ToonWorldgenHook:
         entity = self.actor.world.get_entity(entity_id)
         room = self.actor.world.get_entity(room_id)
         self._ensure_renderable(entity)
-        if not entity.has_component(SpritePosition) and entity.has_component(SpriteBounds):
+        if not entity.has_component(SpritePositionComponent) and entity.has_component(
+            SpriteBoundsComponent
+        ):
             replace_component(
                 entity, _generated_position(self.actor.world, entity, room, event.object_key)
             )
@@ -427,7 +434,9 @@ class ToonWorldgenHook:
         entity = self.actor.world.get_entity(entity_id)
         room = self.actor.world.get_entity(room_id)
         self._ensure_renderable(entity)
-        if not entity.has_component(SpritePosition) and entity.has_component(SpriteBounds):
+        if not entity.has_component(SpritePositionComponent) and entity.has_component(
+            SpriteBoundsComponent
+        ):
             replace_component(
                 entity,
                 _generated_position(self.actor.world, entity, room, event.character_key),
@@ -468,19 +477,19 @@ class MoveSpriteHandler:
             return rejected("character is not in a room")
         room = ctx.entity(room_id)
         bounds = (
-            character.get_component(SpriteBounds)
-            if character.has_component(SpriteBounds)
+            character.get_component(SpriteBoundsComponent)
+            if character.has_component(SpriteBoundsComponent)
             else default_bounds_for(character)
         )
         if bounds is None:
             return rejected("character has no sprite bounds")
-        if not character.has_component(SpriteBounds):
+        if not character.has_component(SpriteBoundsComponent):
             replace_component(character, bounds)
-        position = SpritePosition(x=x, y=y)
+        position = SpritePositionComponent(x=x, y=y)
         room_bounds = (
-            room.get_component(SpriteBounds)
-            if room.has_component(SpriteBounds)
-            else SpriteBounds(width=ROOM_WIDTH, height=ROOM_HEIGHT)
+            room.get_component(SpriteBoundsComponent)
+            if room.has_component(SpriteBoundsComponent)
+            else SpriteBoundsComponent(width=ROOM_WIDTH, height=ROOM_HEIGHT)
         )
         if not _inside_room(position, bounds, room_bounds):
             return rejected("position is outside room bounds")
@@ -516,12 +525,12 @@ __all__ = [
     "MoveSpriteHandler",
     "PlacedOn",
     "SpriteBackfillConsequence",
-    "SpriteBounds",
-    "SpriteImage",
-    "SpriteLayer",
+    "SpriteBoundsComponent",
+    "SpriteImageComponent",
+    "SpriteLayerComponent",
     "SpriteMovedEvent",
-    "SpritePosition",
-    "SpriteScale",
+    "SpritePositionComponent",
+    "SpriteScaleComponent",
     "SURFACE_KINDS",
     "ToonRoomComponent",
     "ToonWorldgenHook",

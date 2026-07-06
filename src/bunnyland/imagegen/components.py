@@ -1,9 +1,10 @@
 """ECS components that reference generated images (spec 27).
 
 These hold only small reference URLs (never image bytes), updated with ``replace_component``
-like every other frozen component. A character can carry both a portrait and, when toonsim is
-enabled, a sprite (which reuses toonsim's ``SpriteImage``); world-history record entities carry
-an :class:`EventImageComponent`. :class:`ImageRequestComponent` is a transient marker placed
+like every other frozen component. A character can carry both a portrait and, when
+toonsim is enabled, a sprite (which reuses toonsim's ``SpriteImageComponent``);
+world-history record entities carry an :class:`EventImageComponent`.
+:class:`ImageRequestComponent` is a transient marker placed
 while a job is in flight so the backfill scan and per-event dedup can see it.
 """
 

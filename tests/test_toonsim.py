@@ -31,12 +31,12 @@ from bunnyland.mechanics.toonsim import (
     MoveSpriteHandler,
     PlacedOn,
     SpriteBackfillConsequence,
-    SpriteBounds,
-    SpriteImage,
-    SpriteLayer,
+    SpriteBoundsComponent,
+    SpriteImageComponent,
+    SpriteLayerComponent,
     SpriteMovedEvent,
-    SpritePosition,
-    SpriteScale,
+    SpritePositionComponent,
+    SpriteScaleComponent,
     ToonRoomComponent,
     default_layer_for,
     install_toonsim,
@@ -54,9 +54,7 @@ def test_backfills_layers_by_category():
     scenario = build_scenario()
     world = scenario.actor.world
 
-    chair = spawn_entity(
-        world, [IdentityComponent(name="a red chair", kind="chair")]
-    )
+    chair = spawn_entity(world, [IdentityComponent(name="a red chair", kind="chair")])
     chest = spawn_entity(
         world,
         [IdentityComponent(name="an oak chest", kind="container"), ContainerComponent()],
@@ -65,18 +63,22 @@ def test_backfills_layers_by_category():
         world,
         [IdentityComponent(name="an apple", kind="food"), PortableComponent()],
     )
-    door = spawn_entity(
-        world, [IdentityComponent(name="a door", kind="door"), DoorComponent()]
-    )
+    door = spawn_entity(world, [IdentityComponent(name="a door", kind="door"), DoorComponent()])
 
     _backfill(world)
 
-    assert world.get_entity(scenario.room_a).get_component(SpriteLayer).layer == LAYER_BACKGROUND
-    assert world.get_entity(scenario.character).get_component(SpriteLayer).layer == LAYER_CHARACTER
-    assert chair.get_component(SpriteLayer).layer == LAYER_FURNITURE
-    assert chest.get_component(SpriteLayer).layer == LAYER_FURNITURE
-    assert apple.get_component(SpriteLayer).layer == LAYER_ITEM
-    assert door.get_component(SpriteLayer).layer == LAYER_ITEM
+    assert (
+        world.get_entity(scenario.room_a).get_component(SpriteLayerComponent).layer
+        == LAYER_BACKGROUND
+    )
+    assert (
+        world.get_entity(scenario.character).get_component(SpriteLayerComponent).layer
+        == LAYER_CHARACTER
+    )
+    assert chair.get_component(SpriteLayerComponent).layer == LAYER_FURNITURE
+    assert chest.get_component(SpriteLayerComponent).layer == LAYER_FURNITURE
+    assert apple.get_component(SpriteLayerComponent).layer == LAYER_ITEM
+    assert door.get_component(SpriteLayerComponent).layer == LAYER_ITEM
 
 
 def test_backfill_attaches_position_and_image():
@@ -86,12 +88,12 @@ def test_backfill_attaches_position_and_image():
     _backfill(world)
 
     room = world.get_entity(scenario.room_a)
-    assert room.has_component(SpritePosition)
-    assert room.has_component(SpriteImage)
-    assert room.has_component(SpriteScale)
-    assert room.get_component(SpritePosition).x == 0.0
-    assert room.get_component(SpriteImage).url == ""
-    assert room.get_component(SpriteScale).scale == 1.0
+    assert room.has_component(SpritePositionComponent)
+    assert room.has_component(SpriteImageComponent)
+    assert room.has_component(SpriteScaleComponent)
+    assert room.get_component(SpritePositionComponent).x == 0.0
+    assert room.get_component(SpriteImageComponent).url == ""
+    assert room.get_component(SpriteScaleComponent).scale == 1.0
 
 
 def test_skips_non_renderable_entities():
@@ -102,10 +104,10 @@ def test_skips_non_renderable_entities():
 
     _backfill(world)
 
-    assert not faction.has_component(SpriteLayer)
-    assert not faction.has_component(SpritePosition)
-    assert not faction.has_component(SpriteImage)
-    assert not faction.has_component(SpriteScale)
+    assert not faction.has_component(SpriteLayerComponent)
+    assert not faction.has_component(SpritePositionComponent)
+    assert not faction.has_component(SpriteImageComponent)
+    assert not faction.has_component(SpriteScaleComponent)
     assert default_layer_for(faction) is None
 
 
@@ -118,20 +120,20 @@ def test_does_not_overwrite_explicit_values():
         [
             IdentityComponent(name="a painted egg", kind="art"),
             PortableComponent(),
-            SpritePosition(x=3.5, y=-2.0),
-            SpriteImage(url="https://cdn/egg.png"),
-            SpriteLayer(layer=99),
-            SpriteScale(scale=2.5),
+            SpritePositionComponent(x=3.5, y=-2.0),
+            SpriteImageComponent(url="https://cdn/egg.png"),
+            SpriteLayerComponent(layer=99),
+            SpriteScaleComponent(scale=2.5),
         ],
     )
 
     _backfill(world)
 
-    # The pre-set layer wins; the entity already had SpriteLayer so it is never touched.
-    assert item.get_component(SpriteLayer).layer == 99
-    assert item.get_component(SpritePosition).x == 3.5
-    assert item.get_component(SpriteImage).url == "https://cdn/egg.png"
-    assert item.get_component(SpriteScale).scale == 2.5
+    # The pre-set layer wins; the entity already had SpriteLayerComponent so it is never touched.
+    assert item.get_component(SpriteLayerComponent).layer == 99
+    assert item.get_component(SpritePositionComponent).x == 3.5
+    assert item.get_component(SpriteImageComponent).url == "https://cdn/egg.png"
+    assert item.get_component(SpriteScaleComponent).scale == 2.5
 
 
 def test_backfill_preserves_existing_sprite_parts_when_adding_layer():
@@ -143,19 +145,19 @@ def test_backfill_preserves_existing_sprite_parts_when_adding_layer():
         [
             IdentityComponent(name="a painted egg", kind="food"),
             PortableComponent(),
-            SpritePosition(x=3.5, y=-2.0),
-            SpriteImage(url="https://cdn/egg.png"),
-            SpriteScale(scale=2.5),
+            SpritePositionComponent(x=3.5, y=-2.0),
+            SpriteImageComponent(url="https://cdn/egg.png"),
+            SpriteScaleComponent(scale=2.5),
         ],
     )
 
     _backfill(world)
 
-    assert item.get_component(SpriteLayer).layer == LAYER_ITEM
-    assert item.get_component(SpritePosition).x == 3.5
-    assert item.get_component(SpritePosition).y == -2.0
-    assert item.get_component(SpriteImage).url == "https://cdn/egg.png"
-    assert item.get_component(SpriteScale).scale == 2.5
+    assert item.get_component(SpriteLayerComponent).layer == LAYER_ITEM
+    assert item.get_component(SpritePositionComponent).x == 3.5
+    assert item.get_component(SpritePositionComponent).y == -2.0
+    assert item.get_component(SpriteImageComponent).url == "https://cdn/egg.png"
+    assert item.get_component(SpriteScaleComponent).scale == 2.5
 
 
 def test_backfill_preserves_existing_bounds_when_adding_layer():
@@ -167,14 +169,14 @@ def test_backfill_preserves_existing_bounds_when_adding_layer():
         [
             IdentityComponent(name="a crate", kind="container"),
             ContainerComponent(),
-            SpriteBounds(width=33.0, height=11.0, solid=True),
+            SpriteBoundsComponent(width=33.0, height=11.0, solid=True),
         ],
     )
 
     _backfill(world)
 
-    assert item.get_component(SpriteLayer).layer == LAYER_FURNITURE
-    assert item.get_component(SpriteBounds).width == 33.0
+    assert item.get_component(SpriteLayerComponent).layer == LAYER_FURNITURE
+    assert item.get_component(SpriteBoundsComponent).width == 33.0
 
 
 def test_default_bounds_cover_renderable_categories_and_unnamed_kind():
@@ -197,10 +199,10 @@ def test_backfill_is_idempotent():
 
     _backfill(world)
     room = world.get_entity(scenario.room_a)
-    first = room.get_component(SpriteLayer).layer
+    first = room.get_component(SpriteLayerComponent).layer
 
     _backfill(world)
-    assert room.get_component(SpriteLayer).layer == first
+    assert room.get_component(SpriteLayerComponent).layer == first
 
 
 async def test_install_registers_consequence_and_runs_on_tick():
@@ -210,7 +212,7 @@ async def test_install_registers_consequence_and_runs_on_tick():
     await scenario.actor.tick(0.0)
 
     room = scenario.actor.world.get_entity(scenario.room_a)
-    assert room.get_component(SpriteLayer).layer == LAYER_BACKGROUND
+    assert room.get_component(SpriteLayerComponent).layer == LAYER_BACKGROUND
 
 
 async def test_worldgen_hook_places_items_on_table_without_changing_containment():
@@ -238,18 +240,18 @@ async def test_worldgen_hook_places_items_on_table_without_changing_containment(
     table = actor.world.get_entity(result.objects["table"])
     apple = actor.world.get_entity(result.objects["apple"])
     assert room.has_component(ToonRoomComponent)
-    assert room.has_component(SpriteBounds)
-    assert table.get_component(SpriteLayer).layer == LAYER_FURNITURE
-    assert apple.get_component(SpriteLayer).layer == LAYER_ITEM
+    assert room.has_component(SpriteBoundsComponent)
+    assert table.get_component(SpriteLayerComponent).layer == LAYER_FURNITURE
+    assert apple.get_component(SpriteLayerComponent).layer == LAYER_ITEM
     assert container_of(table) == room.id
     assert container_of(apple) == room.id
     assert room.has_relationship(Contains, table.id)
     assert room.has_relationship(Contains, apple.id)
     assert apple.has_relationship(PlacedOn, table.id)
 
-    table_pos = table.get_component(SpritePosition)
-    table_bounds = table.get_component(SpriteBounds)
-    apple_pos = apple.get_component(SpritePosition)
+    table_pos = table.get_component(SpritePositionComponent)
+    table_bounds = table.get_component(SpriteBoundsComponent)
+    apple_pos = apple.get_component(SpritePositionComponent)
     assert abs(apple_pos.x - table_pos.x) <= table_bounds.width / 2.0
     assert abs(apple_pos.y - table_pos.y) <= table_bounds.height / 2.0
 
@@ -262,16 +264,16 @@ def test_generated_positions_cover_directions_and_floor_fallback():
         world,
         [
             CharacterComponent(species="hare"),
-            SpriteBounds(width=5.0, height=8.0, solid=True),
+            SpriteBoundsComponent(width=5.0, height=8.0, solid=True),
         ],
     )
-    floor_item = spawn_entity(world, [PortableComponent(), SpriteBounds()])
+    floor_item = spawn_entity(world, [PortableComponent(), SpriteBoundsComponent()])
     north = spawn_entity(
         world,
         [
             IdentityComponent(name="north hatch", kind="door"),
             DoorComponent(),
-            SpriteBounds(width=10.0, height=8.0),
+            SpriteBoundsComponent(width=10.0, height=8.0),
         ],
     )
     south = spawn_entity(
@@ -279,7 +281,7 @@ def test_generated_positions_cover_directions_and_floor_fallback():
         [
             IdentityComponent(name="south hatch", kind="door"),
             DoorComponent(),
-            SpriteBounds(width=10.0, height=8.0),
+            SpriteBoundsComponent(width=10.0, height=8.0),
         ],
     )
     east = spawn_entity(
@@ -287,7 +289,7 @@ def test_generated_positions_cover_directions_and_floor_fallback():
         [
             IdentityComponent(name="east hatch", kind="door"),
             DoorComponent(),
-            SpriteBounds(width=10.0, height=8.0),
+            SpriteBoundsComponent(width=10.0, height=8.0),
         ],
     )
     west = spawn_entity(
@@ -295,10 +297,12 @@ def test_generated_positions_cover_directions_and_floor_fallback():
         [
             IdentityComponent(name="west hatch", kind="door"),
             DoorComponent(),
-            SpriteBounds(width=10.0, height=8.0),
+            SpriteBoundsComponent(width=10.0, height=8.0),
         ],
     )
-    unnamed_door = spawn_entity(world, [DoorComponent(), SpriteBounds(width=10.0, height=8.0)])
+    unnamed_door = spawn_entity(
+        world, [DoorComponent(), SpriteBoundsComponent(width=10.0, height=8.0)]
+    )
 
     assert 30.0 <= toonsim._generated_position(world, character, room, "c").x <= 70.0
     assert toonsim._generated_position(world, north, room, "n").y == 4.0
@@ -320,11 +324,11 @@ def test_generated_surface_position_preserves_existing_placed_on_edge():
         world,
         [
             IdentityComponent(name="desk", kind="desk"),
-            SpritePosition(x=45.0, y=45.0),
-            SpriteBounds(width=20.0, height=10.0, solid=True),
+            SpritePositionComponent(x=45.0, y=45.0),
+            SpriteBoundsComponent(width=20.0, height=10.0, solid=True),
         ],
     )
-    item = spawn_entity(world, [PortableComponent(), SpriteBounds()])
+    item = spawn_entity(world, [PortableComponent(), SpriteBoundsComponent()])
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), surface.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), item.id)
     item.add_relationship(PlacedOn(surface="top"), surface.id)
@@ -372,16 +376,16 @@ def test_worldgen_hook_preserves_explicit_renderable_parts():
     hook.actor = actor
     room = actor.world.get_entity(scenario.room_a)
     room.add_component(ToonRoomComponent(default_start=True))
-    room.add_component(SpritePosition(x=12.0, y=34.0))
+    room.add_component(SpritePositionComponent(x=12.0, y=34.0))
     entity = spawn_entity(
         actor.world,
         [
             IdentityComponent(name="apple", kind="food"),
             PortableComponent(),
-            SpriteImage(url="https://cdn/apple.png"),
-            SpriteScale(scale=2.0),
-            SpriteBounds(width=9.0, height=9.0),
-            SpritePosition(x=22.0, y=33.0),
+            SpriteImageComponent(url="https://cdn/apple.png"),
+            SpriteScaleComponent(scale=2.0),
+            SpriteBoundsComponent(width=9.0, height=9.0),
+            SpritePositionComponent(x=22.0, y=33.0),
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
@@ -404,10 +408,10 @@ def test_worldgen_hook_preserves_explicit_renderable_parts():
     )
 
     assert room.get_component(ToonRoomComponent).default_start is True
-    assert room.get_component(SpritePosition).x == 12.0
-    assert entity.get_component(SpriteImage).url == "https://cdn/apple.png"
-    assert entity.get_component(SpriteScale).scale == 2.0
-    assert entity.get_component(SpritePosition).x == 22.0
+    assert room.get_component(SpritePositionComponent).x == 12.0
+    assert entity.get_component(SpriteImageComponent).url == "https://cdn/apple.png"
+    assert entity.get_component(SpriteScaleComponent).scale == 2.0
+    assert entity.get_component(SpritePositionComponent).x == 22.0
 
 
 def test_worldgen_hook_keeps_existing_character_position():
@@ -416,7 +420,7 @@ def test_worldgen_hook_keeps_existing_character_position():
     hook = toonsim.ToonWorldgenHook()
     hook.actor = actor
     character = actor.world.get_entity(scenario.character)
-    character.add_component(SpritePosition(x=42.0, y=24.0))
+    character.add_component(SpritePositionComponent(x=42.0, y=24.0))
 
     hook._on_character(
         SimpleNamespace(
@@ -427,8 +431,8 @@ def test_worldgen_hook_keeps_existing_character_position():
     )
 
     # Already-positioned character is left where it sits (430->exit false branch).
-    assert character.get_component(SpritePosition).x == 42.0
-    assert character.get_component(SpritePosition).y == 24.0
+    assert character.get_component(SpritePositionComponent).x == 42.0
+    assert character.get_component(SpritePositionComponent).y == 24.0
 
 
 def test_ensure_renderable_skips_layer_and_bounds_for_non_renderable_entity():
@@ -438,15 +442,15 @@ def test_ensure_renderable_skips_layer_and_bounds_for_non_renderable_entity():
     hook.actor = actor
     # A faction is not renderable: default_layer_for and default_bounds_for both
     # return None, so the layer guard (375->377) and bounds guard (383->exit) both
-    # take their false path -- only SpriteImage/SpriteScale get attached.
+    # take their false path -- only SpriteImageComponent/SpriteScaleComponent get attached.
     faction = spawn_entity(actor.world, [IdentityComponent(name="The Warren", kind="faction")])
 
     hook._ensure_renderable(faction)
 
-    assert not faction.has_component(SpriteLayer)
-    assert not faction.has_component(SpriteBounds)
-    assert faction.has_component(SpriteImage)
-    assert faction.has_component(SpriteScale)
+    assert not faction.has_component(SpriteLayerComponent)
+    assert not faction.has_component(SpriteBoundsComponent)
+    assert faction.has_component(SpriteImageComponent)
+    assert faction.has_component(SpriteScaleComponent)
 
 
 def test_backfill_skips_bounds_when_default_is_missing(monkeypatch):
@@ -461,8 +465,8 @@ def test_backfill_skips_bounds_when_default_is_missing(monkeypatch):
 
     _backfill(world)
 
-    assert apple.get_component(SpriteLayer).layer == LAYER_ITEM
-    assert not apple.has_component(SpriteBounds)
+    assert apple.get_component(SpriteLayerComponent).layer == LAYER_ITEM
+    assert not apple.has_component(SpriteBoundsComponent)
 
 
 def _move_sprite(scenario, **payload):
@@ -487,7 +491,7 @@ async def test_move_sprite_repositions_for_free():
     await scenario.actor.tick(0.0)
 
     character = scenario.actor.world.get_entity(scenario.character)
-    pos = character.get_component(SpritePosition)
+    pos = character.get_component(SpritePositionComponent)
     assert (pos.x, pos.y) == (20.0, 20.0)
     # No action points were spent on the free in-room move.
     assert character.get_component(ActionPointsComponent).current == 5.0
@@ -503,7 +507,7 @@ def test_move_sprite_rejects_out_of_room_bounds():
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert result.reason == "position is outside room bounds"
-    assert not character.has_component(SpritePosition)
+    assert not character.has_component(SpritePositionComponent)
 
 
 def test_move_sprite_rejects_solid_collision():
@@ -513,8 +517,8 @@ def test_move_sprite_rejects_solid_collision():
         world,
         [
             IdentityComponent(name="oak table", kind="table"),
-            SpritePosition(x=40.0, y=40.0),
-            SpriteBounds(width=12.0, height=12.0, solid=True),
+            SpritePositionComponent(x=40.0, y=40.0),
+            SpriteBoundsComponent(width=12.0, height=12.0, solid=True),
         ],
     )
     world.get_entity(scenario.room_a).add_relationship(
@@ -526,7 +530,7 @@ def test_move_sprite_rejects_solid_collision():
 
     character = world.get_entity(scenario.character)
     assert result.reason == "position is blocked"
-    assert not character.has_component(SpritePosition)
+    assert not character.has_component(SpritePositionComponent)
 
 
 def test_move_sprite_allows_nearby_non_overlapping_solid_member():
@@ -536,8 +540,8 @@ def test_move_sprite_allows_nearby_non_overlapping_solid_member():
         world,
         [
             IdentityComponent(name="oak table", kind="table"),
-            SpritePosition(x=70.0, y=70.0),
-            SpriteBounds(width=12.0, height=12.0, solid=True),
+            SpritePositionComponent(x=70.0, y=70.0),
+            SpriteBoundsComponent(width=12.0, height=12.0, solid=True),
         ],
     )
     world.get_entity(scenario.room_a).add_relationship(
@@ -548,7 +552,7 @@ def test_move_sprite_allows_nearby_non_overlapping_solid_member():
     result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     assert result.ok is True
-    assert world.get_entity(scenario.character).get_component(SpritePosition).x == 40.0
+    assert world.get_entity(scenario.character).get_component(SpritePositionComponent).x == 40.0
 
 
 def test_move_sprite_ignores_non_solid_and_unpositioned_members():
@@ -558,15 +562,15 @@ def test_move_sprite_ignores_non_solid_and_unpositioned_members():
         world,
         [
             IdentityComponent(name="apple", kind="food"),
-            SpritePosition(x=40.0, y=40.0),
-            SpriteBounds(width=20.0, height=20.0, solid=False),
+            SpritePositionComponent(x=40.0, y=40.0),
+            SpriteBoundsComponent(width=20.0, height=20.0, solid=False),
         ],
     )
     unpositioned_solid = spawn_entity(
         world,
         [
             IdentityComponent(name="table", kind="table"),
-            SpriteBounds(width=20.0, height=20.0, solid=True),
+            SpriteBoundsComponent(width=20.0, height=20.0, solid=True),
         ],
     )
     room = world.get_entity(scenario.room_a)
@@ -577,7 +581,7 @@ def test_move_sprite_ignores_non_solid_and_unpositioned_members():
     result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     assert result.ok is True
-    assert world.get_entity(scenario.character).get_component(SpritePosition).x == 40.0
+    assert world.get_entity(scenario.character).get_component(SpritePositionComponent).x == 40.0
 
 
 def test_move_sprite_rejects_character_without_room():
@@ -607,17 +611,17 @@ def test_move_sprite_preserves_existing_character_bounds():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
-    character.add_component(SpriteBounds(width=3.0, height=7.0, solid=True))
+    character.add_component(SpriteBoundsComponent(width=3.0, height=7.0, solid=True))
     ctx = HandlerContext(world, scenario.actor.epoch)
 
     result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     # The character already has bounds, so they are reused unchanged (477->479).
     assert result.ok is True
-    bounds = world.get_entity(scenario.character).get_component(SpriteBounds)
+    bounds = world.get_entity(scenario.character).get_component(SpriteBoundsComponent)
     assert bounds.width == 3.0
     assert bounds.height == 7.0
-    assert world.get_entity(scenario.character).get_component(SpritePosition).x == 40.0
+    assert world.get_entity(scenario.character).get_component(SpritePositionComponent).x == 40.0
 
 
 async def test_move_sprite_rejects_bad_payload():
@@ -628,7 +632,7 @@ async def test_move_sprite_rejects_bad_payload():
     await scenario.actor.tick(0.0)
 
     character = scenario.actor.world.get_entity(scenario.character)
-    assert not character.has_component(SpritePosition)
+    assert not character.has_component(SpritePositionComponent)
 
 
 def test_move_sprite_rejects_invalid_character_id():
