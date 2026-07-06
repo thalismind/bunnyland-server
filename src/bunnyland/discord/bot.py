@@ -153,6 +153,7 @@ class DiscordMessageFilters:
     guild_ids: tuple[int, ...] = ()
     channel_ids: tuple[int, ...] = ()
     dm_user_ids: tuple[int, ...] = ()
+    allowed_bot_user_ids: tuple[int, ...] = ()
 
     def allows(self, message) -> bool:
         if not self.guild_ids and not self.channel_ids and not self.dm_user_ids:
@@ -383,7 +384,14 @@ class DiscordBot:
     def _should_handle_message(self, message) -> bool:
         author = getattr(message, "author", None)
         if getattr(author, "bot", False):
-            return False
+            if getattr(author, "id", None) not in self.message_filters.allowed_bot_user_ids:
+                return False
+            if not (
+                self.message_filters.guild_ids
+                or self.message_filters.channel_ids
+                or self.message_filters.dm_user_ids
+            ):
+                return False
         content = getattr(message, "content", "")
         if not content.startswith("!"):
             return False

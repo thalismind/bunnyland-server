@@ -165,7 +165,10 @@ def test_bunnyland_config_renders_setup_env() -> None:
         ),
         auth=AuthConfig(admin_user="editor", admin_password="local"),
         world=WorldConfig(starter_pack="peaceful"),
-        discord=DiscordConfig(public_url="https://discord.gg/example"),
+        discord=DiscordConfig(
+            public_url="https://discord.gg/example",
+            allowed_bot_user_ids=(123,),
+        ),
     )
 
     env = config.to_env(dry_run=True)
@@ -176,6 +179,7 @@ def test_bunnyland_config_renders_setup_env() -> None:
     assert env["BUNNYLAND_ADMIN_PASSWORD"] == "local"
     assert env["BUNNYLAND_STARTER_PACK"] == "peaceful"
     assert env["BUNNYLAND_DISCORD_URL"] == "https://discord.gg/example"
+    assert env["BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS"] == "123"
     assert env["BUNNYLAND_SETUP_DRY_RUN"] == "1"
 
 

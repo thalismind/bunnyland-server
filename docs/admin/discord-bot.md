@@ -110,10 +110,17 @@ The matching rules are:
 | `--discord-allowed-guild-id`     | Accept guild messages only from these guilds.           |
 | `--discord-allowed-channel-id`   | Accept guild messages only from these channels.         |
 | `--discord-allowed-dm-user-id`   | Accept DMs only from these users.                       |
+| `--discord-allowed-bot-user-id`  | Accept commands from this bot user id.                  |
 
 Repeat the CLI flags to allow more than one id. If both guild and channel filters are set,
 a guild message must match both. DM messages are accepted only when the author is listed in
 `--discord-allowed-dm-user-id` or `BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS`.
+
+The bot normally ignores Discord bot authors to prevent bot-to-bot loops and accidental
+commands from integrations. To allow a specific bot actor, set
+`BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS` or repeat `--discord-allowed-bot-user-id`, and
+keep the normal guild/channel allowlists restricted to the channels where bot-authored
+commands are expected.
 
 If you do not know the numeric user id yet, omit `BUNNYLAND_DISCORD_USER_ID` and claim from
 Discord instead:

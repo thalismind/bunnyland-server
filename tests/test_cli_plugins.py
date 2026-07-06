@@ -88,6 +88,7 @@ def _serve_args(**overrides):
         "discord_channel_id": None,
         "discord_character": None,
         "discord_playtest": None,
+        "discord_allowed_bot_user_id": [],
         "discord_user_id": None,
         "generator": "empty",
         "lifesim_natural_aging": None,
@@ -1440,8 +1441,9 @@ def test_discord_filter_ids_can_come_from_environment(monkeypatch):
     monkeypatch.setenv("BUNNYLAND_DISCORD_ALLOWED_GUILD_IDS", "11,22")
     monkeypatch.setenv("BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS", "33")
     monkeypatch.setenv("BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS", "44, 55")
+    monkeypatch.setenv("BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS", "66")
 
-    assert cli._discord_filter_ids(_serve_args()) == ((11, 22), (33,), (44, 55))
+    assert cli._discord_filter_ids(_serve_args()) == ((11, 22), (33,), (44, 55), (66,))
 
 
 def test_maybe_assign_startup_discord_claim_handles_errors_and_save(

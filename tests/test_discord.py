@@ -1001,6 +1001,30 @@ def test_discord_bot_ignores_messages_rejected_by_filters():
     assert not bot._should_handle_message(_message(guild_id=111, channel_id=333, content="look"))
 
 
+def test_discord_bot_allows_configured_bot_author_messages_through_filters():
+    bot = object.__new__(DiscordBot)
+    bot.message_filters = DiscordMessageFilters(
+        guild_ids=(111,),
+        channel_ids=(333,),
+        allowed_bot_user_ids=(123,),
+    )
+
+    assert bot._should_handle_message(
+        _message(guild_id=111, channel_id=333, author_id=123, bot=True)
+    )
+    assert not bot._should_handle_message(
+        _message(guild_id=111, channel_id=333, author_id=456, bot=True)
+    )
+    assert not bot._should_handle_message(
+        _message(guild_id=111, channel_id=999, author_id=123, bot=True)
+    )
+
+    bot.message_filters = DiscordMessageFilters(allowed_bot_user_ids=(123,))
+    assert not bot._should_handle_message(
+        _message(guild_id=111, channel_id=333, author_id=123, bot=True)
+    )
+
+
 def test_release_discord_claim_removes_claim_without_changing_controller(scenario):
     claim_secrets = ClaimSecretRegistry()
     assign_discord_controller(

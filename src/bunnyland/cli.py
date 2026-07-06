@@ -522,7 +522,9 @@ def _configure_claim_timeout(actor: WorldActor, args, models: ServeModels) -> No
     )
 
 
-def _discord_filter_ids(args) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+def _discord_filter_ids(
+    args,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
     from .discord import parse_discord_id_list
 
     guild_filter_ids = tuple(
@@ -537,7 +539,11 @@ def _discord_filter_ids(args) -> tuple[tuple[int, ...], tuple[int, ...], tuple[i
         args.discord_allowed_dm_user_id
         or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS"))
     )
-    return guild_filter_ids, channel_filter_ids, dm_user_filter_ids
+    allowed_bot_user_ids = tuple(
+        args.discord_allowed_bot_user_id
+        or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS"))
+    )
+    return guild_filter_ids, channel_filter_ids, dm_user_filter_ids, allowed_bot_user_ids
 
 
 def _setup_discord_bot(
@@ -555,7 +561,9 @@ def _setup_discord_bot(
 
     from .discord import DiscordBot, DiscordMessageFilters
 
-    guild_filter_ids, channel_filter_ids, dm_user_filter_ids = _discord_filter_ids(args)
+    guild_filter_ids, channel_filter_ids, dm_user_filter_ids, allowed_bot_user_ids = (
+        _discord_filter_ids(args)
+    )
     discord_bot = DiscordBot(
         actor,
         token=credentials.discord_token,
@@ -567,6 +575,7 @@ def _setup_discord_bot(
             guild_ids=guild_filter_ids,
             channel_ids=channel_filter_ids,
             dm_user_ids=dm_user_filter_ids,
+            allowed_bot_user_ids=allowed_bot_user_ids,
         ),
         imagegen=imagegen,
         claim_secrets=claim_secrets,
@@ -771,6 +780,7 @@ _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
     "discord_allowed_guild_id": ("--discord-allowed-guild-id",),
     "discord_allowed_channel_id": ("--discord-allowed-channel-id",),
     "discord_allowed_dm_user_id": ("--discord-allowed-dm-user-id",),
+    "discord_allowed_bot_user_id": ("--discord-allowed-bot-user-id",),
     "mcp": ("--mcp",),
     "character_chat": ("--character-chat",),
     "admin_token": ("--admin-token",),
@@ -1071,6 +1081,16 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "allow Discord DM commands from this user id; repeat for more "
             "(env: BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS)"
+        ),
+    )
+    serve.add_argument(
+        "--discord-allowed-bot-user-id",
+        action="append",
+        type=int,
+        default=None,
+        help=(
+            "allow Discord commands from this bot user id; repeat for more "
+            "(env: BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS)"
         ),
     )
     serve.add_argument(

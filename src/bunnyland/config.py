@@ -103,6 +103,7 @@ class DiscordConfig:
     allowed_guild_ids: tuple[int, ...] = ()
     allowed_channel_ids: tuple[int, ...] = ()
     allowed_dm_user_ids: tuple[int, ...] = ()
+    allowed_bot_user_ids: tuple[int, ...] = ()
     public_url: str = ""
 
 
@@ -291,6 +292,7 @@ class BunnylandConfig:
             "discord_allowed_guild_id": list(discord.allowed_guild_ids) or None,
             "discord_allowed_channel_id": list(discord.allowed_channel_ids) or None,
             "discord_allowed_dm_user_id": list(discord.allowed_dm_user_ids) or None,
+            "discord_allowed_bot_user_id": list(discord.allowed_bot_user_ids) or None,
             "mcp": self.mcp.enabled,
             "character_chat": server.character_chat,
             "admin_token": server.admin_token or None,
@@ -376,6 +378,7 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_GUILD_IDS", _csv(discord.allowed_guild_ids))
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS", _csv(discord.allowed_channel_ids))
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS", _csv(discord.allowed_dm_user_ids))
+        _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS", _csv(discord.allowed_bot_user_ids))
         _set_if(env, "COMFYUI_SERVER_URL", imagegen.server_url)
         _set_if(env, "COMFYUI_USE_WEBSOCKET", imagegen.use_websocket)
         _set_if(env, "COMFYUI_POLL_INTERVAL_SECONDS", imagegen.poll_interval_seconds)
