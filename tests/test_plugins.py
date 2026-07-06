@@ -31,6 +31,7 @@ from bunnyland.core import (
 from bunnyland.core.events import NoteTakenEvent
 from bunnyland.core.handlers import ok
 from bunnyland.llm_agents.tools import tool_schemas
+from bunnyland.mechanics.checkpoints import SaveCheckpointComponent
 from bunnyland.mechanics.storyteller import IncidentSpawned
 from bunnyland.plugins import (
     CommandContribution,
@@ -76,7 +77,6 @@ from bunnyland.plugins.builtin import (
     storyteller_plugin,
 )
 from bunnyland.plugins.contributions import collect_content_items, collect_ecs_types
-from bunnyland.mechanics.checkpoints import SaveCheckpointComponent
 
 
 def test_builtin_plugins_declared():

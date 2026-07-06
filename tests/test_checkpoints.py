@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -11,6 +10,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DescriptionComponent,
+    HandlerContext,
     IdentityComponent,
     Lane,
     build_submitted_command,
@@ -19,12 +19,18 @@ from bunnyland.core import (
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.mechanics.checkpoints import (
     CheckpointReloadedEvent,
+    CheckpointReloadService,
     CheckpointSavedEvent,
+    ReloadCheckpointHandler,
     SaveCheckpointComponent,
+    SaveCheckpointHandler,
+    _PendingReload,
+    checkpoint_action_definitions,
 )
 from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.plugins import PluginError, apply_plugins
 from bunnyland.plugins.builtin import CHECKPOINTS, CORE_VERBS, checkpoints_plugin, core_verbs_plugin
+from bunnyland.prompts import ComponentPromptContext
 
 
 def _install_checkpoints(scenario, save_path):
@@ -103,6 +109,20 @@ async def test_save_checkpoint_rejects_without_save_path():
     assert [event.reason for event in rejections] == ["server was not started with --save"]
 
 
+async def test_save_checkpoint_creates_default_meta_when_missing(tmp_path):
+    scenario = build_scenario()
+    save_path = tmp_path / "world.json"
+    _install_checkpoints(scenario, save_path)
+    scenario.actor.persistence.meta = None
+    checkpoint_id = _checkpoint(scenario)
+
+    await scenario.actor.submit(_command(scenario, "save-checkpoint", checkpoint_id))
+    await scenario.actor.tick(0)
+
+    assert scenario.actor.persistence.meta is not None
+    assert save_path.exists()
+
+
 async def test_save_checkpoint_rejects_non_checkpoint(tmp_path):
     scenario = build_scenario()
     _install_checkpoints(scenario, tmp_path / "world.json")
@@ -120,6 +140,96 @@ async def test_save_checkpoint_rejects_non_checkpoint(tmp_path):
     await scenario.actor.tick(0)
 
     assert [event.reason for event in rejections] == ["target is not a checkpoint"]
+
+
+def test_checkpoint_component_prompt_names_identity_room_and_id():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    checkpoint = world.get_entity(_checkpoint(scenario, "terminal"))
+    room = world.get_entity(scenario.room_a)
+    room.add_component(SaveCheckpointComponent())
+    nameless = spawn_entity(world, [SaveCheckpointComponent()])
+
+    assert checkpoint.get_component(SaveCheckpointComponent).prompt_fragments(
+        ComponentPromptContext.for_entity(world, checkpoint)
+    ) == ("Checkpoint terminal: save and reload available.",)
+    assert room.get_component(SaveCheckpointComponent).prompt_fragments(
+        ComponentPromptContext.for_entity(world, room)
+    ) == ("Checkpoint Mosslit Burrow: save and reload available.",)
+    assert nameless.get_component(SaveCheckpointComponent).prompt_fragments(
+        ComponentPromptContext.for_entity(world, nameless)
+    ) == (f"Checkpoint {nameless.id}: save and reload available.",)
+
+
+def test_checkpoint_action_definitions_cover_save_and_reload():
+    save_action, reload_action = checkpoint_action_definitions()
+
+    assert save_action.command_type == "save-checkpoint"
+    assert save_action.tool_name == "save_checkpoint"
+    assert save_action.arguments["target_id"].title == "Checkpoint"
+    assert [pattern.text for pattern in save_action.natural_patterns] == [
+        "save at {target_id}",
+        "save checkpoint {target_id}",
+    ]
+    assert reload_action.command_type == "reload-checkpoint"
+    assert reload_action.tool_name == "reload_checkpoint"
+    assert reload_action.arguments["target_id"] is save_action.arguments["target_id"]
+    assert reload_action.examples[0].text == "reload from bonfire"
+
+
+def test_checkpoint_handlers_reject_invalid_missing_and_unreachable_targets(tmp_path):
+    scenario = build_scenario()
+    _install_checkpoints(scenario, tmp_path / "world.json")
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch, actor=scenario.actor)
+    save_handler = SaveCheckpointHandler()
+    reload_handler = ReloadCheckpointHandler(CheckpointReloadService())
+    checkpoint_id = _checkpoint(scenario)
+    remote_checkpoint = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="far scroll", kind="checkpoint"),
+            SaveCheckpointComponent(),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), remote_checkpoint.id
+    )
+
+    invalid_character = _command(scenario, "save-checkpoint", checkpoint_id)
+    object.__setattr__(invalid_character, "character_id", "not-an-id")
+    removed_character = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="gone", kind="character")],
+    )
+    scenario.actor.world.remove(removed_character.id)
+    missing_character = _command(scenario, "save-checkpoint", checkpoint_id)
+    object.__setattr__(missing_character, "character_id", str(removed_character.id))
+    invalid_target = _command(scenario, "save-checkpoint", "not-an-id")
+    removed_checkpoint = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="gone checkpoint", kind="checkpoint"),
+            SaveCheckpointComponent(),
+        ],
+    )
+    scenario.actor.world.remove(removed_checkpoint.id)
+    missing_target = _command(
+        scenario, "save-checkpoint", removed_checkpoint.id
+    )
+    unreachable = _command(scenario, "save-checkpoint", remote_checkpoint.id)
+
+    assert save_handler.execute(ctx, invalid_character).reason == "invalid character id"
+    assert save_handler.execute(ctx, missing_character).reason == "character does not exist"
+    assert save_handler.execute(ctx, invalid_target).reason == "invalid checkpoint id"
+    assert save_handler.execute(ctx, missing_target).reason == "checkpoint does not exist"
+    assert save_handler.execute(ctx, unreachable).reason == "checkpoint is not reachable"
+
+    no_save_path = ReloadCheckpointHandler(CheckpointReloadService()).execute(
+        HandlerContext(scenario.actor.world, scenario.actor.epoch, actor=None),
+        _command(scenario, "reload-checkpoint", checkpoint_id),
+    )
+    assert no_save_path.reason == "server was not started with --save"
+    assert reload_handler.execute(ctx, missing_target).reason == "checkpoint does not exist"
 
 
 async def test_reload_checkpoint_restores_saved_world_and_clears_queues(tmp_path):
@@ -164,6 +274,32 @@ async def test_reload_checkpoint_rejects_missing_save_file(tmp_path):
     await scenario.actor.tick(0)
 
     assert [event.reason for event in rejections] == ["save file does not exist"]
+
+
+async def test_checkpoint_reload_service_ignores_empty_duplicate_and_failed_reload(
+    tmp_path, monkeypatch
+):
+    scenario = build_scenario()
+    save_path = tmp_path / "world.json"
+    _install_checkpoints(scenario, save_path)
+    checkpoint_id = _checkpoint(scenario)
+    service = CheckpointReloadService()
+    pending = _PendingReload(str(scenario.character), str(checkpoint_id), str(save_path))
+
+    await service.after_tick(scenario.actor)
+    assert service.pending is None
+
+    service.request(pending)
+    service.request(_PendingReload("other-character", "other-checkpoint", str(save_path)))
+    assert service.pending == pending
+
+    def fail_reload(*args, **kwargs):
+        raise RuntimeError("reload failed")
+
+    monkeypatch.setattr("bunnyland.persistence.reload_world", fail_reload)
+    await service.after_tick(scenario.actor)
+
+    assert service.pending is None
 
 
 async def test_checkpoint_save_requires_plugin_on_reload(tmp_path):

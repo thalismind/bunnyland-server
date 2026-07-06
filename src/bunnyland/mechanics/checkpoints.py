@@ -66,8 +66,6 @@ def _entity_name(entity) -> str:
 
 
 def _room_id(ctx: HandlerContext, character_id) -> str | None:
-    if not ctx.world.has_entity(character_id):
-        return None
     room_id = container_of(ctx.world.get_entity(character_id))
     return str(room_id) if room_id is not None else None
 
@@ -91,8 +89,7 @@ def _configured_meta(ctx: HandlerContext):
     if meta is not None:
         return meta
     meta = WorldMeta()
-    if persistence is not None:
-        persistence.meta = meta
+    persistence.meta = meta
     return meta
 
 

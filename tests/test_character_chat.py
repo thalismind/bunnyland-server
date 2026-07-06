@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 import pytest
 from conftest import build_scenario
 
@@ -79,6 +80,13 @@ def chat_service(scenario, agent, *, timeout=0.01) -> CharacterChatService:
         PromptBuilder(scenario.actor.world),
         agent,
         result_timeout_seconds=timeout,
+    )
+
+
+def route_client(app) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
     )
 
 
@@ -532,49 +540,52 @@ async def test_character_chat_unresolved_reference_does_not_submit():
     assert fallback == "All right."
 
 
-def test_character_chat_status_and_disabled_route():
+@pytest.mark.asyncio
+async def test_character_chat_status_and_disabled_route():
     scenario = build_scenario()
     app = create_app(scenario.actor)
 
-    from fastapi.testclient import TestClient
-
-    client = TestClient(app)
-    assert client.get("/world/chat/status").json()["enabled"] is False
-    response = client.post(
-        f"/world/character/{scenario.character}/chat",
-        json={"client_id": "c", "message": "hi"},
-    )
-    assert response.status_code == 409
-    assert response.json()["detail"] == "character chat is not enabled"
-    pending = client.get(
-        f"/world/character/{scenario.character}/chat/pending/missing",
-        params={"client_id": "c"},
-    )
-    assert pending.status_code == 409
-    assert pending.json()["detail"] == "character chat is not enabled"
+    async with route_client(app) as client:
+        assert (await client.get("/world/chat/status")).json()["enabled"] is False
+        response = await client.post(
+            f"/world/character/{scenario.character}/chat",
+            json={"client_id": "c", "message": "hi"},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "character chat is not enabled"
+        pending = await client.get(
+            f"/world/character/{scenario.character}/chat/pending/missing",
+            params={"client_id": "c"},
+        )
+        assert pending.status_code == 409
+        assert pending.json()["detail"] == "character chat is not enabled"
 
 
-def test_character_chat_route_reports_invalid_character_and_wrong_kind():
+@pytest.mark.asyncio
+async def test_character_chat_route_reports_invalid_character_and_wrong_kind():
     scenario = build_scenario()
     install_core(scenario.actor)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
     item = spawn_entity(scenario.actor.world, [IdentityComponent(name="stone", kind="item")])
     app = create_app(scenario.actor, character_chat=service)
 
-    from fastapi.testclient import TestClient
+    async with route_client(app) as client:
+        assert (
+            await client.post(
+                "/world/character/not-real/chat",
+                json={"client_id": "c", "message": "hi"},
+            )
+        ).status_code == 404
+        assert (
+            await client.post(
+                f"/world/character/{item.id}/chat",
+                json={"client_id": "c", "message": "hi"},
+            )
+        ).status_code == 400
 
-    client = TestClient(app)
-    assert client.post(
-        "/world/character/not-real/chat",
-        json={"client_id": "c", "message": "hi"},
-    ).status_code == 404
-    assert client.post(
-        f"/world/character/{item.id}/chat",
-        json={"client_id": "c", "message": "hi"},
-    ).status_code == 400
 
-
-def test_character_chat_route_conflicts_for_non_llm_character():
+@pytest.mark.asyncio
+async def test_character_chat_route_conflicts_for_non_llm_character():
     scenario = build_scenario()
     install_core(scenario.actor)
     web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="web")])
@@ -582,37 +593,36 @@ def test_character_chat_route_conflicts_for_non_llm_character():
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
     app = create_app(scenario.actor, character_chat=service)
 
-    from fastapi.testclient import TestClient
-
-    response = TestClient(app).post(
-        f"/world/character/{scenario.character}/chat",
-        json={"client_id": "c", "message": "hi"},
-    )
+    async with route_client(app) as client:
+        response = await client.post(
+            f"/world/character/{scenario.character}/chat",
+            json={"client_id": "c", "message": "hi"},
+        )
     assert response.status_code == 409
     assert response.json()["detail"] == "character chat requires the current controller to be llm"
 
 
-def test_character_chat_route_validates_request_and_reports_allowed_tools():
+@pytest.mark.asyncio
+async def test_character_chat_route_validates_request_and_reports_allowed_tools():
     scenario = build_scenario()
     install_core(scenario.actor)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
     app = create_app(scenario.actor, character_chat=service)
 
-    from fastapi.testclient import TestClient
-
-    client = TestClient(app)
-    status = client.get("/world/chat/status").json()
-    assert status["enabled"] is True
-    assert set(status["allowed_tools"]) == ALLOWED_CHAT_TOOLS
-    assert {"remember", "take_note", "reflect", "forget"}.issubset(status["allowed_tools"])
-    response = client.post(
-        f"/world/character/{scenario.character}/chat",
-        json={"client_id": "c", "message": ""},
-    )
-    assert response.status_code == 422
+    async with route_client(app) as client:
+        status = (await client.get("/world/chat/status")).json()
+        assert status["enabled"] is True
+        assert set(status["allowed_tools"]) == ALLOWED_CHAT_TOOLS
+        assert {"remember", "take_note", "reflect", "forget"}.issubset(status["allowed_tools"])
+        response = await client.post(
+            f"/world/character/{scenario.character}/chat",
+            json={"client_id": "c", "message": ""},
+        )
+        assert response.status_code == 422
 
 
-def test_character_chat_pending_route_reports_queued_action_and_scopes_client():
+@pytest.mark.asyncio
+async def test_character_chat_pending_route_reports_queued_action_and_scopes_client():
     scenario = build_scenario()
     install_core(scenario.actor)
     service = chat_service(
@@ -622,30 +632,30 @@ def test_character_chat_pending_route_reports_queued_action_and_scopes_client():
     )
     app = create_app(scenario.actor, character_chat=service)
 
-    from fastapi.testclient import TestClient
+    async with route_client(app) as client:
+        response = await client.post(
+            f"/world/character/{scenario.character}/chat",
+            json={"client_id": "c", "message": "say something"},
+        )
+        body = response.json()
+        command_id = body["action"]["command_id"]
+        assert body["action"]["status"] == "queued"
 
-    client = TestClient(app)
-    response = client.post(
-        f"/world/character/{scenario.character}/chat",
-        json={"client_id": "c", "message": "say something"},
-    )
-    body = response.json()
-    command_id = body["action"]["command_id"]
-    assert body["action"]["status"] == "queued"
+        pending = (
+            await client.get(
+                f"/world/character/{scenario.character}/chat/pending/{command_id}",
+                params={"client_id": "c"},
+            )
+        ).json()
+        assert pending["complete"] is False
+        assert pending["action"]["status"] == "queued"
+        assert pending["reply"] == ""
 
-    pending = client.get(
-        f"/world/character/{scenario.character}/chat/pending/{command_id}",
-        params={"client_id": "c"},
-    ).json()
-    assert pending["complete"] is False
-    assert pending["action"]["status"] == "queued"
-    assert pending["reply"] == ""
-
-    missing = client.get(
-        f"/world/character/{scenario.character}/chat/pending/{command_id}",
-        params={"client_id": "other"},
-    )
-    assert missing.status_code == 404
+        missing = await client.get(
+            f"/world/character/{scenario.character}/chat/pending/{command_id}",
+            params={"client_id": "other"},
+        )
+        assert missing.status_code == 404
 
 
 def test_build_character_chat_service_factory_returns_service():

@@ -582,12 +582,17 @@ async def test_textual_config_wizard_filters_and_selects_plugins() -> None:
         app.query_one("#character-chat", Select).value = "no"
         app.query_one("#plugin-search", Input).value = "memory"
         app._filter_plugins()
+        memory_checkbox = next(
+            checkbox
+            for checkbox in app.query(Checkbox)
+            if "bunnyland.memory" in str(checkbox.label)
+        )
         assert app.query_one("#plugin-0", Checkbox).display is False
-        assert app.query_one("#plugin-2", Checkbox).display is True
+        assert memory_checkbox.display is True
         app.clear_plugin_search_pressed(SimpleNamespace())
         assert app.query_one("#plugin-search", Input).value == ""
         assert app.query_one("#plugin-0", Checkbox).display is True
-        app.query_one("#plugin-2", Checkbox).value = False
+        memory_checkbox.value = False
         await _advance_textual_wizard_to_review(app, pilot)
         app.query_one("#save", Button).press()
         await pilot.pause()

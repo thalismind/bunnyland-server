@@ -6,7 +6,9 @@ import sys
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
+import httpx
 import pytest
 from conftest import build_scenario
 
@@ -176,6 +178,102 @@ from bunnyland.worldgen import (
     StoryEventProposal,
     collect_generators,
 )
+
+
+class _SyncASGIClient:
+    """Small HTTP-only ASGI test client that avoids Starlette TestClient's portal startup."""
+
+    def __init__(self, app, headers: dict[str, str] | None = None, **_kwargs) -> None:
+        self.app = app
+        self.headers = dict(headers or {})
+        self._websocket_clients = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc_info):
+        return False
+
+    def request(self, method: str, url: str, **kwargs):
+        async def run_request():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.app),
+                base_url="http://testserver",
+                headers=self.headers,
+            ) as client:
+                return await client.request(method, url, **kwargs)
+
+        return asyncio.run(run_request())
+
+    def get(self, url: str, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs):
+        return self.request("POST", url, **kwargs)
+
+    def put(self, url: str, **kwargs):
+        return self.request("PUT", url, **kwargs)
+
+    def patch(self, url: str, **kwargs):
+        return self.request("PATCH", url, **kwargs)
+
+    def delete(self, url: str, **kwargs):
+        return self.request("DELETE", url, **kwargs)
+
+    def options(self, url: str, **kwargs):
+        return self.request("OPTIONS", url, **kwargs)
+
+    def websocket_connect(self, *args, **kwargs):
+        if _FASTAPI_TESTCLIENT is None:
+            pytest.importorskip("fastapi.testclient")
+        client = _FASTAPI_TESTCLIENT(self.app, headers=self.headers)
+        self._websocket_clients.append(client)
+        return client.websocket_connect(*args, **kwargs)
+
+
+try:
+    import fastapi.testclient as _fastapi_testclient
+
+    _FASTAPI_TESTCLIENT = _fastapi_testclient.TestClient
+except ImportError:
+    _FASTAPI_TESTCLIENT = None
+
+
+@pytest.fixture(autouse=True)
+def _use_sync_asgi_test_client(monkeypatch):
+    if _FASTAPI_TESTCLIENT is None:
+        return
+    import fastapi.testclient as fastapi_testclient
+
+    monkeypatch.setattr(fastapi_testclient, "TestClient", _SyncASGIClient)
+
+
+async def _websocket_outputs(app, path: str, *, headers: dict[str, str] | None = None):
+    from asgiref.testing import ApplicationCommunicator
+
+    split = urlsplit(path)
+    scope = {
+        "type": "websocket",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "scheme": "ws",
+        "path": split.path,
+        "raw_path": split.path.encode(),
+        "query_string": split.query.encode(),
+        "headers": [
+            (key.lower().encode(), value.encode()) for key, value in (headers or {}).items()
+        ],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+        "subprotocols": [],
+    }
+    communicator = ApplicationCommunicator(app, scope)
+    await communicator.send_input({"type": "websocket.connect"})
+    outputs = [await communicator.receive_output(timeout=1)]
+    if outputs[0]["type"] == "websocket.accept":
+        outputs.append(await communicator.receive_output(timeout=1))
+        await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
+    await communicator.wait(timeout=1)
+    return outputs
 
 #: The /admin/* surface is gated by the admin-secret middleware (fail-closed). Tests that
 #: drive admin routes build the app with this token and send the matching header, mirroring
@@ -3889,19 +3987,15 @@ def test_pause_and_resume_tolerate_loops_without_publish(scenario):
     assert resumed.json()["paused"] is False
 
 
-def test_fastapi_world_updates_websocket_handles_client_disconnect(scenario):
-    testclient = pytest.importorskip("fastapi.testclient")
+async def test_fastapi_world_updates_websocket_handles_client_disconnect(scenario):
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    client = testclient.TestClient(app)
 
-    with client.websocket_connect(
-        "/world/updates", headers={"X-Bunnyland-Admin-Secret": "secret"}
-    ) as websocket:
-        assert websocket.receive_json()["type"] == "snapshot"
-        # Queue another message so the handler's next send races the client close, then
-        # close from the client side to drive the WebSocketDisconnect cleanup path.
-        app.state  # noqa: B018 - touch state to ensure app is live before closing
-        websocket.close()
+    outputs = await _websocket_outputs(
+        app, "/world/updates", headers={"X-Bunnyland-Admin-Secret": "secret"}
+    )
+
+    assert outputs[0]["type"] == "websocket.accept"
+    assert json.loads(outputs[1]["text"])["type"] == "snapshot"
 
 
 async def test_admin_controller_assign_endpoint_uses_controller_handoff(scenario):
@@ -5240,43 +5334,33 @@ async def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypat
     assert heartbeat == {"type": "heartbeat", "data": {"world_epoch": scenario.actor.epoch}}
 
 
-def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
-    testclient = pytest.importorskip("fastapi.testclient")
+async def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    client = testclient.TestClient(app)
 
-    with client.websocket_connect(
-        "/world/updates", headers={"X-Bunnyland-Admin-Secret": "secret"}
-    ) as websocket:
-        message = websocket.receive_json()
+    outputs = await _websocket_outputs(
+        app, "/world/updates", headers={"X-Bunnyland-Admin-Secret": "secret"}
+    )
+    message = json.loads(outputs[1]["text"])
 
     assert message["type"] == "snapshot"
     assert message["data"]["metadata"]["seed"] == "moss"
     assert message["data"]["world_epoch"] == scenario.actor.epoch
 
 
-def test_fastapi_world_updates_websocket_requires_admin_token(scenario):
-    testclient = pytest.importorskip("fastapi.testclient")
-    from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
-
+async def test_fastapi_world_updates_websocket_requires_admin_token(scenario):
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    client = testclient.TestClient(app)
 
-    with pytest.raises(StarletteWebSocketDisconnect) as missing:
-        with client.websocket_connect("/world/updates") as websocket:
-            websocket.receive_json()
-    assert missing.value.code == 1008
+    missing = await _websocket_outputs(app, "/world/updates")
+    assert missing == [{"type": "websocket.close", "code": 1008, "reason": ""}]
 
     # A token in the query string is no longer honored -- only the injected header is.
-    with pytest.raises(StarletteWebSocketDisconnect):
-        with client.websocket_connect("/world/updates?admin_token=secret") as websocket:
-            websocket.receive_json()
+    query = await _websocket_outputs(app, "/world/updates?admin_token=secret")
+    assert query == [{"type": "websocket.close", "code": 1008, "reason": ""}]
 
-    with pytest.raises(StarletteWebSocketDisconnect):
-        with client.websocket_connect(
-            "/world/updates", headers={"X-Bunnyland-Admin-Secret": "wrong"}
-        ) as websocket:
-            websocket.receive_json()
+    wrong = await _websocket_outputs(
+        app, "/world/updates", headers={"X-Bunnyland-Admin-Secret": "wrong"}
+    )
+    assert wrong == [{"type": "websocket.close", "code": 1008, "reason": ""}]
 
 
 async def test_event_stream_fans_out_pause_status_events(scenario):

@@ -20,6 +20,14 @@ from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.mechanics.toonsim import SpriteImage
 
 
+@pytest.fixture(autouse=True)
+def inline_to_thread(monkeypatch):
+    async def run_inline(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("asyncio.to_thread", run_inline)
+
+
 def _png(pixels: list[list[tuple[int, int, int, int]]]) -> bytes:
     height = len(pixels)
     width = len(pixels[0])

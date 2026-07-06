@@ -6,6 +6,7 @@ import asyncio
 import sys
 import types
 
+import httpx
 import pytest
 from conftest import build_scenario
 
@@ -22,8 +23,6 @@ from bunnyland.mechanics.history import record_world_history
 from bunnyland.mechanics.toonsim import SpriteImage
 from bunnyland.persistence import WorldMeta
 from bunnyland.server.app import MAX_UPLOAD_IMAGE_BYTES, create_app
-
-testclient = pytest.importorskip("fastapi.testclient")
 
 ADMIN = {"X-Bunnyland-Admin-Secret": "secret"}
 
@@ -49,150 +48,157 @@ def _app(actor, service):
     return create_app(actor, meta=WorldMeta(seed="moss"), admin_token="secret", imagegen=service)
 
 
+def _client(app, *, headers: dict[str, str] | None = None) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers=headers,
+    )
+
+
 # --- admin generate-image ------------------------------------------------------------
 
 
-def test_generate_image_requires_admin(tmp_path):
+async def test_generate_image_requires_admin(tmp_path):
     scenario = build_scenario()
-    client = testclient.TestClient(_app(scenario.actor, _service(scenario.actor, tmp_path)))
-    response = client.post(
-        "/admin/world/generate-image", json={"entity_id": str(scenario.character)}
-    )
+    async with _client(_app(scenario.actor, _service(scenario.actor, tmp_path))) as client:
+        response = await client.post(
+            "/admin/world/generate-image", json={"entity_id": str(scenario.character)}
+        )
     assert response.status_code == 403
 
 
-def test_generate_image_success_and_status(tmp_path):
+async def test_generate_image_success_and_status(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    client = testclient.TestClient(_app(scenario.actor, service))
-    response = client.post(
-        "/admin/world/generate-image",
-        headers=ADMIN,
-        json={"entity_id": str(scenario.character), "purpose": "portrait"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    job_id = payload["job_id"]
-    assert payload["entity_id"] == str(scenario.character)
-    assert payload["purpose"] == "portrait"
+    async with _client(_app(scenario.actor, service)) as client:
+        response = await client.post(
+            "/admin/world/generate-image",
+            headers=ADMIN,
+            json={"entity_id": str(scenario.character), "purpose": "portrait"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        job_id = payload["job_id"]
+        assert payload["entity_id"] == str(scenario.character)
+        assert payload["purpose"] == "portrait"
 
-    status = client.get(f"/admin/world/generate-image/{job_id}", headers=ADMIN)
+        status = await client.get(f"/admin/world/generate-image/{job_id}", headers=ADMIN)
+    assert response.status_code == 200
     assert status.status_code == 200
     assert status.json()["job_id"] == job_id
 
 
-def test_generate_image_invalid_purpose(tmp_path):
+async def test_generate_image_invalid_purpose(tmp_path):
     scenario = build_scenario()
-    client = testclient.TestClient(_app(scenario.actor, _service(scenario.actor, tmp_path)))
-    response = client.post(
-        "/admin/world/generate-image",
-        headers=ADMIN,
-        json={"entity_id": str(scenario.character), "purpose": "nonsense"},
-    )
+    async with _client(_app(scenario.actor, _service(scenario.actor, tmp_path))) as client:
+        response = await client.post(
+            "/admin/world/generate-image",
+            headers=ADMIN,
+            json={"entity_id": str(scenario.character), "purpose": "nonsense"},
+        )
     assert response.status_code == 400
 
 
-def test_image_job_status_unknown(tmp_path):
+async def test_image_job_status_unknown(tmp_path):
     scenario = build_scenario()
-    client = testclient.TestClient(_app(scenario.actor, _service(scenario.actor, tmp_path)))
-    response = client.get("/admin/world/generate-image/ghost", headers=ADMIN)
+    async with _client(_app(scenario.actor, _service(scenario.actor, tmp_path))) as client:
+        response = await client.get("/admin/world/generate-image/ghost", headers=ADMIN)
     assert response.status_code == 404
 
 
-def test_endpoints_409_when_imagegen_disabled():
+async def test_endpoints_409_when_imagegen_disabled():
     scenario = build_scenario()
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    client = testclient.TestClient(app)
-    assert client.post(
-        "/admin/world/generate-image", headers=ADMIN, json={"entity_id": "x"}
-    ).status_code == 409
-    assert client.post("/world/event/rec_1/image").status_code == 409
-    assert client.get("/media/portraits/x.png").status_code == 404
+    async with _client(app) as client:
+        assert (
+            await client.post(
+                "/admin/world/generate-image", headers=ADMIN, json={"entity_id": "x"}
+            )
+        ).status_code == 409
+        assert (await client.post("/world/event/rec_1/image")).status_code == 409
+        assert (await client.get("/media/portraits/x.png")).status_code == 404
 
 
-def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypatch):
+async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypatch):
     monkeypatch.setenv("BUNNYLAND_MEDIA_DIR", str(tmp_path))
     scenario = build_scenario()
-    client = testclient.TestClient(
-        create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    )
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    async with _client(app) as client:
+        denied = await client.post(
+            f"/admin/world/character/{scenario.character}/image/portrait",
+            content=b"PNG",
+            headers={"Content-Type": "image/png"},
+        )
+        assert denied.status_code == 403
 
-    denied = client.post(
-        f"/admin/world/character/{scenario.character}/image/portrait",
-        content=b"PNG",
-        headers={"Content-Type": "image/png"},
-    )
-    assert denied.status_code == 403
+        portrait = await client.post(
+            f"/admin/world/character/{scenario.character}/image/portrait",
+            content=b"PNG",
+            headers={**ADMIN, "Content-Type": "image/png"},
+        )
+        assert portrait.status_code == 200
+        portrait_payload = portrait.json()
+        assert portrait_payload["purpose"] == "portrait"
+        assert portrait_payload["url"].startswith("/media/portraits/")
+        component = scenario.actor.world.get_entity(scenario.character).get_component(
+            PortraitImageComponent
+        )
+        assert component.url == portrait_payload["url"]
+        media = await client.get(component.url)
+        assert media.status_code == 200
+        assert media.content == b"PNG"
 
-    portrait = client.post(
-        f"/admin/world/character/{scenario.character}/image/portrait",
-        content=b"PNG",
-        headers={**ADMIN, "Content-Type": "image/png"},
-    )
-    assert portrait.status_code == 200
-    portrait_payload = portrait.json()
-    assert portrait_payload["purpose"] == "portrait"
-    assert portrait_payload["url"].startswith("/media/portraits/")
-    component = scenario.actor.world.get_entity(scenario.character).get_component(
-        PortraitImageComponent
-    )
-    assert component.url == portrait_payload["url"]
-    media = client.get(component.url)
-    assert media.status_code == 200
-    assert media.content == b"PNG"
-
-    sprite = client.post(
-        f"/admin/world/character/{scenario.character}/image/sprite",
-        content=b"WEBP",
-        headers={**ADMIN, "Content-Type": "image/webp"},
-    )
-    assert sprite.status_code == 200
-    sprite_component = scenario.actor.world.get_entity(scenario.character).get_component(
-        SpriteImage
-    )
-    assert sprite_component.url.startswith(f"/media/{SEGMENT_SPRITES}/")
+        sprite = await client.post(
+            f"/admin/world/character/{scenario.character}/image/sprite",
+            content=b"WEBP",
+            headers={**ADMIN, "Content-Type": "image/webp"},
+        )
+        assert sprite.status_code == 200
+        sprite_component = scenario.actor.world.get_entity(scenario.character).get_component(
+            SpriteImage
+        )
+        assert sprite_component.url.startswith(f"/media/{SEGMENT_SPRITES}/")
 
 
-def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeypatch):
+async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeypatch):
     monkeypatch.setenv("BUNNYLAND_MEDIA_DIR", str(tmp_path))
     scenario = build_scenario()
-    client = testclient.TestClient(
-        create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    )
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    async with _client(app) as client:
+        bad_purpose = await client.post(
+            f"/admin/world/character/{scenario.character}/image/avatar",
+            content=b"PNG",
+            headers={**ADMIN, "Content-Type": "image/png"},
+        )
+        assert bad_purpose.status_code == 400
 
-    bad_purpose = client.post(
-        f"/admin/world/character/{scenario.character}/image/avatar",
-        content=b"PNG",
-        headers={**ADMIN, "Content-Type": "image/png"},
-    )
-    assert bad_purpose.status_code == 400
+        bad_type = await client.post(
+            f"/admin/world/character/{scenario.character}/image/portrait",
+            content=b"GIF",
+            headers={**ADMIN, "Content-Type": "image/gif"},
+        )
+        assert bad_type.status_code == 400
 
-    bad_type = client.post(
-        f"/admin/world/character/{scenario.character}/image/portrait",
-        content=b"GIF",
-        headers={**ADMIN, "Content-Type": "image/gif"},
-    )
-    assert bad_type.status_code == 400
+        empty = await client.post(
+            f"/admin/world/character/{scenario.character}/image/portrait",
+            content=b"",
+            headers={**ADMIN, "Content-Type": "image/png"},
+        )
+        assert empty.status_code == 400
 
-    empty = client.post(
-        f"/admin/world/character/{scenario.character}/image/portrait",
-        content=b"",
-        headers={**ADMIN, "Content-Type": "image/png"},
-    )
-    assert empty.status_code == 400
-
-    too_large = client.post(
-        f"/admin/world/character/{scenario.character}/image/portrait",
-        content=b"P" * (MAX_UPLOAD_IMAGE_BYTES + 1),
-        headers={**ADMIN, "Content-Type": "image/png"},
-    )
-    assert too_large.status_code == 413
+        too_large = await client.post(
+            f"/admin/world/character/{scenario.character}/image/portrait",
+            content=b"P" * (MAX_UPLOAD_IMAGE_BYTES + 1),
+            headers={**ADMIN, "Content-Type": "image/png"},
+        )
+        assert too_large.status_code == 413
 
 
 # --- player event image --------------------------------------------------------------
 
 
-def test_request_event_image_and_dedup(tmp_path):
+async def test_request_event_image_and_dedup(tmp_path):
     scenario = build_scenario()
     world = scenario.actor.world
     record = record_world_history(
@@ -203,8 +209,8 @@ def test_request_event_image_and_dedup(tmp_path):
         created_at_epoch=0,
     )
     service = _service(scenario.actor, tmp_path)
-    client = testclient.TestClient(_app(scenario.actor, service))
-    first = client.post(f"/world/event/{record.id}/image", json={"extra": "dramatic"})
+    async with _client(_app(scenario.actor, service)) as client:
+        first = await client.post(f"/world/event/{record.id}/image", json={"extra": "dramatic"})
     assert first.status_code == 200
     assert first.json()["purpose"] == "event"
     # Once it has an image, a second request reuses it (deduped).
@@ -223,38 +229,39 @@ async def test_scene_helper_unknown_character_returns_none(tmp_path):
     await service.aclose()
 
 
-def test_scene_image_endpoint_success(tmp_path):
+async def test_scene_image_endpoint_success(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    client = testclient.TestClient(_app(scenario.actor, service))
-    response = client.post(f"/world/character/{scenario.character}/scene-image")
+    async with _client(_app(scenario.actor, service)) as client:
+        response = await client.post(f"/world/character/{scenario.character}/scene-image")
     assert response.status_code == 200
     assert response.json()["purpose"] == "event"
 
 
-def test_scene_image_endpoint_unknown_character(tmp_path):
+async def test_scene_image_endpoint_unknown_character(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    client = testclient.TestClient(_app(scenario.actor, service))
-    assert client.post("/world/character/ghost_9/scene-image").status_code == 404
+    async with _client(_app(scenario.actor, service)) as client:
+        assert (await client.post("/world/character/ghost_9/scene-image")).status_code == 404
 
 
-def test_scene_image_endpoint_no_room(tmp_path):
+async def test_scene_image_endpoint_no_room(tmp_path):
     scenario = build_scenario()
     roomless = spawn_entity(
         scenario.actor.world,
         [IdentityComponent(name="Stray", kind="character"), CharacterComponent(species="bunny")],
     )
     service = _service(scenario.actor, tmp_path)
-    client = testclient.TestClient(_app(scenario.actor, service))
-    assert client.post(f"/world/character/{roomless.id}/scene-image").status_code == 400
+    async with _client(_app(scenario.actor, service)) as client:
+        assert (await client.post(f"/world/character/{roomless.id}/scene-image")).status_code == 400
 
 
-def test_scene_image_endpoint_409_without_imagegen():
+async def test_scene_image_endpoint_409_without_imagegen():
     scenario = build_scenario()
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    client = testclient.TestClient(app)
-    assert client.post(f"/world/character/{scenario.character}/scene-image").status_code == 409
+    async with _client(app) as client:
+        response = await client.post(f"/world/character/{scenario.character}/scene-image")
+        assert response.status_code == 409
 
 
 # --- backend request_image -----------------------------------------------------------
@@ -339,25 +346,25 @@ async def test_backend_base_request_image_default():
 # --- projection portrait fields ------------------------------------------------------
 
 
-def test_character_projection_includes_portrait(tmp_path):
+async def test_character_projection_includes_portrait(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
     entity.add_component(
         PortraitImageComponent(url="/media/portraits/p.png", alpha_url="/media/alpha/p.png")
     )
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    client = testclient.TestClient(app)
-    body = client.get(f"/world/character/{scenario.character}").json()
+    async with _client(app) as client:
+        body = (await client.get(f"/world/character/{scenario.character}")).json()
     assert body["portrait"]["url"] == "/media/portraits/p.png"
     assert body["portrait"]["alpha_url"] == "/media/alpha/p.png"
 
 
-def test_room_projection_entity_portrait_default_empty(tmp_path):
+async def test_room_projection_entity_portrait_default_empty(tmp_path):
     scenario = build_scenario()
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    client = testclient.TestClient(app)
     room = scenario.character_room()
-    body = client.get(f"/world/room/{room}").json()
+    async with _client(app) as client:
+        body = (await client.get(f"/world/room/{room}")).json()
     members = body["room"]["entities"]
     assert members  # the character is in the room
     assert all("portrait" in member for member in members)
@@ -367,20 +374,19 @@ def test_room_projection_entity_portrait_default_empty(tmp_path):
 # --- media route ---------------------------------------------------------------------
 
 
-def test_media_route_serves_and_404(tmp_path):
+async def test_media_route_serves_and_404(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
     service.media.write(SEGMENT_PORTRAITS, "abc123.png", b"IMGDATA")
-    client = testclient.TestClient(_app(scenario.actor, service))
+    async with _client(_app(scenario.actor, service)) as client:
+        ok = await client.get("/media/portraits/abc123.png")
+        assert ok.status_code == 200
+        assert ok.content == b"IMGDATA"
+        assert ok.headers["content-type"].startswith("image/png")
 
-    ok = client.get("/media/portraits/abc123.png")
-    assert ok.status_code == 200
-    assert ok.content == b"IMGDATA"
-    assert ok.headers["content-type"].startswith("image/png")
-
-    assert client.get("/media/portraits/missing.png").status_code == 404
-    # Invalid (dotted) name is rejected by the store -> 404.
-    assert client.get("/media/portraits/..%2Fsecret.png").status_code == 404
+        assert (await client.get("/media/portraits/missing.png")).status_code == 404
+        # Invalid (dotted) name is rejected by the store -> 404.
+        assert (await client.get("/media/portraits/..%2Fsecret.png")).status_code == 404
 
 
 # --- backfill loop -------------------------------------------------------------------
@@ -403,12 +409,15 @@ async def test_start_backfill_generates_missing_portrait(tmp_path):
     await service.aclose()
 
 
-def test_lifespan_starts_backfill_and_closes(tmp_path):
+async def test_lifespan_starts_backfill_and_closes(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    # Entering the TestClient context triggers startup (start_backfill) and shutdown (aclose).
-    with testclient.TestClient(_app(scenario.actor, service)) as client:
-        assert client.get("/health").status_code == 200
+    app = _app(scenario.actor, service)
+    async with app.router.lifespan_context(app):
+        assert service._backfill is not None
+        async with _client(app) as client:
+            assert (await client.get("/health")).status_code == 200
+    assert service._backfill is None
 
 
 # --- wiring --------------------------------------------------------------------------

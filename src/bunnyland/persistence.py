@@ -31,8 +31,8 @@ from pydantic import BaseModel
 from relics import Component, Edge
 
 from . import telemetry
-from .core.world_actor import WorldActor
 from .core.queue import CommandQueues
+from .core.world_actor import WorldActor
 from .persistence_yaml import YAMLPersistenceDriver
 from .plugins.contributions import collect_ecs_types
 from .plugins.loader import PluginError, apply_plugins

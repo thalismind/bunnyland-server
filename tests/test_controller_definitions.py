@@ -6,6 +6,7 @@ import json
 import sys
 from types import ModuleType, SimpleNamespace
 
+import httpx
 import pytest
 from conftest import build_scenario
 
@@ -286,7 +287,6 @@ async def test_dispatch_drives_a_stored_scripted_controller(tmp_path):
 
 
 def _client(scenario, tmp_path):
-    testclient = pytest.importorskip("fastapi.testclient")
     from bunnyland.server.app import create_app
 
     app = create_app(
@@ -295,62 +295,65 @@ def _client(scenario, tmp_path):
         admin_token="secret",
     )
     # The /admin/* surface is gated server-side; send the injected admin secret like nginx.
-    return testclient.TestClient(app, headers={"X-Bunnyland-Admin-Secret": "secret"})
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
+    )
 
 
-def test_rest_lists_and_registers_definitions(tmp_path):
+async def test_rest_lists_and_registers_definitions(tmp_path):
     scenario = build_scenario()
-    client = _client(scenario, tmp_path)
+    async with _client(scenario, tmp_path) as client:
+        listing = await client.get("/admin/controllers/definitions")
+        assert listing.status_code == 200
+        body = listing.json()
+        assert "idle" in body["behaviors"]
+        assert "wait" in body["scripts"]
+        assert "take_first_item" in body["action_library"]
+        assert "has_visible_objects" in body["condition_library"]
 
-    listing = client.get("/admin/controllers/definitions")
-    assert listing.status_code == 200
-    body = listing.json()
-    assert "idle" in body["behaviors"]
-    assert "wait" in body["scripts"]
-    assert "take_first_item" in body["action_library"]
-    assert "has_visible_objects" in body["condition_library"]
+        created = await client.post(
+            "/admin/controllers/scripts",
+            json={
+                "name": "rest-script",
+                "calls": [{"name": "move", "arguments": {"direction": "north"}}],
+            },
+        )
+        assert created.status_code == 200
+        assert "rest-script" in created.json()["scripts"]
+        assert created.json()["stored"]["scripts"] == ["rest-script"]
 
-    created = client.post(
-        "/admin/controllers/scripts",
-        json={
-            "name": "rest-script",
-            "calls": [{"name": "move", "arguments": {"direction": "north"}}],
-        },
-    )
-    assert created.status_code == 200
-    assert "rest-script" in created.json()["scripts"]
-    assert created.json()["stored"]["scripts"] == ["rest-script"]
-
-    behavior = client.post(
-        "/admin/controllers/behaviors",
-        json=_forager_spec("rest-forager").model_dump(mode="json"),
-    )
-    assert behavior.status_code == 200
-    assert "rest-forager" in behavior.json()["behaviors"]
+        behavior = await client.post(
+            "/admin/controllers/behaviors",
+            json=_forager_spec("rest-forager").model_dump(mode="json"),
+        )
+        assert behavior.status_code == 200
+        assert "rest-forager" in behavior.json()["behaviors"]
 
 
-def test_rest_rejects_invalid_behavior(tmp_path):
+async def test_rest_rejects_invalid_behavior(tmp_path):
     scenario = build_scenario()
-    client = _client(scenario, tmp_path)
-    response = client.post(
-        "/admin/controllers/behaviors",
-        json={"name": "broken", "root": {"kind": "action", "ref": "nope"}},
-    )
+    async with _client(scenario, tmp_path) as client:
+        response = await client.post(
+            "/admin/controllers/behaviors",
+            json={"name": "broken", "root": {"kind": "action", "ref": "nope"}},
+        )
     assert response.status_code == 400
     assert "unknown action" in response.json()["detail"]
 
 
-def test_rest_persists_definitions_across_app_restart(tmp_path):
+async def test_rest_persists_definitions_across_app_restart(tmp_path):
     scenario = build_scenario()
-    client = _client(scenario, tmp_path)
-    client.post(
-        "/admin/controllers/behaviors",
-        json=_forager_spec("persisted-forager").model_dump(mode="json"),
-    )
+    async with _client(scenario, tmp_path) as client:
+        await client.post(
+            "/admin/controllers/behaviors",
+            json=_forager_spec("persisted-forager").model_dump(mode="json"),
+        )
 
     # A fresh app over the same store file re-registers the saved behavior on boot.
-    second = _client(build_scenario(), tmp_path)
-    listing = second.get("/admin/controllers/definitions").json()
+    async with _client(build_scenario(), tmp_path) as second:
+        listing = (await second.get("/admin/controllers/definitions")).json()
     assert "persisted-forager" in listing["behaviors"]
     assert listing["stored"]["behaviors"] == ["persisted-forager"]
 

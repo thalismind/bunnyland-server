@@ -169,6 +169,14 @@ from ..mechanics.barbariansim import (
     barbariansim_fragments,
     install_barbariansim,
 )
+from ..mechanics.checkpoints import (
+    CheckpointReloadedEvent,
+    CheckpointReloadRequestedEvent,
+    CheckpointSavedEvent,
+    SaveCheckpointComponent,
+    checkpoint_action_definitions,
+    install_checkpoints,
+)
 from ..mechanics.colonysim import (
     AllowedAreaComponent,
     AllowItemHandler,
@@ -250,14 +258,6 @@ from ..mechanics.colonysim import (
     WorkstationComponent,
     colonysim_fragments,
     install_colonysim,
-)
-from ..mechanics.checkpoints import (
-    CheckpointReloadRequestedEvent,
-    CheckpointReloadedEvent,
-    CheckpointSavedEvent,
-    SaveCheckpointComponent,
-    checkpoint_action_definitions,
-    install_checkpoints,
 )
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.daggersim import (

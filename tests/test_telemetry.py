@@ -12,6 +12,7 @@ import json
 import sys
 import types
 
+import httpx
 import pytest
 from conftest import build_scenario
 
@@ -922,7 +923,6 @@ async def test_mcp_save_world_admin_traces_status(otel_capture, monkeypatch, tmp
 @pytestmark_otel
 async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
 
     from bunnyland.core import WorldActor
     from bunnyland.persistence import WorldMeta
@@ -931,8 +931,10 @@ async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
     span_exporter, _reader = otel_capture
     actor = WorldActor()
     app = create_app(actor, meta=WorldMeta(seed="s", generator="stub"), admin_token="secret")
-    with TestClient(app) as client:
-        response = client.get(
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
             "/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "secret"}
         )
         assert response.status_code == 200
