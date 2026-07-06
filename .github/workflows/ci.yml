@@ -187,6 +187,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
       - name: Check Docker availability
         run: |
           docker version
@@ -216,17 +226,15 @@ jobs:
             ""                            # container runtime (blank = first available)
             "localhost"                   # sandbox domain
             "$data_dir"                   # host data directory
+            ""                            # Let's Encrypt email (blank)
             "editor"                      # admin username
             "local"                       # admin password
-            "local"                       # admin password (confirm)
-            ""                            # Let's Encrypt email (blank)
-            ""                            # existing world save (blank)
             "none"                        # starter pack
             "y"                           # use a custom favicon?
             "$favicon_file"               # custom favicon path
-            "https://discord.gg/example"  # community Discord invite URL
             ""                            # homepage domain (blank to skip)
             "n"                           # full deployment with LLM + Discord?
+            "https://discord.gg/example"  # community Discord invite URL
             "n"                           # enable HTTP MCP endpoint?
             "n"                           # enable image generation via ComfyUI?
             "y"                           # proceed?
