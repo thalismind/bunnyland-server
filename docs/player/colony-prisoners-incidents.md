@@ -1,4 +1,4 @@
-# Colony prisoners, incidents, and surgery
+# Colony-sim prisoners, incidents, and surgery
 
 Colony-sim supports explicit prisoner policy, recruitment, incident resolution, and
 body-part health. Sensitive table concepts should still be gated by world policy and

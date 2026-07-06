@@ -1,4 +1,4 @@
-# Garden fishing and mining
+# Garden-sim fishing and mining
 
 Garden-sim includes fishing spots, mine nodes, mine levels, ladders, and geodes. These
 loops create inventory resources that can feed bundles, gifts, shipping, museum donation,

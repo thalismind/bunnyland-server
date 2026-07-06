@@ -1,4 +1,4 @@
-# Farm production
+# Garden-sim farm production
 
 Garden-sim covers more than crop beds. V1 farm production includes edible harvests,
 processing machines, farm animals, fishing, mining, foraging, gifts, festivals, bundles,

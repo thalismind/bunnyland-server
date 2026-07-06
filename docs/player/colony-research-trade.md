@@ -1,4 +1,4 @@
-# Colony research and trade
+# Colony-sim research and trade
 
 Colony-sim has durable pawn profile, job-bill, research, faction, trade, caravan, and
 ownership state. These systems are explicit commands, not hidden automation.

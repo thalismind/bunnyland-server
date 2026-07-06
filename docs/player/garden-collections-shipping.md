@@ -1,4 +1,4 @@
-# Garden collections and shipping
+# Garden-sim collections and shipping
 
 Garden-sim tracks farm mail, local requests, shipping bins, collections, museum
 donations, and rewards. These loops turn produce, fish, minerals, and artisan goods into

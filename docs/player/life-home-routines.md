@@ -1,4 +1,4 @@
-# Life routines and home objects
+# Life-sim routines and home objects
 
 Life-sim keeps everyday character state in the world: profile details, whims, home
 objects, invitations, routines, claimed rooms, and aging policy. These commands are

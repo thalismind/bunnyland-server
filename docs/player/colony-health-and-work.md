@@ -1,4 +1,4 @@
-# Colony health and work
+# Colony-sim health and work
 
 Colony-sim adds shared work control, room quality, medical recovery, colony wealth, and
 mental-state pressure on top of resource gathering, stockpiles, jobs, and crafting.

@@ -1,4 +1,4 @@
-# Hungry Courier playtesting guide
+# Playtesting
 
 Use this guide for the public-preview first-session pass. The pass starts at the welcome
 page, uses the Toon client as the canonical first-user path, and validates the working

@@ -1,4 +1,4 @@
-# Garden animals and artisan machines
+# Garden-sim animals and artisan machines
 
 Garden-sim animals can be fed, petted, bred, and harvested for products. Machines process
 resources over time, can be canceled, can break down, and can be repaired.
