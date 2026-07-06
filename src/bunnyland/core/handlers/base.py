@@ -40,6 +40,7 @@ class HandlerContext:
 
     world: World
     epoch: int
+    actor: Any | None = None
 
     def entity(self, entity_id: EntityId):
         return self.world.get_entity(entity_id)

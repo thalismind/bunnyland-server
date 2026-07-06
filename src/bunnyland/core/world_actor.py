@@ -19,6 +19,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from relics import EntityId, World
@@ -113,6 +114,16 @@ class _LaneOutcome:
     stop_lane: bool  # leave remaining commands queued (insufficient points, waiting)
 
 
+@dataclass
+class WorldPersistenceContext:
+    """Runtime persistence wiring used by actor-bound plugin handlers."""
+
+    save_path: str | Path | None = None
+    meta: Any | None = None
+    plugins: tuple[Any, ...] = ()
+    plugin_context: Any | None = None
+
+
 class WorldActor:
     """Owns the Relics world and serializes all mutations through ticks."""
 
@@ -140,6 +151,7 @@ class WorldActor:
         self._inbox: asyncio.Queue[SubmittedCommand] = asyncio.Queue()
         self._rng = rng or random.Random()
         self._lock = asyncio.Lock()
+        self.persistence = WorldPersistenceContext()
 
         self.world.register_system(WorldClockSystem())
         self.world.register_system(ActionFocusRegenSystem())
@@ -170,6 +182,21 @@ class WorldActor:
     def register_after_tick(self, hook: AfterTickHook) -> None:
         """Run ``hook`` at the end of every tick while the actor owns the world lock."""
         self._after_tick.append(hook)
+
+    def configure_persistence(
+        self,
+        *,
+        save_path: str | Path | None,
+        meta: Any | None,
+        plugins: tuple[Any, ...] = (),
+        plugin_context: Any | None = None,
+    ) -> None:
+        self.persistence = WorldPersistenceContext(
+            save_path=save_path,
+            meta=meta,
+            plugins=tuple(plugins),
+            plugin_context=plugin_context,
+        )
 
     def available_command_types(self) -> tuple[str, ...]:
         """Return command types currently accepted by this actor."""
@@ -561,7 +588,7 @@ class WorldActor:
             return _LaneOutcome(executed=False, stop_lane=False)
 
         # Execute. Points are spent only if the handler succeeds.
-        ctx = HandlerContext(world=self.world, epoch=self.epoch)
+        ctx = HandlerContext(world=self.world, epoch=self.epoch, actor=self)
         handler = self._handler_for(ctx, command, handlers)
         if handler is None:
             self.queues.pop(character_id, lane)

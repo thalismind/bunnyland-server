@@ -84,6 +84,7 @@ behaviour is added by **plugins**; the builtins are:
 | Plugin id               | Provides                                                       |
 |-------------------------|---------------------------------------------------------------|
 | `bunnyland.core_verbs`  | move, take, put, use, write, sleep/wake/wait, say, tell, threaded conversations |
+| `bunnyland.checkpoints` | opt-in save/reload checkpoint objects and verbs; see [checkpoint world building](checkpoint-world-building.md) |
 | `bunnyland.lifesim`     | daily needs, eat/drink, self-care, homes, work, family, aging |
 | `bunnyland.memory`      | take-note / remember (private, focus-lane)                    |
 | `bunnyland.worldgen`    | the `oneshot` and `recursive` world generators                |

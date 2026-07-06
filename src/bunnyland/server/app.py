@@ -230,6 +230,12 @@ def create_app(
         raise RuntimeError(
             "bunnyland server API requires FastAPI; install the server dependencies first"
         )
+    actor.configure_persistence(
+        save_path=save_path,
+        meta=meta,
+        plugins=tuple(plugins or ()),
+        plugin_context=getattr(actor.persistence, "plugin_context", None),
+    )
 
     mcp_session_manager = None
     mcp_event_bridge = None

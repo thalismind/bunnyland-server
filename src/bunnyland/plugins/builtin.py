@@ -251,6 +251,14 @@ from ..mechanics.colonysim import (
     colonysim_fragments,
     install_colonysim,
 )
+from ..mechanics.checkpoints import (
+    CheckpointReloadRequestedEvent,
+    CheckpointReloadedEvent,
+    CheckpointSavedEvent,
+    SaveCheckpointComponent,
+    checkpoint_action_definitions,
+    install_checkpoints,
+)
 from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
 from ..mechanics.daggersim import (
     AbandonGeneratedQuestHandler,
@@ -1596,6 +1604,7 @@ TOONSIM = "bunnyland.toonsim"
 STORYTELLER = "bunnyland.storyteller"
 IMAGEGEN = "bunnyland.imagegen"
 MCP = "bunnyland.mcp"
+CHECKPOINTS = "bunnyland.checkpoints"
 
 
 def _install_affect(actor) -> None:
@@ -1662,6 +1671,25 @@ def core_verbs_plugin() -> Plugin:
                 ItemRemovedEvent,
             ),
         ),
+    )
+
+
+def checkpoints_plugin() -> Plugin:
+    return Plugin(
+        id=CHECKPOINTS,
+        name="Checkpoints",
+        default_enabled=False,
+        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
+        ecs=EcsContribution(components=(SaveCheckpointComponent,)),
+        commands=CommandContribution(
+            action_definitions=checkpoint_action_definitions(),
+            typed_events=(
+                CheckpointSavedEvent,
+                CheckpointReloadRequestedEvent,
+                CheckpointReloadedEvent,
+            ),
+        ),
+        runtime=RuntimeContribution(service_factories=(install_checkpoints,)),
     )
 
 
@@ -3529,6 +3557,7 @@ def imagegen_plugin() -> Plugin:
 def bunnyland_plugins() -> list[Plugin]:
     return [
         core_verbs_plugin(),
+        checkpoints_plugin(),
         lifesim_plugin(),
         memory_plugin(),
         worldgen_plugin(),
@@ -3556,6 +3585,7 @@ def bunnyland_plugins() -> list[Plugin]:
 
 __all__ = [
     "BARBARIANSIM",
+    "CHECKPOINTS",
     "CORE_VERBS",
     "COLONYSIM",
     "DAGGERSIM",
@@ -3580,6 +3610,7 @@ __all__ = [
     "WORLDGEN",
     "barbariansim_plugin",
     "bunnyland_plugins",
+    "checkpoints_plugin",
     "colonysim_plugin",
     "dinosim_plugin",
     "core_verbs_plugin",

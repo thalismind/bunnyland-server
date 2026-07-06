@@ -106,6 +106,10 @@ uv run --extra server bunnyland serve --load private-world.json --ticks 0 \
   --save private-world.json --autosave-every 20
 ```
 
+Some worlds also enable in-world [checkpoints](checkpoints.md), such as typewriters,
+scrolls, bonfires, or terminals. Those let players save or reload the configured save file
+from reachable world objects.
+
 Admins can optionally run a bounded offline-life catch-up after loading a save. When that
 is enabled, returning players may find that background characters made limited, ordinary
 world changes while the server was down.

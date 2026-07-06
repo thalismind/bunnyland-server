@@ -15,6 +15,8 @@ bunnyland serve --module bunnyland_3d --module bunnyland_rl ...
 
 - `bunnyland.core_verbs`: movement, looking, inventory, object use, talking, waiting,
   sleeping, waking, and other baseline verbs.
+- `bunnyland.checkpoints`: opt-in save/reload checkpoint entities and verbs. Disabled
+  by default; enable explicitly and intentionally place checkpoint objects.
 - `bunnyland.worldgen`: deterministic demo generators plus recursive worldgen expansion.
 - `bunnyland.environment`: time of day, weather, light, fire, and environmental pressure.
 - `bunnyland.mechanisms`: doors, buttons, switches, locks, and other interactive machinery.

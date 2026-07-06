@@ -15,6 +15,7 @@ resumes with empty queues.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import inspect
 import json
@@ -31,9 +32,11 @@ from relics import Component, Edge
 
 from . import telemetry
 from .core.world_actor import WorldActor
+from .core.queue import CommandQueues
 from .persistence_yaml import YAMLPersistenceDriver
-from .plugins import PluginError, PluginRuntimeContext, apply_plugins
 from .plugins.contributions import collect_ecs_types
+from .plugins.loader import PluginError, apply_plugins
+from .plugins.model import PluginRuntimeContext
 
 if TYPE_CHECKING:
     from .plugins.model import Plugin
@@ -251,12 +254,51 @@ def load_world(
             raise
 
 
+def reload_world(
+    actor: WorldActor,
+    path: str | Path,
+    *,
+    meta: WorldMeta,
+    plugins: Sequence[Plugin] | None = None,
+    plugin_context: PluginRuntimeContext | None = None,
+    format: PersistenceFormat | None = None,
+) -> WorldMeta:
+    """Reload ``path`` into a live actor, preserving actor services and plugin wiring.
+
+    The caller must already own ``actor._lock`` when needed. Tick after-hooks run while
+    the lock is held, so this helper intentionally does not acquire it itself.
+    """
+
+    replacement, loaded_meta = load_world(
+        path,
+        plugins=plugins,
+        plugin_context=plugin_context,
+        format=format,
+    )
+    actor.world = replacement.world
+    actor.bind_clock()
+    actor.queues = CommandQueues()
+    actor._inbox = asyncio.Queue()
+
+    updates = loaded_meta.model_dump()
+    for key, value in updates.items():
+        setattr(meta, key, value)
+    actor.configure_persistence(
+        save_path=path,
+        meta=meta,
+        plugins=tuple(plugins or ()),
+        plugin_context=plugin_context,
+    )
+    return meta
+
+
 __all__ = [
     "SCHEMA_VERSION",
     "PersistenceFormat",
     "WorldMeta",
     "YAMLPersistenceDriver",
     "load_world",
+    "reload_world",
     "save_world",
     "type_registries",
 ]

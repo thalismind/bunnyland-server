@@ -818,6 +818,12 @@ async def _serve(args) -> None:
         models,
         plugin_context,
     )
+    actor.configure_persistence(
+        save_path=args.save,
+        meta=meta,
+        plugins=tuple(plugins),
+        plugin_context=plugin_context,
+    )
     telemetry.register_world_gauges(actor)
     _configure_actor_backends(actor, args, lifesim_natural_aging)
     imagegen = _build_imagegen_service(actor, plugins, getattr(args, "imagegen_config", None))

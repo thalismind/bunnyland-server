@@ -48,6 +48,7 @@ from bunnyland.plugins import (
 )
 from bunnyland.plugins.builtin import (
     BARBARIANSIM,
+    CHECKPOINTS,
     COLONYSIM,
     CORE_VERBS,
     DAGGERSIM,
@@ -70,10 +71,12 @@ from bunnyland.plugins.builtin import (
     TOONSIM,
     VOIDSIM,
     WORLDGEN,
+    checkpoints_plugin,
     core_verbs_plugin,
     storyteller_plugin,
 )
 from bunnyland.plugins.contributions import collect_content_items, collect_ecs_types
+from bunnyland.mechanics.checkpoints import SaveCheckpointComponent
 
 
 def test_builtin_plugins_declared():
@@ -102,6 +105,7 @@ def test_builtin_plugins_declared():
         TOONSIM,
         STORYTELLER,
         IMAGEGEN,
+        CHECKPOINTS,
     }
 
 
@@ -109,6 +113,8 @@ def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
     assert len(select(plugins, None)) == 22
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
+    assert CHECKPOINTS not in {p.id for p in select(plugins, None)}
+    assert [p.id for p in select(plugins, [CHECKPOINTS])] == [CHECKPOINTS]
 
 
 def test_collect_prompt_fragments_gathers_providers():
@@ -171,6 +177,10 @@ def test_collect_ecs_types_preserves_plugin_order():
 def test_builtin_admin_and_storyteller_ecs_types_are_registered():
     assert AdminComponent in core_verbs_plugin().ecs.components
     assert IncidentSpawned in storyteller_plugin().ecs.edges
+    assert SaveCheckpointComponent in checkpoints_plugin().ecs.components
+    assert {
+        definition.command_type for definition in checkpoints_plugin().commands.action_definitions
+    } == {"save-checkpoint", "reload-checkpoint"}
 
 
 def test_worldgen_plugin_contributes_named_generators():
