@@ -680,6 +680,16 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
         scenario.actor,
         client_id="kept",
     ) is None
+    discord = spawn_entity(scenario.actor.world, [SuspendedControllerComponent(reason="idle")])
+    discord_claim = add_claim(
+        discord,
+        client_kind="discord",
+        client_id="discord-user",
+        character_id=str(scenario.character),
+        claim_id="discord-claim",
+    )
+    normalize_claimed_controllers_without_secrets(scenario.actor, registry)
+    assert controller_claim(discord) == discord_claim
 
     assert controller_claim(spawn_entity(scenario.actor.world)) is None
 

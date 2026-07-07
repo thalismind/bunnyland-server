@@ -677,6 +677,29 @@ def test_resume_discord_claim_returns_active_discord_controller(scenario):
     assert resumed == (character, controller_id, edge.generation)
 
 
+def test_discord_controlled_character_ignores_mismatched_claim_character(scenario):
+    assign_discord_controller(
+        scenario.actor,
+        discord_user_id=123,
+        default_channel_id=456,
+        character_name="Juniper",
+    )
+    original = scenario.actor.world.get_entity(scenario.character)
+    other = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    original_edge, controller_id = original.get_relationships(ControlledBy)[0]
+    scenario.actor.assign_controller(other.id, controller_id)
+
+    found = discord_controlled_character(scenario.actor, 123)
+
+    assert found == (original.id, controller_id, original_edge.generation)
+
+
 def test_resume_discord_claim_uses_fresh_controller_when_existing_has_other_claim(scenario):
     assign_discord_controller(
         scenario.actor,
@@ -2693,6 +2716,9 @@ async def test_discord_bot_meta_commands_cover_success_and_errors(scenario):
     assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
     assert await bot._handle_meta_command(ctx, "suspend", "") is True
     assert ctx.replies[-1][0] == "Juniper is idle until you resume with another command."
+
+    assert await bot._handle_meta_command(ctx, "claim", "Juniper") is True
+    assert ctx.replies[-1][0] == "You are now controlling Juniper."
 
     assert await bot._handle_meta_command(ctx, "dance", "") is False
 

@@ -266,6 +266,7 @@ def discord_controlled_character(actor: WorldActor, discord_user_id: int):
         if (
             discord.discord_user_id == discord_user_id
             and claim is not None
+            and claim.character_id == str(character.id)
             and claim_client_matches(claim, client_id)
         ):
             return character.id, controller.id, edge.generation

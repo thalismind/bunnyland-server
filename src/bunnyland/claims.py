@@ -251,6 +251,8 @@ def normalize_claimed_controllers_without_secrets(
     controllers = actor.world.query().with_all([ClaimedComponent]).execute_entities()
     for controller in list(controllers):
         claim = controller.get_component(ClaimedComponent)
+        if claim.client_kind == CLIENT_KIND_DISCORD:
+            continue
         if registry.has_secret(claim.claim_id):
             continue
         controller.remove_component(ClaimedComponent)
