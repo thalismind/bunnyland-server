@@ -3314,6 +3314,44 @@ async def test_world_generator_selector_select_uses_highlighted_generator():
     assert results[-1].seed == "recursive seed"
 
 
+async def test_world_generator_selector_select_uses_selected_generator_without_highlight():
+    from textual.app import App
+    from textual.widgets import Input, OptionList
+
+    screen = WorldGeneratorSelector(
+        [
+            WorldGenerator(
+                name="recursive",
+                generate=_selector_generator,
+                description="seeded world",
+                uses_seed=True,
+                group="algorithmic",
+            )
+        ],
+        initial_generator="recursive",
+        initial_seed="initial seed",
+    )
+    results = []
+
+    class Host(App[None]):
+        async def on_mount(self) -> None:
+            await self.push_screen(screen, callback=results.append)
+
+    app = Host()
+    async with app.run_test() as pilot:
+        options = await _wait_for_widget(screen, pilot, "#generator-list", OptionList)
+        options.highlighted = None
+        await pilot.pause()
+        assert screen._highlighted_generator() is None
+
+        screen.query_one("#seed-input", Input).value = "selected seed"
+        screen._start_pressed(SimpleNamespace())
+        await pilot.pause()
+
+    assert results[-1].generator == "recursive"
+    assert results[-1].seed == "selected seed"
+
+
 async def test_world_generator_selector_ignores_invalid_selection_and_cancels():
     from textual.app import App
 
@@ -3341,6 +3379,8 @@ async def test_world_generator_selector_ignores_invalid_selection_and_cancels():
         screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="group")))
         assert screen.selected_generator.name == "recursive"
         screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="generator:missing")))
+        assert screen.selected_generator.name == "recursive"
+        screen._generator_highlighted(SimpleNamespace(option=SimpleNamespace(id="group")))
         assert screen.selected_generator.name == "recursive"
         screen._cancel_pressed(SimpleNamespace())
         await pilot.pause()
