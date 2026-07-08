@@ -1,0 +1,70 @@
+name: Discord Crosstest
+
+on:
+  workflow_dispatch:
+    inputs:
+      character:
+        description: Discord character to claim during the cross-test.
+        required: true
+        default: Postmaster Wren
+      action:
+        description: Discord action command. Supports {nonce} and {character}.
+        required: true
+        default: say discord-ci-crosstest {nonce}
+      action_expect:
+        description: Optional reply substring for the action; blank means the generated nonce.
+        required: false
+        default: ""
+      look_expect:
+        description: Optional reply substring required from !look.
+        required: false
+        default: ""
+      timeout_seconds:
+        description: Seconds to wait for each expected bot reply.
+        required: true
+        default: "120"
+      min_interval_seconds:
+        description: Minimum delay between Discord API requests.
+        required: true
+        default: "1.25"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  discord-crosstest:
+    name: Live Discord crosstest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Run Discord crosstest
+        env:
+          BUNNYLAND_DISCORD_TEST_TOKEN: ${{ secrets.BUNNYLAND_DISCORD_TEST_TOKEN }}
+          BUNNYLAND_DISCORD_TEST_CHANNEL_ID: ${{ secrets.BUNNYLAND_DISCORD_TEST_CHANNEL_ID }}
+          BUNNYLAND_DISCORD_BOT_USER_ID: ${{ secrets.BUNNYLAND_DISCORD_BOT_USER_ID }}
+          BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS: ${{ secrets.BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS }}
+          BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS: ${{ secrets.BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS }}
+          BUNNYLAND_DISCORD_TEST_CHARACTER: ${{ inputs.character }}
+          BUNNYLAND_DISCORD_TEST_ACTION: ${{ inputs.action }}
+          BUNNYLAND_DISCORD_TEST_ACTION_EXPECT: ${{ inputs.action_expect }}
+          BUNNYLAND_DISCORD_TEST_LOOK_EXPECT: ${{ inputs.look_expect }}
+          BUNNYLAND_DISCORD_LIVE_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+          BUNNYLAND_DISCORD_LIVE_MIN_INTERVAL_SECONDS: ${{ inputs.min_interval_seconds }}
+          BUNNYLAND_DISCORD_CROSSTEST_ARTIFACT_DIR: artifacts/discord-crosstest
+        run: scripts/discord-ci-crosstest
+
+      - name: Upload Discord crosstest artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: discord-crosstest
+          path: artifacts/discord-crosstest
+          if-no-files-found: error

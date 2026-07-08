@@ -1,0 +1,312 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/discord-ci-crosstest
+
+Send real Discord messages from a dedicated validation bot and wait for the
+hosted Bunnyland Discord bot to reply. This CI version intentionally does not
+read local .env files, SSH to a VPS, restart services, or inspect hosted saves.
+
+Required env:
+  BUNNYLAND_DISCORD_TEST_TOKEN       Bot token for the validation actor.
+  BUNNYLAND_DISCORD_TEST_CHANNEL_ID  Discord channel id for the validation channel.
+
+Recommended env:
+  BUNNYLAND_DISCORD_BOT_USER_ID      Bunnyland bot user id, used to filter replies.
+  BUNNYLAND_DISCORD_TEST_CHARACTER   Character to claim, default: Postmaster Wren.
+  BUNNYLAND_DISCORD_TEST_ACTION      Action command, default: say discord-ci-crosstest {nonce}
+  BUNNYLAND_DISCORD_TEST_ACTION_EXPECT
+                                      Additional reply substring for the action; the nonce is always required.
+  BUNNYLAND_DISCORD_TEST_LOOK_EXPECT Optional reply substring for !look.
+  BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS
+  BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS
+  BUNNYLAND_DISCORD_LIVE_MIN_INTERVAL_SECONDS
+                                      Minimum delay between Discord API requests, default: 1.25.
+  BUNNYLAND_DISCORD_CROSSTEST_ARTIFACT_DIR
+                                      Artifact directory, default: artifacts/discord-crosstest.
+USAGE
+}
+
+case "${1:-}" in
+  "")
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+python3 <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+from typing import Any
+
+
+API_BASE = os.environ.get("BUNNYLAND_DISCORD_API_BASE", "https://discord.com/api/v10")
+TOKEN = os.environ.get("BUNNYLAND_DISCORD_TEST_TOKEN", "")
+CHANNEL_ID = os.environ.get("BUNNYLAND_DISCORD_TEST_CHANNEL_ID", "")
+BOT_USER_ID = os.environ.get("BUNNYLAND_DISCORD_BOT_USER_ID", "").strip()
+CHARACTER = os.environ.get("BUNNYLAND_DISCORD_TEST_CHARACTER", "Postmaster Wren")
+TIMEOUT_SECONDS = int(os.environ.get("BUNNYLAND_DISCORD_LIVE_TIMEOUT_SECONDS", "120"))
+MIN_INTERVAL_SECONDS = float(
+    os.environ.get("BUNNYLAND_DISCORD_LIVE_MIN_INTERVAL_SECONDS", "1.25")
+)
+NONCE = os.environ.get("BUNNYLAND_DISCORD_LIVE_NONCE", f"discord-ci-crosstest-{uuid.uuid4().hex[:10]}")
+ACTION = os.environ.get(
+    "BUNNYLAND_DISCORD_TEST_ACTION",
+    "say discord-ci-crosstest {nonce}",
+).replace("{nonce}", NONCE).replace("{character}", CHARACTER)
+ACTION_EXPECT = os.environ.get("BUNNYLAND_DISCORD_TEST_ACTION_EXPECT", "").strip() or NONCE
+LOOK_EXPECT = os.environ.get("BUNNYLAND_DISCORD_TEST_LOOK_EXPECT", "").strip()
+ARTIFACT_DIR = Path(
+    os.environ.get("BUNNYLAND_DISCORD_CROSSTEST_ARTIFACT_DIR", "artifacts/discord-crosstest")
+)
+ALLOWED_BOT_USER_IDS = {
+    item.strip()
+    for item in os.environ.get("BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS", "").split(",")
+    if item.strip()
+}
+ALLOWED_CHANNEL_IDS = {
+    item.strip()
+    for item in os.environ.get("BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS", "").split(",")
+    if item.strip()
+}
+
+LAST_REQUEST_AT = 0.0
+ARTIFACT: dict[str, Any] = {
+    "status": "running",
+    "api_base": API_BASE,
+    "channel_id": CHANNEL_ID,
+    "bot_user_id_filter": BOT_USER_ID,
+    "character": CHARACTER,
+    "nonce": NONCE,
+    "action": ACTION,
+    "action_expect": ACTION_EXPECT,
+    "look_expect": LOOK_EXPECT,
+    "min_interval_seconds": MIN_INTERVAL_SECONDS,
+    "timeout_seconds": TIMEOUT_SECONDS,
+    "actor": None,
+    "steps": [],
+    "messages": [],
+    "error": "",
+}
+
+
+def record_step(name: str, status: str, **details: Any) -> None:
+    ARTIFACT["steps"].append(
+        {
+            "name": name,
+            "status": status,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            **details,
+        }
+    )
+
+
+def write_artifact() -> None:
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path = ARTIFACT_DIR / "discord-crosstest.json"
+    path.write_text(json.dumps(ARTIFACT, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"artifact: {path}")
+
+
+def fail(message: str) -> None:
+    ARTIFACT["status"] = "failed"
+    ARTIFACT["error"] = message
+    print(f"FAIL: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def pace() -> None:
+    global LAST_REQUEST_AT
+    now = time.monotonic()
+    wait = MIN_INTERVAL_SECONDS - (now - LAST_REQUEST_AT)
+    if wait > 0:
+        time.sleep(wait)
+    LAST_REQUEST_AT = time.monotonic()
+
+
+def request(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any] | list[Any]:
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{API_BASE}{path}",
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bot {TOKEN}",
+            "Content-Type": "application/json",
+            "User-Agent": "bunnyland-discord-ci-crosstest/1.0",
+        },
+    )
+    for attempt in range(4):
+        pace()
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = response.read().decode("utf-8")
+                return json.loads(data) if data else {}
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < 3:
+                try:
+                    details = json.loads(exc.read().decode("utf-8"))
+                    retry_after = float(details.get("retry_after", 1.0))
+                except Exception:
+                    retry_after = 1.0
+                record_step("rate-limit", "retrying", method=method, path=path, retry_after=retry_after)
+                time.sleep(retry_after)
+                continue
+            body_text = exc.read().decode("utf-8", errors="replace")
+            fail(f"Discord API {method} {path} returned {exc.code}: {body_text}")
+    fail(f"Discord API {method} {path} rate-limited repeatedly")
+
+
+def send(command: str) -> dict[str, Any]:
+    content = command if command.startswith("!") else f"!{command}"
+    message = request("POST", f"/channels/{CHANNEL_ID}/messages", {"content": content})
+    if not isinstance(message, dict):
+        fail(f"Discord API returned invalid send response for {content!r}")
+    ARTIFACT["messages"].append(
+        {
+            "direction": "sent",
+            "id": message.get("id"),
+            "content": content,
+            "author_id": str(message.get("author", {}).get("id", "")),
+        }
+    )
+    print(f"sent {content!r} as message {message['id']}")
+    return message
+
+
+def list_after(message_id: str) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode({"after": message_id, "limit": 25})
+    messages = request("GET", f"/channels/{CHANNEL_ID}/messages?{query}")
+    if not isinstance(messages, list):
+        fail("Discord API returned invalid channel history response")
+    return sorted(messages, key=lambda item: int(item["id"]))
+
+
+def from_bunnyland_bot(message: dict[str, Any], actor_id: str) -> bool:
+    author_id = str(message.get("author", {}).get("id", ""))
+    if author_id == actor_id:
+        return False
+    return not BOT_USER_ID or author_id == BOT_USER_ID
+
+
+def wait_reply(after_id: str, actor_id: str, expected: tuple[str, ...] = ()) -> dict[str, Any]:
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    last_seen = after_id
+    while time.monotonic() < deadline:
+        for message in list_after(last_seen):
+            last_seen = str(message["id"])
+            author_id = str(message.get("author", {}).get("id", ""))
+            content = str(message.get("content", ""))
+            if not from_bunnyland_bot(message, actor_id):
+                continue
+            ARTIFACT["messages"].append(
+                {
+                    "direction": "received",
+                    "id": last_seen,
+                    "content": content,
+                    "author_id": author_id,
+                }
+            )
+            if expected and not any(needle in content for needle in expected):
+                continue
+            print(f"reply {last_seen}: {content!r}")
+            return message
+        time.sleep(2)
+    details = ", ".join(repr(item) for item in expected) if expected else "any bot reply"
+    fail(f"timed out waiting for {details} after message {after_id}")
+
+
+def run_command(step: str, command: str, actor_id: str, expected: tuple[str, ...] = ()) -> dict[str, Any]:
+    record_step(step, "started", command=command, expected=expected)
+    message = send(command)
+    reply = wait_reply(str(message["id"]), actor_id, expected)
+    record_step(step, "passed", reply_id=reply.get("id"), reply=reply.get("content", ""))
+    return reply
+
+
+def run_look(step: str, actor_id: str) -> dict[str, Any]:
+    reply = run_command(step, "look", actor_id)
+    content = str(reply.get("content", ""))
+    if "not controlling a character" in content or "do not have a character claim" in content:
+        fail(f"look did not resume or confirm control: {content!r}")
+    if LOOK_EXPECT and LOOK_EXPECT not in content:
+        fail(f"look response did not contain {LOOK_EXPECT!r}: {content!r}")
+    return reply
+
+
+def main() -> None:
+    if not TOKEN:
+        fail("set BUNNYLAND_DISCORD_TEST_TOKEN to the validation bot token")
+    if not CHANNEL_ID:
+        fail("set BUNNYLAND_DISCORD_TEST_CHANNEL_ID to the validation channel id")
+
+    actor = request("GET", "/users/@me")
+    if not isinstance(actor, dict):
+        fail("Discord API returned invalid actor response")
+    actor_id = str(actor["id"])
+    if BOT_USER_ID and BOT_USER_ID == actor_id:
+        fail("BUNNYLAND_DISCORD_BOT_USER_ID must identify the Bunnyland bot, not the validation actor")
+    ARTIFACT["actor"] = {
+        "id": actor_id,
+        "username": actor.get("username", "unknown"),
+    }
+    if ALLOWED_BOT_USER_IDS and actor_id not in ALLOWED_BOT_USER_IDS:
+        fail("validation actor is not listed in BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS")
+    if ALLOWED_CHANNEL_IDS and CHANNEL_ID not in ALLOWED_CHANNEL_IDS:
+        fail("validation channel is not listed in BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS")
+    print(f"validation actor: {actor.get('username', 'unknown')} ({actor_id})")
+    print(f"channel: {CHANNEL_ID}")
+    print(f"character: {CHARACTER}")
+    print(f"nonce: {NONCE}")
+
+    run_command(
+        "cleanup-release",
+        "release",
+        actor_id,
+        ("Released your claim", "You do not have a character claim"),
+    )
+    run_command("characters", "characters", actor_id, (CHARACTER,))
+    run_command(
+        "claim",
+        f"claim {CHARACTER}",
+        actor_id,
+        (f"You are now controlling {CHARACTER}.",),
+    )
+    run_look("look-after-claim", actor_id)
+    action_expected = (NONCE,) if ACTION_EXPECT == NONCE else (NONCE, ACTION_EXPECT)
+    run_command("action", ACTION, actor_id, action_expected)
+    run_command("suspend", "suspend", actor_id, ("is idle until you resume",))
+    run_look("look-after-suspend", actor_id)
+    run_command("final-release", "release", actor_id, ("Released your claim",))
+    ARTIFACT["status"] = "passed"
+    print("PASS: Discord CI crosstest completed")
+
+
+try:
+    main()
+except SystemExit:
+    raise
+except Exception as exc:
+    ARTIFACT["status"] = "failed"
+    ARTIFACT["error"] = repr(exc)
+    raise
+finally:
+    write_artifact()
+PY
