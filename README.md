@@ -261,6 +261,8 @@ The demos are `lifesim-demo`, `gardensim-demo`, `maple-farm-demo`, `colonysim-de
 `neonsim-demo`, and `dinosim-demo`.
 Fast travel and richer map features remain planned follow-up work rather than part of the
 current implemented parity surface.
+The public demo progression is `apple-crossing` (first-run Hungry Courier tutorial),
+`bell-green` (small-town sandbox), and `clover-city` (dense city-block showcase).
 There is also a larger life-sim showcase, `apartment-demo`: a quirky NYC apartment
 building of eccentric tenants with backstories, homes, and daily routines, a rat-man in
 the warren below, and hidden corners.

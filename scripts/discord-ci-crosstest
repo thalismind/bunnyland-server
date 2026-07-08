@@ -15,7 +15,7 @@ Required env:
 
 Recommended env:
   BUNNYLAND_DISCORD_BOT_USER_ID      Bunnyland bot user id, used to filter replies.
-  BUNNYLAND_DISCORD_TEST_CHARACTER   Character to claim, default: Postmaster Wren.
+  BUNNYLAND_DISCORD_TEST_CHARACTER   Character to claim, default: Juniper.
   BUNNYLAND_DISCORD_TEST_ACTION      Action command, default: say discord-ci-crosstest {nonce}
   BUNNYLAND_DISCORD_TEST_ACTION_EXPECT
                                       Additional reply substring for the action; the nonce is always required.
@@ -61,7 +61,7 @@ API_BASE = os.environ.get("BUNNYLAND_DISCORD_API_BASE", "https://discord.com/api
 TOKEN = os.environ.get("BUNNYLAND_DISCORD_TEST_TOKEN", "")
 CHANNEL_ID = os.environ.get("BUNNYLAND_DISCORD_TEST_CHANNEL_ID", "")
 BOT_USER_ID = os.environ.get("BUNNYLAND_DISCORD_BOT_USER_ID", "").strip()
-CHARACTER = os.environ.get("BUNNYLAND_DISCORD_TEST_CHARACTER", "Postmaster Wren")
+CHARACTER = os.environ.get("BUNNYLAND_DISCORD_TEST_CHARACTER", "Juniper")
 TIMEOUT_SECONDS = int(os.environ.get("BUNNYLAND_DISCORD_LIVE_TIMEOUT_SECONDS", "120"))
 MIN_INTERVAL_SECONDS = float(
     os.environ.get("BUNNYLAND_DISCORD_LIVE_MIN_INTERVAL_SECONDS", "1.25")

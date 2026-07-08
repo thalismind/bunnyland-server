@@ -1,0 +1,13 @@
+{
+  "ticks": 6,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Juniper", "expect": ["You are now controlling Juniper."]},
+    {"tick": 1, "content": "!look", "expect": ["Apple Crossing", "Pippa Bramble", "Pip Thistle", "courier letter"]},
+    {"tick": 2, "content": "!move east", "expect": ["You are now in Apple Hedge"]},
+    {"tick": 3, "content": "!take red crossing apple", "expect": ["Item taken: item red crossing apple"]},
+    {"tick": 4, "content": "!move west", "expect": ["You are now in Apple Crossing"]},
+    {"tick": 5, "content": "!drop red crossing apple", "expect": ["Item dropped: item red crossing apple"]}
+  ]
+}

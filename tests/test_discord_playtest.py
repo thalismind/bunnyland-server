@@ -37,6 +37,7 @@ from bunnyland.core import (
     UseHandler,
     WaitHandler,
     WakeHandler,
+    WorldActor,
     WritableComponent,
     WriteHandler,
     container_of,
@@ -134,8 +135,14 @@ from bunnyland.mechanics.storyteller import (
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.memory.store import MemoryEntry
 from bunnyland.narration import NarrationProjection, check_grounding
-from bunnyland.plugins import apply_plugins, load_modules, select
+from bunnyland.plugins import apply_plugins, bunnyland_plugins, load_modules, select
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.worldgen.examples import (
+    APPLE_CROSSING_DEMO,
+    BELL_GREEN_DEMO,
+    CLOVER_CITY_DEMO,
+)
+from bunnyland.worldgen.generators import GenOptions
 
 PLAYTEST_DIR = Path(__file__).resolve().parents[1] / "examples" / "playtests"
 
@@ -1454,6 +1461,44 @@ async def test_discord_playtest_core_narration_transcript(scenario):
     assert latest is not None
     assert "You moved north to North Tunnel." in latest.text
     assert check_grounding(latest.scene, latest.text) == ()
+
+
+async def _run_generator_discord_playtest(generator, playtest_name: str):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    await generator.generate(actor, generator.name, GenOptions())
+    spec = load_discord_playtest(_run_path(playtest_name))
+    return await run_discord_playtest(_loop(actor), spec)
+
+
+async def test_discord_playtest_apple_crossing_generator_offline():
+    result = await _run_generator_discord_playtest(
+        APPLE_CROSSING_DEMO,
+        "discord-apple-crossing.json",
+    )
+
+    assert result.ticks == 6
+    assert len(result.inputs) == 6
+
+
+async def test_discord_playtest_bell_green_generator_offline():
+    result = await _run_generator_discord_playtest(
+        BELL_GREEN_DEMO,
+        "discord-bell-green.json",
+    )
+
+    assert result.ticks == 4
+    assert len(result.inputs) == 4
+
+
+async def test_discord_playtest_clover_city_generator_offline():
+    result = await _run_generator_discord_playtest(
+        CLOVER_CITY_DEMO,
+        "discord-clover-city.json",
+    )
+
+    assert result.ticks == 4
+    assert len(result.inputs) == 4
 
 
 async def test_discord_playtest_needs_and_memory_loop(scenario):

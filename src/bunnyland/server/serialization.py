@@ -605,8 +605,8 @@ _FIRST_RUN_CHECKLIST = (
     ("room-action", "Use one available room action."),
     ("move", "Move once."),
     ("say", "Say something."),
-    ("help-courier", "Help Moss the hungry courier."),
-    ("watch-courier", "Watch Moss act through world rules."),
+    ("help-courier", "Help Pip the hungry courier."),
+    ("watch-courier", "Watch Pip act through world rules."),
     ("inspect-consequence", "Check the activity feed, memory, or history."),
 )
 
@@ -648,31 +648,31 @@ def _room_has_named_entity(actor: WorldActor, room_id, query: str) -> bool:
 
 def _first_run_suggestions(actor: WorldActor, character, room: ClientRoomView) -> list[str]:
     goal = _current_goal(character)
-    if "Moss" not in goal and "courier" not in goal:
+    if "Pip" not in goal and "courier" not in goal:
         return []
 
     has_apple = _has_named_inventory(actor, character, "apple")
     room_id = parse_entity_id(room.id)
     suggestions: list[str] = []
-    if room.title == "Clover Post Office":
+    if room.title == "Apple Crossing":
         if has_apple:
-            suggestions.append("Drop the apple so Moss can eat it through the normal eat action.")
+            suggestions.append("Drop the apple so Pip can eat it through the normal eat action.")
         else:
-            suggestions.append("Go east to Market Lane and look for food Moss can reach.")
-        suggestions.append("Leave the courier letter where Moss can take it after eating.")
-    elif room.title == "Market Lane":
+            suggestions.append("Go east to Apple Hedge and look for food Pip can reach.")
+        suggestions.append("Leave the courier letter where Pip can take it after eating.")
+    elif room.title == "Apple Hedge":
         if has_apple:
-            suggestions.append("Go west to return the apple to Moss.")
+            suggestions.append("Go west to return the apple to Pip.")
         elif _room_has_named_entity(actor, room_id, "apple"):
-            suggestions.append("Take the red market apple, then bring it west to Moss.")
+            suggestions.append("Take the red crossing apple, then bring it west to Pip.")
         else:
             suggestions.append(
-                "If the apple is gone, tell Moss what happened and watch the fallback."
+                "If the apple is gone, tell Pip what happened and watch the fallback."
             )
-    elif room.title == "Moss Kiosk":
+    elif room.title == "Mira's Cottage":
         suggestions.append("Inspect the delivery ledger or activity feed for the consequence.")
     if not suggestions:
-        suggestions.append("Watch Moss choose eat, take, move, or write only when state allows it.")
+        suggestions.append("Watch Pip choose eat, take, move, or write only when state allows it.")
     return suggestions
 
 

@@ -1,190 +1,198 @@
 # Playtesting
 
-Use this guide for the public-preview first-session pass. The pass starts at the welcome
-page, uses the Toon client as the canonical first-user path, and validates the working
-quest: **The Hungry Courier**.
+Use this guide to test the public demo ladder:
 
-The product goal is that a fresh tester can finish the demo in under 10 minutes and say:
+> Apple Crossing -> Bell Green -> Clover City
 
-> The NPC wanted to do something, but had to solve the same world problems I did.
+The goal is to confirm that a new player can learn the rules in Apple Crossing, then
+understand Bell Green as the shared small-town sandbox, and Clover City as the larger
+dense-world showcase.
 
-## Product success metrics
+## Shared setup
 
-- New user can start the Toon client without help.
-- New user can complete Hungry Courier in under 10 minutes.
-- New user can explain the core mechanic: agents act through the same world rules.
-- User sees at least one visible consequence: delivery, memory, history, activity, or reply.
-
-## Technical readiness metrics
-
-- Hosted deployment acceptance checklist passes.
-- Backup/restore drill passes.
-- Non-admin player path passes.
-- Discord path passes if enabled.
-- Feature flags match public disclosure.
-- Release manifest exists.
-- Known issues are classified.
-
-## Tester setup
-
-Start a timer before opening the public welcome page. Do not read source code or admin
-tools first.
-
-Record:
+Record for every pass:
 
 - Tester name or initials.
-- Date and hosted URL tested.
+- Date, build, hosted URL, and generator name.
 - Browser and device.
-- Time to first successful Toon connection.
+- Time to first connection.
 - Time to character claim.
-- Time to courier delivery consequence.
-- The first moment of confusion, quoted as closely as possible.
-- The tester's explanation of the core mechanic after the run.
+- First moment of confusion, quoted as closely as possible.
+- Whether Discord, LLM, imagegen, and MCP were enabled.
 
-## 1. Welcome page
+Pass criteria for every world:
 
-Open the sandbox welcome page.
+- Non-admin player can claim, look, move, inspect, and speak.
+- Toon, Web REPL/TUI, and Discord show the same world state when those clients are enabled.
+- Suggested actions and visible room contents point to the next useful action.
+- No NPC or system declares success without matching world state.
 
-What to try:
+## 1. Apple Crossing: Hungry Courier
 
-- Identify the primary first step without help.
-- Confirm that **Play in Toon Client** is the obvious primary action.
-- Read the "Start here" actions before opening a client.
+Generator: `apple-crossing`
 
-Pass criteria:
+Apple Crossing is the first-run tutorial. The quest is **Hungry Courier**: help Pip eat,
+then watch him deliver a letter to Mira's Cottage through normal world actions.
 
-- Tester opens Toon first without being told.
-- Tester can name the first action they expect to take.
-
-Report:
-
-- Any equal-weight client-choice confusion.
-- Any wording that makes the demo sound like a scripted movie instead of a live world.
-
-## 2. Toon client start
-
-Open the Toon client from the welcome page.
+### Start
 
 What to try:
 
+- Open the welcome page and start the Toon client.
 - Connect to the hosted server if it does not auto-connect.
-- Claim Juniper or the obvious available player character.
-- Find the current goal, checklist, suggested actions, AP/FP, inventory, actions, and
+- Claim Juniper.
+- Find the current goal, checklist, suggested actions, inventory, actions, AP/FP, and
   activity feed.
 
 Pass criteria:
 
-- Tester can claim a character without synchronous help.
-- Checklist shows progress or can be reset for another run.
+- Tester can claim Juniper without help.
+- The current goal mentions helping Pip deliver the courier letter.
+- The suggested action points toward Apple Hedge when the player has no apple.
 
-Report:
-
-- Any claim, controller, auth, or reconnect issue.
-- Any first-run guidance that is hidden below too much UI.
-
-## 3. Hungry Courier golden path
-
-Complete the golden path without using admin tools.
+### Golden path
 
 Expected beats:
 
-1. Postmaster Wren introduces Moss and the delivery problem.
-2. Player looks around in Clover Post Office.
-3. Player goes east to Market Lane.
-4. Player takes the red market apple.
-5. Player returns west.
-6. Player drops or otherwise leaves food where Moss can reach it.
-7. Moss eats through the normal `eat` action.
-8. Moss takes the courier letter.
-9. Moss moves through exits toward Moss Kiosk.
-10. Moss writes to the delivery ledger or creates an equivalent visible consequence.
-11. Player checks activity, history, memory, ledger, or another consequence surface.
+1. Pippa Bramble introduces Pip and the delivery problem.
+2. Player looks around in Apple Crossing.
+3. Player sees Pip, Pippa, the courier letter, and exits.
+4. Player goes east to Apple Hedge.
+5. Player takes the red crossing apple.
+6. Player returns west to Apple Crossing.
+7. Player drops or otherwise leaves the apple where Pip can reach it.
+8. Pip eats through the normal `eat` action.
+9. Pip takes the courier letter.
+10. Pip moves through Old Footbridge and Mira's Cottage Lane.
+11. Pip reaches Mira's Cottage and writes the delivery ledger consequence.
+12. Player confirms the consequence in activity, history, memory, or the ledger.
 
 Pass criteria:
 
 - Completion time is under 10 minutes.
-- Moss visibly acts through normal validated actions.
-- The tester can explain that Moss wanted to deliver, but could not bypass hunger.
+- Pip visibly acts through normal validated actions: eat, take, move, write or drop.
+- Tester can explain that Pip wanted to deliver the letter, but could not bypass hunger.
+
+### Branch checks
+
+Run these after the golden path:
+
+- Player eats the apple before Pip can: Pip should remain hungry and ask or stall visibly.
+- Player takes the courier letter: Pip should notice it is not reachable.
+- Player ignores the quest: the world should continue without fake completion.
+- Player follows Pip: Pip should move through real exits and remain observable.
 
 Report:
 
 - The exact step where the tester hesitated.
-- Any action that lacked a clear target, unavailable reason, or useful result.
-- Whether the visible consequence was obvious enough.
+- Any action with unclear targeting, unavailable reason, or result text.
+- Whether the delivery consequence was obvious enough.
 
-## 4. Branch checks
+## 2. Bell Green
 
-Run these as short follow-up passes after the golden path has been tested.
+Generator: `bell-green`
 
-Player eats the food:
+Bell Green is the small-town sandbox. It should feel like the next step after Apple
+Crossing: more rooms, more residents, and more shared-town context without becoming dense.
 
-- Take the apple and eat it before Moss can.
-- Moss should remain hungry and ask, adapt, or fail visibly.
-
-Player takes the letter:
-
-- Take the courier letter before Moss can.
-- Moss should notice it is not reachable and react.
-
-Player ignores the quest:
-
-- Wait or explore without helping.
-- The world should continue; Moss should not declare success without state support.
-
-Player follows Moss:
-
-- After feeding Moss, follow room by room.
-- Moss should move through real exits and remain observable.
-
-Pass criteria:
-
-- Branches fail or adapt through normal command validation, not silent script breaks.
-- Rejections or stalled behavior produce understandable feedback.
-
-## 5. Multiclient check
-
-Open Web REPL or Web TUI as a second client during or after the run.
+### Town orientation
 
 What to try:
 
-- Inspect the same character, room, inventory, or ledger state.
-- Confirm the courier consequence is visible outside Toon.
-- Submit one harmless command from the second client if using a separate claimed character.
+- Claim Bram Hollow, Pippa Bramble, or another obvious resident.
+- Look in Bell Green.
+- Inspect the central notice board.
+- Visit Bell Green Post Office, Garden Walk, Hearthwick Inn, and Old Bell Shrine.
 
 Pass criteria:
 
-- Both clients show the same world state.
-- No client claims impossible state or hides the consequence.
+- Tester can identify Bell Green as a town center.
+- Notice board text gives several possible goals.
+- Exits are readable enough to navigate back to Bell Green.
+- The post office, garden, store/workshop/inn, pet yard, and shrine feel distinct.
 
-## 6. Optional Discord check
-
-Run this section only if Discord is enabled for the release manifest.
+### Sandbox behavior
 
 What to try:
 
-- Claim or play from a non-admin Discord account.
-- Reconnect after leaving and returning.
-- Compare Discord command output with Toon or Web REPL state.
+- Inspect the community mailbox or sorted letters.
+- Carry a harmless item between two rooms.
+- Speak to one resident.
+- Use a second client to observe the same room or item state.
 
 Pass criteria:
 
-- Non-admin claim/play/reconnect works.
-- Discord feature state matches public disclosure.
+- Shared-state changes are visible from another client.
+- The town has enough readable hooks to suggest errands without requiring a linear quest.
+- Discord output, if enabled, can claim a resident and inspect the notice board.
 
-## 7. Release acceptance record
+Report:
 
-Attach this result to the release manifest.
+- Any room that feels redundant or hard to distinguish.
+- Any resident whose role is unclear from name, room, or nearby objects.
+- Any online/shared-state mismatch between clients.
+
+## 3. Clover City
+
+Generator: `clover-city`
+
+Clover City is the advanced dense-world showcase. It should feel larger than Bell Green,
+with shared facilities, routines, and overlapping tensions.
+
+### City orientation
+
+What to try:
+
+- Claim Ada Warden.
+- Look in Clover City Lobby.
+- Inspect the daily bulletin.
+- Visit Mailroom, Elevator, Laundry Room, Community Kitchen, Rooftop Garden, Security
+  Office, and Street Stop.
+
+Pass criteria:
+
+- Tester can identify the lobby as the navigation hub.
+- The daily bulletin clearly lists city-block tensions.
+- Shared facilities feel distinct from private apartments.
+- The map feels denser than Bell Green without losing basic navigability.
+
+### Dense-world behavior
+
+What to try:
+
+- Inspect the parcel locker or incident log.
+- Move through elevator apartment exits.
+- Observe at least three residents in different facilities.
+- Wait or tick long enough to see routines or activity feed changes.
+- Use a second client or Discord account to compare room and bulletin state.
+
+Pass criteria:
+
+- Tester understands Clover City as a larger social simulation, not a first-run tutorial.
+- Residents, shared resources, and bulletin text imply overlapping needs or conflicts.
+- Multi-client or Discord observation matches the same world state.
+
+Report:
+
+- Any navigation label that is confusing.
+- Any facility that lacks an obvious purpose.
+- Any performance, rendering, or output problem caused by the larger cast.
+
+## Release acceptance
+
+Attach results to the release manifest.
 
 Record:
 
+- Generator tested: `apple-crossing`, `bell-green`, or `clover-city`.
 - Hosted deployment URL.
 - Release manifest id/tag.
-- Feature flags observed: LLM, imagegen, Discord, MCP.
-- Non-admin path result.
-- Discord path result, if enabled.
+- Feature flags observed.
+- Toon result.
+- Web REPL/TUI result.
+- Discord result, if enabled.
 - Save/restart/reload result.
-- Backup/restore drill result.
 - Known issues discovered or reclassified.
 
-Overall pass requires the golden path, non-admin path, release manifest, feature-flag
-disclosure, and known-issues classification to be complete.
+Overall pass requires Apple Crossing golden path, Bell Green orientation, Clover City
+orientation, non-admin claim/play, feature-flag disclosure, and known-issues classification.

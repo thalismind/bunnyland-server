@@ -1,0 +1,11 @@
+{
+  "ticks": 4,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Ada Warden", "expect": ["You are now controlling Ada Warden."]},
+    {"tick": 1, "content": "!look", "expect": ["Clover City Lobby", "directory board", "daily bulletin"]},
+    {"tick": 2, "content": "!inspect daily bulletin", "expect": ["Entity inspected: entity daily bulletin"]},
+    {"tick": 3, "content": "!move east", "expect": ["You are now in Mailroom"]}
+  ]
+}

@@ -22,10 +22,11 @@ class HungryCourierControllerComponent(Component):
     food_query: str = "apple"
     letter_query: str = "courier letter"
     ledger_query: str = "delivery ledger"
-    destination_title: str = "Moss Kiosk"
+    destination_title: str = "Mira's Cottage"
     route: tuple[tuple[str, str], ...] = (
-        ("Clover Post Office", "east"),
-        ("Market Lane", "south"),
+        ("Apple Crossing", "south"),
+        ("Old Footbridge", "west"),
+        ("Mira's Cottage Lane", "in"),
     )
     act_every_ticks: int = 1
 

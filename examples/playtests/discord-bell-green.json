@@ -1,0 +1,11 @@
+{
+  "ticks": 4,
+  "default_user_id": 123,
+  "default_channel_id": 456,
+  "inputs": [
+    {"tick": 0, "content": "!claim Bram Hollow", "expect": ["You are now controlling Bram Hollow."]},
+    {"tick": 1, "content": "!look", "expect": ["Bell Green", "central notice board", "community mailbox"]},
+    {"tick": 2, "content": "!inspect central notice board", "expect": ["Entity inspected: entity central notice board"]},
+    {"tick": 3, "content": "!move north", "expect": ["You are now in Bell Green Post Office"]}
+  ]
+}

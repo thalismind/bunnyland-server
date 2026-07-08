@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/discord-demo-ladder-crosstest <apple-crossing|bell-green|clover-city>
+
+Runs the live Discord crosstest against a deployed Bunnyland Discord bot using
+character/look/action defaults for one public demo generator. The target server must
+already be running the selected world.
+
+Required env is the same as scripts/discord-ci-crosstest:
+  BUNNYLAND_DISCORD_TEST_TOKEN
+  BUNNYLAND_DISCORD_TEST_CHANNEL_ID
+
+Recommended:
+  BUNNYLAND_DISCORD_BOT_USER_ID
+  BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS
+  BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS
+USAGE
+}
+
+world="${1:-}"
+case "$world" in
+  apple-crossing)
+    export BUNNYLAND_DISCORD_TEST_CHARACTER="${BUNNYLAND_DISCORD_TEST_CHARACTER:-Juniper}"
+    export BUNNYLAND_DISCORD_TEST_LOOK_EXPECT="${BUNNYLAND_DISCORD_TEST_LOOK_EXPECT:-Apple Crossing}"
+    export BUNNYLAND_DISCORD_TEST_ACTION="${BUNNYLAND_DISCORD_TEST_ACTION:-look}"
+    export BUNNYLAND_DISCORD_TEST_ACTION_EXPECT="${BUNNYLAND_DISCORD_TEST_ACTION_EXPECT:-Apple Crossing}"
+    ;;
+  bell-green)
+    export BUNNYLAND_DISCORD_TEST_CHARACTER="${BUNNYLAND_DISCORD_TEST_CHARACTER:-Bram Hollow}"
+    export BUNNYLAND_DISCORD_TEST_LOOK_EXPECT="${BUNNYLAND_DISCORD_TEST_LOOK_EXPECT:-Bell Green}"
+    export BUNNYLAND_DISCORD_TEST_ACTION="${BUNNYLAND_DISCORD_TEST_ACTION:-inspect central notice board}"
+    export BUNNYLAND_DISCORD_TEST_ACTION_EXPECT="${BUNNYLAND_DISCORD_TEST_ACTION_EXPECT:-central notice board}"
+    ;;
+  clover-city)
+    export BUNNYLAND_DISCORD_TEST_CHARACTER="${BUNNYLAND_DISCORD_TEST_CHARACTER:-Ada Warden}"
+    export BUNNYLAND_DISCORD_TEST_LOOK_EXPECT="${BUNNYLAND_DISCORD_TEST_LOOK_EXPECT:-Clover City Lobby}"
+    export BUNNYLAND_DISCORD_TEST_ACTION="${BUNNYLAND_DISCORD_TEST_ACTION:-inspect daily bulletin}"
+    export BUNNYLAND_DISCORD_TEST_ACTION_EXPECT="${BUNNYLAND_DISCORD_TEST_ACTION_EXPECT:-daily bulletin}"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "$repo_dir/scripts/discord-ci-crosstest"
