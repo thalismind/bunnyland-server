@@ -40,9 +40,16 @@ from bunnyland.tui.backend import (
     save_claim_control,
 )
 from bunnyland.tui.events import EventNarrator
+from bunnyland.tui.generator_selector import (
+    PRESET_SEEDS,
+    GeneratorSelection,
+    WorldGeneratorSelector,
+    random_preset_seed,
+)
 from bunnyland.tui.model import Target, World, entity_icon, entity_name, entity_type
 from bunnyland.tui.splash import IntroSplash
 from bunnyland.tui.verbs import ACTION_VERBS
+from bunnyland.worldgen import GenOptions, InstantiatedWorld, WorldGenerator
 
 PLAYER = "character:1"
 MARLOW = "character:2"
@@ -3177,10 +3184,234 @@ async def test_app_empty_character_roster_prompts_for_playable_character():
         assert "playable characters" in hint
 
 
+# ── local world generator selector ───────────────────────────────────────────
+async def _selector_generator(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
+    del actor, seed, options
+    return InstantiatedWorld()
+
+
+async def test_world_generator_selector_groups_generators_and_returns_seed(monkeypatch):
+    from textual.app import App
+    from textual.widgets import Button, Input, OptionList, Static
+
+    from bunnyland.tui import generator_selector as selector_module
+
+    generators = [
+        WorldGenerator(
+            name="fixed-demo",
+            generate=_selector_generator,
+            description="fixed world",
+            uses_seed=False,
+            group="tutorials",
+        ),
+        WorldGenerator(
+            name="recursive",
+            generate=_selector_generator,
+            description="seeded world",
+            uses_seed=True,
+            group="algorithmic",
+        ),
+    ]
+    results = []
+    screen = WorldGeneratorSelector(
+        generators,
+        initial_generator="recursive",
+        initial_seed="initial seed",
+    )
+
+    class Host(App[None]):
+        async def on_mount(self) -> None:
+            await self.push_screen(screen, callback=results.append)
+
+    app = Host()
+    async with app.run_test() as pilot:
+        options = await _wait_for_widget(screen, pilot, "#generator-list", OptionList)
+        prompts = [str(options.get_option_at_index(i).prompt) for i in range(options.option_count)]
+        assert any("ALGORITHMIC" in prompt for prompt in prompts)
+        assert any("TUTORIALS" in prompt for prompt in prompts)
+        assert any("recursive" in prompt for prompt in prompts)
+        assert not any("uses seed" in prompt for prompt in prompts)
+        assert not any("ignores seed" in prompt for prompt in prompts)
+
+        seed = screen.query_one("#seed-input", Input)
+        assert seed.value == "initial seed"
+        assert not seed.disabled
+        assert screen.query_one("#generator-start", Button).label.plain == "Select"
+
+        screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="generator:fixed-demo")))
+        assert seed.disabled
+        assert screen.query_one("#seed-random", Button).disabled
+        description = str(screen.query_one("#generator-description", Static).render())
+        assert "fixed world" in description
+        assert "ignores" not in description
+
+        screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="generator:recursive")))
+
+        monkeypatch.setattr(selector_module.secrets, "choice", lambda choices: choices[-1])
+        assert random_preset_seed() == PRESET_SEEDS[-1]
+        screen._random_seed_pressed(SimpleNamespace())
+        assert seed.value == PRESET_SEEDS[-1]
+
+        seed.value = ""
+        screen._seed_submitted(SimpleNamespace())
+        assert results == []
+        assert "Seed is required" in str(screen.query_one("#generator-error", Static).render())
+
+        seed.value = "chosen seed"
+        screen._start_pressed(SimpleNamespace())
+        await pilot.pause()
+        assert results[-1].generator == "recursive"
+        assert results[-1].seed == "chosen seed"
+
+
+async def test_world_generator_selector_ignores_invalid_selection_and_cancels():
+    from textual.app import App
+
+    results = []
+    screen = WorldGeneratorSelector(
+        [
+            WorldGenerator(
+                name="recursive",
+                generate=_selector_generator,
+                uses_seed=True,
+                group="algorithmic",
+            )
+        ],
+        initial_generator="missing",
+    )
+
+    class Host(App[None]):
+        async def on_mount(self) -> None:
+            await self.push_screen(screen, callback=results.append)
+
+    app = Host()
+    async with app.run_test() as pilot:
+        await _wait_for_widget(screen, pilot, "#generator-list")
+        assert screen.selected_generator.name == "recursive"
+        screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="group")))
+        assert screen.selected_generator.name == "recursive"
+        screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="generator:missing")))
+        assert screen.selected_generator.name == "recursive"
+        screen._cancel_pressed(SimpleNamespace())
+        await pilot.pause()
+        assert results == [None]
+
+
+def test_world_generator_selector_escape_cancels(monkeypatch):
+    screen = WorldGeneratorSelector(
+        [
+            WorldGenerator(
+                name="recursive",
+                generate=_selector_generator,
+                uses_seed=True,
+                group="algorithmic",
+            )
+        ]
+    )
+    dismissed = []
+
+    monkeypatch.setattr(screen, "dismiss", dismissed.append)
+    screen.action_cancel()
+
+    assert dismissed == [None]
+
+
+def test_world_generator_selector_rejects_empty_generator_list():
+    with pytest.raises(ValueError, match="needs at least one generator"):
+        WorldGeneratorSelector([])
+
+
+class SelectorLocalBackend(LocalBackend):
+    def __init__(self) -> None:
+        super().__init__(
+            seed="old seed",
+            generator="apartment-demo",
+            autorun=False,
+            client_id="selector-client",
+        )
+        self.started = False
+
+    async def start(self) -> None:
+        self.started = True
+
+
+async def test_tui_mount_uses_local_generator_selection(monkeypatch):
+    backend = SelectorLocalBackend()
+    app = BunnylandTUI(backend)
+    app.show_generator_selector = True
+    refreshed = []
+    intervals = []
+    workers = []
+
+    def fake_push_screen(screen, callback=None):
+        assert isinstance(screen, WorldGeneratorSelector)
+        callback(GeneratorSelection(generator="bell-green", seed="town seed"))
+
+    async def fake_refresh():
+        refreshed.append(True)
+
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+    monkeypatch.setattr(app, "run_worker", lambda coro, **kwargs: workers.append(coro))
+    monkeypatch.setattr(app, "refresh_world", fake_refresh)
+    monkeypatch.setattr(app, "set_interval", lambda *args: intervals.append(args))
+
+    await app.on_mount()
+    assert len(workers) == 1
+    await workers[0]
+
+    assert backend.started
+    assert backend.generator_name == "bell-green"
+    assert backend.seed == "town seed"
+    assert backend.label == "local · bell-green"
+    assert refreshed == [True]
+    assert intervals
+
+
+async def test_tui_mount_shows_intro_before_local_generator_selector(monkeypatch):
+    backend = SelectorLocalBackend()
+    app = BunnylandTUI(backend, show_intro=True)
+    app.show_generator_selector = True
+    pushed = []
+
+    def fake_push_screen(screen, callback=None):
+        pushed.append((screen, callback))
+
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+
+    await app.on_mount()
+
+    assert isinstance(pushed[0][0], IntroSplash)
+    assert not backend.started
+
+    pushed[0][1](None)
+    assert isinstance(pushed[1][0], WorldGeneratorSelector)
+    assert not backend.started
+
+
+async def test_tui_mount_exits_when_local_generator_selection_is_cancelled(monkeypatch):
+    backend = SelectorLocalBackend()
+    app = BunnylandTUI(backend)
+    app.show_generator_selector = True
+    exits = []
+
+    def fake_push_screen(screen, callback=None):
+        assert isinstance(screen, WorldGeneratorSelector)
+        callback(None)
+
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+    monkeypatch.setattr(app, "exit", lambda: exits.append(True))
+
+    await app.on_mount()
+
+    assert exits == [True]
+    assert not backend.started
+
+
 # ── TUI CLI wiring ────────────────────────────────────────────────────────────
 def test_main_runs_remote_backend(monkeypatch):
     backends = []
     runs = []
+    apps = []
 
     class BackendStub:
         def __init__(self, server, *, fallback_controller=None, timeout_seconds=None):
@@ -3192,9 +3423,10 @@ def test_main_runs_remote_backend(monkeypatch):
     class AppStub:
         def __init__(self, backend):
             self.backend = backend
+            apps.append(self)
 
         def run(self):
-            runs.append(self.backend)
+            runs.append(self)
 
     monkeypatch.setattr(tui_app, "RemoteBackend", BackendStub)
     monkeypatch.setattr(tui_app, "BunnylandTUI", AppStub)
@@ -3212,14 +3444,16 @@ def test_main_runs_remote_backend(monkeypatch):
         )
         == 0
     )
-    assert runs == backends
+    assert [app.backend for app in runs] == backends
     assert backends[0].server == "http://example.test"
     assert backends[0].fallback_controller == "llm"
     assert backends[0].timeout_seconds == 600
+    assert apps[0].show_generator_selector is False
 
 
 def test_main_runs_local_backend(monkeypatch):
     backends = []
+    apps = []
 
     class BackendStub:
         def __init__(
@@ -3234,6 +3468,7 @@ def test_main_runs_local_backend(monkeypatch):
     class AppStub:
         def __init__(self, backend):
             self.backend = backend
+            apps.append(self)
 
         def run(self): ...
 
@@ -3256,6 +3491,7 @@ def test_main_runs_local_backend(monkeypatch):
     assert backends[0].seed == "test seed"
     assert backends[0].generator == "empty"
     assert backends[0].fallback_controller == "suspend"
+    assert apps[0].show_generator_selector is False
 
 
 def test_main_no_icons_disables_tui_icons(monkeypatch):
@@ -3280,6 +3516,7 @@ def test_main_no_icons_disables_tui_icons(monkeypatch):
 
     assert tui_app.main(["--no-icons"]) == 0
     assert apps[0].show_icons is False
+    assert apps[0].show_generator_selector is True
 
 
 def test_main_lists_generators_and_exits(monkeypatch, capsys):

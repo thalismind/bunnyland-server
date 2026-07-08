@@ -218,6 +218,7 @@ async def test_hungry_courier_agent_handles_invalid_done_and_hungry_states():
 async def test_hungry_courier_agent_branches_on_real_world_state():
     actor, world = await _hungry_courier_world()
     agent = _hungry_courier_agent(actor)
+    agent.component = HungryCourierControllerComponent(food_query="slice")
     courier = actor.world.get_entity(world.characters["courier"])
     courier_id = str(courier.id)
     letter = actor.world.get_entity(world.objects["letter"])
@@ -277,12 +278,12 @@ async def test_hungry_courier_agent_branches_on_real_world_state():
 async def test_hungry_courier_agent_finds_food_by_state_not_script():
     actor, world = await _hungry_courier_world()
     agent = _hungry_courier_agent(actor)
+    agent.component = HungryCourierControllerComponent(food_query="slice")
     courier = actor.world.get_entity(world.characters["courier"])
     crossing = actor.world.get_entity(world.rooms["crossing"])
+    hedge = actor.world.get_entity(world.rooms["apple_hedge"])
+    hedge.remove_relationship(Contains, world.objects["apple"])
 
-    apple_sign = spawn_entity(
-        actor.world, [IdentityComponent(name="apple sign", kind="sign")]
-    )
     apple_slice = spawn_entity(
         actor.world,
         [
@@ -297,12 +298,17 @@ async def test_hungry_courier_agent_finds_food_by_state_not_script():
             FoodComponent(nutrition=1.0, satiety=1.0),
         ],
     )
-    crossing.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), apple_sign.id)
     crossing.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), apple_slice.id)
     crossing.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), cracker.id)
 
     assert agent._reachable_food(courier) == apple_slice
     crossing.remove_relationship(Contains, apple_slice.id)
+
+    agent.component = HungryCourierControllerComponent(food_query="apple")
+    apple_sign = spawn_entity(
+        actor.world, [IdentityComponent(name="apple sign", kind="sign")]
+    )
+    crossing.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), apple_sign.id)
     assert agent._reachable_food(courier) == cracker
 
     crossing.remove_relationship(Contains, cracker.id)

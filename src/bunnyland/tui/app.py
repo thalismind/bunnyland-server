@@ -25,6 +25,7 @@ from ..server.models import CharacterSummaryView
 from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, ControlClaim, LocalBackend, RemoteBackend
 from .events import EventNarrator
+from .generator_selector import DEFAULT_LOCAL_GENERATOR, DEFAULT_LOCAL_SEED, WorldGeneratorSelector
 from .model import Target, World, entity_icon, entity_name, fmt_points, has
 from .splash import IntroSplash
 from .verbs import ACTION_VERBS, Verb
@@ -385,6 +386,7 @@ class BunnylandTUI(App[None]):
         self._event_image_url = ""
         self._event_image_failure_epoch = -1
         self._refresh_error: str | None = None
+        self.show_generator_selector = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -428,8 +430,34 @@ class BunnylandTUI(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        if self.show_generator_selector and isinstance(self.backend, LocalBackend):
+            if self.show_intro:
+                self.push_screen(IntroSplash(), callback=lambda _: self._show_generator_selector())
+            else:
+                self._show_generator_selector()
+            return
         if self.show_intro:
             self.push_screen(IntroSplash())
+        await self._start_backend()
+
+    def _show_generator_selector(self) -> None:
+        self.push_screen(
+            WorldGeneratorSelector(
+                available_generators(),
+                initial_generator=self.backend.generator_name,
+                initial_seed=self.backend.seed,
+            ),
+            callback=self._generator_selected,
+        )
+
+    def _generator_selected(self, selection) -> None:
+        if selection is None:
+            self.exit()
+            return
+        self.backend.configure_world(seed=selection.seed, generator=selection.generator)
+        self.run_worker(self._start_backend(), exclusive=True)
+
+    async def _start_backend(self) -> None:
         await self.backend.start()
         await self.refresh_world()
         self.set_interval(REFRESH_SECONDS, self.refresh_world)
@@ -1123,9 +1151,9 @@ class BunnylandTUI(App[None]):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bunnyland-tui", description=__doc__)
     parser.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
-    parser.add_argument("--seed", default="a quiet marsh", help="seed for a locally hosted world")
+    parser.add_argument("--seed", default=None, help="seed for a locally hosted world")
     parser.add_argument(
-        "--generator", default="apartment-demo", help="generator for a locally hosted world"
+        "--generator", default=None, help="generator for a locally hosted world"
     )
     parser.add_argument(
         "--list-generators",
@@ -1160,6 +1188,7 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
 
+    show_generator_selector = not args.server and args.generator is None
     backend: Backend = (
         RemoteBackend(
             args.server,
@@ -1168,13 +1197,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.server
         else LocalBackend(
-            seed=args.seed,
-            generator=args.generator,
+            seed=args.seed or DEFAULT_LOCAL_SEED,
+            generator=args.generator or DEFAULT_LOCAL_GENERATOR,
             fallback_controller=args.claim_fallback,
             timeout_seconds=timeout_seconds,
         )
     )
     app = BunnylandTUI(backend)
+    app.show_generator_selector = show_generator_selector
     app.show_icons = not args.no_icons
     app.show_intro = True
     app.run()

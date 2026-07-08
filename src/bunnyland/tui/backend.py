@@ -340,6 +340,12 @@ class LocalBackend(Backend):
     def supports_image_requests(self) -> bool:
         return self.imagegen is not None
 
+    def configure_world(self, *, seed: str, generator: str) -> None:
+        """Update local generation inputs before ``start`` creates the world."""
+        self.seed = seed
+        self.generator_name = generator
+        self.label = f"local · {generator}"
+
     async def start(self) -> None:
         # Imported here so the optional server/llm wiring is only pulled when hosting.
         from ..core.world_actor import WorldActor

@@ -22,7 +22,8 @@ from bunnyland.repl.client import (
     resolve_name,
 )
 from bunnyland.repl.completion import complete_line, reference_candidates, value_candidates
-from bunnyland.tui.backend import Backend, SubmitResult
+from bunnyland.tui.backend import Backend, LocalBackend, SubmitResult
+from bunnyland.tui.generator_selector import GeneratorSelection, WorldGeneratorSelector
 from bunnyland.tui.model import World, entity_name
 from bunnyland.tui.splash import IntroSplash
 
@@ -1216,6 +1217,95 @@ async def test_app_history_file_missing_and_unwritable(monkeypatch, tmp_path):
         pass
 
 
+class SelectorReplLocalBackend(LocalBackend):
+    def __init__(self) -> None:
+        super().__init__(
+            seed="old seed",
+            generator="apartment-demo",
+            autorun=False,
+            client_id="selector-client",
+        )
+        self.started = False
+
+    async def start(self) -> None:
+        self.started = True
+
+
+async def test_repl_mount_uses_local_generator_selection(monkeypatch):
+    backend = SelectorReplLocalBackend()
+    app = BunnylandReplApp(backend)
+    app.show_generator_selector = True
+    refreshed = []
+    intervals = []
+    workers = []
+
+    def fake_push_screen(screen, callback=None):
+        assert isinstance(screen, WorldGeneratorSelector)
+        callback(GeneratorSelection(generator="clover-city", seed="city seed"))
+
+    async def fake_refresh(prime=False):
+        refreshed.append(prime)
+
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+    monkeypatch.setattr(app, "run_worker", lambda coro, **kwargs: workers.append(coro))
+    monkeypatch.setattr(app, "_load_history", lambda: None)
+    monkeypatch.setattr(app, "_safe_refresh", fake_refresh)
+    monkeypatch.setattr(app, "write_log", lambda renderable: None)
+    monkeypatch.setattr(app, "set_interval", lambda *args: intervals.append(args))
+    monkeypatch.setattr(app.command, "focus", lambda: None)
+
+    await app.on_mount()
+    assert len(workers) == 1
+    await workers[0]
+
+    assert backend.started
+    assert backend.generator_name == "clover-city"
+    assert backend.seed == "city seed"
+    assert backend.label == "local · clover-city"
+    assert refreshed == [True]
+    assert intervals
+
+
+async def test_repl_mount_shows_intro_before_local_generator_selector(monkeypatch):
+    backend = SelectorReplLocalBackend()
+    app = BunnylandReplApp(backend, show_intro=True)
+    app.show_generator_selector = True
+    pushed = []
+
+    def fake_push_screen(screen, callback=None):
+        pushed.append((screen, callback))
+
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+
+    await app.on_mount()
+
+    assert isinstance(pushed[0][0], IntroSplash)
+    assert not backend.started
+
+    pushed[0][1](None)
+    assert isinstance(pushed[1][0], WorldGeneratorSelector)
+    assert not backend.started
+
+
+async def test_repl_mount_exits_when_local_generator_selection_is_cancelled(monkeypatch):
+    backend = SelectorReplLocalBackend()
+    app = BunnylandReplApp(backend)
+    app.show_generator_selector = True
+    exits = []
+
+    def fake_push_screen(screen, callback=None):
+        assert isinstance(screen, WorldGeneratorSelector)
+        callback(None)
+
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+    monkeypatch.setattr(app, "exit", lambda: exits.append(True))
+
+    await app.on_mount()
+
+    assert exits == [True]
+    assert not backend.started
+
+
 # ── lazy package exports + CLI wiring ─────────────────────────────────────────
 def test_repl_package_lazily_exports_app_symbols():
     import bunnyland.repl as repl
@@ -1306,7 +1396,7 @@ def test_main_lists_generators_and_exits(monkeypatch, capsys):
 
 
 def test_main_runs_remote_backend(monkeypatch):
-    backends, runs = [], []
+    backends, runs, apps = [], [], []
 
     class BackendStub:
         def __init__(self, server, *, fallback_controller=None, timeout_seconds=None):
@@ -1318,9 +1408,10 @@ def test_main_runs_remote_backend(monkeypatch):
     class AppStub:
         def __init__(self, backend):
             self.backend = backend
+            apps.append(self)
 
         def run(self):
-            runs.append(self.backend)
+            runs.append(self)
 
     monkeypatch.setattr(repl_app, "RemoteBackend", BackendStub)
     monkeypatch.setattr(repl_app, "BunnylandReplApp", AppStub)
@@ -1330,13 +1421,15 @@ def test_main_runs_remote_backend(monkeypatch):
         "--claim-fallback", "llm",
         "--claim-timeout-minutes", "10",
     ]) == 0
-    assert runs == backends
+    assert [app.backend for app in runs] == backends
     assert backends[0].server == "http://example.test"
     assert backends[0].timeout_seconds == 600
+    assert apps[0].show_generator_selector is False
 
 
 def test_main_runs_local_backend(monkeypatch):
     backends = []
+    apps = []
 
     class BackendStub:
         def __init__(self, *, seed=None, generator=None, fallback_controller=None,
@@ -1348,6 +1441,7 @@ def test_main_runs_local_backend(monkeypatch):
     class AppStub:
         def __init__(self, backend):
             self.backend = backend
+            apps.append(self)
 
         def run(self): ...
 
@@ -1357,6 +1451,7 @@ def test_main_runs_local_backend(monkeypatch):
     assert repl_app.main(["--seed", "test seed", "--generator", "empty"]) == 0
     assert backends[0].seed == "test seed"
     assert backends[0].generator == "empty"
+    assert apps[0].show_generator_selector is False
 
 
 def test_main_no_icons_disables_repl_icons(monkeypatch):
@@ -1380,6 +1475,7 @@ def test_main_no_icons_disables_repl_icons(monkeypatch):
 
     assert repl_app.main(["--no-icons"]) == 0
     assert apps[0].repl.show_icons is False
+    assert apps[0].show_generator_selector is True
 
 
 # ── character sheet deep links ───────────────────────────────────────────────────────

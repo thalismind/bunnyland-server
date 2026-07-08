@@ -26,19 +26,26 @@ def _generator_group_label(group: str) -> str:
     return group.replace("-", " ").title()
 
 
-def format_generator_lines(generators: Iterable[WorldGenerator]) -> list[str]:
-    """Human-readable grouped lines for ``--list-generators`` output."""
+def group_generators(generators: Iterable[WorldGenerator]) -> dict[str, list[WorldGenerator]]:
+    """Generators grouped for terminal picker/list rendering."""
     grouped: dict[str, list[WorldGenerator]] = {}
     for generator in generators:
         grouped.setdefault(_generator_group(generator), []).append(generator)
+    return {
+        group: sorted(items, key=lambda item: item.name)
+        for group, items in sorted(grouped.items())
+    }
 
+
+def format_generator_lines(generators: Iterable[WorldGenerator]) -> list[str]:
+    """Human-readable grouped lines for ``--list-generators`` output."""
     lines: list[str] = []
     seedless = False
-    for group in sorted(grouped):
+    for group, items in group_generators(generators).items():
         if lines:
             lines.append("")
         lines.append(f"{_generator_group_label(group)}:")
-        for generator in sorted(grouped[group], key=lambda item: item.name):
+        for generator in items:
             marker = ""
             if not generator.uses_seed:
                 marker = " *"
