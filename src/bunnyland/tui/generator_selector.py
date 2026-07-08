@@ -60,6 +60,7 @@ class WorldGeneratorSelector(ModalScreen[GeneratorSelection | None]):
     #generator-list { height: 10; margin-bottom: 1; }
     #generator-description { height: auto; min-height: 2; color: $text-muted; }
     #seed-row { height: 3; }
+    #seed-label { width: 13; padding-top: 1; }
     #seed-input { width: 1fr; }
     #seed-random { width: 14; min-width: 14; }
     #generator-error { color: $error; height: 1; }
@@ -90,6 +91,7 @@ class WorldGeneratorSelector(ModalScreen[GeneratorSelection | None]):
             yield OptionList(id="generator-list")
             yield Static("", id="generator-description")
             with Horizontal(id="seed-row"):
+                yield Label("Seed prompt", id="seed-label")
                 yield Input(self.initial_seed, id="seed-input", placeholder="seed")
                 yield Button("Random Seed", id="seed-random")
             yield Static("", id="generator-error")
@@ -122,6 +124,17 @@ class WorldGeneratorSelector(ModalScreen[GeneratorSelection | None]):
     def _generator_by_name(self, name: str) -> WorldGenerator | None:
         return next((generator for generator in self.generators if generator.name == name), None)
 
+    def _generator_from_option_id(self, option_id: str) -> WorldGenerator | None:
+        if not option_id.startswith("generator:"):
+            return None
+        return self._generator_by_name(option_id.removeprefix("generator:"))
+
+    def _highlighted_generator(self) -> WorldGenerator | None:
+        option = self.query_one("#generator-list", OptionList).highlighted_option
+        if option is None:
+            return None
+        return self._generator_from_option_id(str(option.id or ""))
+
     def _sync_seed_state(self) -> None:
         description = self.selected_generator.description or "No description."
         self.query_one("#generator-description", Static).update(description)
@@ -132,10 +145,15 @@ class WorldGeneratorSelector(ModalScreen[GeneratorSelection | None]):
 
     @on(OptionList.OptionSelected, "#generator-list")
     def _generator_selected(self, event: OptionList.OptionSelected) -> None:
-        option_id = str(event.option.id or "")
-        if not option_id.startswith("generator:"):
+        generator = self._generator_from_option_id(str(event.option.id or ""))
+        if generator is None:
             return
-        generator = self._generator_by_name(option_id.removeprefix("generator:"))
+        self.selected_generator = generator
+        self._sync_seed_state()
+
+    @on(OptionList.OptionHighlighted, "#generator-list")
+    def _generator_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        generator = self._generator_from_option_id(str(event.option.id or ""))
         if generator is None:
             return
         self.selected_generator = generator
@@ -161,6 +179,10 @@ class WorldGeneratorSelector(ModalScreen[GeneratorSelection | None]):
         self.dismiss(None)
 
     def _start(self) -> None:
+        highlighted = self._highlighted_generator()
+        if highlighted is not None:
+            self.selected_generator = highlighted
+            self._sync_seed_state()
         seed = self.query_one("#seed-input", Input).value.strip()
         if self.selected_generator.uses_seed and not seed:
             self.query_one("#generator-error", Static).update("Seed is required.")

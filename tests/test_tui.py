@@ -3192,7 +3192,7 @@ async def _selector_generator(actor, seed: str, options: GenOptions) -> Instanti
 
 async def test_world_generator_selector_groups_generators_and_returns_seed(monkeypatch):
     from textual.app import App
-    from textual.widgets import Button, Input, OptionList, Static
+    from textual.widgets import Button, Input, Label, OptionList, Static
 
     from bunnyland.tui import generator_selector as selector_module
 
@@ -3236,6 +3236,7 @@ async def test_world_generator_selector_groups_generators_and_returns_seed(monke
         seed = screen.query_one("#seed-input", Input)
         assert seed.value == "initial seed"
         assert not seed.disabled
+        assert str(screen.query_one("#seed-label", Label).render()) == "Seed prompt"
         assert screen.query_one("#generator-start", Button).label.plain == "Select"
         picker_region = screen.query_one("#generator-picker").region
         buttons_region = screen.query_one("#generator-buttons").region
@@ -3248,7 +3249,8 @@ async def test_world_generator_selector_groups_generators_and_returns_seed(monke
         assert "fixed world" in description
         assert "ignores" not in description
 
-        screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="generator:recursive")))
+        screen._generator_highlighted(SimpleNamespace(option=SimpleNamespace(id="generator:recursive")))
+        assert screen.selected_generator.name == "recursive"
 
         monkeypatch.setattr(selector_module.secrets, "choice", lambda choices: choices[-1])
         assert random_preset_seed() == PRESET_SEEDS[-1]
@@ -3265,6 +3267,51 @@ async def test_world_generator_selector_groups_generators_and_returns_seed(monke
         await pilot.pause()
         assert results[-1].generator == "recursive"
         assert results[-1].seed == "chosen seed"
+
+
+async def test_world_generator_selector_select_uses_highlighted_generator():
+    from textual.app import App
+    from textual.widgets import Input, OptionList
+
+    generators = [
+        WorldGenerator(
+            name="fixed-demo",
+            generate=_selector_generator,
+            description="fixed world",
+            uses_seed=False,
+            group="tutorials",
+        ),
+        WorldGenerator(
+            name="recursive",
+            generate=_selector_generator,
+            description="seeded world",
+            uses_seed=True,
+            group="algorithmic",
+        ),
+    ]
+    results = []
+    screen = WorldGeneratorSelector(
+        generators,
+        initial_generator="fixed-demo",
+        initial_seed="initial seed",
+    )
+
+    class Host(App[None]):
+        async def on_mount(self) -> None:
+            await self.push_screen(screen, callback=results.append)
+
+    app = Host()
+    async with app.run_test() as pilot:
+        options = await _wait_for_widget(screen, pilot, "#generator-list", OptionList)
+        options.highlighted = options.get_option_index("generator:recursive")
+        await pilot.pause()
+        screen.query_one("#seed-input", Input).value = "recursive seed"
+
+        screen._start_pressed(SimpleNamespace())
+        await pilot.pause()
+
+    assert results[-1].generator == "recursive"
+    assert results[-1].seed == "recursive seed"
 
 
 async def test_world_generator_selector_ignores_invalid_selection_and_cancels():
