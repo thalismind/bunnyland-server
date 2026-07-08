@@ -3237,6 +3237,9 @@ async def test_world_generator_selector_groups_generators_and_returns_seed(monke
         assert seed.value == "initial seed"
         assert not seed.disabled
         assert screen.query_one("#generator-start", Button).label.plain == "Select"
+        picker_region = screen.query_one("#generator-picker").region
+        buttons_region = screen.query_one("#generator-buttons").region
+        assert buttons_region.y + buttons_region.height <= picker_region.y + picker_region.height
 
         screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="generator:fixed-demo")))
         assert seed.disabled

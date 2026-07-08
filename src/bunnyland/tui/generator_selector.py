@@ -52,18 +52,18 @@ class WorldGeneratorSelector(ModalScreen[GeneratorSelection | None]):
     CSS = """
     WorldGeneratorSelector { align: center middle; }
     #generator-picker {
-        width: 76; height: auto; max-height: 90%;
+        width: 76; height: auto; max-height: 100%;
         border: thick $accent; background: $surface; padding: 1 2;
     }
     #generator-title { text-style: bold; }
-    #generator-hint { color: $text-muted; height: auto; padding-bottom: 1; }
-    #generator-list { height: 18; margin-bottom: 1; }
+    #generator-hint { color: $text-muted; height: 1; }
+    #generator-list { height: 10; margin-bottom: 1; }
     #generator-description { height: auto; min-height: 2; color: $text-muted; }
     #seed-row { height: 3; }
     #seed-input { width: 1fr; }
     #seed-random { width: 14; min-width: 14; }
     #generator-error { color: $error; height: 1; }
-    #generator-buttons { height: auto; padding-top: 1; }
+    #generator-buttons { height: 3; }
     #generator-start { margin-right: 1; }
     """
 
@@ -84,7 +84,7 @@ class WorldGeneratorSelector(ModalScreen[GeneratorSelection | None]):
         with Vertical(id="generator-picker"):
             yield Label("Choose a world", id="generator-title")
             yield Static(
-                "Select a local generator, then set a seed when the seed field is enabled.",
+                "Pick a generator. Add a seed when the seed field is enabled.",
                 id="generator-hint",
             )
             yield OptionList(id="generator-list")
