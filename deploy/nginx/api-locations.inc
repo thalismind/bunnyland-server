@@ -38,6 +38,20 @@ location = /api/world/overview {
     proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
 }
 
+location = /api/world/events/recent {
+    auth_basic "Bunnyland admin";
+    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
+
+    proxy_pass ${BUNNYLAND_API_UPSTREAM}/world/events/recent;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
+    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
+}
+
 location ^~ /api/world/dm/ {
     auth_basic "Bunnyland admin";
     auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
