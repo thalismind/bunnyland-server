@@ -50,6 +50,7 @@ _TYPE_MODULES = (
     "bunnyland.core.components",
     "bunnyland.core.edges",
     "bunnyland.core.controllers",
+    "bunnyland.discord.components",
     "bunnyland.mechanics.needs",
     "bunnyland.mechanics.consumables",
     "bunnyland.mechanics.affect",

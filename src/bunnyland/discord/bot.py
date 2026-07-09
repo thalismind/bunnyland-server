@@ -17,24 +17,41 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
+from relics import (
+    OnComponentAdded,
+    OnComponentRemoved,
+    OnRelationshipAdded,
+    OnRelationshipRemoved,
+)
+
 from ..claims import ClaimSecretRegistry
 from ..core.claim_timeout import (
     normalize_claim_timeout,
 )
 from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
-from ..core.components import ControllerOutboxMessageComponent
+from ..core.components import ControllerOutboxMessageComponent, RoomComponent
 from ..core.controllers import DiscordControllerComponent
-from ..core.ecs import replace_component
+from ..core.ecs import entity_name, parse_entity_id, replace_component
+from ..core.edges import ContainmentMode, Contains
 from ..core.events import (
+    ActorMovedEvent,
     CharacterClaimedEvent,
+    CommandAcceptedEvent,
+    CommandCancelledEvent,
     CommandExecutedEvent,
+    CommandExpiredEvent,
+    CommandQueuedEvent,
     CommandRejectedEvent,
+    CommandSubmittedEvent,
+    DomainEvent,
+    EventVisibility,
     NotesSearchedEvent,
     WorldPauseStatusChangedEvent,
 )
@@ -67,6 +84,7 @@ from .claim import (
     set_discord_claim_fallback,
     suspend_discord_character,
 )
+from .components import DiscordRoomFeedComponent
 from .view import (
     render_action_result,
     render_help,
@@ -86,6 +104,16 @@ PAUSED_REACTION = "\N{DOUBLE VERTICAL BAR}\N{VARIATION SELECTOR-16}"
 META_COMMANDS = frozenset(
     {"help", "claim", "characters", "fallback", "look", "release", "suspend"}
 )
+COMMAND_LIFECYCLE_EVENTS = (
+    CommandAcceptedEvent,
+    CommandCancelledEvent,
+    CommandExecutedEvent,
+    CommandExpiredEvent,
+    CommandQueuedEvent,
+    CommandRejectedEvent,
+    CommandSubmittedEvent,
+)
+_CAMEL_WORD_RE = re.compile(r"(?<!^)(?=[A-Z])")
 
 
 @dataclass(frozen=True)
@@ -323,6 +351,98 @@ def discord_broadcast_channel_ids(actor: WorldActor) -> tuple[int, ...]:
     return tuple(sorted(channel_ids))
 
 
+def _room_feed_component_observer(bot: DiscordBot, *, removed: bool):
+    if removed:
+
+        class _Observer(OnComponentRemoved):
+            component_type = DiscordRoomFeedComponent
+
+            def on_component_removed(self, entity, component) -> None:
+                del component
+                bot._remove_room_feed(str(entity.id))
+
+    else:
+
+        class _Observer(OnComponentAdded):
+            component_type = DiscordRoomFeedComponent
+
+            def on_component_added(self, entity, component) -> None:
+                bot._set_room_feed(str(entity.id), component.channel_id)
+
+    return _Observer()
+
+
+def _contains_observer(bot: DiscordBot, *, removed: bool):
+    if removed:
+
+        class _Observer(OnRelationshipRemoved):
+            edge_type = Contains
+
+            def on_relationship_removed(self, source, edge, target) -> None:
+                bot._record_containment_change(source, edge, target, removed=True)
+
+    else:
+
+        class _Observer(OnRelationshipAdded):
+            edge_type = Contains
+
+            def on_relationship_added(self, source, edge, target) -> None:
+                bot._record_containment_change(source, edge, target, removed=False)
+
+    return _Observer()
+
+
+def _feed_entity_name(actor: WorldActor | None, raw_id: str | None) -> str | None:
+    if actor is None or raw_id is None:
+        return raw_id
+    entity_id = parse_entity_id(raw_id)
+    if entity_id is None or not actor.world.has_entity(entity_id):
+        return raw_id
+    entity = actor.world.get_entity(entity_id)
+    if entity.has_component(RoomComponent):
+        return entity.get_component(RoomComponent).title
+    return entity_name(entity)
+
+
+def render_room_feed_event(event: DomainEvent, actor: WorldActor | None = None) -> str:
+    """Render a room-feed event; callers only invoke this after a feed match."""
+
+    title = _CAMEL_WORD_RE.sub(" ", type(event).__name__).removesuffix(" Event")
+    if isinstance(event, ActorMovedEvent):
+        actor_name = _feed_entity_name(actor, event.actor_id) or "Someone"
+        from_room = _feed_entity_name(actor, event.from_room_id) or event.from_room_id
+        to_room = _feed_entity_name(actor, event.to_room_id) or event.to_room_id
+        direction = f" {event.direction}" if event.direction else ""
+        summary = f" {event.arrival_summary}" if event.arrival_summary else ""
+        return (
+            f"**{title}**: {actor_name} moved{direction} "
+            f"from {from_room} to {to_room}.{summary}"
+        )
+
+    base_fields = {
+        "event_id",
+        "world_epoch",
+        "created_at",
+        "visibility",
+        "actor_id",
+        "room_id",
+        "target_ids",
+        "causation_id",
+        "correlation_id",
+    }
+    details = [
+        f"{key}={value}"
+        for key, value in event.model_dump(mode="json").items()
+        if key not in base_fields and value not in (None, "", [], ())
+    ]
+    actor_name = _feed_entity_name(actor, event.actor_id)
+    room_name = _feed_entity_name(actor, event.room_id)
+    actor_text = f" actor={actor_name}" if actor_name else ""
+    room = f" room={room_name}" if room_name else ""
+    suffix = f": {', '.join(details[:6])}" if details else ""
+    return f"**{title}**{actor_text}{room}{suffix}"
+
+
 class DiscordBot:
     """Maps Discord slash commands to character verbs for the controlling user."""
 
@@ -358,9 +478,16 @@ class DiscordBot:
         self._paused_reactions: dict[str, Any] = {}
         # record entity id -> the Discord message that requested an image for it.
         self._image_messages: dict[str, Any] = {}
+        self._room_feed_channels: dict[str, tuple[int, ...]] = {}
+        self._actor_rooms: dict[str, str] = {}
+        self._delivered_room_feed_events: set[tuple[str, int]] = set()
+        self._room_feed_observers_attached = False
+        self._build_room_feed_index()
+        self._attach_room_feed_observers()
         self.actor.bus.subscribe(CommandExecutedEvent, self._complete_pending)
         self.actor.bus.subscribe(CommandRejectedEvent, self._complete_pending)
         self.actor.bus.subscribe(WorldPauseStatusChangedEvent, self._post_pause_status)
+        self.actor.bus.subscribe(DomainEvent, self._post_room_feed_event)
         if imagegen is not None:
             self.actor.bus.subscribe(ImageGenerationCompletedEvent, self._deliver_image)
             self.actor.bus.subscribe(ImageGenerationFailedEvent, self._image_failed)
@@ -375,6 +502,118 @@ class DiscordBot:
         self._paused_reactions.pop(event.command_id, None)
         if future is not None and not future.done():
             future.set_result(event)
+
+    def _build_room_feed_index(self) -> None:
+        self._room_feed_channels = {}
+        self._actor_rooms = {}
+        rooms = self.actor.world.query().with_all([RoomComponent]).execute_entities()
+        for room in rooms:
+            if room.has_component(DiscordRoomFeedComponent):
+                component = room.get_component(DiscordRoomFeedComponent)
+                self._set_room_feed(str(room.id), component.channel_id)
+            for edge, target_id in room.get_relationships(Contains):
+                if edge.mode == ContainmentMode.ROOM_CONTENT:
+                    self._actor_rooms[str(target_id)] = str(room.id)
+
+    def _attach_room_feed_observers(self) -> None:
+        if getattr(self, "_room_feed_observers_attached", False):
+            return
+        self.actor.world.observe(_room_feed_component_observer(self, removed=False))
+        self.actor.world.observe(_room_feed_component_observer(self, removed=True))
+        self.actor.world.observe(_contains_observer(self, removed=False))
+        self.actor.world.observe(_contains_observer(self, removed=True))
+        self._room_feed_observers_attached = True
+
+    def _process_room_feed_observers(self) -> None:
+        process = getattr(self.actor.world, "_process_observer_queue", None)
+        if callable(process):
+            process()
+
+    def _set_room_feed(self, room_id: str, channel_id: int) -> None:
+        if channel_id:
+            self._room_feed_channels[room_id] = (int(channel_id),)
+        else:
+            self._room_feed_channels.pop(room_id, None)
+
+    def _remove_room_feed(self, room_id: str) -> None:
+        self._room_feed_channels.pop(room_id, None)
+
+    def _record_containment_change(self, source, edge, target, *, removed: bool) -> None:
+        if edge.mode != ContainmentMode.ROOM_CONTENT:
+            return
+        if not source.has_component(RoomComponent):
+            return
+        actor_id = str(target)
+        room_id = str(source.id)
+        if removed:
+            if self._actor_rooms.get(actor_id) == room_id:
+                self._actor_rooms.pop(actor_id, None)
+            return
+        self._actor_rooms[actor_id] = room_id
+
+    def _room_ids_for_event(self, event: DomainEvent) -> tuple[str, ...]:
+        room_ids: list[str] = []
+        for attr in ("room_id", "from_room_id", "to_room_id"):
+            value = getattr(event, attr, None)
+            if value:
+                room_ids.append(str(value))
+        if not room_ids and event.actor_id:
+            room_id = self._actor_rooms.get(event.actor_id)
+            if room_id:
+                room_ids.append(room_id)
+        return tuple(dict.fromkeys(room_ids))
+
+    async def _post_room_feed_event(self, event: DomainEvent) -> None:
+        if isinstance(event, COMMAND_LIFECYCLE_EVENTS):
+            return
+        if event.visibility in {EventVisibility.SYSTEM, EventVisibility.PRIVATE}:
+            return
+        self._process_room_feed_observers()
+        room_ids = self._room_ids_for_event(event)
+        if not room_ids:
+            self._update_actor_room_from_event(event)
+            return
+
+        channel_ids: list[int] = []
+        for room_id in room_ids:
+            channel_ids.extend(self._room_feed_channels.get(room_id, ()))
+        if not channel_ids:
+            self._update_actor_room_from_event(event)
+            return
+
+        message = render_room_feed_event(event, self.actor)
+        for channel_id in dict.fromkeys(channel_ids):
+            key = (event.event_id, channel_id)
+            if key in self._delivered_room_feed_events:
+                continue
+            self._delivered_room_feed_events.add(key)
+            await self._send_room_feed_message(channel_id, message)
+        self._update_actor_room_from_event(event)
+
+    def _update_actor_room_from_event(self, event: DomainEvent) -> None:
+        if isinstance(event, ActorMovedEvent) and event.actor_id:
+            self._actor_rooms[event.actor_id] = event.to_room_id
+
+    async def _send_room_feed_message(self, channel_id: int, message: str) -> None:
+        channel = self.client.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.client.fetch_channel(channel_id)
+            except Exception as exc:
+                print(
+                    f"Discord room feed post failed for channel {channel_id}: {exc!r}",
+                    flush=True,
+                )
+                return
+        for chunk in split_discord_text(message):
+            try:
+                await channel.send(chunk)
+            except Exception as exc:
+                print(
+                    f"Discord room feed post failed for channel {channel_id}: {exc!r}",
+                    flush=True,
+                )
+                return
 
     def _is_world_paused(self) -> bool:
         if self._pause_status is not None:
@@ -1000,6 +1239,10 @@ class DiscordBot:
         """Stop the Discord client when the host game loop is shutting down."""
 
         self.actor.bus.unsubscribe(WorldPauseStatusChangedEvent, self._post_pause_status)
+        self.actor.bus.unsubscribe(DomainEvent, self._post_room_feed_event)
+        if self.imagegen is not None:
+            self.actor.bus.unsubscribe(ImageGenerationCompletedEvent, self._deliver_image)
+            self.actor.bus.unsubscribe(ImageGenerationFailedEvent, self._image_failed)
         await self.client.close()
 
 
@@ -1007,9 +1250,11 @@ __all__ = [
     "DiscordAction",
     "DiscordBot",
     "DiscordMessageFilters",
+    "DiscordRoomFeedComponent",
     "assign_discord_controller",
     "did_you_mean",
     "discord_broadcast_channel_ids",
+    "render_room_feed_event",
     "parse_discord_action",
     "parse_discord_id_list",
     "release_discord_claim",

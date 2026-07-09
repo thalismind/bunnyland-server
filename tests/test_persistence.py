@@ -23,6 +23,7 @@ from bunnyland.core import (
 )
 from bunnyland.core.components import IdentityComponent
 from bunnyland.core.ecs import contents
+from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.mechanics.needs import HungerComponent
@@ -661,6 +662,24 @@ def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):
             target == child.id and edge.mode == ContainmentMode.REGION
             for edge, target in relationships
         )
+
+
+def test_discord_room_feed_component_survives_save_load(tmp_path):
+    actor = WorldActor()
+    room = spawn_entity(
+        actor.world,
+        [
+            RoomComponent(title="Feed Room"),
+            DiscordRoomFeedComponent(channel_id=123456789),
+        ],
+    )
+
+    path = tmp_path / "discord-room-feed.json"
+    save_world(actor, path, meta=WorldMeta(seed="discord-feed"))
+    loaded, _meta = load_world(path)
+
+    component = loaded.world.get_entity(room.id).get_component(DiscordRoomFeedComponent)
+    assert component.channel_id == 123456789
 
 
 def test_yaml_module_missing_extra_raises(monkeypatch):

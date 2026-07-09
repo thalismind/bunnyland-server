@@ -43,9 +43,12 @@ from bunnyland.core import (
 )
 from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.events import (
+    ActorMovedEvent,
     CharacterClaimedEvent,
     CommandExecutedEvent,
     CommandRejectedEvent,
+    CommandSubmittedEvent,
+    DomainEvent,
     EventVisibility,
     NotesSearchedEvent,
     WorldPauseStatusChangedEvent,
@@ -87,6 +90,7 @@ from bunnyland.discord.claim import (
     discord_controlled_character,
     resume_discord_claim,
 )
+from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.memory import InMemoryStore, install_memory
 
 
@@ -172,7 +176,12 @@ def _bot_for_scenario(scenario, **attrs):
     bot._world_paused = attrs.pop("world_paused", False)
     bot._pending = attrs.pop("pending", {})
     bot._paused_reactions = attrs.pop("paused_reactions", {})
+    bot._room_feed_channels = attrs.pop("room_feed_channels", {})
+    bot._actor_rooms = attrs.pop("actor_rooms", {})
+    bot._delivered_room_feed_events = attrs.pop("delivered_room_feed_events", set())
+    bot._room_feed_observers_attached = attrs.pop("room_feed_observers_attached", False)
     bot.claim_secrets = attrs.pop("claim_secrets", None)
+    bot.imagegen = attrs.pop("imagegen", None)
     bot.client = attrs.pop("client", _DiscordObject(user="bot-user"))
     for key, value in attrs.items():
         setattr(bot, key, value)
@@ -2309,6 +2318,390 @@ async def test_discord_bot_pause_resume_replaces_cached_reactions(scenario):
     assert paused_message.removed == [(PAUSED_REACTION, "bot-user")]
     assert paused_message.added == [QUEUED_REACTION]
     assert client.channel.messages == ["World resumed."]
+
+
+class _RoomFeedChannel:
+    def __init__(self):
+        self.messages = []
+
+    async def send(self, message):
+        self.messages.append(message)
+
+
+class _RoomFeedClient:
+    user = "bot-user"
+
+    def __init__(self, channels):
+        self.channels = channels
+        self.fetched = []
+
+    def get_channel(self, channel_id):
+        return self.channels.get(channel_id)
+
+    async def fetch_channel(self, channel_id):
+        self.fetched.append(channel_id)
+        return self.channels[channel_id]
+
+
+def _room_feed_event(**kwargs):
+    values = {
+        "event_id": "feed-event-1",
+        "world_epoch": 1,
+        "created_at": datetime.now(UTC),
+        "visibility": EventVisibility.ROOM,
+    }
+    values.update(kwargs)
+    return DomainEvent(**values)
+
+
+async def test_discord_room_feed_posts_marked_room_activity(scenario):
+    scenario.actor.world.get_entity(scenario.room_a).add_component(
+        DiscordRoomFeedComponent(channel_id=111)
+    )
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(scenario, client=_RoomFeedClient({111: channel}))
+    bot._build_room_feed_index()
+
+    await bot._post_room_feed_event(
+        _room_feed_event(actor_id=str(scenario.character), room_id=str(scenario.room_a))
+    )
+
+    assert len(channel.messages) == 1
+    assert "Juniper" in channel.messages[0]
+    assert "Mosslit Burrow" in channel.messages[0]
+
+
+async def test_discord_room_feed_skips_unmarked_room(scenario):
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(
+        scenario,
+        client=_RoomFeedClient({111: channel}),
+        room_feed_channels={str(scenario.room_a): (111,)},
+    )
+
+    await bot._post_room_feed_event(
+        _room_feed_event(room_id=str(scenario.room_b), actor_id=str(scenario.character))
+    )
+
+    assert channel.messages == []
+
+
+async def test_discord_room_feed_posts_movement_to_source_and_destination(scenario):
+    channel_a = _RoomFeedChannel()
+    channel_b = _RoomFeedChannel()
+    bot = _bot_for_scenario(
+        scenario,
+        client=_RoomFeedClient({111: channel_a, 222: channel_b}),
+        room_feed_channels={
+            str(scenario.room_a): (111,),
+            str(scenario.room_b): (222,),
+        },
+    )
+
+    await bot._post_room_feed_event(
+        ActorMovedEvent(
+            event_id="move-1",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_b),
+            from_room_id=str(scenario.room_a),
+            to_room_id=str(scenario.room_b),
+            direction="north",
+        )
+    )
+
+    assert len(channel_a.messages) == 1
+    assert len(channel_b.messages) == 1
+    assert "moved north" in channel_a.messages[0]
+    assert bot._actor_rooms[str(scenario.character)] == str(scenario.room_b)
+
+
+async def test_discord_room_feed_deduplicates_same_channel_for_one_event(scenario):
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(
+        scenario,
+        client=_RoomFeedClient({111: channel}),
+        room_feed_channels={
+            str(scenario.room_a): (111,),
+            str(scenario.room_b): (111,),
+        },
+    )
+
+    await bot._post_room_feed_event(
+        ActorMovedEvent(
+            event_id="move-dedupe",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_b),
+            from_room_id=str(scenario.room_a),
+            to_room_id=str(scenario.room_b),
+        )
+    )
+    await bot._post_room_feed_event(
+        ActorMovedEvent(
+            event_id="move-dedupe",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_b),
+            from_room_id=str(scenario.room_a),
+            to_room_id=str(scenario.room_b),
+        )
+    )
+
+    assert len(channel.messages) == 1
+
+
+async def test_discord_room_feed_ignores_lifecycle_private_and_system_events(scenario):
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(
+        scenario,
+        client=_RoomFeedClient({111: channel}),
+        room_feed_channels={str(scenario.room_a): (111,)},
+    )
+
+    await bot._post_room_feed_event(
+        CommandSubmittedEvent(
+            event_id="cmd-1",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+            command_id="cmd",
+            command_type="move",
+        )
+    )
+    await bot._post_room_feed_event(
+        _room_feed_event(
+            event_id="private-1",
+            visibility=EventVisibility.PRIVATE,
+            room_id=str(scenario.room_a),
+        )
+    )
+    await bot._post_room_feed_event(
+        _room_feed_event(
+            event_id="system-1",
+            visibility=EventVisibility.SYSTEM,
+            room_id=str(scenario.room_a),
+        )
+    )
+
+    assert channel.messages == []
+
+
+async def test_discord_room_feed_uses_actor_room_cache_without_event_room(scenario):
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(
+        scenario,
+        client=_RoomFeedClient({111: channel}),
+        room_feed_channels={str(scenario.room_a): (111,)},
+        actor_rooms={str(scenario.character): str(scenario.room_a)},
+    )
+
+    await bot._post_room_feed_event(_room_feed_event(actor_id=str(scenario.character)))
+
+    assert len(channel.messages) == 1
+
+
+async def test_discord_room_feed_observer_refreshes_added_component(scenario):
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(scenario, client=_RoomFeedClient({111: channel}))
+    bot._attach_room_feed_observers()
+
+    scenario.actor.world.get_entity(scenario.room_a).add_component(
+        DiscordRoomFeedComponent(channel_id=111)
+    )
+    await bot._post_room_feed_event(_room_feed_event(room_id=str(scenario.room_a)))
+
+    assert bot._room_feed_channels == {str(scenario.room_a): (111,)}
+    assert len(channel.messages) == 1
+
+
+async def test_discord_room_feed_no_match_fast_path_does_not_scan_world(scenario, monkeypatch):
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(
+        scenario,
+        client=_RoomFeedClient({111: channel}),
+        room_feed_channels={str(scenario.room_a): (111,)},
+    )
+
+    def fail_query():
+        raise AssertionError("room feed hot path scanned the world")
+
+    monkeypatch.setattr(scenario.actor.world, "query", fail_query)
+
+    await bot._post_room_feed_event(_room_feed_event(room_id=str(scenario.room_b)))
+
+    assert channel.messages == []
+
+
+async def test_discord_room_feed_observers_refresh_removed_component_and_containment(
+    scenario,
+):
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(scenario, client=_RoomFeedClient({111: channel}))
+    bot._attach_room_feed_observers()
+    bot._attach_room_feed_observers()
+
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(DiscordRoomFeedComponent(channel_id=111))
+    scenario.actor.world._process_observer_queue()
+    assert bot._room_feed_channels == {str(scenario.room_a): (111,)}
+
+    room.remove_component(DiscordRoomFeedComponent)
+    scenario.actor.world._process_observer_queue()
+    assert bot._room_feed_channels == {}
+
+    _observer = discord_bot._contains_observer(bot, removed=True)
+    _observer.on_relationship_removed(
+        room, Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character
+    )
+    assert str(scenario.character) not in bot._actor_rooms
+
+    observer = discord_bot._contains_observer(bot, removed=False)
+    observer.on_relationship_added(
+        room, Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character
+    )
+    assert bot._actor_rooms[str(scenario.character)] == str(scenario.room_a)
+
+
+def test_discord_room_feed_index_and_cache_helpers_cover_empty_branches(
+    scenario,
+    monkeypatch,
+):
+    bot = _bot_for_scenario(scenario)
+    bot._room_feed_channels = {str(scenario.room_a): (111,)}
+    bot._set_room_feed(str(scenario.room_a), 0)
+    bot._remove_room_feed(str(scenario.room_b))
+    assert bot._room_feed_channels == {}
+
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.REGION), scenario.room_b)
+    bot._build_room_feed_index()
+    assert bot._actor_rooms[str(scenario.character)] == str(scenario.room_a)
+    assert str(scenario.room_b) not in bot._actor_rooms
+
+    monkeypatch.setattr(scenario.actor.world, "_process_observer_queue", None)
+    bot._process_room_feed_observers()
+
+    bot._record_containment_change(
+        room,
+        Contains(mode=ContainmentMode.REGION),
+        scenario.character,
+        removed=False,
+    )
+    assert bot._actor_rooms[str(scenario.character)] == str(scenario.room_a)
+
+    bot._record_containment_change(
+        scenario.actor.world.get_entity(scenario.character),
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        scenario.room_b,
+        removed=False,
+    )
+    assert str(scenario.room_b) not in bot._actor_rooms
+
+    bot._record_containment_change(
+        room,
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        scenario.character,
+        removed=True,
+    )
+    assert str(scenario.character) not in bot._actor_rooms
+
+    bot._record_containment_change(
+        room,
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        scenario.character,
+        removed=True,
+    )
+    assert str(scenario.character) not in bot._actor_rooms
+
+
+async def test_discord_room_feed_no_room_event_exits_without_delivery(scenario):
+    channel = _RoomFeedChannel()
+    bot = _bot_for_scenario(
+        scenario,
+        client=_RoomFeedClient({111: channel}),
+        room_feed_channels={str(scenario.room_a): (111,)},
+    )
+
+    await bot._post_room_feed_event(_room_feed_event(actor_id="entity_9999"))
+
+    assert channel.messages == []
+
+
+async def test_discord_room_feed_channel_fetch_and_send_failures_are_nonfatal(
+    capsys,
+    scenario,
+):
+    class FetchFailClient:
+        def get_channel(self, channel_id):
+            del channel_id
+            return None
+
+        async def fetch_channel(self, channel_id):
+            del channel_id
+            raise RuntimeError("fetch failed")
+
+    bot = _bot_for_scenario(scenario, client=FetchFailClient())
+    await bot._send_room_feed_message(111, "hello")
+    assert "fetch failed" in capsys.readouterr().out
+
+    class SendFailChannel:
+        async def send(self, message):
+            del message
+            raise RuntimeError("send failed")
+
+    class SendFailClient:
+        def get_channel(self, channel_id):
+            del channel_id
+            return SendFailChannel()
+
+    bot = _bot_for_scenario(scenario, client=SendFailClient())
+    await bot._send_room_feed_message(111, "hello")
+    assert "send failed" in capsys.readouterr().out
+
+
+def test_render_room_feed_event_handles_missing_actor_and_unknown_ids(scenario):
+    text = discord_bot.render_room_feed_event(
+        ActorMovedEvent(
+            event_id="move-unknown",
+            world_epoch=1,
+            created_at=datetime.now(UTC),
+            visibility=EventVisibility.ROOM,
+            from_room_id="missing-room-a",
+            to_room_id="missing-room-b",
+        )
+    )
+    assert "Someone moved" in text
+    assert "missing-room-a" in text
+
+    text_with_unknown = discord_bot.render_room_feed_event(
+        _room_feed_event(actor_id="not-an-id", room_id=str(scenario.room_a)),
+        scenario.actor,
+    )
+    assert "not-an-id" in text_with_unknown
+
+
+async def test_discord_bot_close_unsubscribes_imagegen_handlers(scenario):
+    class Client:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    client = Client()
+    bot = _bot_for_scenario(scenario, client=client, imagegen=object())
+
+    await bot.close()
+
+    assert client.closed is True
 
 
 async def test_discord_bot_build_command_resolves_names_and_reports_suggestions(scenario):

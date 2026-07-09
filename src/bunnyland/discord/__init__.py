@@ -14,6 +14,7 @@ from .claim import (
     release_discord_claim,
     render_character_list,
 )
+from .components import DiscordRoomFeedComponent
 from .view import (
     HELP_TEXT,
     explain_rejection,
@@ -28,6 +29,7 @@ from .view import (
 __all__ = [
     "DiscordBot",
     "DiscordMessageFilters",
+    "DiscordRoomFeedComponent",
     "HELP_TEXT",
     "assign_discord_controller",
     "did_you_mean",

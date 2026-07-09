@@ -80,6 +80,7 @@ from bunnyland.core.events import (
     WorldGenerationStartedEvent,
 )
 from bunnyland.core.handlers import ok
+from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
@@ -4117,6 +4118,15 @@ def test_world_schema_includes_available_types_and_live_usage(scenario):
     assert schema.edges["Contains"].count == 1
 
 
+def test_world_schema_includes_discord_room_feed_component(scenario):
+    schema = world_schema(scenario.actor)
+
+    assert "DiscordRoomFeedComponent" in schema.components
+    room_feed_schema = schema.components["DiscordRoomFeedComponent"].json_schema
+    assert room_feed_schema["properties"]["channel_id"]["type"] == "integer"
+    assert "channel_id" in room_feed_schema["required"]
+
+
 def test_content_library_fragments_are_valid_world_patches(scenario):
     library = load_content_library()
 
@@ -4400,6 +4410,30 @@ def test_world_patch_adds_component_to_existing_entity(scenario):
     assert response.ok is True
     assert response.changed_entities[0]["id"] == str(scenario.character)
     assert character.get_component(SuspendedComponent).reason == "editor"
+
+
+def test_world_patch_adds_discord_room_feed_component_by_type_name(scenario):
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "add_component",
+                        "entity_id": str(scenario.room_a),
+                        "component": {
+                            "type": "DiscordRoomFeedComponent",
+                            "fields": {"channel_id": 123456789},
+                        },
+                    },
+                ]
+            }
+        ),
+    )
+
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    assert response.ok is True
+    assert room.get_component(DiscordRoomFeedComponent).channel_id == 123456789
 
 
 def test_world_patch_adds_and_deletes_entity(scenario):
