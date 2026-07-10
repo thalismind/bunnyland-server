@@ -433,6 +433,7 @@ def create_app(
                 definitions_path=definitions_path,
                 worldgen_options=worldgen_options,
                 plugins=plugins or (),
+                media_store=media_store,
             )
 
     def _character_entity(character_id: str):
