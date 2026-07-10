@@ -4180,7 +4180,6 @@ class SocialRegisterReactor:
 
 def install_daggersim(actor) -> None:
     actor.register_consequence(TravelCompletionConsequence())
-    actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
     actor.register_consequence(FeedingNeedConsequence())
     reactor = SocialRegisterReactor(actor.world)

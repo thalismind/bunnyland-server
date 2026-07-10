@@ -1,0 +1,128 @@
+"""Action metadata owned by bunnyland.daggersim."""
+
+from ...core.actions import (
+    ActionDefinition,
+    define_action,
+)
+
+ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
+    define_action("expand-site", ("site_id", "generator_id", "trigger"), tool_name="expand_site"),
+    define_action("ask-rumor", ("rumor_id",), tool_name="ask_rumor"),
+    define_action("investigate-rumor", ("rumor_id",), tool_name="investigate_rumor"),
+    define_action("plan-travel", ("destination_id",), tool_name="plan_travel"),
+    define_action("join-institution", ("institution_id", "rank"), tool_name="join_institution"),
+    define_action("use-institution-service", ("service_id",), tool_name="use_institution_service"),
+    define_action(
+        "promote-institution",
+        ("institution_id", "rank"),
+        tool_name="promote_institution",
+    ),
+    define_action(
+        "pay-institution-dues",
+        ("institution_id", "amount"),
+        tool_name="pay_institution_dues",
+    ),
+    define_action("open-bank-account", ("bank_id",), tool_name="open_bank_account"),
+    define_action("deposit", ("bank_id", "amount"), tool_name="deposit"),
+    define_action("withdraw", ("bank_id", "amount"), tool_name="withdraw"),
+    define_action("take-loan", ("bank_id", "amount", "duration_seconds"), tool_name="take_loan"),
+    define_action("repay-loan", ("loan_id", "amount"), tool_name="repay_loan"),
+    define_action(
+        "issue-letter-of-credit",
+        ("bank_id", "amount"),
+        tool_name="issue_letter_of_credit",
+    ),
+    define_action(
+        "store-safe-item",
+        ("storage_id", "item_id"),
+        tool_name="store_safe_item",
+    ),
+    define_action(
+        "retrieve-safe-item",
+        ("storage_id", "item_id"),
+        tool_name="retrieve_safe_item",
+    ),
+    define_action("send-debt-collector", ("debt_id",), tool_name="send_debt_collector"),
+    define_action("commit-crime", ("crime_type",), tool_name="commit_crime"),
+    define_action("pay-fine", ("crime_id",), tool_name="pay_fine"),
+    define_action("sentence-crime", ("crime_id", "sentence"), tool_name="sentence_crime"),
+    define_action(
+        "rent-lodging",
+        ("lodging_id", "duration_seconds"),
+        tool_name="rent_lodging",
+    ),
+    define_action("camp", ("risk",), tool_name="camp"),
+    define_action("buy-travel-supplies", ("quantity",), tool_name="buy_travel_supplies"),
+    define_action(
+        "resolve-travel-interruption",
+        ("interruption_id",),
+        tool_name="resolve_travel_interruption",
+    ),
+    define_action("buy-property", ("property_id",), tool_name="buy_property"),
+    define_action(
+        "create-custom-class",
+        (
+            "template_id",
+            "class_name",
+            "primary_skills",
+            "major_skills",
+            "minor_skills",
+            "advantages",
+            "disadvantages",
+        ),
+        tool_name="create_custom_class",
+    ),
+    define_action("create-spell", ("template_id", "spell_name"), tool_name="create_spell"),
+    define_action(
+        "cast-spell",
+        ("spell_id", "target_id"),
+        tool_name="cast_spell",
+        patterns=(
+            "cast {spell_id} on {target_id}",
+            "cast {spell_id} at {target_id}",
+            "cast {spell_id}",
+        ),
+        examples=("cast moss charm on Juniper",),
+    ),
+    define_action(
+        "enchant-item",
+        ("item_id", "spell_id"),
+        tool_name="enchant_item",
+        patterns=("enchant {item_id} with {spell_id}",),
+        examples=("enchant moss charm with Mend Moss",),
+    ),
+    define_action("make-potion", ("maker_id",), tool_name="make_potion"),
+    define_action(
+        "recharge-enchanted-item",
+        ("item_id", "service_id"),
+        tool_name="recharge_enchanted_item",
+    ),
+    define_action("attempt-pacify", ("target_id", "language"), tool_name="attempt_pacify"),
+    define_action("contract-affliction", ("affliction_type",), tool_name="contract_affliction"),
+    define_action(
+        "progress-affliction-incubation",
+        ("target_id",),
+        tool_name="progress_affliction_incubation",
+    ),
+    define_action(
+        "mark-affliction-stigma",
+        ("target_id", "region_id", "severity"),
+        tool_name="mark_affliction_stigma",
+    ),
+    define_action("transform", ("form_name",), tool_name="transform"),
+    define_action("feed-on", ("target_id",), tool_name="feed_on"),
+    define_action("end-transformation", tool_name="end_transformation"),
+    define_action("cure-affliction", tool_name="cure_affliction"),
+    define_action("request-dungeon", ("dungeon_id",), tool_name="request_dungeon"),
+    define_action("enter-dungeon", ("dungeon_id",), tool_name="enter_dungeon"),
+    define_action("search-room", tool_name="search_room"),
+    define_action("open-secret-door", ("door_id",), tool_name="open_secret_door"),
+    define_action("mark-path", tool_name="mark_path"),
+    define_action("view-map", tool_name="view_map"),
+    define_action("set-recall", tool_name="set_recall"),
+    define_action("use-recall", tool_name="use_recall"),
+    define_action("rest", tool_name="rest"),
+    define_action("leave-dungeon", ("dungeon_id",), tool_name="leave_dungeon"),
+)
+
+__all__ = ["ACTION_DEFINITIONS"]

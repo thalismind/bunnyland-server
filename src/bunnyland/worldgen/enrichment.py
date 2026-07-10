@@ -7,11 +7,21 @@ which of its own components to attach.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from ..core.components import IdentityComponent
-from ..core.ecs import parse_entity_id, replace_component
+from relics import Component, World
+
+from ..core.components import (
+    CharacterComponent,
+    GenerationIntentComponent,
+    IdentityComponent,
+    RoomComponent,
+)
+from ..core.ecs import parse_entity_id, replace_component, spawn_entity
 from ..core.events import CharacterGeneratedEvent, ObjectGeneratedEvent, RoomGeneratedEvent
+from ..core.generation import GenerationDelta, GenerationRequest
 from ..mechanics.barbariansim import (
     ArmorComponent,
     BaseClaimComponent,
@@ -384,6 +394,123 @@ _RESOURCE_TYPES = (
 )
 
 _DEFAULT_EXPANSION_GENERATOR = "worldgen.recursive"
+
+
+@dataclass(frozen=True)
+class LegacyWorldgenEnricher:
+    """Run an existing pure ECS hook as a declarative generation enricher.
+
+    Bundled plugins use this adapter while their hook implementations retain save-compatible
+    component identities. Enrichment happens against an isolated temporary entity and returns
+    a delta; the real world is not mutated until the complete plan validates.
+    """
+
+    hook: type
+    component_types: tuple[type[Component], ...] = ()
+    capabilities: tuple[str, ...] = ()
+    provided_capabilities: tuple[str, ...] = ()
+
+    def bind_components(self, component_types) -> LegacyWorldgenEnricher:
+        return LegacyWorldgenEnricher(
+            hook=self.hook,
+            component_types=tuple(component_types),
+            capabilities=self.capabilities,
+            provided_capabilities=self.provided_capabilities,
+        )
+
+    def enrich(self, request: GenerationRequest) -> GenerationDelta:
+        base_components = tuple(request.context.get("base_components", ()))
+        world = World()
+        entity = spawn_entity(world, base_components)
+        room_component = next(
+            (component for component in base_components if isinstance(component, RoomComponent)),
+            None,
+        )
+        room = (
+            entity
+            if room_component is not None
+            else spawn_entity(world, [RoomComponent(title="generated room")])
+        )
+        legacy_capabilities = tuple(
+            dict.fromkeys(
+                (
+                    *request.capabilities,
+                    *(value.rsplit(".", 1)[-1] for value in request.capabilities if "." in value),
+                )
+            )
+        )
+        generation = GenerationIntentComponent(
+            description=request.description,
+            tags=request.tags,
+            wants=legacy_capabilities,
+            source_seed=request.source_seed,
+            source_key=request.source_key,
+            entity_kind=request.entity_kind,
+        )
+        species = next(
+            (
+                component.species
+                for component in base_components
+                if isinstance(component, CharacterComponent)
+            ),
+            request.entity_kind,
+        )
+        if room_component is not None:
+            event_type = RoomGeneratedEvent
+        elif any(isinstance(component, CharacterComponent) for component in base_components):
+            event_type = CharacterGeneratedEvent
+        else:
+            event_type = ObjectGeneratedEvent
+        event = event_type.model_construct(
+            entity_id=str(entity.id),
+            entity_key=request.source_key,
+            entity_kind=request.entity_kind,
+            room_key=request.source_key,
+            object_key=request.source_key,
+            character_key=request.source_key,
+            species=species,
+            intent=request.description,
+            seed=request.source_seed,
+            tags=request.tags,
+            biome=(room_component.biome if room_component is not None else request.tags[0])
+            if request.tags
+            else "",
+            indoor=room_component.indoor if room_component is not None else False,
+            room_id=str(room.id),
+            container_id=str(room.id),
+            containment_mode="room_content",
+            generation=generation,
+            world_epoch=int(request.context.get("world_epoch", 0)),
+        )
+        instance = self.hook()
+        instance.actor = SimpleNamespace(world=world)
+        if any(isinstance(component, RoomComponent) for component in base_components):
+            handler = getattr(instance, "_on_room", None)
+        elif any(isinstance(component, CharacterComponent) for component in base_components):
+            handler = getattr(instance, "_on_character", None)
+        else:
+            handler = getattr(instance, "_on_object", None)
+        handler = handler or getattr(instance, "_on_entity", None)
+        if handler is None and not any(
+            isinstance(component, CharacterComponent) for component in base_components
+        ):
+            handler = getattr(instance, "_on_site", None)
+        if handler is not None:
+            handler(event)
+        base_types = {type(component) for component in base_components}
+        components = tuple(
+            entity.get_component(component_type)
+            for component_type in self.component_types
+            if component_type not in base_types and entity.has_component(component_type)
+        )
+        return GenerationDelta(
+            components=components,
+            satisfies=tuple(
+                capability
+                for capability in request.capabilities
+                if capability in self.provided_capabilities
+            ),
+        )
 
 
 def _entity(actor: WorldActor, event: GeneratedEntityEvent) -> Entity | None:
@@ -1609,9 +1736,7 @@ class NukeWorldgenHook:
             return
         name = _name(entity, event.entity_key)
         resource_type = _resource_type(event)
-        if _wants(event, "radiation-source") or _mentions(
-            event, "radiation", "fallout", "reactor"
-        ):
+        if _wants(event, "radiation-source") or _mentions(event, "radiation", "fallout", "reactor"):
             replace_component(
                 entity,
                 RadiationSourceComponent(last_updated_epoch=event.world_epoch),

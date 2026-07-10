@@ -61,6 +61,25 @@ class GenerationEnricher(Protocol):
     def enrich(self, request: GenerationRequest) -> GenerationDelta: ...
 
 
+class CoreGenerationEnricher:
+    """Plugin-neutral enrichment for components owned by Core itself."""
+
+    capabilities: tuple[str, ...] = ()
+
+    def enrich(self, request: GenerationRequest) -> GenerationDelta:
+        from .components import KeyComponent
+
+        text = " ".join((request.entity_kind, request.description, *request.tags)).casefold()
+        wants_key = "key" in {value.casefold() for value in request.capabilities}
+        has_key = any(
+            isinstance(component, KeyComponent)
+            for component in request.context.get("base_components", ())
+        )
+        if not has_key and (wants_key or "key" in text.split()):
+            return GenerationDelta(components=(KeyComponent(key_name=request.description),))
+        return GenerationDelta()
+
+
 def _dedupe(values) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
 
@@ -93,8 +112,7 @@ class GenerationPipeline:
         registered = self.registry.components.get(type(component).__name__)
         if registered is None:
             raise GenerationError(
-                f"plugin {plugin_id!r} provides unregistered component "
-                f"{type(component).__name__!r}"
+                f"plugin {plugin_id!r} provides unregistered component {type(component).__name__!r}"
             )
         if registered is not None and registered != (plugin_id, type(component)):
             raise GenerationError(
@@ -178,8 +196,7 @@ class GenerationPipeline:
         unmet = tuple(
             capability
             for capability in normalized.capabilities
-            if "." in capability
-            and (capability not in available or capability not in satisfied)
+            if "." in capability and (capability not in available or capability not in satisfied)
         )
         return GenerationPlan(
             request=normalized,
@@ -198,4 +215,5 @@ __all__ = [
     "GenerationPipeline",
     "GenerationPlan",
     "GenerationRequest",
+    "CoreGenerationEnricher",
 ]

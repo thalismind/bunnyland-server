@@ -24,6 +24,7 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
+from bunnyland.core.actions import action_definition_for_command_type
 from bunnyland.core.availability import (
     affordable,
     evaluate_availability,
@@ -273,6 +274,7 @@ def _capture_rejections(actor):
 def test_submit_rejects_missing_required_argument():
     scenario = build_scenario()
     scenario.actor.register_handler(SayHandler())
+    scenario.actor.register_action_definition(action_definition_for_command_type("say"))
     rejected = _capture_rejections(scenario.actor)
 
     outcome = asyncio.run(scenario.actor.submit(_say_command(scenario, {})))
@@ -365,6 +367,7 @@ def test_submit_rejects_unmet_capability_requirement():
             return ok()
 
     scenario.actor.register_handler(_PickLockHandler())
+    scenario.actor.register_action_definition(action_definition_for_command_type("pick-lock"))
 
     def _pick(payload=None):
         return build_submitted_command(

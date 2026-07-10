@@ -25,6 +25,7 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
+from .actions import ACTION_DEFINITIONS
 
 
 def plugin() -> Plugin:
@@ -44,6 +45,7 @@ def plugin() -> Plugin:
             edges=(IncidentSpawned,),
         ),
         commands=CommandContribution(
+            action_definitions=ACTION_DEFINITIONS,
             action_handlers=(ResolveIncidentHandler,),
             typed_events=(
                 IncidentGeneratedEvent,

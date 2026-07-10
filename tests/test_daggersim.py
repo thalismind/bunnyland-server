@@ -4890,7 +4890,6 @@ def test_install_daggersim_registers_plugin_consequences():
     }
     assert registered == {
         "TravelCompletionConsequence",
-        "QuestDeadlineConsequence",
         "LoanDueConsequence",
         "FeedingNeedConsequence",
     }

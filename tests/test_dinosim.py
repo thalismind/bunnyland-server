@@ -229,8 +229,10 @@ from bunnyland.mechanics.storyteller import (
     IncidentSpawned,
     StorytellerComponent,
     StorytellerConsequence,
+    default_incident_definitions,
 )
 from bunnyland.prompts import ComponentPromptContext
+from bunnyland.simpacks.dinosim.incidents import KAIJU_ATTACK
 
 HOUR = 60 * 60
 DAY = 24 * HOUR
@@ -3168,7 +3170,9 @@ def test_companion_handlers_reject_invalid_targets_and_missing_ownership_directl
 async def test_storyteller_selects_kaiju_attack_only_when_colonysim_and_dinosim_are_enabled():
     scenario = build_scenario()
     install_dinosim(scenario.actor)
-    scenario.actor.register_consequence(StorytellerConsequence())
+    scenario.actor.register_consequence(
+        StorytellerConsequence((*default_incident_definitions(), KAIJU_ATTACK))
+    )
     spawn_entity(
         scenario.actor.world,
         [
@@ -3189,7 +3193,9 @@ async def test_storyteller_selects_kaiju_attack_only_when_colonysim_and_dinosim_
     scenario = build_scenario()
     install_colonysim(scenario.actor)
     install_dinosim(scenario.actor)
-    scenario.actor.register_consequence(StorytellerConsequence())
+    scenario.actor.register_consequence(
+        StorytellerConsequence((*default_incident_definitions(), KAIJU_ATTACK))
+    )
     world = scenario.actor.world
     region = spawn_entity(world, [RegionComponent(name="Mosslit Basin")])
     room_c = spawn_entity(world, [RoomComponent(title="South Ridge")])

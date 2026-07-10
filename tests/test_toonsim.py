@@ -651,3 +651,11 @@ def test_move_sprite_rejects_invalid_character_id():
     result = MoveSpriteHandler().execute(ctx, command)
 
     assert result.reason == "invalid character id"
+
+
+def test_toon_placement_hook_ignores_missing_generated_entities():
+    scenario = build_scenario()
+    hook = toonsim.ToonPlacementWorldgenHook()
+    hook.actor = scenario.actor
+
+    hook._on_object(SimpleNamespace(entity_id="not-an-entity", room_id=None))

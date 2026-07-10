@@ -816,6 +816,11 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "SpellCooldownComponent",
         "PersuasionComponent",
         "SurrenderComponent",
+        "QuestTemplateComponent",
+        "GeneratedQuestComponent",
+        "QuestDeadlineComponent",
+        "DaggerQuestRewardComponent",
+        "CureQuestHookComponent",
     } <= {component.__name__ for component in dragon.ecs.components}
     assert {"HasPerk", "KnowsWord", "KnowsSpell"} <= {edge.__name__ for edge in dragon.ecs.edges}
     assert {
@@ -845,6 +850,14 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "recover-magic",
         "identify",
         "appease-ancient-beast",
+        "ask-for-work",
+        "accept-generated-quest",
+        "complete-generated-quest",
+        "refuse-generated-quest",
+        "abandon-generated-quest",
+        "extend-generated-quest",
+        "lie-about-quest",
+        "request-cure-quest",
     } <= {handler.command_type for handler in dragon.commands.action_handlers}
     assert {
         "MapMarkerAddedEvent",
@@ -871,6 +884,13 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "CrimeReportedEvent",
         "ArtifactIdentifiedEvent",
         "AncientBeastAppeasedEvent",
+        "QuestGeneratedEvent",
+        "QuestFailedEvent",
+        "QuestRefusedEvent",
+        "QuestAbandonedEvent",
+        "QuestExtendedEvent",
+        "QuestLieToldEvent",
+        "CureQuestRequestedEvent",
     } <= {event.__name__ for event in dragon.commands.typed_events}
     assert LIFESIM in dragon.dependencies.requires
 
@@ -894,10 +914,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "buy-property",
         "promote-institution",
         "pay-institution-dues",
-        "refuse-generated-quest",
-        "abandon-generated-quest",
-        "extend-generated-quest",
-        "lie-about-quest",
         "issue-letter-of-credit",
         "store-safe-item",
         "retrieve-safe-item",
@@ -912,7 +928,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "identify",
         "progress-affliction-incubation",
         "mark-affliction-stigma",
-        "request-cure-quest",
     } <= {handler.command_type for handler in dagger.commands.action_handlers}
     assert {
         "InstitutionReputationChangedEvent",
@@ -921,9 +936,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "PropertyPurchasedEvent",
         "InstitutionPromotedEvent",
         "InstitutionDuesPaidEvent",
-        "QuestRefusedEvent",
-        "QuestAbandonedEvent",
-        "QuestExtendedEvent",
         "LetterOfCreditIssuedEvent",
         "CourtSentenceIssuedEvent",
         "LodgingRentedEvent",
@@ -933,7 +945,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "IngredientIdentifiedEvent",
         "AfflictionIncubationProgressedEvent",
         "AfflictionStigmaMarkedEvent",
-        "CureQuestRequestedEvent",
     } <= {event.__name__ for event in dagger.commands.typed_events}
 
     void = plugins[VOIDSIM]

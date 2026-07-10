@@ -84,6 +84,8 @@ class ContentContribution(BaseModel):
     generation_enrichers: tuple[Any, ...] = ()
     #: Storyteller incident definitions contributed by this plugin.
     incident_definitions: tuple[Any, ...] = ()
+    #: Plugin-owned completion predicates for spawned incident requirements.
+    incident_resolution_rules: tuple[Any, ...] = ()
 
 
 class PolicyContribution(BaseModel):

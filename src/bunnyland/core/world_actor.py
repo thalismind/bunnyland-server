@@ -27,7 +27,6 @@ from relics import EntityId, World
 from .. import telemetry
 from .actions import (
     ActionDefinition,
-    action_definitions,
     inferred_action_definition,
 )
 from .availability import (
@@ -270,7 +269,7 @@ class WorldActor:
         if self._definition_cache is None:
             self._definition_cache = {
                 definition.command_type: definition
-                for definition in action_definitions(self.action_definitions())
+                for definition in self.action_definitions()
             }
         return self._definition_cache.get(command_type) or inferred_action_definition(
             command_type

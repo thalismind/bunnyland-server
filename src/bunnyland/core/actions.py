@@ -73,9 +73,7 @@ class ActionRequirement:
 
     @property
     def is_empty(self) -> bool:
-        return not (
-            self.character_components or self.character_edges or self.reachable_components
-        )
+        return not (self.character_components or self.character_edges or self.reachable_components)
 
 
 @dataclass(frozen=True)
@@ -360,6 +358,7 @@ def action_icon_for(command_type: str) -> str:
             return icon
     return "•"
 
+
 REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
     {
         "airlock_id",
@@ -598,6 +597,15 @@ def _definition(
         examples=tuple(ActionExample(example, natural=True) for example in examples),
         requirement=requirement,
     )
+
+
+# Public construction primitives for plugin-owned action catalogues. The underscored names
+# remain while the legacy bundled table below is retained for external compatibility.
+ACTION_COST = _ACTION
+SPEECH_COST = _SPEECH
+FOCUS_COST = _FOCUS
+FREE_COST = _FREE
+define_action = _definition
 
 
 DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
@@ -1787,9 +1795,7 @@ DEFAULT_ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     _definition("launch", ("ship_id",), tool_name="launch"),
     # Nuke sim.
     _definition("scan-radiation", ("target_id",), tool_name="scan_radiation"),
-    _definition(
-        "seal-radiation-source", ("target_id",), tool_name="seal_radiation_source"
-    ),
+    _definition("seal-radiation-source", ("target_id",), tool_name="seal_radiation_source"),
     _definition(
         "decontaminate",
         ("target_id", "station_id"),
@@ -2119,6 +2125,7 @@ def reference_arg_keys(
 
 
 __all__ = [
+    "ACTION_COST",
     "ActionArgument",
     "ActionDefinition",
     "ActionExample",
@@ -2126,11 +2133,15 @@ __all__ = [
     "ActionRequirement",
     "ArgumentKind",
     "DEFAULT_ACTION_DEFINITIONS",
+    "FOCUS_COST",
+    "FREE_COST",
     "REFERENCE_ARG_KEYS",
     "action_definition_for_command_type",
     "action_definitions",
+    "define_action",
     "definition_by_command_type",
     "definitions_by_tool_name",
     "inferred_action_definition",
     "reference_arg_keys",
+    "SPEECH_COST",
 ]

@@ -137,6 +137,8 @@ from bunnyland.memory.store import MemoryEntry
 from bunnyland.narration import NarrationProjection, check_grounding
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, load_modules, select
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.simpacks.dinosim.incidents import KAIJU_ATTACK
+from bunnyland.simpacks.dinosim.resolution import RESOLUTION_RULES as DINO_RESOLUTION_RULES
 from bunnyland.worldgen.examples import (
     APPLE_CROSSING_DEMO,
     BELL_GREEN_DEMO,
@@ -498,7 +500,11 @@ def _add_dinosim_loop_world(scenario):
 
 
 def _add_dinosim_kaiju_world(scenario):
-    install_storyteller(scenario.actor)
+    install_storyteller(
+        scenario.actor,
+        incidents=(KAIJU_ATTACK,),
+        resolution_rules=DINO_RESOLUTION_RULES,
+    )
     colony.install_colonysim(scenario.actor)
     dino.install_dinosim(scenario.actor)
     storyteller = spawn_entity(

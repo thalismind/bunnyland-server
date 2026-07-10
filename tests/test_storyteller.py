@@ -54,6 +54,8 @@ from bunnyland.mechanics.storyteller import (
     storyteller_fragments,
 )
 from bunnyland.prompts import ComponentPromptContext
+from bunnyland.simpacks.barbariansim.incidents import BARBARIAN_RAID
+from bunnyland.simpacks.dinosim.incidents import KAIJU_ATTACK
 
 HOUR = 3600.0
 
@@ -285,23 +287,29 @@ def test_target_room_skips_inactive_characters_and_falls_back_to_rooms(scenario)
 
 
 def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario):
+    from bunnyland.plugins import PluginRegistry
+    from bunnyland.plugins.builtin import bunnyland_plugins
+
     world = scenario.actor.world
     room_id = str(scenario.room_a)
     incident = IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0, room_id=room_id)
+    registry = PluginRegistry(bunnyland_plugins())
+    rules = (*story.DEFAULT_RESOLUTION_RULES, *registry.incident_resolution_rules.values())
 
     unclaimed = spawn_entity(world, [IdentityComponent(name="crate", kind="item")])
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), unclaimed.id
     )
-    assert story._spawned_requirement_done(world, incident, "loot", unclaimed.id) is False
-    assert story._spawned_requirement_done(world, incident, "missing", unclaimed.id) is True
-    assert story._spawned_requirement_done(world, incident, "loot", scenario.room_b) is True
+    assert story._spawned_requirement_done(world, incident, "loot", unclaimed.id, rules) is False
+    assert story._spawned_requirement_done(world, incident, "missing", unclaimed.id, rules) is True
+    assert story._spawned_requirement_done(world, incident, "loot", scenario.room_b, rules) is True
     assert (
         story._spawned_requirement_done(
             world,
             IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0),
             "loot",
             unclaimed.id,
+            rules,
         )
         is False
     )
@@ -310,18 +318,21 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
         world,
         [IdentityComponent(name="active raider", kind="character"), CharacterComponent()],
     )
-    assert story._spawned_requirement_done(world, incident, "monster", active_monster.id) is False
+    assert (
+        story._spawned_requirement_done(world, incident, "monster", active_monster.id, rules)
+        is False
+    )
 
     pacified = spawn_entity(
         world,
-            [
-                IdentityComponent(name="pacified raider", kind="character"),
-                CharacterComponent(),
-                PacifiedComponent(
-                    pacified_by=str(scenario.character),
-                    language="common",
-                    pacified_at_epoch=0,
-                ),
+        [
+            IdentityComponent(name="pacified raider", kind="character"),
+            CharacterComponent(),
+            PacifiedComponent(
+                pacified_by=str(scenario.character),
+                language="common",
+                pacified_at_epoch=0,
+            ),
         ],
     )
     prisoner = spawn_entity(
@@ -349,7 +360,7 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
         ],
     )
     for entity in (pacified, prisoner, companion, tamed):
-        assert story._spawned_requirement_done(world, incident, "monster", entity.id) is True
+        assert story._spawned_requirement_done(world, incident, "monster", entity.id, rules) is True
 
     pen = spawn_entity(world, [EnclosureComponent(), GateComponent(locked=True)])
     contained = spawn_entity(
@@ -357,7 +368,7 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
         [IdentityComponent(name="contained beast", kind="character"), CharacterComponent()],
     )
     pen.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), contained.id)
-    assert story._spawned_requirement_done(world, incident, "monster", contained.id) is True
+    assert story._spawned_requirement_done(world, incident, "monster", contained.id, rules) is True
 
     kaiju = spawn_entity(
         world,
@@ -372,7 +383,7 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
         ],
     )
     for entity in (kaiju, apex):
-        assert story._spawned_requirement_done(world, incident, "monster", entity.id) is True
+        assert story._spawned_requirement_done(world, incident, "monster", entity.id, rules) is True
 
     dragon_quest = spawn_entity(
         world,
@@ -383,14 +394,14 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
         [GeneratedQuestComponent(title="Dagger Quest", objective="finish", status="completed")],
     )
     for quest in (dragon_quest, dagger_quest):
-        assert story._spawned_requirement_done(world, incident, "quest", quest.id) is True
+        assert story._spawned_requirement_done(world, incident, "quest", quest.id, rules) is True
 
     unrepaired = spawn_entity(world, [SettlementDamageComponent(severity=1)])
     repaired = spawn_entity(world, [SettlementDamageComponent(severity=0, repaired=True)])
     no_damage = spawn_entity(world, [IdentityComponent(name="plain", kind="prop")])
-    assert story._spawned_requirement_done(world, incident, "damage", unrepaired.id) is False
-    assert story._spawned_requirement_done(world, incident, "damage", repaired.id) is True
-    assert story._spawned_requirement_done(world, incident, "damage", no_damage.id) is True
+    assert story._spawned_requirement_done(world, incident, "damage", unrepaired.id, rules) is False
+    assert story._spawned_requirement_done(world, incident, "damage", repaired.id, rules) is True
+    assert story._spawned_requirement_done(world, incident, "damage", no_damage.id, rules) is True
 
 
 def test_incident_ready_and_resolve_handler_cover_error_paths_directly(scenario):
@@ -482,26 +493,26 @@ def test_incident_generated_event_exposes_generation_properties():
     assert event.needs == ("dinosim",)  # 129
 
 
-def test_choose_incident_selects_kaiju_attack_when_colony_and_dino_enabled(scenario):
+def test_dinosim_owns_kaiju_incident_when_colony_and_dino_enabled(scenario):
     world = scenario.actor.world
     spawn_entity(world, [ColonySimComponent(enabled=True)])
     spawn_entity(world, [DinosimPolicyComponent(kaiju_storyteller_incidents=True)])
-    kind, spent = story._choose_incident(world, 16.0)  # 147-155, 172
-    assert kind == "kaiju_attack"
+    definition, spent = story._choose_incident_definition(world, 16.0, (KAIJU_ATTACK,))
+    assert definition.id == "kaiju_attack"
     assert spent == 15.0
-    generation = story._incident_generation("kaiju_attack", 15.0)  # line 200
+    generation = definition.generation(spent)
     assert "kaiju" in generation.tags
     assert generation.needs == ("dinosim",)
 
 
-def test_choose_incident_selects_barbarian_raid_when_colony_and_barbarian_enabled(scenario):
+def test_barbariansim_owns_raid_incident_when_colony_and_barbarian_enabled(scenario):
     world = scenario.actor.world
     spawn_entity(world, [ColonySimComponent(enabled=True)])
     spawn_entity(world, [BarbarianSimPolicyComponent(raid_storyteller_incidents=True)])
-    kind, spent = story._choose_incident(world, 13.0)  # 159-167, 174
-    assert kind == "barbarian_raid"
+    definition, spent = story._choose_incident_definition(world, 13.0, (BARBARIAN_RAID,))
+    assert definition.id == "barbarian_raid"
     assert spent == 12.0
-    generation = story._incident_generation("barbarian_raid", 12.0)  # line 212
+    generation = definition.generation(spent)
     assert "raid" in generation.tags
     assert generation.needs == ("barbariansim",)
 
@@ -585,7 +596,6 @@ def test_incident_generation_falls_back_to_generic_intent():
 
 
 def test_plugin_incident_definitions_select_deterministically_and_fall_back(scenario):
-    assert story._enabled_component(scenario.actor.world, "MissingComponent", "enabled") is False
     eligible = story.IncidentDefinition(id="rain", cost=3.0, priority=5)
     higher = story.IncidentDefinition(id="storm", cost=3.0, priority=10)
     disabled = story.IncidentDefinition(
@@ -598,9 +608,7 @@ def test_plugin_incident_definitions_select_deterministically_and_fall_back(scen
     assert selected is higher
     assert spent == 3.0
 
-    fallback, spent = story._choose_incident_definition(
-        scenario.actor.world, 1.0, (eligible,)
-    )
+    fallback, spent = story._choose_incident_definition(scenario.actor.world, 1.0, (eligible,))
     assert fallback.id == "resource_drop"
     assert spent == 1.0
 
@@ -680,6 +688,8 @@ def test_incident_enrichment_ignores_events_with_missing_entities(scenario):
 
 
 def test_monster_neutralized_with_unlocked_enclosure_gate_is_not_done(scenario):
+    from bunnyland.simpacks.dinosim.resolution import RESOLUTION_RULES
+
     world = scenario.actor.world
     incident = IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0)
     pen = spawn_entity(world, [EnclosureComponent(), GateComponent(locked=False)])
@@ -689,13 +699,22 @@ def test_monster_neutralized_with_unlocked_enclosure_gate_is_not_done(scenario):
     )
     pen.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), beast.id)
     # gate unlocked -> not neutralized by containment (331->333)
-    assert story._spawned_requirement_done(world, incident, "monster", beast.id) is False
+    assert (
+        story._spawned_requirement_done(world, incident, "monster", beast.id, RESOLUTION_RULES)
+        is False
+    )
 
 
 def test_quest_done_false_without_quest_components(scenario):
+    from bunnyland.simpacks.dragonsim.resolution import RESOLUTION_RULES
+
     world = scenario.actor.world
     plain = spawn_entity(world, [IdentityComponent(name="not a quest", kind="prop")])
-    assert story._quest_done(world, plain) is False
+    incident = IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0)
+    assert (
+        story._spawned_requirement_done(world, incident, "quest", plain.id, RESOLUTION_RULES)
+        is False
+    )
 
 
 def test_spawned_requirement_done_true_when_target_missing(scenario):

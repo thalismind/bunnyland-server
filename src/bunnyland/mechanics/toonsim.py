@@ -437,6 +437,33 @@ class ToonWorldgenHook:
             )
 
 
+class ToonPlacementWorldgenHook:
+    """Finalize surface-relative edges after previously planned room objects exist."""
+
+    def _on_object(self, event: ObjectGeneratedEvent) -> None:
+        entity_id = parse_entity_id(event.entity_id)
+        room_id = parse_entity_id(event.room_id)
+        if (
+            entity_id is None
+            or room_id is None
+            or not self.actor.world.has_entity(entity_id)
+            or not self.actor.world.has_entity(room_id)
+        ):
+            return
+        entity = self.actor.world.get_entity(entity_id)
+        if not entity.has_component(PortableComponent) or not entity.has_component(
+            SpriteBoundsComponent
+        ):
+            return
+        room = self.actor.world.get_entity(room_id)
+        if not _surface_entities(self.actor.world, room, entity.id):
+            return
+        replace_component(
+            entity,
+            _generated_position(self.actor.world, entity, room, event.object_key),
+        )
+
+
 class SpriteMovedEvent(DomainEvent):
     """A character repositioned its sprite within its current room."""
 

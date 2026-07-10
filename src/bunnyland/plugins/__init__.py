@@ -1,6 +1,5 @@
 """Plugin system (spec 21): loadable contribution bundles + loader."""
 
-from .builtin import bunnyland_plugins
 from .loader import (
     PluginError,
     apply_plugin,
@@ -27,6 +26,13 @@ from .model import (
     RuntimeContribution,
 )
 from .registry import PluginRegistry
+
+
+def bunnyland_plugins():
+    """Load the bundled compatibility catalogue without coupling canonical entrypoints."""
+    from .builtin import bunnyland_plugins as collect
+
+    return collect()
 
 __all__ = [
     "CommandContribution",

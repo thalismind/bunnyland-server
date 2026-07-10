@@ -51,10 +51,13 @@ class PluginRegistry:
         self._services: dict[tuple[str, str], Any] = {}
         self._projections: dict[tuple[str, str], Any] = {}
         self._incidents: dict[tuple[str, str], Any] = {}
+        self._incident_resolution_rules: dict[tuple[str, str], Any] = {}
         self._integrations: dict[tuple[str, str], Any] = {}
         self._worldgen_hooks: list[tuple[str, Any]] = []
         self._normalizers: list[tuple[str, Any]] = []
-        self._enrichers: list[tuple[str, Any]] = []
+        from ..core.generation import CoreGenerationEnricher
+
+        self._enrichers: list[tuple[str, Any]] = [("bunnyland.core", CoreGenerationEnricher())]
         self._seed_core_contracts()
         for plugin in plugins:
             self.register(plugin)
@@ -121,6 +124,10 @@ class PluginRegistry:
     @property
     def incidents(self):
         return MappingProxyType(self._incidents)
+
+    @property
+    def incident_resolution_rules(self):
+        return MappingProxyType(self._incident_resolution_rules)
 
     @property
     def services(self):
@@ -259,15 +266,24 @@ class PluginRegistry:
             self._scoped(self._projections, plugin.id, factory, "projection")
         for incident in plugin.content.incident_definitions:
             self._scoped(self._incidents, plugin.id, incident, "incident")
+        for rule in plugin.content.incident_resolution_rules:
+            self._scoped(
+                self._incident_resolution_rules,
+                plugin.id,
+                rule,
+                "incident resolution rule",
+            )
         for integration in plugin.runtime.integration_factories:
             self._scoped(self._integrations, plugin.id, integration, "integration")
         self._worldgen_hooks.extend((plugin.id, hook) for hook in plugin.content.worldgen_hooks)
         self._normalizers.extend(
             (plugin.id, normalizer) for normalizer in plugin.content.intent_normalizers
         )
-        self._enrichers.extend(
-            (plugin.id, enricher) for enricher in plugin.content.generation_enrichers
-        )
+        for enricher in plugin.content.generation_enrichers:
+            bind_components = getattr(enricher, "bind_components", None)
+            if bind_components is not None:
+                enricher = bind_components(plugin.ecs.components)
+            self._enrichers.append((plugin.id, enricher))
 
     def event_key(self, event_type: type) -> str | None:
         owner = self._event_owners.get(event_type)

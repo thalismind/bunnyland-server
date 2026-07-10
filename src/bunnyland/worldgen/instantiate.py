@@ -204,6 +204,7 @@ async def _cooperative_components(
         tags=generation.tags,
         source_seed=generation.source_seed,
         source_key=generation.source_key,
+        context={"base_components": tuple(components), "world_epoch": actor.epoch},
     )
     plan = await GenerationPipeline(actor.plugins).compile(
         request,

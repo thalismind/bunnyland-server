@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
+from pathlib import Path
 
 import pytest
 from relics import Component, Edge
@@ -109,14 +110,30 @@ def test_registry_namespaces_same_named_event_classes_and_uses_exact_identity():
     assert registry.require_exported_event("pack.one", FirstSharedEvent) is FirstSharedEvent
 
 
-def test_dragonsim_is_the_single_owner_of_shared_quest_lifecycle_events():
-    from bunnyland.mechanics.daggersim import QuestCompletedEvent as DaggerQuestCompletedEvent
+def test_dragonsim_is_the_single_owner_of_quest_contracts():
+    from bunnyland.mechanics.daggersim import (
+        GeneratedQuestComponent,
+        QuestGeneratedEvent,
+        QuestTemplateComponent,
+    )
+    from bunnyland.mechanics.daggersim import (
+        QuestCompletedEvent as DaggerQuestCompletedEvent,
+    )
     from bunnyland.simpacks.dragonsim.events import QuestCompletedEvent
 
     registry = PluginRegistry(bunnyland_plugins())
 
     assert DaggerQuestCompletedEvent is QuestCompletedEvent
     assert registry.event_key(QuestCompletedEvent) == "bunnyland.dragonsim:QuestCompletedEvent"
+    assert registry.event_key(QuestGeneratedEvent) == "bunnyland.dragonsim:QuestGeneratedEvent"
+    assert registry.components["GeneratedQuestComponent"] == (
+        "bunnyland.dragonsim",
+        GeneratedQuestComponent,
+    )
+    assert registry.components["QuestTemplateComponent"] == (
+        "bunnyland.dragonsim",
+        QuestTemplateComponent,
+    )
 
 
 def test_registry_rejects_duplicate_event_ownership_and_incompatible_expectations():
@@ -270,7 +287,19 @@ def test_canonical_builtin_package_entrypoints_are_independently_importable():
         "bunnyland.simpacks.nukesim": "bunnyland.nukesim",
         "bunnyland.simpacks.toonsim": "bunnyland.toonsim",
         "bunnyland.simpacks.voidsim": "bunnyland.voidsim",
+        "bunnyland.foundation.checkpoints": "bunnyland.checkpoints",
+        "bunnyland.foundation.core_verbs": "bunnyland.core_verbs",
+        "bunnyland.foundation.environment": "bunnyland.environment",
+        "bunnyland.foundation.history": "bunnyland.history",
+        "bunnyland.foundation.imagegen": "bunnyland.imagegen",
+        "bunnyland.foundation.mcp": "bunnyland.mcp",
+        "bunnyland.foundation.mechanisms": "bunnyland.mechanisms",
+        "bunnyland.foundation.memory": "bunnyland.memory",
+        "bunnyland.foundation.persona": "bunnyland.persona",
+        "bunnyland.foundation.policy": "bunnyland.policy",
+        "bunnyland.foundation.social": "bunnyland.social",
         "bunnyland.foundation.storyteller": "bunnyland.storyteller",
+        "bunnyland.foundation.worldgen": "bunnyland.worldgen",
     }
     for module_name, plugin_id in expected.items():
         module = import_module(module_name)
@@ -889,3 +918,59 @@ def test_legacy_type_discovery_rejects_loaded_schema_v1_name_collisions():
     with pytest.raises(PluginError, match="duplicate persisted edge"):
         type_registries()
     duplicate_edge.__name__ = "LegacyContains"
+
+
+def test_canonical_plugin_entrypoints_do_not_depend_on_builtin_catalogue():
+    root = Path(__file__).parents[1] / "src" / "bunnyland"
+    paths = (*root.glob("simpacks/*/plugin.py"), *root.glob("foundation/*/plugin.py"))
+    for path in paths:
+        assert "plugins.builtin" not in path.read_text()
+
+
+def test_bundled_generation_uses_declarative_enrichers_not_runtime_hooks():
+    registry = PluginRegistry(bunnyland_plugins())
+
+    assert tuple(plugin_id for plugin_id, _hook in registry.worldgen_hooks) == (
+        "bunnyland.toonsim",
+    )
+    providers = {plugin_id for plugin_id, _enricher in registry.generation_enrichers}
+    assert {
+        "bunnyland.core",
+        "bunnyland.environment",
+        "bunnyland.lifesim",
+        "bunnyland.colonysim",
+        "bunnyland.gardensim",
+        "bunnyland.dragonsim",
+        "bunnyland.daggersim",
+    } <= providers
+
+
+def test_actor_action_catalogue_contains_only_enabled_plugin_actions():
+    from bunnyland.plugins.builtin import CORE_VERBS
+
+    core = next(plugin for plugin in bunnyland_plugins() if plugin.id == CORE_VERBS)
+    actor = WorldActor()
+    apply_plugins([core], actor)
+
+    command_types = {definition.command_type for definition in actor.action_definitions()}
+    assert "look" in command_types
+    assert "scavenge" not in command_types
+    assert actor.plugins.actions["look"][0] == CORE_VERBS
+
+
+def test_storyteller_resolution_rules_are_pack_owned_and_registry_backed():
+    registry = PluginRegistry(bunnyland_plugins())
+    providers = {plugin_id for plugin_id, _rule_id in registry.incident_resolution_rules}
+
+    assert {
+        "bunnyland.colonysim",
+        "bunnyland.daggersim",
+        "bunnyland.dinosim",
+        "bunnyland.dragonsim",
+    } <= providers
+    storyteller_source = (
+        Path(__file__).parents[1] / "src" / "bunnyland" / "mechanics" / "storyteller.py"
+    ).read_text()
+    assert '"PacifiedComponent"' not in storyteller_source
+    assert '"GeneratedQuestComponent"' not in storyteller_source
+    assert '"SettlementDamageComponent"' not in storyteller_source

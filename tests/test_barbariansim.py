@@ -138,8 +138,10 @@ from bunnyland.mechanics.storyteller import (
     IncidentSpawned,
     StorytellerComponent,
     StorytellerConsequence,
+    default_incident_definitions,
 )
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.barbariansim.incidents import BARBARIAN_RAID
 
 HOUR = 3600.0
 
@@ -1823,7 +1825,9 @@ def test_barbarian_raid_enrichment_is_seeded_and_idempotent():
 async def test_storyteller_selects_barbarian_raid_only_when_colonysim_and_barbariansim_enabled():
     scenario = build_scenario()
     install_barbariansim(scenario.actor)
-    scenario.actor.register_consequence(StorytellerConsequence())
+    scenario.actor.register_consequence(
+        StorytellerConsequence((*default_incident_definitions(), BARBARIAN_RAID))
+    )
     spawn_entity(
         scenario.actor.world,
         [
@@ -1844,7 +1848,9 @@ async def test_storyteller_selects_barbarian_raid_only_when_colonysim_and_barbar
     scenario = build_scenario()
     install_colonysim(scenario.actor)
     install_barbariansim(scenario.actor)
-    scenario.actor.register_consequence(StorytellerConsequence())
+    scenario.actor.register_consequence(
+        StorytellerConsequence((*default_incident_definitions(), BARBARIAN_RAID))
+    )
     world = scenario.actor.world
     spawn_entity(
         world,
