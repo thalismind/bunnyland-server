@@ -494,11 +494,6 @@ def _season(event: GeneratedEntityEvent) -> str:
 
 
 class EnvironmentWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_entity)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_entity)
-
     def _on_entity(self, event: RoomGeneratedEvent | ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -512,12 +507,6 @@ class EnvironmentWorldgenHook:
 
 
 class LifeWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
-
     def _on_room(self, event: RoomGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -613,12 +602,6 @@ class LifeWorldgenHook:
 
 
 class ColonyWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
-
     def _on_room(self, event: RoomGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -772,12 +755,6 @@ class ColonyWorldgenHook:
 
 
 class GardenWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
-
     def _on_room(self, event: RoomGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -941,12 +918,6 @@ class GardenWorldgenHook:
 
 
 class BarbarianWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
-
     def _on_character(self, event: CharacterGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -1039,12 +1010,6 @@ class BarbarianWorldgenHook:
 
 
 class DragonWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_site)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_site)
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-
     def _on_site(self, event: RoomGeneratedEvent | ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -1167,12 +1132,6 @@ class DragonWorldgenHook:
 
 
 class DaggerWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-
     def _on_room(self, event: RoomGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -1428,12 +1387,6 @@ class DaggerWorldgenHook:
 
 
 class DinoWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
-
     def _on_character(self, event: CharacterGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -1522,11 +1475,6 @@ class DinoWorldgenHook:
 
 
 class VoidWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
-
     def _on_room(self, event: RoomGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -1655,12 +1603,6 @@ class VoidWorldgenHook:
 
 
 class NukeWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_entity)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_entity)
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-
     def _on_entity(self, event: RoomGeneratedEvent | ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:
@@ -1770,12 +1712,6 @@ class NukeWorldgenHook:
 
 
 class NeonWorldgenHook:
-    def subscribe(self, actor: WorldActor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_entity)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_entity)
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-
     def _on_entity(self, event: RoomGeneratedEvent | ObjectGeneratedEvent) -> None:
         entity = _entity(self.actor, event)
         if entity is None:

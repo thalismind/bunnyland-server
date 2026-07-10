@@ -267,11 +267,16 @@ class KnowsWord(Edge):
 
 
 @dataclass(frozen=True)
-class StealthComponent(Component):
+class SneakingComponent(Component):
     """Whether a character is currently sneaking (unseen by witnesses)."""
 
     sneaking: bool = False
     since_epoch: int = 0
+
+
+# Source compatibility for addons that imported the old ambiguous class name. Persistence
+# now uses ``SneakingComponent`` so it cannot collide with core's distinct StealthComponent.
+StealthComponent = SneakingComponent
 
 
 @dataclass(frozen=True)
@@ -476,7 +481,7 @@ class EncounterTriggeredEvent(DomainEvent):
 
 class QuestAcceptedEvent(DomainEvent):
     quest_id: str
-    quest_key: str
+    quest_key: str | None = None
     title: str
 
 
@@ -488,8 +493,9 @@ class QuestObjectiveCompletedEvent(DomainEvent):
 
 class QuestCompletedEvent(DomainEvent):
     quest_id: str
-    quest_key: str
+    quest_key: str | None = None
     title: str
+    reward_item_id: str | None = None
 
 
 class QuestTrackedEvent(DomainEvent):
@@ -2526,6 +2532,7 @@ __all__ = [
     "StealHandler",
     "StealthChangedEvent",
     "StealthComponent",
+    "SneakingComponent",
     "CarvableComponent",
     "InscribeVoicePhraseHandler",
     "StudyVoiceInscriptionHandler",

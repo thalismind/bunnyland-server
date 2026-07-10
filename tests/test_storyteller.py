@@ -584,6 +584,57 @@ def test_incident_generation_falls_back_to_generic_intent():
     assert generation.source_key == "trader_arrival"
 
 
+def test_plugin_incident_definitions_select_deterministically_and_fall_back(scenario):
+    assert story._enabled_component(scenario.actor.world, "MissingComponent", "enabled") is False
+    eligible = story.IncidentDefinition(id="rain", cost=3.0, priority=5)
+    higher = story.IncidentDefinition(id="storm", cost=3.0, priority=10)
+    disabled = story.IncidentDefinition(
+        id="meteor", cost=1.0, priority=100, eligible=lambda world: False
+    )
+
+    selected, spent = story._choose_incident_definition(
+        scenario.actor.world, 4.0, (eligible, higher, disabled)
+    )
+    assert selected is higher
+    assert spent == 3.0
+
+    fallback, spent = story._choose_incident_definition(
+        scenario.actor.world, 1.0, (eligible,)
+    )
+    assert fallback.id == "resource_drop"
+    assert spent == 1.0
+
+
+def test_storyteller_consequence_uses_plugin_incident_generation(scenario):
+    _storyteller(scenario, points=4.0)
+    plain = story.IncidentDefinition(id="rain", cost=1.0, priority=10)
+    events = story.StorytellerConsequence((plain,)).process(
+        scenario.actor.world, int(HOUR)
+    )
+    generated = next(event for event in events if isinstance(event, IncidentGeneratedEvent))
+    assert generated.kind == "rain"
+    assert generated.intent == "a rain incident"
+
+    _storyteller(scenario, points=4.0)
+    custom = story.IncidentDefinition(
+        id="storm",
+        cost=1.0,
+        priority=10,
+        generation=lambda spent: story.GenerationIntentComponent(
+            description=f"custom storm {spent:g}", entity_kind="incident"
+        ),
+    )
+    events = story.StorytellerConsequence((custom,)).process(
+        scenario.actor.world, int(HOUR)
+    )
+    generated = next(
+        event
+        for event in events
+        if isinstance(event, IncidentGeneratedEvent) and event.kind == "storm"
+    )
+    assert generated.intent == "custom storm 1"
+
+
 def test_target_room_skips_character_without_valid_room(scenario):
     world = scenario.actor.world
     # the only character is not contained in any room -> the loop body continues (140->136)
@@ -644,7 +695,7 @@ def test_monster_neutralized_with_unlocked_enclosure_gate_is_not_done(scenario):
 def test_quest_done_false_without_quest_components(scenario):
     world = scenario.actor.world
     plain = spawn_entity(world, [IdentityComponent(name="not a quest", kind="prop")])
-    assert story._quest_done(plain) is False  # line 351
+    assert story._quest_done(world, plain) is False
 
 
 def test_spawned_requirement_done_true_when_target_missing(scenario):

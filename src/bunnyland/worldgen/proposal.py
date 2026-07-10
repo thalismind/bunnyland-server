@@ -93,6 +93,7 @@ def _generation_dict(value: object) -> dict[str, object]:
             "source_seed": value.source_seed,
             "source_key": value.source_key,
             "entity_kind": value.entity_kind,
+            "unmet_capabilities": value.unmet_capabilities,
         }
     if isinstance(value, Mapping):
         return dict(value)

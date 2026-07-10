@@ -115,8 +115,8 @@ async def test_connect_is_idempotent_and_does_not_clobber_existing_exit():
     actor = WorldActor()
     gen = RecursiveWorldGenerator(actor, StubWorldAgent(), max_rooms=2)
     async with actor._lock:
-        a = gen._spawn_room("a", RoomNodeProposal(title="Hall A"))
-        b = gen._spawn_room("b", RoomNodeProposal(title="Hall B"))
+        a = await gen._spawn_room("a", RoomNodeProposal(title="Hall A"))
+        b = await gen._spawn_room("b", RoomNodeProposal(title="Hall B"))
         gen._connect(a, b, DoorProposal(direction="north", bidirectional=False))
         # Re-connect with a different direction: the guard must keep the original edge.
         gen._connect(a, b, DoorProposal(direction="south", bidirectional=False))

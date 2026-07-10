@@ -15,13 +15,15 @@ from .models import EcsTypeSchema, WorldSchemaResponse
 
 
 def _component_registry(actor: WorldActor) -> dict[str, type[Component]]:
-    registry = type_registries()[0]
+    plugins = tuple(actor.plugins.plugins.values()) if actor.plugins is not None else None
+    registry = type_registries(plugins)[0]
     registry.update(getattr(actor.world, "_component_types", {}))
     return registry
 
 
 def _edge_registry(actor: WorldActor) -> dict[str, type[Edge]]:
-    registry = type_registries()[1]
+    plugins = tuple(actor.plugins.plugins.values()) if actor.plugins is not None else None
+    registry = type_registries(plugins)[1]
     registry.update(getattr(actor.world, "_edge_types", {}))
     return registry
 

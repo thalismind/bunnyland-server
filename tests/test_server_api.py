@@ -1261,6 +1261,7 @@ def test_event_serialization_includes_type_and_json_fields(scenario):
     serialized = serialize_event(event)
 
     assert serialized["event_type"] == "ActorMovedEvent"
+    assert serialized["event_key"] == "bunnyland.core:ActorMovedEvent"
     assert serialized["event"]["world_epoch"] == 7
     assert serialized["event"]["created_at"] is not None
 

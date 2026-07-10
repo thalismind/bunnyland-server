@@ -284,7 +284,7 @@ def test_builtin_sim_dependencies_match_layering_contracts():
     )
     assert plugins[BARBARIANSIM].dependencies.requires == (CORE_VERBS,)
     assert plugins[DRAGONSIM].dependencies.requires == (CORE_VERBS, LIFESIM)
-    assert plugins[DAGGERSIM].dependencies.requires == (CORE_VERBS,)
+    assert plugins[DAGGERSIM].dependencies.requires == (CORE_VERBS, DRAGONSIM)
     assert plugins[VOIDSIM].dependencies.requires == (
         CORE_VERBS,
         COLONYSIM,
@@ -1303,9 +1303,7 @@ def test_worldgen_hook_with_bus_subscribe_signature_receives_bus():
     assert captured["bus"] is actor.bus
 
 
-def test_callable_worldgen_hook_is_subscribed_to_generated_entity_event():
-    from bunnyland.core.events import GeneratedEntityEvent
-
+def test_callable_worldgen_hook_is_registered_for_finalization():
     seen = []
 
     def hook(event):
@@ -1323,8 +1321,7 @@ def test_callable_worldgen_hook_is_subscribed_to_generated_entity_event():
         actor,
     )
 
-    # The bare callable was wired as a GeneratedEntityEvent subscriber.
-    assert hook in actor.bus._handlers[GeneratedEntityEvent]
+    assert hook in actor._worldgen_hooks
 
 
 def test_non_callable_worldgen_hook_without_subscribe_raises():

@@ -1,0 +1,15 @@
+"""Canonical Barbarian Sim plugin entrypoint."""
+
+from ...plugins.builtin import barbariansim_plugin
+from ...plugins.model import Plugin, PluginPlacement
+
+
+def plugin() -> Plugin:
+    return barbariansim_plugin().model_copy(update={"placement": PluginPlacement.OUTER})
+
+
+def bunnyland_plugins() -> list[Plugin]:
+    return [plugin()]
+
+
+__all__ = ["bunnyland_plugins", "plugin"]

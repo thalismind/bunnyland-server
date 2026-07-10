@@ -152,6 +152,9 @@ class WorldActor:
         self._rng = rng or random.Random()
         self._lock = asyncio.Lock()
         self.persistence = WorldPersistenceContext()
+        #: Populated by the plugin loader without making core import plugin modules.
+        self.plugins: Any | None = None
+        self._worldgen_hooks: list[Any] = []
 
         self.world.register_system(WorldClockSystem())
         self.world.register_system(ActionFocusRegenSystem())
@@ -372,22 +375,28 @@ class WorldActor:
         with telemetry.record_duration(telemetry.record_tick), telemetry.span(
             "game.tick", {"tick.game_delta_seconds": game_delta_seconds}
         ) as tick_span:
-            async with self._lock:
-                # Phase 1: drain the inbox into the per-character lanes.
-                with telemetry.span("tick.ingest"):
-                    await self._ingest()
-                # Phases 2-4: advance clock, regen Action/Focus, run passive systems.
-                with telemetry.span("tick.systems"):
-                    self.world.tick(game_delta_seconds)
-                tick_span.set_attribute("tick.epoch", self.epoch)
-                # Phase 5: process queued commands in initiative order.
-                with telemetry.span("tick.commands"):
-                    await self._process_commands()
-                # Phase 6: consequence systems (downed/death transitions, etc.).
-                with telemetry.span("tick.consequences"):
-                    await self._run_consequences()
-                with telemetry.span("tick.after_tick"):
-                    await self._run_after_tick()
+            self.bus.begin_transaction()
+            try:
+                async with self._lock:
+                    # Deliver work deferred by the prior tick before producing new events.
+                    await self.bus.drain()
+                    # Phase 1: drain the inbox into the per-character lanes.
+                    with telemetry.span("tick.ingest"):
+                        await self._ingest()
+                    # Phases 2-4: advance clock, regen Action/Focus, run passive systems.
+                    with telemetry.span("tick.systems"):
+                        self.world.tick(game_delta_seconds)
+                    tick_span.set_attribute("tick.epoch", self.epoch)
+                    # Phase 5: process queued commands in initiative order.
+                    with telemetry.span("tick.commands"):
+                        await self._process_commands()
+                    # Phase 6: consequence systems (downed/death transitions, etc.).
+                    with telemetry.span("tick.consequences"):
+                        await self._run_consequences()
+                    with telemetry.span("tick.after_tick"):
+                        await self._run_after_tick()
+            finally:
+                await self.bus.end_transaction()
 
     async def _run_consequences(self) -> None:
         for consequence in self._consequences:
@@ -616,7 +625,10 @@ class WorldActor:
             return _LaneOutcome(executed=False, stop_lane=False)
 
         result_events = tuple(
-            {"event_type": event.__class__.__name__, **event.model_dump(mode="json")}
+            {
+                "event_type": event.__class__.__name__,
+                **event.model_dump(mode="json"),
+            }
             for event in result.events
         )
         await self._spend(character, command)

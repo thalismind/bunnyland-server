@@ -286,7 +286,7 @@ class MCPEventBridge:
             self._subscriptions.pop(uri, None)
 
     async def record(self, event: DomainEvent) -> None:
-        message = event_message(event)
+        message = event_message(event, self.actor.plugins)
         self._seq += 1
         message["seq"] = self._seq
         self._recent.append(message)

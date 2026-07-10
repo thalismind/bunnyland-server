@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING, Any
 from pydantic import TypeAdapter, ValidationError
 
 from ..core.actions import action_definition_for_command_type, inferred_action_definition
-from ..core.events import GeneratedEntityEvent
 from .contributions import collect_content_items
 from .model import Plugin, PluginRuntimeContext
+from .registry import PluginRegistry
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -41,6 +41,9 @@ def _qualify_plugin(module_name: str, plugin: Plugin) -> Plugin:
         update={
             "requires": tuple(qualify(dep) for dep in plugin.dependencies.requires),
             "recommends": tuple(qualify(dep) for dep in plugin.dependencies.recommends),
+            "integrates_with": tuple(
+                qualify(dep) for dep in plugin.dependencies.integrates_with
+            ),
         }
     )
     return plugin.model_copy(update={"id": qualify(plugin.id), "dependencies": dependencies})
@@ -177,6 +180,16 @@ def _subscribe_worldgen_hook(actor: WorldActor, hook) -> None:
     """Register a generation hook contributed by plugin content."""
 
     instance = _instantiate(hook)
+    legacy_handlers = tuple(
+        getattr(instance, name, None)
+        for name in ("_on_room", "_on_object", "_on_character", "_on_entity", "_on_site")
+    )
+    if any(callable(handler) for handler in legacy_handlers):
+        # Transitional adapter: generation entry points invoke these before publishing the
+        # finalized event, rather than using the event as a mutation trigger.
+        instance.actor = actor
+        actor._worldgen_hooks.append(instance)
+        return
     subscribe = getattr(instance, "subscribe", None)
     if subscribe is not None:
         params = list(inspect.signature(subscribe).parameters)
@@ -186,7 +199,7 @@ def _subscribe_worldgen_hook(actor: WorldActor, hook) -> None:
             subscribe(actor.bus)
         return
     if callable(instance):
-        actor.bus.subscribe(GeneratedEntityEvent, instance)
+        actor._worldgen_hooks.append(instance)
         return
     raise PluginError(f"worldgen hook {hook!r} is not callable and has no subscribe()")
 
@@ -198,27 +211,36 @@ def apply_plugin(
 ) -> None:
     """Wire a single plugin's contributions into the actor."""
     context = context or PluginRuntimeContext()
-    for system in plugin.ecs.systems:
-        actor.world.register_system(_instantiate(system))
-    for observer in plugin.ecs.observers:
-        actor.world.observe(_instantiate(observer))
-    for definition in plugin.commands.action_definitions:
-        actor.register_action_definition(_instantiate(definition))
-    for handler in plugin.commands.action_handlers:
-        instance = _instantiate(handler)
-        actor.register_handler(instance)
-        if not any(
-            definition.command_type == instance.command_type
-            for definition in actor.action_definitions()
+    registration = actor.bus.begin_registration(plugin.id, plugin.placement.value)
+    try:
+        for system in plugin.ecs.systems:
+            actor.world.register_system(_instantiate(system))
+        for observer in plugin.ecs.observers:
+            actor.world.observe(_instantiate(observer))
+        for definition in plugin.commands.action_definitions:
+            actor.register_action_definition(_instantiate(definition))
+        for handler in plugin.commands.action_handlers:
+            instance = _instantiate(handler)
+            actor.register_handler(instance)
+            if not any(
+                definition.command_type == instance.command_type
+                for definition in actor.action_definitions()
+            ):
+                actor.register_action_definition(
+                    action_definition_for_command_type(instance.command_type)
+                    or inferred_action_definition(instance.command_type)
+                )
+        for hook in plugin.content.worldgen_hooks:
+            _subscribe_worldgen_hook(actor, hook)
+        for factory in (
+            plugin.runtime.controller_factories
+            + plugin.runtime.generator_factories
+            + plugin.runtime.service_factories
+            + plugin.runtime.projection_factories
         ):
-            actor.register_action_definition(
-                action_definition_for_command_type(instance.command_type)
-                or inferred_action_definition(instance.command_type)
-            )
-    for hook in plugin.content.worldgen_hooks:
-        _subscribe_worldgen_hook(actor, hook)
-    for factory in plugin.runtime.all_factories():
-        _call_runtime_factory(factory, actor, context)
+            _call_runtime_factory(factory, actor, context)
+    finally:
+        actor.bus.end_registration(registration)
 
 
 def apply_plugins(
@@ -228,9 +250,21 @@ def apply_plugins(
 ) -> list[Plugin]:
     """Resolve order and apply each plugin. Returns the applied order."""
     ordered = resolve_order(plugins)
+    registry = PluginRegistry(ordered)
+    actor.plugins = registry
     context = context or PluginRuntimeContext()
+    context.plugins = registry
     for plugin in ordered:
         apply_plugin(plugin, actor, context)
+    # Optional integrations are deliberately installed only after every enabled plugin's
+    # ordinary contracts and mechanics are registered.
+    for plugin in ordered:
+        for factory in plugin.runtime.integration_factories:
+            registration = actor.bus.begin_registration(plugin.id, plugin.placement.value)
+            try:
+                _call_runtime_factory(factory, actor, context)
+            finally:
+                actor.bus.end_registration(registration)
     return ordered
 
 

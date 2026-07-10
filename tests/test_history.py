@@ -312,8 +312,17 @@ async def test_history_reactor_ignores_duplicate_source_event():
         cause="a rockfall",
     )
 
+    record_world_history(
+        world,
+        source_event_id="fixed-death-event",
+        event_type="seeded",
+        summary="A prior projection already recorded this event.",
+        tags=("seeded",),
+        created_at_epoch=9,
+    )
     await scenario.actor.bus.publish(CharacterDiedEvent(**payload))
-    # Re-emitting the same source event id must not create a second record (577).
+    # The reactor sees the durable source-id duplicate; the bus also rejects replaying the
+    # same reaction for the same event id.
     await scenario.actor.bus.publish(CharacterDiedEvent(**payload))
 
     records = world_history_records(world)

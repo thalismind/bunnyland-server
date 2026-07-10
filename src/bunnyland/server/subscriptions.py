@@ -29,10 +29,11 @@ class EventStream:
     def __init__(self, actor: WorldActor, *, recent_limit: int = 200) -> None:
         self._recent: deque[dict[str, Any]] = deque(maxlen=recent_limit)
         self._subscribers: set[EventSubscription] = set()
+        self._registry = actor.plugins
         actor.bus.subscribe(DomainEvent, self.record)
 
     def record(self, event: DomainEvent) -> None:
-        message = event_message(event)
+        message = event_message(event, self._registry)
         self._recent.append(message)
         self.broadcast(message)
 

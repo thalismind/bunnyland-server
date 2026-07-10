@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 
@@ -25,20 +26,6 @@ from ..core.edges import ContainmentMode, Contains
 from ..core.events import DomainEvent, EventVisibility, event_base
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected
 from ..prompts import ComponentPromptContext
-from .barbariansim import BarbarianSimPolicyComponent
-from .colonysim import ColonySimComponent, PrisonerComponent
-from .daggersim import GeneratedQuestComponent, PacifiedComponent
-from .dinosim import (
-    ApexPredatorComponent,
-    CompanionComponent,
-    DinosimPolicyComponent,
-    EnclosureComponent,
-    GateComponent,
-    KaijuComponent,
-    SettlementDamageComponent,
-    TamingComponent,
-)
-from .dragonsim import QuestComponent
 
 SECONDS_PER_DAY = 24 * 60 * 60
 
@@ -85,6 +72,17 @@ class IncidentComponent(Component):
 @dataclass(frozen=True)
 class IncidentSpawned(Edge):
     kind: str = "spawn"
+
+
+@dataclass(frozen=True)
+class IncidentDefinition:
+    """Plugin-contributed incident selection and generation contract."""
+
+    id: str
+    cost: float
+    priority: int = 0
+    eligible: Callable[[World], bool] = lambda world: True
+    generation: Callable[[float], GenerationIntentComponent] | None = None
 
 
 class IncidentProposedEvent(DomainEvent):
@@ -143,28 +141,37 @@ def _target_room(world: World):
     return rooms[0] if rooms else None
 
 
+def _component_type(world: World, name: str):
+    return world._component_types.get(name)
+
+
+def _component(world: World, entity: Entity, name: str):
+    component_type = _component_type(world, name)
+    if component_type is None or not entity.has_component(component_type):
+        return None
+    return entity.get_component(component_type)
+
+
+def _enabled_component(world: World, name: str, attribute: str) -> bool:
+    component_type = _component_type(world, name)
+    if component_type is None:
+        return False
+    return any(
+        bool(getattr(entity.get_component(component_type), attribute, False))
+        for entity in world.query().with_all([component_type]).execute_entities()
+    )
+
+
 def _kaiju_storyteller_enabled(world: World) -> bool:
-    colony_enabled = any(
-        marker.get_component(ColonySimComponent).enabled
-        for marker in world.query().with_all([ColonySimComponent]).execute_entities()
+    return _enabled_component(world, "ColonySimComponent", "enabled") and _enabled_component(
+        world, "DinosimPolicyComponent", "kaiju_storyteller_incidents"
     )
-    dino_enabled = any(
-        policy.get_component(DinosimPolicyComponent).kaiju_storyteller_incidents
-        for policy in world.query().with_all([DinosimPolicyComponent]).execute_entities()
-    )
-    return colony_enabled and dino_enabled
 
 
 def _barbarian_storyteller_enabled(world: World) -> bool:
-    colony_enabled = any(
-        marker.get_component(ColonySimComponent).enabled
-        for marker in world.query().with_all([ColonySimComponent]).execute_entities()
+    return _enabled_component(world, "ColonySimComponent", "enabled") and _enabled_component(
+        world, "BarbarianSimPolicyComponent", "raid_storyteller_incidents"
     )
-    barbarian_enabled = any(
-        policy.get_component(BarbarianSimPolicyComponent).raid_storyteller_incidents
-        for policy in world.query().with_all([BarbarianSimPolicyComponent]).execute_entities()
-    )
-    return colony_enabled and barbarian_enabled
 
 
 def _choose_incident(world: World, points: float) -> tuple[str, float]:
@@ -177,6 +184,62 @@ def _choose_incident(world: World, points: float) -> tuple[str, float]:
     if points >= 5:
         return "trader_arrival", 5.0
     return "resource_drop", min(points, 2.0)
+
+
+def default_incident_definitions() -> tuple[IncidentDefinition, ...]:
+    return (
+        IncidentDefinition(
+            id="resource_drop",
+            cost=2.0,
+            generation=partial(_incident_generation, "resource_drop"),
+        ),
+        IncidentDefinition(
+            id="trader_arrival",
+            cost=5.0,
+            priority=10,
+            generation=partial(_incident_generation, "trader_arrival"),
+        ),
+        IncidentDefinition(
+            id="hostile_encounter",
+            cost=10.0,
+            priority=20,
+            generation=partial(_incident_generation, "hostile_encounter"),
+        ),
+        IncidentDefinition(
+            id="barbarian_raid",
+            cost=12.0,
+            priority=30,
+            eligible=_barbarian_storyteller_enabled,
+            generation=partial(_incident_generation, "barbarian_raid"),
+        ),
+        IncidentDefinition(
+            id="kaiju_attack",
+            cost=15.0,
+            priority=40,
+            eligible=_kaiju_storyteller_enabled,
+            generation=partial(_incident_generation, "kaiju_attack"),
+        ),
+    )
+
+
+def _choose_incident_definition(
+    world: World,
+    points: float,
+    definitions: tuple[IncidentDefinition, ...],
+) -> tuple[IncidentDefinition, float]:
+    eligible = [
+        definition
+        for definition in definitions
+        if definition.cost <= points and definition.eligible(world)
+    ]
+    if eligible:
+        definition = max(eligible, key=lambda item: (item.priority, item.cost, item.id))
+        return definition, definition.cost
+    fallback = next(
+        (definition for definition in definitions if definition.id == "resource_drop"),
+        IncidentDefinition(id="resource_drop", cost=2.0),
+    )
+    return fallback, min(points, fallback.cost)
 
 
 def _incident_generation(kind: str, spent: float) -> GenerationIntentComponent:
@@ -228,8 +291,15 @@ def _incident_generation(kind: str, spent: float) -> GenerationIntentComponent:
     )
 
 
-def _spawn_incident(world: World, epoch: int, room, kind: str, spent: float):
-    generation = _incident_generation(kind, spent)
+def _spawn_incident(
+    world: World,
+    epoch: int,
+    room,
+    kind: str,
+    spent: float,
+    generation: GenerationIntentComponent | None = None,
+):
+    generation = generation or _incident_generation(kind, spent)
     incident = spawn_entity(
         world,
         [
@@ -313,48 +383,43 @@ def _loot_claimed(world: World, incident: IncidentComponent, entity: Entity) -> 
 def _monster_neutralized(world: World, entity: Entity) -> bool:
     if entity.has_component(DeadComponent) or entity.has_component(SuspendedComponent):
         return True
-    if entity.has_component(PacifiedComponent) or entity.has_component(PrisonerComponent):
+    if _component(world, entity, "PacifiedComponent") is not None or _component(
+        world, entity, "PrisonerComponent"
+    ) is not None:
         return True
-    if entity.has_component(CompanionComponent):
+    if _component(world, entity, "CompanionComponent") is not None:
         return True
-    if entity.has_component(TamingComponent) and entity.get_component(TamingComponent).tamed:
+    taming = _component(world, entity, "TamingComponent")
+    if taming is not None and taming.tamed:
         return True
     container_id = container_of(entity)
     if container_id is not None and world.has_entity(container_id):
         container = world.get_entity(container_id)
-        if container.has_component(EnclosureComponent):
-            gate = (
-                container.get_component(GateComponent)
-                if container.has_component(GateComponent)
-                else GateComponent(locked=True)
-            )
-            if gate.locked:
+        if _component(world, container, "EnclosureComponent") is not None:
+            gate = _component(world, container, "GateComponent")
+            if gate is None or gate.locked:
                 return True
-    if (
-        entity.has_component(KaijuComponent)
-        and entity.get_component(KaijuComponent).threat_level <= 0
-    ):
+    kaiju = _component(world, entity, "KaijuComponent")
+    if kaiju is not None and kaiju.threat_level <= 0:
         return True
-    if (
-        entity.has_component(ApexPredatorComponent)
-        and entity.get_component(ApexPredatorComponent).threat_level <= 0
-    ):
+    predator = _component(world, entity, "ApexPredatorComponent")
+    if predator is not None and predator.threat_level <= 0:
         return True
     return False
 
 
-def _quest_done(entity: Entity) -> bool:
-    if entity.has_component(QuestComponent):
-        return entity.get_component(QuestComponent).status == "completed"
-    if entity.has_component(GeneratedQuestComponent):
-        return entity.get_component(GeneratedQuestComponent).status == "completed"
+def _quest_done(world: World, entity: Entity) -> bool:
+    for name in ("QuestComponent", "GeneratedQuestComponent"):
+        quest = _component(world, entity, name)
+        if quest is not None:
+            return quest.status == "completed"
     return False
 
 
-def _damage_repaired(entity: Entity) -> bool:
-    if not entity.has_component(SettlementDamageComponent):
+def _damage_repaired(world: World, entity: Entity) -> bool:
+    damage = _component(world, entity, "SettlementDamageComponent")
+    if damage is None:
         return True
-    damage = entity.get_component(SettlementDamageComponent)
     return damage.repaired or damage.severity <= 0
 
 
@@ -369,9 +434,9 @@ def _spawned_requirement_done(
     if kind == "monster":
         return _monster_neutralized(world, target)
     if kind == "quest":
-        return _quest_done(target)
+        return _quest_done(world, target)
     if kind == "damage":
-        return _damage_repaired(target)
+        return _damage_repaired(world, target)
     return True
 
 
@@ -406,6 +471,9 @@ def _resolve_incident(
 class StorytellerConsequence:
     """Accrue incident budget and start a deterministic incident when due."""
 
+    def __init__(self, incidents: tuple[IncidentDefinition, ...] = ()) -> None:
+        self.incidents = incidents
+
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
         events: list[DomainEvent] = []
         query = world.query().with_all([StorytellerComponent, IncidentBudgetComponent])
@@ -426,9 +494,21 @@ class StorytellerConsequence:
                 if entity.has_component(ThreatPointsComponent)
                 else 0.0
             )
-            kind, spent = _choose_incident(world, points + threat)
+            if self.incidents:
+                definition, spent = _choose_incident_definition(
+                    world, points + threat, self.incidents
+                )
+                kind = definition.id
+                generation = (
+                    definition.generation(spent)
+                    if definition.generation is not None
+                    else _incident_generation(kind, spent)
+                )
+            else:
+                kind, spent = _choose_incident(world, points + threat)
+                generation = _incident_generation(kind, spent)
             room = _target_room(world)
-            incident = _spawn_incident(world, epoch, room, kind, spent)
+            incident = _spawn_incident(world, epoch, room, kind, spent, generation)
             history = (
                 entity.get_component(IncidentHistoryComponent)
                 if entity.has_component(IncidentHistoryComponent)
@@ -562,8 +642,13 @@ def storyteller_fragments(world: World, character) -> list[str]:
     return sorted(lines)
 
 
-def install_storyteller(actor) -> None:
-    actor.register_consequence(StorytellerConsequence())
+def install_storyteller(actor, context=None) -> None:
+    incidents = (
+        tuple(context.plugins.incidents.values())
+        if context is not None and context.plugins is not None
+        else ()
+    )
+    actor.register_consequence(StorytellerConsequence(incidents))
     actor.register_consequence(IncidentAutoResolutionConsequence())
     StorytellerIncidentEnrichment(actor.world).subscribe(actor.bus)
 
@@ -574,6 +659,7 @@ __all__ = [
     "IncidentAutoResolutionConsequence",
     "IncidentGeneratedEvent",
     "IncidentHistoryComponent",
+    "IncidentDefinition",
     "IncidentProposedEvent",
     "IncidentResolvedEvent",
     "IncidentSpawned",
@@ -582,6 +668,7 @@ __all__ = [
     "StorytellerIncidentEnrichment",
     "StorytellerComponent",
     "StorytellerConsequence",
+    "default_incident_definitions",
     "ThreatPointsComponent",
     "install_storyteller",
     "storyteller_fragments",

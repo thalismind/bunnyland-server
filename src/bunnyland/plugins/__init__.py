@@ -21,10 +21,12 @@ from .model import (
     DependencyContribution,
     EcsContribution,
     Plugin,
+    PluginPlacement,
     PluginRuntimeContext,
     PolicyContribution,
     RuntimeContribution,
 )
+from .registry import PluginRegistry
 
 __all__ = [
     "CommandContribution",
@@ -34,6 +36,8 @@ __all__ = [
     "EcsContribution",
     "Plugin",
     "PluginError",
+    "PluginPlacement",
+    "PluginRegistry",
     "PluginRuntimeContext",
     "PolicyContribution",
     "RuntimeContribution",

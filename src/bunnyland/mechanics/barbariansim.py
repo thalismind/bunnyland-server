@@ -23,6 +23,7 @@ from ..core.components import (
     HealthComponent,
     IdentityComponent,
     InjuryComponent,
+    KeyComponent,
     PortableComponent,
     RoomComponent,
     SuspendedComponent,
@@ -395,15 +396,6 @@ class BossComponent(Component):
         del ctx
         state = "defeated" if self.defeated else "undefeated"
         return (f"Boss nearby: {self.name} ({state}).",)
-
-
-@dataclass(frozen=True)
-class KeyComponent(Component):
-    key_name: str
-
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
-        return (f"Key nearby: {self.key_name}.",)
 
 
 @dataclass(frozen=True)

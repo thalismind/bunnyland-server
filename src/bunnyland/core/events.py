@@ -10,8 +10,9 @@ observer system. The world actor is the single emitter, so ordering is determini
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, TypeVar
@@ -591,6 +592,14 @@ class WorldGenerationFailedEvent(DomainEvent):
     error: str
 
 
+class ReactionCascadeLimitedEvent(DomainEvent):
+    """Diagnostic emitted when a causal chain exceeds the configured hop limit."""
+
+    source_event_id: str
+    hops: int
+    reason: str = "causal hop limit exceeded"
+
+
 # --------------------------------------------------------------------------------------
 # Event bus
 # --------------------------------------------------------------------------------------
@@ -599,18 +608,94 @@ E = TypeVar("E", bound=DomainEvent)
 Handler = Callable[[DomainEvent], None | Awaitable[None]]
 
 
+_PLACEMENT_ORDER = {"core": 0, "foundation": 1, "inner": 2, "outer": 3, "addon": 4}
+
+
+@dataclass(frozen=True)
+class _Subscription:
+    event_type: type[DomainEvent]
+    handler: Handler
+    reaction_id: str
+    plugin_id: str
+    placement: str
+    external: bool
+    sequence: int
+
+    @property
+    def order(self) -> tuple[int, str, str, int]:
+        return (
+            _PLACEMENT_ORDER.get(self.placement, _PLACEMENT_ORDER["outer"]),
+            self.plugin_id,
+            self.reaction_id,
+            self.sequence,
+        )
+
+
 class EventBus:
-    """Synchronous-ordered dispatch with support for async handlers.
+    """Breadth-first deterministic dispatch with support for async handlers.
 
     Subscriptions are keyed by event class. Subscribing to a base class (e.g.
     ``DomainEvent``) receives every subclass, enabling audit/logging sinks.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_deliveries: int = 256, max_causal_hops: int = 16) -> None:
         self._handlers: dict[type[DomainEvent], list[Handler]] = defaultdict(list)
+        self._subscriptions: list[_Subscription] = []
+        self._events: deque[tuple[DomainEvent, int]] = deque()
+        self._deliveries: deque[tuple[_Subscription, DomainEvent, int]] = deque()
+        self._external: deque[tuple[_Subscription, DomainEvent]] = deque()
+        self._delivered: set[tuple[str, str, str]] = set()
+        self._dispatching = False
+        self._flushing_external = False
+        self._transaction_depth = 0
+        self._sequence = 0
+        self._registration_plugin_id = "bunnyland.core"
+        self._registration_placement = "core"
+        self._current_event: DomainEvent | None = None
+        self._current_depth = 0
+        self._remaining_deliveries = max_deliveries
+        self.max_deliveries = max_deliveries
+        self.max_causal_hops = max_causal_hops
+        self.diagnostics: list[ReactionCascadeLimitedEvent] = []
 
-    def subscribe(self, event_type: type[E], handler: Handler) -> None:
+    def subscribe(
+        self,
+        event_type: type[E],
+        handler: Handler,
+        *,
+        reaction_id: str | None = None,
+        plugin_id: str | None = None,
+        placement: str | None = None,
+        external: bool = False,
+    ) -> None:
+        reaction_id = reaction_id or (
+            f"{getattr(handler, '__module__', type(handler).__module__)}:"
+            f"{getattr(handler, '__qualname__', type(handler).__qualname__)}:{self._sequence}"
+        )
         self._handlers[event_type].append(handler)
+        self._subscriptions.append(
+            _Subscription(
+                event_type=event_type,
+                handler=handler,
+                reaction_id=reaction_id,
+                plugin_id=plugin_id or self._registration_plugin_id,
+                placement=placement or self._registration_placement,
+                external=external,
+                sequence=self._sequence,
+            )
+        )
+        self._sequence += 1
+
+    def begin_registration(self, plugin_id: str, placement: str) -> tuple[str, str]:
+        """Set defaults for subscriptions installed by one plugin factory."""
+
+        previous = (self._registration_plugin_id, self._registration_placement)
+        self._registration_plugin_id = plugin_id
+        self._registration_placement = placement
+        return previous
+
+    def end_registration(self, previous: tuple[str, str]) -> None:
+        self._registration_plugin_id, self._registration_placement = previous
 
     def unsubscribe(self, event_type: type[E], handler: Handler) -> None:
         handlers = self._handlers.get(event_type)
@@ -620,14 +705,131 @@ class EventBus:
             handlers.remove(handler)
         except ValueError:
             return
+        self._subscriptions = [
+            subscription
+            for subscription in self._subscriptions
+            if not (
+                subscription.event_type is event_type and subscription.handler == handler
+            )
+        ]
+
+    def begin_transaction(self) -> None:
+        """Defer external sinks until the actor-owned transaction has committed."""
+
+        self._transaction_depth += 1
+        if self._transaction_depth == 1:
+            self._remaining_deliveries = self.max_deliveries
+
+    async def end_transaction(self) -> None:
+        if self._transaction_depth == 0:
+            return
+        self._transaction_depth -= 1
+        if self._transaction_depth == 0:
+            await self.flush_external()
+
+    def _derived_event(self, event: DomainEvent) -> tuple[DomainEvent, int] | None:
+        source = self._current_event
+        if source is None:
+            return event, 0
+        depth = self._current_depth + 1
+        if depth > self.max_causal_hops:
+            diagnostic = ReactionCascadeLimitedEvent(
+                **event_base(
+                    source.world_epoch,
+                    correlation_id=source.correlation_id or source.event_id,
+                    causation_id=source.event_id,
+                    source_event_id=source.event_id,
+                    hops=depth,
+                )
+            )
+            self.diagnostics.append(diagnostic)
+            self._events.append((diagnostic, 0))
+            return None
+        updates: dict[str, str] = {}
+        if event.causation_id is None:
+            updates["causation_id"] = source.event_id
+        if event.correlation_id is None:
+            updates["correlation_id"] = source.correlation_id or source.event_id
+        return (event.model_copy(update=updates) if updates else event), depth
+
+    def _schedule_deliveries(self, event: DomainEvent, depth: int) -> None:
+        matching = sorted(
+            (
+                subscription
+                for subscription in self._subscriptions
+                if isinstance(event, subscription.event_type)
+            ),
+            key=lambda subscription: subscription.order,
+        )
+        for subscription in matching:
+            if subscription.external:
+                self._external.append((subscription, event))
+            else:
+                self._deliveries.append((subscription, event, depth))
+
+    async def drain(self) -> None:
+        if self._dispatching:
+            return
+        self._dispatching = True
+        try:
+            while self._remaining_deliveries > 0 and (self._deliveries or self._events):
+                if not self._deliveries:
+                    event, depth = self._events.popleft()
+                    self._schedule_deliveries(event, depth)
+                    if not self._deliveries:
+                        continue
+                subscription, event, depth = self._deliveries.popleft()
+                delivery_key = (
+                    event.event_id,
+                    subscription.plugin_id,
+                    subscription.reaction_id,
+                )
+                if delivery_key in self._delivered:
+                    continue
+                self._delivered.add(delivery_key)
+                self._remaining_deliveries -= 1
+                self._current_event = event
+                self._current_depth = depth
+                result = subscription.handler(event)
+                if isinstance(result, Awaitable):
+                    await result
+        finally:
+            self._current_event = None
+            self._current_depth = 0
+            self._dispatching = False
+
+    async def flush_external(self) -> None:
+        if self._transaction_depth or self._flushing_external:
+            return
+        self._flushing_external = True
+        try:
+            while self._external:
+                subscription, event = self._external.popleft()
+                delivery_key = (
+                    event.event_id,
+                    subscription.plugin_id,
+                    subscription.reaction_id,
+                )
+                if delivery_key in self._delivered:
+                    continue
+                self._delivered.add(delivery_key)
+                result = subscription.handler(event)
+                if isinstance(result, Awaitable):
+                    await result
+        finally:
+            self._flushing_external = False
 
     async def publish(self, event: DomainEvent) -> None:
-        for event_type, handlers in self._handlers.items():
-            if isinstance(event, event_type):
-                for handler in handlers:
-                    result = handler(event)
-                    if isinstance(result, Awaitable):
-                        await result
+        scheduled = self._derived_event(event)
+        if scheduled is not None:
+            self._events.append(scheduled)
+        if self._dispatching:
+            return
+        if self._transaction_depth == 0:
+            self._remaining_deliveries = self.max_deliveries
+        await self.drain()
+        if self._transaction_depth == 0:
+            await self.flush_external()
 
 
 __all__ = [
@@ -705,6 +907,7 @@ __all__ = [
     "PhysicalWriteEvent",
     "ReflectionCreatedEvent",
     "RoomGeneratedEvent",
+    "ReactionCascadeLimitedEvent",
     "RoomLookedEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",

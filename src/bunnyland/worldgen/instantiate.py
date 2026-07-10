@@ -7,7 +7,8 @@ references, then creates entities, components, edges, and controllers. Emits
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import inspect
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -37,13 +38,20 @@ from ..core.controllers import (
     LLMControllerComponent,
     ScriptedControllerComponent,
 )
-from ..core.ecs import replace_component, spawn_entity
+from ..core.ecs import parse_entity_id, spawn_entity
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import (
     CharacterGeneratedEvent,
+    GeneratedEntityEvent,
     ObjectGeneratedEvent,
     RoomGeneratedEvent,
     WorldGeneratedEvent,
+)
+from ..core.generation import (
+    GenerationError,
+    GenerationPipeline,
+    GenerationPlan,
+    GenerationRequest,
 )
 from ..llm_agents.behavior_tree import behavior_tree_names
 from ..llm_agents.scripts import script_names
@@ -184,6 +192,69 @@ def _generation_intent(
     )
 
 
+async def _cooperative_components(
+    actor: WorldActor,
+    generation: GenerationIntentComponent,
+    components: list,
+) -> tuple[list, GenerationIntentComponent, GenerationPlan]:
+    request = GenerationRequest(
+        entity_kind=generation.entity_kind,
+        description=generation.description,
+        capabilities=(*generation.wants, *generation.needs),
+        tags=generation.tags,
+        source_seed=generation.source_seed,
+        source_key=generation.source_key,
+    )
+    plan = await GenerationPipeline(actor.plugins).compile(
+        request,
+        base_components=tuple(components),
+    )
+    finalized = replace(
+        generation,
+        wants=plan.request.capabilities,
+        unmet_capabilities=plan.unmet_capabilities,
+    )
+    return [*plan.components, finalized], finalized, plan
+
+
+async def _finalize_legacy_hooks(actor: WorldActor, event: GeneratedEntityEvent) -> None:
+    method_name = {
+        RoomGeneratedEvent: "_on_room",
+        ObjectGeneratedEvent: "_on_object",
+        CharacterGeneratedEvent: "_on_character",
+    }.get(type(event))
+    for hook in actor._worldgen_hooks:
+        handler = getattr(hook, method_name, None) if method_name is not None else None
+        handler = handler or getattr(hook, "_on_entity", None)
+        if handler is None and isinstance(event, (RoomGeneratedEvent, ObjectGeneratedEvent)):
+            handler = getattr(hook, "_on_site", None)
+        if handler is None and callable(hook):
+            handler = hook
+        if handler is not None:
+            result = handler(event)
+            if inspect.isawaitable(result):
+                await result
+
+
+def _validate_plan_edges(actor: WorldActor, plan: GenerationPlan) -> None:
+    for edge_delta in plan.edges:
+        target_id = edge_delta.target_id
+        if isinstance(target_id, str):
+            target_id = parse_entity_id(target_id)
+        if target_id is None or not actor.world.has_entity(target_id):
+            raise GenerationError(
+                f"generation edge references missing entity {edge_delta.target_id!r}"
+            )
+
+
+def _apply_plan_edges(actor: WorldActor, entity, plan: GenerationPlan) -> None:
+    for edge_delta in plan.edges:
+        target_id = edge_delta.target_id
+        if isinstance(target_id, str):
+            target_id = parse_entity_id(target_id)
+        entity.add_relationship(edge_delta.edge, target_id)
+
+
 async def instantiate(actor: WorldActor, proposal: WorldProposal) -> InstantiatedWorld:
     """Validate then build the proposed world. Raises ValueError on validation failure."""
     errors = validate_proposal(proposal)
@@ -192,40 +263,79 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
 
     world = actor.world
     result = InstantiatedWorld()
+    room_plans: dict[str, tuple[list, GenerationIntentComponent, GenerationPlan]] = {}
+    object_plans: dict[str, tuple[list, GenerationIntentComponent, GenerationPlan]] = {}
+    character_plans: dict[str, tuple[list, GenerationIntentComponent, GenerationPlan]] = {}
+
+    # Compile every declarative enrichment before mutating the ECS. A conflict or plugin
+    # failure therefore aborts the proposal without leaving a partially generated world.
+    for room in proposal.rooms:
+        components = [RoomComponent(title=room.title, biome=room.biome, indoor=room.indoor)]
+        if room.light is not None:
+            components.append(LightComponent(level=room.light))
+        if room.celsius is not None:
+            components.append(TemperatureComponent(celsius=room.celsius))
+        generation = _generation_intent(
+            room.generation,
+            description=room.title,
+            tags=(room.biome, "indoor" if room.indoor else "outdoor"),
+            source_seed=proposal.seed,
+            source_key=room.key,
+            entity_kind="room",
+        )
+        room_plans[room.key] = await _cooperative_components(actor, generation, components)
+    for obj in proposal.objects:
+        generation = _generation_intent(
+            obj.generation,
+            description=obj.name,
+            tags=(obj.kind,),
+            source_seed=proposal.seed,
+            source_key=obj.key,
+            entity_kind=obj.kind,
+        )
+        object_plans[obj.key] = await _cooperative_components(
+            actor, generation, _object_components(obj)
+        )
+    for character in proposal.characters:
+        generation = _generation_intent(
+            character.generation,
+            description=f"{character.name}, a {character.species}",
+            tags=(character.species, *character.traits),
+            source_seed=proposal.seed,
+            source_key=character.key,
+            entity_kind="character",
+        )
+        character_plans[character.key] = await _cooperative_components(
+            actor, generation, _character_components(character)
+        )
+    for _components, _generation, plan in (
+        *room_plans.values(),
+        *object_plans.values(),
+        *character_plans.values(),
+    ):
+        _validate_plan_edges(actor, plan)
 
     async with actor._lock:
         for room in proposal.rooms:
-            components = [RoomComponent(title=room.title, biome=room.biome, indoor=room.indoor)]
-            if room.light is not None:
-                components.append(LightComponent(level=room.light))
-            if room.celsius is not None:
-                components.append(TemperatureComponent(celsius=room.celsius))
+            components, generation, plan = room_plans[room.key]
             entity = spawn_entity(world, components)
-            generation = _generation_intent(
-                room.generation,
-                description=room.title,
-                tags=(room.biome, "indoor" if room.indoor else "outdoor"),
-                source_seed=proposal.seed,
-                source_key=room.key,
-                entity_kind="room",
-            )
-            replace_component(entity, generation)
+            _apply_plan_edges(actor, entity, plan)
             result.rooms[room.key] = entity.id
-            await actor.bus.publish(
-                RoomGeneratedEvent(
-                    **actor._event_base(
-                        seed=proposal.seed,
-                        entity_id=str(entity.id),
-                        entity_key=room.key,
-                        entity_kind="room",
-                        room_id=str(entity.id),
-                        room_key=room.key,
-                        generation=generation,
-                        biome=room.biome,
-                        indoor=room.indoor,
-                    )
+            event = RoomGeneratedEvent(
+                **actor._event_base(
+                    seed=proposal.seed,
+                    entity_id=str(entity.id),
+                    entity_key=room.key,
+                    entity_kind="room",
+                    room_id=str(entity.id),
+                    room_key=room.key,
+                    generation=generation,
+                    biome=room.biome,
+                    indoor=room.indoor,
                 )
             )
+            await _finalize_legacy_hooks(actor, event)
+            await actor.bus.publish(event)
 
         for exit_ in proposal.exits:
             world.get_entity(result.rooms[exit_.from_key]).add_relationship(
@@ -234,66 +344,52 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
             )
 
         for obj in proposal.objects:
-            entity = spawn_entity(world, _object_components(obj))
-            generation = _generation_intent(
-                obj.generation,
-                description=obj.name,
-                tags=(obj.kind,),
-                source_seed=proposal.seed,
-                source_key=obj.key,
-                entity_kind=obj.kind,
-            )
-            replace_component(entity, generation)
+            components, generation, plan = object_plans[obj.key]
+            entity = spawn_entity(world, components)
+            _apply_plan_edges(actor, entity, plan)
             world.get_entity(result.rooms[obj.room_key]).add_relationship(
                 Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
             )
             result.objects[obj.key] = entity.id
-            await actor.bus.publish(
-                ObjectGeneratedEvent(
-                    **actor._event_base(
-                        seed=proposal.seed,
-                        entity_id=str(entity.id),
-                        entity_key=obj.key,
-                        entity_kind=obj.kind,
-                        object_key=obj.key,
-                        room_id=str(result.rooms[obj.room_key]),
-                        container_id=str(result.rooms[obj.room_key]),
-                        containment_mode=ContainmentMode.ROOM_CONTENT.value,
-                        generation=generation,
-                    )
+            event = ObjectGeneratedEvent(
+                **actor._event_base(
+                    seed=proposal.seed,
+                    entity_id=str(entity.id),
+                    entity_key=obj.key,
+                    entity_kind=obj.kind,
+                    object_key=obj.key,
+                    room_id=str(result.rooms[obj.room_key]),
+                    container_id=str(result.rooms[obj.room_key]),
+                    containment_mode=ContainmentMode.ROOM_CONTENT.value,
+                    generation=generation,
                 )
             )
+            await _finalize_legacy_hooks(actor, event)
+            await actor.bus.publish(event)
 
         for character in proposal.characters:
-            entity = spawn_entity(world, _character_components(character))
-            generation = _generation_intent(
-                character.generation,
-                description=f"{character.name}, a {character.species}",
-                tags=(character.species, *character.traits),
-                source_seed=proposal.seed,
-                source_key=character.key,
-                entity_kind="character",
-            )
-            replace_component(entity, generation)
+            components, generation, plan = character_plans[character.key]
+            entity = spawn_entity(world, components)
+            _apply_plan_edges(actor, entity, plan)
             world.get_entity(result.rooms[character.room_key]).add_relationship(
                 Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
             )
             result.characters[character.key] = entity.id
             _wire_controller(actor, entity.id, character)
-            await actor.bus.publish(
-                CharacterGeneratedEvent(
-                    **actor._event_base(
-                        seed=proposal.seed,
-                        entity_id=str(entity.id),
-                        entity_key=character.key,
-                        entity_kind="character",
-                        character_key=character.key,
-                        room_id=str(result.rooms[character.room_key]),
-                        generation=generation,
-                        species=character.species,
-                    )
+            event = CharacterGeneratedEvent(
+                **actor._event_base(
+                    seed=proposal.seed,
+                    entity_id=str(entity.id),
+                    entity_key=character.key,
+                    entity_kind="character",
+                    character_key=character.key,
+                    room_id=str(result.rooms[character.room_key]),
+                    generation=generation,
+                    species=character.species,
                 )
             )
+            await _finalize_legacy_hooks(actor, event)
+            await actor.bus.publish(event)
 
         await actor.bus.publish(
             WorldGeneratedEvent(

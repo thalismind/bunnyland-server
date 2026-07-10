@@ -49,6 +49,7 @@ class GenerationIntentComponent(Component):
     source_seed: str = ""
     source_key: str = ""
     entity_kind: str = ""
+    unmet_capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -414,6 +415,10 @@ class LockableComponent(Component):
 @dataclass(frozen=True)
 class KeyComponent(Component):
     key_name: str
+
+    def prompt_fragments(self, ctx) -> tuple[str, ...]:
+        del ctx
+        return (f"Key nearby: {self.key_name}.",)
 
 
 @dataclass(frozen=True)

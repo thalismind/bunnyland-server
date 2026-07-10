@@ -369,12 +369,6 @@ def _generated_position(
 class ToonWorldgenHook:
     """Attach deterministic toon placement to generated rooms, objects, and characters."""
 
-    def subscribe(self, actor) -> None:
-        self.actor = actor
-        actor.bus.subscribe(RoomGeneratedEvent, self._on_room)
-        actor.bus.subscribe(ObjectGeneratedEvent, self._on_object)
-        actor.bus.subscribe(CharacterGeneratedEvent, self._on_character)
-
     def _ensure_renderable(self, entity: Entity) -> None:
         layer = default_layer_for(entity)
         if layer is not None and not entity.has_component(SpriteLayerComponent):

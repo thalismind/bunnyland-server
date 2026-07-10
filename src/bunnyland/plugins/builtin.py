@@ -123,7 +123,6 @@ from ..mechanics.barbariansim import (
     ItemBrokenEvent,
     ItemDamagedEvent,
     ItemRepairedEvent,
-    KeyComponent,
     PerformRitualHandler,
     PickpocketHandler,
     PlaceTrapHandler,
@@ -454,12 +453,6 @@ from ..mechanics.daggersim import (
     WithdrawHandler,
     daggersim_fragments,
     install_daggersim,
-)
-from ..mechanics.daggersim import (
-    QuestAcceptedEvent as DaggerQuestAcceptedEvent,
-)
-from ..mechanics.daggersim import (
-    QuestCompletedEvent as DaggerQuestCompletedEvent,
 )
 from ..mechanics.dinosim import (
     AncientSampleComponent,
@@ -1333,21 +1326,6 @@ from ..mechanics.social import (
     obligation_fragments,
     relationship_fragments,
 )
-from ..mechanics.storyteller import (
-    IncidentBudgetComponent,
-    IncidentComponent,
-    IncidentGeneratedEvent,
-    IncidentHistoryComponent,
-    IncidentProposedEvent,
-    IncidentResolvedEvent,
-    IncidentSpawned,
-    IncidentStartedEvent,
-    ResolveIncidentHandler,
-    StorytellerComponent,
-    ThreatPointsComponent,
-    install_storyteller,
-    storyteller_fragments,
-)
 from ..mechanics.toonsim import (
     MoveSpriteHandler,
     PlacedOn,
@@ -1578,6 +1556,7 @@ from .model import (
     DependencyContribution,
     EcsContribution,
     Plugin,
+    PluginPlacement,
     RuntimeContribution,
 )
 
@@ -2202,7 +2181,6 @@ def barbariansim_plugin() -> Plugin:
                 CurseComponent,
                 DangerZoneComponent,
                 BossComponent,
-                KeyComponent,
                 TreasureComponent,
                 ClimbingSkillComponent,
                 ClimbingGateComponent,
@@ -2312,7 +2290,6 @@ def gardensim_plugin() -> Plugin:
                 WeedComponent,
                 CropInspectionComponent,
                 GreenhouseComponent,
-                ResourceStackComponent,
                 TreeComponent,
                 TreeTapComponent,
                 MachineComponent,
@@ -2800,7 +2777,7 @@ def daggersim_plugin() -> Plugin:
         id=DAGGERSIM,
         name="Dagger Sim",
         dependencies=DependencyContribution(
-            requires=(CORE_VERBS,),
+            requires=(CORE_VERBS, DRAGONSIM),
             recommends=(WORLDGEN,),
         ),
         ecs=EcsContribution(
@@ -2948,8 +2925,6 @@ def daggersim_plugin() -> Plugin:
                 InstitutionPromotedEvent,
                 InstitutionDuesPaidEvent,
                 QuestGeneratedEvent,
-                DaggerQuestAcceptedEvent,
-                DaggerQuestCompletedEvent,
                 QuestFailedEvent,
                 QuestRefusedEvent,
                 QuestAbandonedEvent,
@@ -3218,11 +3193,9 @@ def nukesim_plugin() -> Plugin:
                 MutationThresholdComponent,
                 MutationResistanceComponent,
                 MutationComponent,
-                RadiationMutationPressureComponent,
                 ScavengeSiteComponent,
                 LootTableComponent,
                 JunkComponent,
-                ResourceStackComponent,
                 OldWorldTechComponent,
                 TechLeadComponent,
                 ChemComponent,
@@ -3496,32 +3469,9 @@ def neonsim_plugin() -> Plugin:
 
 
 def storyteller_plugin() -> Plugin:
-    return Plugin(
-        id=STORYTELLER,
-        name="Storyteller",
-        dependencies=DependencyContribution(requires=(CORE_VERBS,)),
-        ecs=EcsContribution(
-            components=(
-                StorytellerComponent,
-                IncidentBudgetComponent,
-                ThreatPointsComponent,
-                IncidentHistoryComponent,
-                IncidentComponent,
-            ),
-            edges=(IncidentSpawned,),
-        ),
-        commands=CommandContribution(
-            action_handlers=(ResolveIncidentHandler,),
-            typed_events=(
-                IncidentGeneratedEvent,
-                IncidentProposedEvent,
-                IncidentStartedEvent,
-                IncidentResolvedEvent,
-            ),
-        ),
-        runtime=RuntimeContribution(service_factories=(install_storyteller,)),
-        content=ContentContribution(prompt_fragments=(storyteller_fragments,)),
-    )
+    from ..foundation.storyteller.plugin import plugin
+
+    return plugin()
 
 
 def mcp_plugin() -> Plugin:
@@ -3555,7 +3505,7 @@ def imagegen_plugin() -> Plugin:
 
 
 def bunnyland_plugins() -> list[Plugin]:
-    return [
+    plugins = [
         core_verbs_plugin(),
         checkpoints_plugin(),
         lifesim_plugin(),
@@ -3580,6 +3530,28 @@ def bunnyland_plugins() -> list[Plugin]:
         storyteller_plugin(),
         imagegen_plugin(),
         mcp_plugin(),
+    ]
+    placements = {
+        CORE_VERBS: PluginPlacement.CORE,
+        LIFESIM: PluginPlacement.INNER,
+        COLONYSIM: PluginPlacement.INNER,
+        GARDENSIM: PluginPlacement.INNER,
+        CHECKPOINTS: PluginPlacement.FOUNDATION,
+        MEMORY: PluginPlacement.FOUNDATION,
+        WORLDGEN: PluginPlacement.FOUNDATION,
+        ENVIRONMENT: PluginPlacement.FOUNDATION,
+        MECHANISMS: PluginPlacement.FOUNDATION,
+        HISTORY: PluginPlacement.FOUNDATION,
+        SOCIAL: PluginPlacement.FOUNDATION,
+        POLICY: PluginPlacement.FOUNDATION,
+        PERSONA: PluginPlacement.FOUNDATION,
+        STORYTELLER: PluginPlacement.FOUNDATION,
+        IMAGEGEN: PluginPlacement.FOUNDATION,
+        MCP: PluginPlacement.FOUNDATION,
+    }
+    return [
+        plugin.model_copy(update={"placement": placements.get(plugin.id, PluginPlacement.OUTER)})
+        for plugin in plugins
     ]
 
 

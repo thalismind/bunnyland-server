@@ -147,6 +147,15 @@ from .events import (
     WorldPauseStatusChangedEvent,
     event_base,
 )
+from .generation import (
+    GenerationDelta,
+    GenerationEdge,
+    GenerationEnricher,
+    GenerationError,
+    GenerationPipeline,
+    GenerationPlan,
+    GenerationRequest,
+)
 from .handlers import (
     CloseHandler,
     ConversationLineHandler,
@@ -241,7 +250,14 @@ __all__ = [
     "ExitTo",
     "FocusPointsComponent",
     "GeneratedEntityEvent",
+    "GenerationDelta",
+    "GenerationEdge",
+    "GenerationEnricher",
+    "GenerationError",
     "GenerationIntentComponent",
+    "GenerationPipeline",
+    "GenerationPlan",
+    "GenerationRequest",
     "EntityInspectedEvent",
     "EntityLockedEvent",
     "EntityUnlockedEvent",

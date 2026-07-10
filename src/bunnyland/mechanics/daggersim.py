@@ -31,6 +31,7 @@ from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import DomainEvent, EventVisibility, SpeechSaidEvent, SpeechToldEvent
 from ..core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
 from ..prompts import ComponentPromptContext
+from .dragonsim import QuestAcceptedEvent, QuestCompletedEvent
 from .history import DeedReputationComponent
 
 
@@ -871,17 +872,6 @@ class QuestGeneratedEvent(DomainEvent):
     quest_id: str
     title: str
     due_at_epoch: int
-
-
-class QuestAcceptedEvent(DomainEvent):
-    quest_id: str
-    title: str
-
-
-class QuestCompletedEvent(DomainEvent):
-    quest_id: str
-    title: str
-    reward_item_id: str
 
 
 class QuestFailedEvent(DomainEvent):

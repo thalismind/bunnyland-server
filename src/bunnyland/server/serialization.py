@@ -1345,19 +1345,27 @@ def serialize_dm_projection(actor: WorldActor, dm_id: str) -> DmProjectionRespon
     )
 
 
-def serialize_event(event: DomainEvent) -> dict[str, Any]:
+def serialize_event(event: DomainEvent, registry: Any | None = None) -> dict[str, Any]:
     """Return a typed event payload with class name and JSON-safe fields."""
 
+    event_type = event.__class__
+    event_key = registry.event_key(event_type) if registry is not None else None
+    if event_key is None:
+        provider = "bunnyland.core" if event_type.__module__.startswith("bunnyland.core") else (
+            event_type.__module__
+        )
+        event_key = f"{provider}:{event_type.__name__}"
     return {
-        "event_type": event.__class__.__name__,
+        "event_type": event_type.__name__,
+        "event_key": event_key,
         "event": event.model_dump(mode="json"),
     }
 
 
-def event_message(event: DomainEvent) -> dict[str, Any]:
+def event_message(event: DomainEvent, registry: Any | None = None) -> dict[str, Any]:
     """Wrap a serialized event as a websocket message."""
 
-    return {"type": "event", "data": serialize_event(event)}
+    return {"type": "event", "data": serialize_event(event, registry)}
 
 
 __all__ = [

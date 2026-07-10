@@ -37,6 +37,7 @@ from .persistence_yaml import YAMLPersistenceDriver
 from .plugins.contributions import collect_ecs_types
 from .plugins.loader import PluginError, apply_plugins
 from .plugins.model import PluginRuntimeContext
+from .plugins.registry import PluginRegistry
 
 if TYPE_CHECKING:
     from .plugins.model import Plugin
@@ -44,28 +45,13 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = 1
 PersistenceFormat = Literal["json", "yaml"]
 
-# Modules scanned for the component/edge types a saved world may contain. Plugin-provided
-# types are added from each plugin's EcsContribution at save/load time.
-_TYPE_MODULES = (
+# Only always-on core types are discovered locally. Every optional persisted type comes
+# from the resolved plugin registry rather than a second mechanics-module catalogue.
+_CORE_TYPE_MODULES = (
     "bunnyland.core.components",
     "bunnyland.core.edges",
     "bunnyland.core.controllers",
     "bunnyland.discord.components",
-    "bunnyland.mechanics.needs",
-    "bunnyland.mechanics.consumables",
-    "bunnyland.mechanics.affect",
-    "bunnyland.mechanics.environment",
-    "bunnyland.mechanics.history",
-    "bunnyland.mechanics.social",
-    "bunnyland.mechanics.policy",
-    "bunnyland.mechanics.persona",
-    "bunnyland.mechanics.lifesim",
-    "bunnyland.mechanics.storyteller",
-    "bunnyland.mechanics.colonysim",
-    "bunnyland.mechanics.barbariansim",
-    "bunnyland.mechanics.gardensim",
-    "bunnyland.mechanics.dinosim",
-    "bunnyland.mechanics.dragonsim",
 )
 
 
@@ -109,17 +95,39 @@ def type_registries(
     """Build ``(component_registry, edge_registry)`` keyed by class name for ``relics.load``."""
     components: dict[str, type] = {}
     edges: dict[str, type] = {}
-    for module_name in _TYPE_MODULES:
+    for module_name in _CORE_TYPE_MODULES:
         module = importlib.import_module(module_name)
         for _name, obj in inspect.getmembers(module, inspect.isclass):
             if issubclass(obj, Edge) and obj is not Edge:
                 edges[obj.__name__] = obj
             elif issubclass(obj, Component) and obj is not Component:
                 components[obj.__name__] = obj
-    plugin_components, plugin_edges = collect_ecs_types(plugins or ())
+    if plugins is None:
+        def subclasses(base):
+            found = []
+            for subclass in base.__subclasses__():
+                found.append(subclass)
+                found.extend(subclasses(subclass))
+            return found
+
+        plugin_components = tuple(
+            type_ for type_ in subclasses(Component) if type_.__module__.startswith("bunnyland.")
+        )
+        plugin_edges = tuple(
+            type_ for type_ in subclasses(Edge) if type_.__module__.startswith("bunnyland.")
+        )
+    else:
+        registry = PluginRegistry(plugins)
+        plugin_components, plugin_edges = collect_ecs_types(registry.plugins.values())
     for component in plugin_components:
+        previous = components.get(component.__name__)
+        if previous is not None and previous is not component:
+            raise PluginError(f"duplicate persisted component name {component.__name__!r}")
         components[component.__name__] = component
     for edge in plugin_edges:
+        previous = edges.get(edge.__name__)
+        if previous is not None and previous is not edge:
+            raise PluginError(f"duplicate persisted edge name {edge.__name__!r}")
         edges[edge.__name__] = edge
     return components, edges
 

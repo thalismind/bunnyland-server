@@ -12,6 +12,7 @@ Pragmatic conventions for MVP:
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -73,6 +74,16 @@ class ContentContribution(BaseModel):
     persona_fragments: tuple[Any, ...] = ()
     #: Image-prompt enhancers (``PromptEnhancer`` instances) for image generation (spec 27).
     prompt_enhancers: tuple[Any, ...] = ()
+    #: Namespaced capabilities this plugin can satisfy during generation.
+    generation_capabilities: tuple[str, ...] = ()
+    #: Legacy intent names mapped to a namespaced generation capability.
+    generation_aliases: dict[str, str] = Field(default_factory=dict)
+    #: Pure request normalizers run before generation enrichers.
+    intent_normalizers: tuple[Any, ...] = ()
+    #: Declarative generation enrichers contributed by this plugin.
+    generation_enrichers: tuple[Any, ...] = ()
+    #: Storyteller incident definitions contributed by this plugin.
+    incident_definitions: tuple[Any, ...] = ()
 
 
 class PolicyContribution(BaseModel):
@@ -94,6 +105,17 @@ class DependencyContribution(BaseModel):
 
     requires: tuple[str, ...] = ()
     recommends: tuple[str, ...] = ()
+    integrates_with: tuple[str, ...] = ()
+
+
+class PluginPlacement(StrEnum):
+    """Architectural ring used for deterministic registration and reaction ordering."""
+
+    CORE = "core"
+    FOUNDATION = "foundation"
+    INNER = "inner"
+    OUTER = "outer"
+    ADDON = "addon"
 
 
 class Plugin(BaseModel):
@@ -102,6 +124,7 @@ class Plugin(BaseModel):
     id: str
     name: str
     version: str = "0.1.0"
+    placement: PluginPlacement = PluginPlacement.OUTER
 
     dependencies: DependencyContribution = Field(default_factory=DependencyContribution)
     default_enabled: bool = True
@@ -115,10 +138,11 @@ class Plugin(BaseModel):
 
 
 class PluginRuntimeContext(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     plugin_config: dict[str, Any] = Field(default_factory=dict)
     addon_config: dict[str, Any] = Field(default_factory=dict)
+    plugins: Any | None = None
 
     def config_for(self, plugin_id: str, default: Any = None) -> Any:
         return self.plugin_config.get(plugin_id, default)
@@ -131,6 +155,7 @@ __all__ = [
     "DependencyContribution",
     "EcsContribution",
     "Plugin",
+    "PluginPlacement",
     "PluginRuntimeContext",
     "PolicyContribution",
     "RuntimeContribution",
