@@ -33,9 +33,9 @@ from .mechanics import (
     QuestProvenanceComponent,
     QuestRewardComponent,
     QuestStateComponent,
+    SneakingComponent,
     SpellComponent,
     SpellCooldownComponent,
-    StealthComponent,
     SurrenderComponent,
     VoiceInscriptionComponent,
     WantedComponent,
@@ -140,7 +140,7 @@ class DragonGenerationEnricher:
             if generation_wants(ctx, "great-soul"):
                 add(GreatSoulComponent(souls=1))
             if generation_wants(ctx, "stealth") or generation_mentions(ctx, "sneak", "stealthy"):
-                add(StealthComponent(sneaking=True, since_epoch=ctx.world_epoch))
+                add(SneakingComponent(sneaking=True, since_epoch=ctx.world_epoch))
             if generation_wants(ctx, "wanted", "bounty"):
                 add(WantedComponent(amounts={generation_generated_id(ctx, "faction"): 10}))
             if generation_wants(ctx, "magic"):

@@ -47,7 +47,6 @@ class PluginRegistry:
         self._components: dict[str, tuple[str, type]] = {}
         self._edges: dict[str, tuple[str, type]] = {}
         self._capabilities: dict[str, tuple[str, Any | None]] = {}
-        self._aliases: dict[str, str] = {}
         self._services: dict[tuple[str, str], Any] = {}
         self._projections: dict[tuple[str, str], Any] = {}
         self._incidents: dict[tuple[str, str], Any] = {}
@@ -115,10 +114,6 @@ class PluginRegistry:
     @property
     def capabilities(self):
         return MappingProxyType(self._capabilities)
-
-    @property
-    def aliases(self):
-        return MappingProxyType(self._aliases)
 
     @property
     def incidents(self):
@@ -238,23 +233,6 @@ class PluginRegistry:
                     f"generation capability {capability!r} must be namespaced by {plugin.id!r}"
                 )
             self._global(self._capabilities, capability, plugin.id, None, "capability")
-        for alias, capability in plugin.content.generation_aliases.items():
-            registered = self._capabilities.get(capability)
-            if registered is None or registered[0] != plugin.id:
-                from .loader import PluginError
-
-                raise PluginError(
-                    f"generation alias {alias!r} targets unowned capability {capability!r}"
-                )
-            previous = self._aliases.get(alias)
-            if previous is not None and previous != capability:
-                from .loader import PluginError
-
-                raise PluginError(
-                    f"generation alias {alias!r} maps to both {previous!r} and {capability!r}"
-                )
-            self._aliases[alias] = capability
-
         for factory in plugin.runtime.service_factories:
             self._scoped(self._services, plugin.id, factory, "service")
         for factory in plugin.runtime.projection_factories:

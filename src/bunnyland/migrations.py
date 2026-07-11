@@ -81,6 +81,16 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
     components = _table(snapshot, "components")
     relationships = _table(snapshot, "relationships")
     entities = _table(snapshot, "entities")
+    legacy_stealth = components.get("StealthComponent", {})
+    if isinstance(legacy_stealth, dict) and any(
+        isinstance(fields, dict) and ("sneaking" in fields or "since_epoch" in fields)
+        for fields in legacy_stealth.values()
+    ):
+        if "SneakingComponent" in components:
+            raise WorldMigrationError(
+                "schema-v1 snapshot contains both StealthComponent and SneakingComponent"
+            )
+        components["SneakingComponent"] = components.pop("StealthComponent")
     quest_index = _quest_index(components)
     states = _records(components, "QuestStateComponent")
     quests = _records(components, "QuestComponent")

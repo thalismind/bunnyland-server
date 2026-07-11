@@ -124,7 +124,7 @@ from ...plugins.model import (
 )
 from .actions import ACTION_DEFINITIONS
 from .demos import NUKESIM_DEMO
-from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
+from .generation import CAPABILITIES, GENERATION_ENRICHER
 
 
 def _definition() -> Plugin:
@@ -251,7 +251,6 @@ def _definition() -> Plugin:
         content=ContentContribution(
             prompt_fragments=(nukesim_fragments,),
             generation_capabilities=CAPABILITIES,
-            generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
             world_generators=(NUKESIM_DEMO,),
         ),

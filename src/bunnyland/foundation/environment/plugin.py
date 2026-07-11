@@ -26,7 +26,7 @@ from ...plugins.model import (
     RuntimeContribution,
 )
 from .actions import ACTION_DEFINITIONS
-from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
+from .generation import CAPABILITIES, GENERATION_ENRICHER
 
 
 def _environment_factory(actor) -> None:
@@ -60,7 +60,6 @@ def _definition() -> Plugin:
         content=ContentContribution(
             prompt_fragments=(environment_fragments,),
             generation_capabilities=CAPABILITIES,
-            generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
         ),
     )

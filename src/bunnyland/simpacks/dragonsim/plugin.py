@@ -88,13 +88,13 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     RequiresQuest,
     ServeJailTimeHandler,
     SneakHandler,
+    SneakingComponent,
     SpeakWordOfPowerHandler,
     SpellComponent,
     SpellCooldownComponent,
     SpellLearnedEvent,
     StealHandler,
     StealthChangedEvent,
-    StealthComponent,
     StudyVoiceInscriptionHandler,
     SurrenderComponent,
     SurrenderedEvent,
@@ -132,7 +132,7 @@ from ...plugins.model import (
 )
 from .actions import ACTION_DEFINITIONS
 from .demos import CLUE_SNACK_DEMO, DRAGONSIM_DEMO
-from .generation import ALIASES, CAPABILITIES, GENERATED_QUEST_ENRICHER, GENERATION_ENRICHER
+from .generation import CAPABILITIES, GENERATED_QUEST_ENRICHER, GENERATION_ENRICHER
 from .quests import (
     AbandonGeneratedQuestHandler,
     AcceptGeneratedQuestHandler,
@@ -191,7 +191,7 @@ def _definition() -> Plugin:
                 WordOfPowerComponent,
                 CarvableComponent,
                 VoiceInscriptionComponent,
-                StealthComponent,
+                SneakingComponent,
                 WantedComponent,
                 LockDifficultyComponent,
                 LoreBookComponent,
@@ -313,7 +313,6 @@ def _definition() -> Plugin:
         content=ContentContribution(
             prompt_fragments=(dragonsim_fragments,),
             generation_capabilities=CAPABILITIES,
-            generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER, GENERATED_QUEST_ENRICHER),
             incident_resolution_rules=RESOLUTION_RULES,
             world_generators=(DRAGONSIM_DEMO, CLUE_SNACK_DEMO),

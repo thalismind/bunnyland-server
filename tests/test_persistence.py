@@ -301,6 +301,31 @@ def test_schema_migration_validates_version_and_v2_sections():
         migrate_snapshot({"bunnyland": {"schema_version": 2}, "entities": []})
 
 
+def test_schema_v1_dragon_stealth_name_migrates_without_mutating_source():
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"]["StealthComponent"] = {
+        "entity_2": {"sneaking": True, "since_epoch": 7}
+    }
+
+    migrated = migrate_snapshot(source)
+
+    assert "StealthComponent" in source["components"]
+    assert "StealthComponent" not in migrated["components"]
+    assert migrated["components"]["SneakingComponent"] == {
+        "entity_2": {"sneaking": True, "since_epoch": 7}
+    }
+
+    ambiguous = _schema_v1_generated_quest_snapshot()
+    ambiguous["components"]["StealthComponent"] = {
+        "entity_2": {"sneaking": True, "since_epoch": 7}
+    }
+    ambiguous["components"]["SneakingComponent"] = {
+        "entity_3": {"sneaking": False, "since_epoch": 0}
+    }
+    with pytest.raises(WorldMigrationError, match="both StealthComponent and SneakingComponent"):
+        migrate_snapshot(ambiguous)
+
+
 def test_schema_v1_migration_handles_collisions_and_unaccepted_generated_quests():
     snapshot = _schema_v1_generated_quest_snapshot()
     snapshot["components"]["GeneratedQuestComponent"]["entity_1"].pop("accepted_by")

@@ -199,7 +199,7 @@ from .demos import (
     GOTHIC_COUNT_DEMO,
     STORM_LIGHTHOUSE_DEMO,
 )
-from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
+from .generation import CAPABILITIES, GENERATION_ENRICHER
 from .resolution import RESOLUTION_RULES
 
 
@@ -395,7 +395,6 @@ def _definition() -> Plugin:
         content=ContentContribution(
             prompt_fragments=(daggersim_fragments,),
             generation_capabilities=CAPABILITIES,
-            generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
             incident_resolution_rules=RESOLUTION_RULES,
             world_generators=(

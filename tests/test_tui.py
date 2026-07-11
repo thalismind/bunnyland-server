@@ -51,7 +51,6 @@ from bunnyland.tui.generator_selector import (
 )
 from bunnyland.tui.model import Target, World, entity_icon, entity_name, entity_type
 from bunnyland.tui.splash import IntroSplash
-from bunnyland.tui.verbs import ACTION_VERBS
 from bunnyland.worldgen import GenOptions, InstantiatedWorld, WorldGenerator
 
 PLAYER = "character:1"
@@ -207,6 +206,45 @@ def _projected_action(**overrides) -> dict:
     }
     action.update(overrides)
     return action
+
+
+def _action(command_type: str) -> dict:
+    definitions = {
+        "move": ("Move", "world", 1, 0, "exit_id", "exits"),
+        "say": ("Say", "world", 1, 1, "text", None),
+        "tell": ("Tell", "world", 1, 1, "target_id", "characters"),
+        "wait": ("Wait", "world", 0, 0, None, None),
+    }
+    title, lane, action_cost, focus_cost, key, target_group = definitions[command_type]
+    arguments = []
+    if key:
+        arguments.append(
+            {
+                "key": key,
+                "title": key.replace("_", " "),
+                "kind": "entity" if target_group else "string",
+                "required": True,
+                "target_group": target_group,
+            }
+        )
+    if command_type == "tell":
+        arguments.append(
+            {
+                "key": "text",
+                "title": "text",
+                "kind": "string",
+                "required": True,
+                "target_group": None,
+            }
+        )
+    return _projected_action(
+        command_type=command_type,
+        tool_name=command_type,
+        title=title,
+        lane=lane,
+        cost={"action": action_cost, "focus": focus_cost},
+        arguments=arguments,
+    )
 
 
 def _queued_response(*commands: dict) -> dict:
@@ -670,15 +708,10 @@ def test_entity_presentation_fallbacks():
     assert entity_name(nameless) == "nameless-entity-"
 
 
-# ── verb catalogue ────────────────────────────────────────────────────────────
-def test_verb_catalogue_costs():
-    by_tool = {v.tool: v for v in ACTION_VERBS}
-    assert by_tool["wait"].ap == 0 and by_tool["wait"].fp == 0
-    assert by_tool["say"].fp == 1
-    assert by_tool["move"].target_kind == "exits" and by_tool["move"].target_key == "exit_id"
-    # Every target verb names both the payload key and a candidate kind.
-    for verb in ACTION_VERBS:
-        assert bool(verb.target_kind) == bool(verb.target_key)
+def test_missing_projected_action_metadata_produces_empty_action_state():
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    app.action_views = []
+    assert app._available_actions() == []
 
 
 def test_queued_command_label_formats_unknown_free_command():
@@ -2314,7 +2347,7 @@ async def test_app_renders_room_and_actions():
         queued = app.query_one("#queued", OptionList)
         assert backend.queued_requests[-1] == PLAYER
         assert queued.option_count == 1
-        assert "Say [focus]" in str(queued.get_option_at_index(0).prompt)
+        assert "say [focus]" in str(queued.get_option_at_index(0).prompt)
         assert "1 AP + 1 FP" in str(queued.get_option_at_index(0).prompt)
         assert "text: next" in str(queued.get_option_at_index(0).prompt)
 
@@ -2391,8 +2424,7 @@ async def test_app_ignores_second_action_form_while_one_is_open():
         assert sum(isinstance(s, ActionForm) for s in app.screen_stack) == 1
 
         # Selecting another action while a form is open is a no-op: no second form, no submit.
-        say = next(v for v in ACTION_VERBS if v.tool == "say")
-        await app._do_verb(say)
+        await app._do_action(_action("say"))
         await pilot.pause()
         assert sum(isinstance(s, ActionForm) for s in app.screen_stack) == 1
         assert app.backend.commands == []
@@ -2902,6 +2934,8 @@ async def test_app_member_and_verb_selection_handlers():
         app._member_selected(SimpleNamespace(option=SimpleNamespace(id=APPLE)))
         assert app.selected_id == APPLE
 
+        app.action_views = [_action("wait")]
+        app._render_actions()
         app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="wait")))
         await pilot.pause()
         assert app.backend.commands[-1]["command_type"] == "wait"
@@ -2970,6 +3004,8 @@ async def test_app_action_form_selection_runs_in_worker(monkeypatch):
 
         monkeypatch.setattr(app, "push_screen_wait", fake_form)
 
+        app.action_views = [_action("move")]
+        app._render_actions()
         app._verb_selected(SimpleNamespace(option=SimpleNamespace(id="move")))
         await pilot.pause()
 
@@ -2981,8 +3017,7 @@ async def test_app_wait_submits_a_command():
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
-        wait = next(v for v in ACTION_VERBS if v.tool == "wait")
-        await app._do_verb(wait)
+        await app._do_action(_action("wait"))
         assert app.backend.commands[-1]["command_type"] == "wait"
         # Generation comes from the character projection's controller (gen 3 in _client_view).
         assert app.backend.commands[-1]["controller_generation"] == 3
@@ -3032,8 +3067,7 @@ async def test_app_move_uses_action_form_dropdown(monkeypatch):
             return {"exit_id": HALL}  # choose the north exit
 
         monkeypatch.setattr(app, "push_screen_wait", fake_form)
-        move = next(v for v in ACTION_VERBS if v.tool == "move")
-        await app._do_verb(move)
+        await app._do_action(_action("move"))
         cmd = app.backend.commands[-1]
         assert cmd["command_type"] == "move"
         assert cmd["payload"] == {"exit_id": HALL}
@@ -3050,21 +3084,20 @@ async def test_app_action_form_cancellation_submits_nothing(monkeypatch):
             return None  # user cancelled the form
 
         monkeypatch.setattr(app, "push_screen_wait", fake_form)
-        tell = next(v for v in ACTION_VERBS if v.tool == "tell")
-        await app._do_verb(tell)
+        await app._do_action(_action("tell"))
         assert app.backend.commands == []
 
 
 async def test_app_verb_without_player_or_control_submits_nothing():
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test():
-        wait = next(v for v in ACTION_VERBS if v.tool == "wait")
-        await app._do_verb(wait)
+        wait = _action("wait")
+        await app._do_action(wait)
         assert app.backend.commands == []
 
         app.player_id = MARLOW
         app.control = None
-        await app._do_verb(wait)
+        await app._do_action(wait)
         assert app.backend.commands == []
 
 
@@ -3079,8 +3112,7 @@ async def test_app_say_collects_text(monkeypatch):
             return {"text": "hello terminal"}
 
         monkeypatch.setattr(app, "push_screen_wait", fake_form)
-        say = next(v for v in ACTION_VERBS if v.tool == "say")
-        await app._do_verb(say)
+        await app._do_action(_action("say"))
         assert app.backend.commands[-1]["payload"] == {"text": "hello terminal"}
 
 
@@ -3093,7 +3125,7 @@ async def test_app_cancelled_form_submits_nothing(monkeypatch):
             return None  # user pressed escape
 
         monkeypatch.setattr(app, "push_screen_wait", fake_form)
-        await app._do_verb(next(v for v in ACTION_VERBS if v.tool == "move"))
+        await app._do_action(_action("move"))
         assert app.backend.commands == []
 
 

@@ -75,8 +75,6 @@ class ContentContribution(BaseModel):
     prompt_enhancers: tuple[Any, ...] = ()
     #: Namespaced capabilities this plugin can satisfy during generation.
     generation_capabilities: tuple[str, ...] = ()
-    #: Stable shorthand names mapped to a namespaced generation capability.
-    generation_aliases: dict[str, str] = Field(default_factory=dict)
     #: Pure request normalizers run before generation enrichers.
     intent_normalizers: tuple[Any, ...] = ()
     #: Declarative generation enrichers contributed by this plugin.

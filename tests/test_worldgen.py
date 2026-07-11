@@ -1169,7 +1169,6 @@ async def test_plugin_generation_enricher_can_add_owned_components():
                 ecs=EcsContribution(components=(HumidityComponent,)),
                 content=ContentContribution(
                     generation_capabilities=("humidity.room",),
-                    generation_aliases={"humidity": "humidity.room"},
                     generation_enrichers=(HumidityEnricher(),),
                 ),
             )
@@ -1183,7 +1182,7 @@ async def test_plugin_generation_enricher_can_add_owned_components():
                 key="room",
                 title="Rain Room",
                 description="rain pools on the floor",
-                wants=("humidity",),
+                wants=("humidity.room",),
             )
         ],
     )
@@ -2258,9 +2257,9 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         QuestProvenanceComponent,
         QuestRewardComponent,
         QuestStateComponent,
+        SneakingComponent,
         SpellComponent,
         SpellCooldownComponent,
-        StealthComponent,
         SurrenderComponent,
         VoiceInscriptionComponent,
         WantedComponent,
@@ -2608,7 +2607,7 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         GuardComponent,
         JailComponent,
         GreatSoulComponent,
-        StealthComponent,
+        SneakingComponent,
         WantedComponent,
         MagicComponent,
         SpellCooldownComponent,

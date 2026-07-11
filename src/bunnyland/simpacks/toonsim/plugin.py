@@ -24,7 +24,6 @@ from ...plugins.model import (
 )
 from .actions import ACTION_DEFINITIONS
 from .generation import (
-    ALIASES,
     CAPABILITIES,
     GENERATION_ENRICHER,
 )
@@ -53,7 +52,6 @@ def _definition() -> Plugin:
         runtime=RuntimeContribution(service_factories=(install_toonsim,)),
         content=ContentContribution(
             generation_capabilities=CAPABILITIES,
-            generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
         ),
     )

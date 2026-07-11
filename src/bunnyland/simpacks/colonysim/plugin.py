@@ -99,7 +99,7 @@ from ...plugins.model import (
 )
 from .actions import ACTION_DEFINITIONS
 from .demos import COLONYSIM_DEMO
-from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
+from .generation import CAPABILITIES, GENERATION_ENRICHER
 from .resolution import RESOLUTION_RULES
 
 
@@ -197,7 +197,6 @@ def _definition() -> Plugin:
         content=ContentContribution(
             prompt_fragments=(colonysim_fragments,),
             generation_capabilities=CAPABILITIES,
-            generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
             incident_resolution_rules=RESOLUTION_RULES,
             world_generators=(COLONYSIM_DEMO,),

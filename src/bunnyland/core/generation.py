@@ -122,11 +122,9 @@ class GenerationPipeline:
         self.registry = registry
 
     def normalize(self, request: GenerationRequest) -> GenerationRequest:
-        aliases = self.registry.aliases if self.registry is not None else {}
-        capabilities = [aliases.get(value, value) for value in request.capabilities]
         normalized = replace(
             request,
-            capabilities=_dedupe(capabilities),
+            capabilities=_dedupe(request.capabilities),
             request_id=request.request_id or _request_id(request),
         )
         if self.registry is None:

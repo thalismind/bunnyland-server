@@ -29,7 +29,6 @@ from .events import EventNarrator
 from .generator_selector import DEFAULT_LOCAL_GENERATOR, DEFAULT_LOCAL_SEED, WorldGeneratorSelector
 from .model import Target, World, entity_icon, entity_name, fmt_points, has
 from .splash import IntroSplash
-from .verbs import ACTION_VERBS, Verb
 
 REFRESH_SECONDS = 1.0
 ACTIVITY_LIMIT = 8
@@ -54,12 +53,6 @@ def _queued_command_name(command: dict, actions: list[dict] | None = None) -> st
     for action in actions or []:
         if action.get("command_type") == command.get("command_type"):
             return _action_title(action)
-    verb = next(
-        (verb for verb in ACTION_VERBS if verb.cmd == command.get("command_type")),
-        None,
-    )
-    if verb:
-        return verb.label
     return str(command.get("command_type") or "command").replace("-", " ")
 
 
@@ -78,39 +71,6 @@ def _queued_command_detail(command: dict) -> str:
     return ", ".join(
         f"{key}: {value}" for key, value in payload.items() if value is not None and value != ""
     )
-
-
-def _legacy_action_view(verb: Verb) -> dict:
-    arguments = []
-    if verb.target_key and verb.target_kind:
-        arguments.append(
-            {
-                "key": verb.target_key,
-                "title": verb.target_key.removesuffix("_id").replace("_", " "),
-                "kind": "entity",
-                "required": True,
-                "target_group": verb.target_kind,
-            }
-        )
-    if verb.prompt:
-        arguments.append(
-            {
-                "key": verb.prompt,
-                "title": verb.prompt.replace("_", " "),
-                "kind": "string",
-                "required": True,
-                "target_group": None,
-            }
-        )
-    return {
-        "command_type": verb.cmd,
-        "tool_name": verb.tool,
-        "title": verb.label,
-        "icon": action_icon_for(verb.cmd),
-        "lane": verb.lane,
-        "cost": {"action": verb.ap, "focus": verb.fp},
-        "arguments": arguments,
-    }
 
 
 def _action_title(action: dict) -> str:
@@ -822,7 +782,7 @@ class BunnylandTUI(App[None]):
         return max(0, int(round(float(next_tick) - time.time())))
 
     def _available_actions(self) -> list[dict]:
-        return self.action_views or [_legacy_action_view(verb) for verb in ACTION_VERBS]
+        return self.action_views
 
     def _filtered_actions(self) -> list[dict]:
         actions = self._available_actions()
@@ -1039,9 +999,6 @@ class BunnylandTUI(App[None]):
     @on(OptionList.OptionSelected, "#verbs")
     def _verb_selected(self, event: OptionList.OptionSelected) -> None:
         action = self._action_options.get(str(event.option.id))
-        if action is None:
-            legacy = next((verb for verb in ACTION_VERBS if verb.tool == event.option.id), None)
-            action = _legacy_action_view(legacy) if legacy else None
         if action:
             self.run_worker(self._do_action(action), exclusive=True)
 
@@ -1071,9 +1028,6 @@ class BunnylandTUI(App[None]):
             self._render_actions()
 
     # ── actions ─────────────────────────────────────────────────────────────────
-    async def _do_verb(self, verb: Verb) -> None:
-        await self._do_action(_legacy_action_view(verb))
-
     def _action_fields(self, action: dict) -> list[FormField]:
         # Prompt for every required argument plus any entity argument that has a target
         # group, so the form can offer a dropdown of nearby candidates.

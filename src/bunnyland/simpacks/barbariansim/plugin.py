@@ -114,7 +114,7 @@ from ...plugins.model import (
 )
 from .actions import ACTION_DEFINITIONS
 from .demos import BARBARIANSIM_DEMO
-from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
+from .generation import CAPABILITIES, GENERATION_ENRICHER
 from .incidents import BARBARIAN_RAID
 
 
@@ -235,7 +235,6 @@ def _definition() -> Plugin:
         content=ContentContribution(
             prompt_fragments=(barbariansim_fragments,),
             generation_capabilities=CAPABILITIES,
-            generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
             world_generators=(BARBARIANSIM_DEMO,),
             incident_definitions=(BARBARIAN_RAID,),

@@ -109,13 +109,13 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     ReportCrimeHandler,
     ServeJailTimeHandler,
     SneakHandler,
+    SneakingComponent,
     SpeakWordOfPowerHandler,
     SpellComponent,
     SpellCooldownComponent,
     SpellLearnedEvent,
     StealHandler,
     StealthChangedEvent,
-    StealthComponent,
     StudyVoiceInscriptionHandler,
     SurrenderComponent,
     SurrenderedEvent,
@@ -2139,11 +2139,11 @@ async def test_sneak_toggles_stealth_state():
     await scenario.actor.submit(_cmd(scenario, "sneak"))
     await scenario.actor.tick(HOUR)
     character = scenario.actor.world.get_entity(scenario.character)
-    assert character.get_component(StealthComponent).sneaking is True
+    assert character.get_component(SneakingComponent).sneaking is True
 
     await scenario.actor.submit(_cmd(scenario, "sneak"))
     await scenario.actor.tick(HOUR)
-    assert character.get_component(StealthComponent).sneaking is False
+    assert character.get_component(SneakingComponent).sneaking is False
     assert [event.sneaking for event in changes] == [True, False]
 
 
@@ -2298,7 +2298,7 @@ def test_dragonsim_fragments_show_sneaking_and_bounty():
     _install(scenario.actor)
     faction = _faction(scenario)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(StealthComponent(sneaking=True))
+    character.add_component(SneakingComponent(sneaking=True))
     character.add_component(WantedComponent(amounts={str(faction): 25}))
 
     lines = dragonsim_fragments(scenario.actor.world, character)

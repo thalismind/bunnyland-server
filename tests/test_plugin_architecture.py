@@ -217,7 +217,7 @@ def test_registry_enforces_global_and_plugin_scoped_collision_rules():
         )
 
 
-def test_registry_validates_capability_namespaces_aliases_and_indexes():
+def test_registry_validates_capability_namespaces_and_indexes():
     plugin = Plugin(
         id="pack.fire",
         name="Fire",
@@ -225,7 +225,6 @@ def test_registry_validates_capability_namespaces_aliases_and_indexes():
         ecs=EcsContribution(components=(MarkerComponent,), edges=(MarkerEdge,)),
         content=ContentContribution(
             generation_capabilities=("pack.fire.flammable",),
-            generation_aliases={"flammable": "pack.fire.flammable"},
             world_generators=(NamedContribution("demo"),),
             incident_definitions=(Incident("spark"),),
         ),
@@ -245,7 +244,8 @@ def test_registry_validates_capability_namespaces_aliases_and_indexes():
     assert registry.edges["MarkerEdge"] == (plugin.id, MarkerEdge)
     assert registry.generators["demo"][0] == plugin.id
     assert registry.capabilities["pack.fire.flammable"][0] == plugin.id
-    assert registry.aliases["flammable"] == "pack.fire.flammable"
+    assert "generation_aliases" not in ContentContribution.model_fields
+    assert not hasattr(registry, "aliases")
     assert registry.incidents[(plugin.id, "spark")].id == "spark"
     assert registry.services[(plugin.id, "clock")].name == "clock"
     assert registry.projections[(plugin.id, "view")].name == "view"
@@ -322,39 +322,6 @@ def test_registry_backed_generator_collection_and_runtime_factory_flattening():
         integration_factories=(factories[4],),
     )
     assert contribution.all_factories() == factories
-    with pytest.raises(PluginError, match="unowned capability"):
-        PluginRegistry(
-            [
-                Plugin(
-                    id="pack.bad",
-                    name="Bad",
-                    content=ContentContribution(generation_aliases={"old": "pack.bad.missing"}),
-                )
-            ]
-        )
-
-    with pytest.raises(PluginError, match="maps to both"):
-        PluginRegistry(
-            [
-                Plugin(
-                    id="pack.one",
-                    name="One",
-                    content=ContentContribution(
-                        generation_capabilities=("pack.one.value",),
-                        generation_aliases={"legacy": "pack.one.value"},
-                    ),
-                ),
-                Plugin(
-                    id="pack.two",
-                    name="Two",
-                    content=ContentContribution(
-                        generation_capabilities=("pack.two.value",),
-                        generation_aliases={"legacy": "pack.two.value"},
-                    ),
-                ),
-            ]
-        )
-
     anonymous = object()
     anonymous_registry = PluginRegistry(
         [
@@ -598,14 +565,13 @@ def add_fire_capability(request):
     return ("pack.fire.flammable",) if "hot" in request.description else ()
 
 
-async def test_generation_pipeline_normalizes_aliases_and_merges_applicable_enrichers():
+async def test_generation_pipeline_merges_canonical_capabilities_and_enrichers():
     plugin = Plugin(
         id="pack.fire",
         name="Fire",
         ecs=EcsContribution(components=(MarkerComponent,)),
         content=ContentContribution(
             generation_capabilities=("pack.fire.flammable",),
-            generation_aliases={"fire": "pack.fire.flammable"},
             intent_normalizers=(add_fire_capability,),
             generation_enrichers=(FireEnricher,),
         ),
@@ -613,7 +579,11 @@ async def test_generation_pipeline_normalizes_aliases_and_merges_applicable_enri
     pipeline = GenerationPipeline(PluginRegistry([plugin]))
 
     plan = await pipeline.compile(
-        GenerationRequest(entity_kind="room", description="hot room", capabilities=("fire",))
+        GenerationRequest(
+            entity_kind="room",
+            description="hot room",
+            capabilities=("pack.fire.flammable",),
+        )
     )
 
     assert plan.request.capabilities == ("pack.fire.flammable",)

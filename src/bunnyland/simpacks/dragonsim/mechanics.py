@@ -313,11 +313,6 @@ class SneakingComponent(Component):
     since_epoch: int = 0
 
 
-# Source compatibility for addons that imported the old ambiguous class name. Persistence
-# now uses ``SneakingComponent`` so it cannot collide with core's distinct StealthComponent.
-StealthComponent = SneakingComponent
-
-
 @dataclass(frozen=True)
 class WantedComponent(Component):
     """Outstanding bounties keyed by faction id (catalogue 6.5)."""
@@ -1403,8 +1398,8 @@ DEFAULT_BOUNTY = 10
 
 def _is_sneaking(character: Entity) -> bool:
     return (
-        character.has_component(StealthComponent)
-        and character.get_component(StealthComponent).sneaking
+        character.has_component(SneakingComponent)
+        and character.get_component(SneakingComponent).sneaking
     )
 
 
@@ -1436,17 +1431,17 @@ class SneakHandler:
             return rejected("invalid character id")
         character = ctx.entity(character_id)
         sneaking = not _is_sneaking(character)
-        if character.has_component(StealthComponent):
+        if character.has_component(SneakingComponent):
             replace_component(
                 character,
                 replace(
-                    character.get_component(StealthComponent),
+                    character.get_component(SneakingComponent),
                     sneaking=sneaking,
                     since_epoch=ctx.epoch,
                 ),
             )
         else:
-            character.add_component(StealthComponent(sneaking=sneaking, since_epoch=ctx.epoch))
+            character.add_component(SneakingComponent(sneaking=sneaking, since_epoch=ctx.epoch))
         return ok(
             StealthChangedEvent(
                 **ctx.event_base(
@@ -2575,7 +2570,7 @@ __all__ = [
     "SurrenderHandler",
     "StealHandler",
     "StealthChangedEvent",
-    "StealthComponent",
+    "SneakingComponent",
     "SneakingComponent",
     "CarvableComponent",
     "InscribeVoicePhraseHandler",
