@@ -324,34 +324,49 @@ class BountyComponent(Component):
 
 
 @dataclass(frozen=True)
-class RegionalReputationComponent(Component):
-    scores: dict[str, int]
+class HasStandingInRegion(Edge):
+    """character -> region entity, carrying general regional standing."""
+
+    score: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or ctx.target is None:
+            return ()
+        return (f"Regional standing in {_name(ctx.target)}: {self.score}.",)
 
 
 @dataclass(frozen=True)
-class InstitutionReputationComponent(Component):
-    scores: dict[str, int]
+class HasStandingWithInstitution(Edge):
+    """character -> institution, carrying institutional standing."""
+
+    score: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person:
+        if not ctx.is_first_person or ctx.target is None:
             return ()
-        return tuple(
-            f"Institution reputation with {institution_id}: {score}."
-            for institution_id, score in sorted(self.scores.items())
+        institution_name = (
+            ctx.target.get_component(InstitutionComponent).name
+            if ctx.target.has_component(InstitutionComponent)
+            else _name(ctx.target)
         )
+        return (f"Institution standing with {institution_name}: {self.score}.",)
 
 
 @dataclass(frozen=True)
-class LegalReputationComponent(Component):
-    scores: dict[str, int]
+class HasLegalStandingInRegion(Edge):
+    """character -> law-region entity, carrying legal standing."""
+
+    score: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person:
+        if not ctx.is_first_person or ctx.target is None:
             return ()
-        return tuple(
-            f"Legal reputation in {region_id}: {score}."
-            for region_id, score in sorted(self.scores.items())
+        region_name = (
+            ctx.target.get_component(LawRegionComponent).region_id
+            if ctx.target.has_component(LawRegionComponent)
+            else _name(ctx.target)
         )
+        return (f"Legal standing in {region_name}: {self.score}.",)
 
 
 @dataclass(frozen=True)
@@ -1092,28 +1107,31 @@ class DungeonExitedEvent(DomainEvent):
 
 
 def _adjust_institution_reputation(character: Entity, institution_id: EntityId, delta: int) -> int:
-    current = (
-        character.get_component(InstitutionReputationComponent)
-        if character.has_component(InstitutionReputationComponent)
-        else InstitutionReputationComponent(scores={})
+    current = next(
+        (
+            edge
+            for edge, target_id in character.get_relationships(HasStandingWithInstitution)
+            if target_id == institution_id
+        ),
+        None,
     )
-    scores = dict(current.scores)
-    key = str(institution_id)
-    scores[key] = scores.get(key, 0) + delta
-    replace_component(character, replace(current, scores=scores))
-    return scores[key]
+    score = (current.score if current is not None else 0) + delta
+    character.add_relationship(HasStandingWithInstitution(score=score), institution_id)
+    return score
 
 
-def _adjust_legal_reputation(character: Entity, region_id: str, delta: int) -> int:
-    current = (
-        character.get_component(LegalReputationComponent)
-        if character.has_component(LegalReputationComponent)
-        else LegalReputationComponent(scores={})
+def _adjust_legal_reputation(character: Entity, region_id: EntityId, delta: int) -> int:
+    current = next(
+        (
+            edge
+            for edge, target_id in character.get_relationships(HasLegalStandingInRegion)
+            if target_id == region_id
+        ),
+        None,
     )
-    scores = dict(current.scores)
-    scores[region_id] = scores.get(region_id, 0) + delta
-    replace_component(character, replace(current, scores=scores))
-    return scores[region_id]
+    score = (current.score if current is not None else 0) + delta
+    character.add_relationship(HasLegalStandingInRegion(score=score), region_id)
+    return score
 
 
 def _grant_service_access(character: Entity, service_id: EntityId) -> bool:
@@ -2131,7 +2149,7 @@ class CommitCrimeHandler:
             ],
         )
         character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), crime.id)
-        legal_score = _adjust_legal_reputation(character, law.region_id, -fine)
+        legal_score = _adjust_legal_reputation(character, region_id, -fine)
         return ok(
             CrimeCommittedEvent(
                 **ctx.event_base(
@@ -2192,6 +2210,9 @@ class PayFineHandler:
         account_component = account.get_component(BankAccountComponent)
         if account_component.balance < crime.fine:
             return rejected("insufficient bank balance")
+        region_id = _law_region_by_label(ctx.world, crime.region_id)
+        if region_id is None:
+            return rejected("crime law region does not exist")
 
         replace_component(
             account,
@@ -2200,7 +2221,7 @@ class PayFineHandler:
         replace_component(crime_entity, replace(crime, status="paid"))
         if crime_entity.has_component(BountyComponent):
             crime_entity.remove_component(BountyComponent)
-        legal_score = _adjust_legal_reputation(character, crime.region_id, crime.fine)
+        legal_score = _adjust_legal_reputation(character, region_id, crime.fine)
         return ok(
             FinePaidEvent(
                 **ctx.event_base(
@@ -3190,6 +3211,13 @@ def _current_law_region(
     return None
 
 
+def _law_region_by_label(world: World, label: str) -> EntityId | None:
+    for region in world.query().with_all([LawRegionComponent]).execute_entities():
+        if region.get_component(LawRegionComponent).region_id == label:
+            return region.id
+    return None
+
+
 def _any_bank_account(world: World, owner_id: EntityId) -> Entity | None:
     for account in world.query().with_all([BankAccountComponent]).execute_entities():
         component = account.get_component(BankAccountComponent)
@@ -3720,17 +3748,17 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     ):
         if character.has_component(component_type):
             lines.extend(character.get_component(component_type).prompt_fragments(ctx))
-    if character.has_component(InstitutionReputationComponent):
-        for institution_id, score in character.get_component(
-            InstitutionReputationComponent
-        ).scores.items():
-            label = institution_id
-            parsed = parse_entity_id(institution_id)
-            if parsed is not None and world.has_entity(parsed):
-                label = _name(world.get_entity(parsed))
-            lines.append(f"Institution reputation with {label}: {score}.")
-    if character.has_component(LegalReputationComponent):
-        lines.extend(character.get_component(LegalReputationComponent).prompt_fragments(ctx))
+    for edge_type in (
+        HasStandingInRegion,
+        HasStandingWithInstitution,
+        HasLegalStandingInRegion,
+    ):
+        for edge, target_id in character.get_relationships(edge_type):
+            target = world.get_entity(target_id)
+            edge_ctx = ComponentPromptContext.for_entity(
+                world, character, perspective=ctx.perspective, target=target
+            )
+            lines.extend(edge.prompt_fragments(edge_ctx))
     service_count = len(character.get_relationships(HasAccessToService))
     if service_count:
         lines.append(f"Unlocked institution services: {service_count}.")
@@ -3900,7 +3928,7 @@ __all__ = [
     "InstitutionJoinedEvent",
     "InstitutionPromotedEvent",
     "InstitutionReputationChangedEvent",
-    "InstitutionReputationComponent",
+    "HasStandingWithInstitution",
     "InstitutionServiceComponent",
     "InstitutionServiceUsedEvent",
     "ItemEnchantedEvent",
@@ -3908,7 +3936,7 @@ __all__ = [
     "JoinInstitutionHandler",
     "LawRegionComponent",
     "LegalReputationChangedEvent",
-    "LegalReputationComponent",
+    "HasLegalStandingInRegion",
     "LanguageSkillComponent",
     "LetterOfCreditComponent",
     "LetterOfCreditIssuedEvent",
@@ -3936,7 +3964,7 @@ __all__ = [
     "PromoteInstitutionHandler",
     "PotionMakerComponent",
     "PotionMadeEvent",
-    "RegionalReputationComponent",
+    "HasStandingInRegion",
     "RechargeEnchantedItemHandler",
     "RechargeServiceComponent",
     "RepayLoanHandler",

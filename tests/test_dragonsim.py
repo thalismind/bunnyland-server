@@ -59,6 +59,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     GuardBribedEvent,
     GuardComponent,
     HasPerk,
+    HasStandingWithFaction,
     IdentifyArtifactHandler,
     InscribeVoicePhraseHandler,
     JailComponent,
@@ -130,7 +131,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     VoiceInscriptionComponent,
     VoiceInscriptionStudiedEvent,
     VoicePhraseInscribedEvent,
-    WantedComponent,
+    WantedByFaction,
     WordOfPowerComponent,
     WordOfPowerLearnedEvent,
     WordOfPowerSpokenEvent,
@@ -353,7 +354,7 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
     assert declined_quest.get_component(QuestStateComponent).status == "declined"
     assert target.get_component(PersuasionComponent).disposition == 2
     assert character.get_component(SurrenderComponent).reason == "fine"
-    assert criminal.get_component(WantedComponent).amounts[str(faction.id)] == 7
+    assert criminal.get_relationships(WantedByFaction) == [(WantedByFaction(amount=7), faction.id)]
     assert character.get_component(MagicComponent).current == 4
     assert str(scenario.character) in artifact.get_component(ArtifactComponent).identified_by
     fragments = dragonsim_fragments(scenario.actor.world, character)
@@ -1977,7 +1978,7 @@ async def test_change_rank_bribe_guard_serve_jail_and_pick_lock():
     faction = _faction(scenario)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_relationship(MemberOfFaction(rank="scout", since_epoch=3), faction)
-    character.add_component(WantedComponent(amounts={str(faction): 15}))
+    character.add_relationship(WantedByFaction(amount=15), faction)
     guard = spawn_entity(
         scenario.actor.world,
         [
@@ -2016,15 +2017,14 @@ async def test_change_rank_bribe_guard_serve_jail_and_pick_lock():
     await scenario.actor.submit(_cmd(scenario, "bribe", guard_id=str(guard.id)))
     await scenario.actor.tick(HOUR)
     assert bribed[0].amount == 10
-    assert character.get_component(WantedComponent).amounts[str(faction)] == 5
+    assert character.get_relationships(WantedByFaction) == [(WantedByFaction(amount=5), faction)]
 
-    character.remove_component(WantedComponent)
-    character.add_component(WantedComponent(amounts={str(faction): 5}))
+    character.add_relationship(WantedByFaction(amount=5), faction)
     character.add_component(JailComponent(faction_id=str(faction), release_epoch=0))
     await scenario.actor.submit(_cmd(scenario, "serve-jail-time"))
     await scenario.actor.tick(HOUR)
     assert not character.has_component(JailComponent)
-    assert character.get_component(WantedComponent).amounts == {}
+    assert not character.get_relationships(WantedByFaction)
     assert jailed[0].faction_id == str(faction)
 
     await scenario.actor.submit(_cmd(scenario, "pick-lock", lock_id=str(lock.id)))
@@ -2169,8 +2169,9 @@ async def test_witnessed_theft_takes_item_and_raises_faction_bounty():
     assert container_of(world.get_entity(item)) == scenario.character
     assert thefts and thefts[0].victim_id == str(victim)
     assert crimes and crimes[0].faction_id == str(faction)
-    bounty = world.get_entity(scenario.character).get_component(WantedComponent)
-    assert bounty.amounts[str(faction)] == 10
+    assert world.get_entity(scenario.character).get_relationships(WantedByFaction) == [
+        (WantedByFaction(amount=10), faction)
+    ]
 
 
 async def test_repeat_witnessed_theft_updates_existing_bounty_and_ignores_invalid_witnesses():
@@ -2212,8 +2213,9 @@ async def test_repeat_witnessed_theft_updates_existing_bounty_and_ignores_invali
     )
     await scenario.actor.tick(HOUR)
 
-    bounty = world.get_entity(scenario.character).get_component(WantedComponent)
-    assert bounty.amounts[str(faction)] == 20
+    assert world.get_entity(scenario.character).get_relationships(WantedByFaction) == [
+        (WantedByFaction(amount=20), faction)
+    ]
     assert len(crimes) == 2
     assert str(sleeping_witness.id) not in crimes[-1].witness_ids
 
@@ -2234,15 +2236,15 @@ async def test_sneaking_thief_is_not_witnessed():
     world = scenario.actor.world
     assert container_of(world.get_entity(item)) == scenario.character
     assert not crimes
-    assert not world.get_entity(scenario.character).has_component(WantedComponent)
+    assert not world.get_entity(scenario.character).get_relationships(WantedByFaction)
 
 
 async def test_pay_bounty_clears_a_faction_bounty():
     scenario = build_scenario()
     _install(scenario.actor)
     faction = _faction(scenario)
-    scenario.actor.world.get_entity(scenario.character).add_component(
-        WantedComponent(amounts={str(faction): 30})
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        WantedByFaction(amount=30), faction
     )
     paid: list[BountyPaidEvent] = []
     scenario.actor.bus.subscribe(BountyPaidEvent, paid.append)
@@ -2250,8 +2252,9 @@ async def test_pay_bounty_clears_a_faction_bounty():
     await scenario.actor.submit(_cmd(scenario, "pay-bounty", faction_id=str(faction)))
     await scenario.actor.tick(HOUR)
 
-    bounty = scenario.actor.world.get_entity(scenario.character).get_component(WantedComponent)
-    assert str(faction) not in bounty.amounts
+    assert not scenario.actor.world.get_entity(scenario.character).get_relationships(
+        WantedByFaction
+    )
     assert paid and paid[0].amount == 30
 
 
@@ -2304,11 +2307,19 @@ def test_dragonsim_fragments_show_sneaking_and_bounty():
     faction = _faction(scenario)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(SneakingComponent(sneaking=True))
-    character.add_component(WantedComponent(amounts={str(faction): 25}))
+    character.add_relationship(WantedByFaction(amount=25), faction)
+    character.add_relationship(HasStandingWithFaction(score=3), faction)
 
     lines = dragonsim_fragments(scenario.actor.world, character)
     assert any("sneaking" in line for line in lines)
     assert any("Bounty of 25" in line and "Moss Wardens" in line for line in lines)
+    assert "Faction standing with Moss Wardens: 3." in lines
+    assert (
+        HasStandingWithFaction(score=3).prompt_fragments(
+            ComponentPromptContext.for_entity(scenario.actor.world, character)
+        )
+        == ()
+    )
 
 
 async def test_theft_without_faction_witnesses_raises_no_bounty():
@@ -2324,7 +2335,7 @@ async def test_theft_without_faction_witnesses_raises_no_bounty():
     world = scenario.actor.world
     assert container_of(world.get_entity(item)) == scenario.character
     assert not crimes
-    assert not world.get_entity(scenario.character).has_component(WantedComponent)
+    assert not world.get_entity(scenario.character).get_relationships(WantedByFaction)
 
 
 def test_steal_and_sneak_reject_more_bad_state_directly():
@@ -2341,8 +2352,8 @@ def test_steal_and_sneak_reject_more_bad_state_directly():
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), loose.id
     )
-    scenario.actor.world.get_entity(scenario.character).add_component(
-        WantedComponent(amounts={str(faction): 10})
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        WantedByFaction(amount=10), faction
     )
 
     cases = [
@@ -2369,14 +2380,17 @@ def test_steal_and_sneak_reject_more_bad_state_directly():
         assert expected in result.reason, (expected, result.reason)
 
 
-def test_fragments_show_bounty_for_unknown_faction_key():
+def test_fragments_show_bounty_for_non_faction_target():
     scenario = build_scenario()
     _install(scenario.actor)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(WantedComponent(amounts={"lost_77": 5}))
+    target = spawn_entity(
+        scenario.actor.world, [IdentityComponent(name="lost warrant", kind="record")]
+    )
+    character.add_relationship(WantedByFaction(amount=5), target.id)
 
     lines = dragonsim_fragments(scenario.actor.world, character)
-    assert any("Bounty of 5 with lost_77" in line for line in lines)
+    assert "Bounty of 5 with lost warrant." in lines
 
 
 def test_payload_entity_id_returns_none_when_no_keys_present():
@@ -2776,20 +2790,36 @@ def test_bribe_guard_branches_no_wanted_and_full_clear_directly():
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), guard.id)
     bribe = BribeGuardHandler()
 
-    # No WantedComponent at all (branch 1613 false -> 1622).
+    # No WantedByFaction edge at all.
     assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
-    assert not character.has_component(WantedComponent)
+    assert not character.get_relationships(WantedByFaction)
 
-    # Wanted but for a different faction (branch 1615 false -> 1622).
-    character.add_component(WantedComponent(amounts={"other_5": 7}))
-    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
-    assert character.get_component(WantedComponent).amounts == {"other_5": 7}
+    unscoped_guard = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Unscoped Guard", kind="character"),
+            CharacterComponent(species="bunny"),
+            GuardComponent(faction_id="not-an-entity", bribe_amount=10),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unscoped_guard.id)
+    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(unscoped_guard.id))).ok
 
-    # Bribe exactly clears the bounty to 0 -> key removed (line 1620).
-    character.remove_component(WantedComponent)
-    character.add_component(WantedComponent(amounts={str(faction): 10}))
+    # Wanted by a different faction.
+    other_faction = spawn_entity(
+        world, [IdentityComponent(name="Other", kind="faction"), FactionComponent(name="Other")]
+    )
+    character.add_relationship(WantedByFaction(amount=7), other_faction.id)
     assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
-    assert str(faction) not in character.get_component(WantedComponent).amounts
+    assert character.get_relationships(WantedByFaction) == [
+        (WantedByFaction(amount=7), other_faction.id)
+    ]
+
+    # Bribe exactly clears the matching bounty.
+    character.remove_relationship(WantedByFaction, other_faction.id)
+    character.add_relationship(WantedByFaction(amount=10), faction)
+    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
+    assert not character.get_relationships(WantedByFaction)
 
 
 def test_serve_jail_time_branches_directly():
@@ -2806,7 +2836,7 @@ def test_serve_jail_time_branches_directly():
         == "sentence is not complete"
     )
 
-    # Complete sentence, no WantedComponent (branch 1651 false -> 1655).
+    # Complete sentence, no WantedByFaction edge.
     character.remove_component(JailComponent)
     character.add_component(JailComponent(faction_id="f1", release_epoch=0))
     assert ServeJailTimeHandler().execute(ctx, _handler_cmd(scenario, "serve-jail-time")).ok
@@ -2921,10 +2951,12 @@ def test_fragments_show_bounty_when_faction_key_is_non_faction_entity():
     # Key parses and the entity exists, but it is not a faction (2411 -> 2413):
     # the bounty line falls back to the raw key as the faction name.
     prop = spawn_entity(world, [IdentityComponent(name="plain rock", kind="prop")])
-    character.add_component(WantedComponent(amounts={str(prop.id): 8}))
+    character.add_relationship(WantedByFaction(amount=8), prop.id)
+    character.add_relationship(HasStandingWithFaction(score=-2), prop.id)
 
     lines = dragonsim_fragments(world, character)
-    assert any(f"Bounty of 8 with {prop.id}" in line for line in lines)
+    assert "Bounty of 8 with plain rock." in lines
+    assert "Faction standing with plain rock: -2." in lines
 
 
 def test_fragments_skip_spell_component_for_already_known_nearby_spell():

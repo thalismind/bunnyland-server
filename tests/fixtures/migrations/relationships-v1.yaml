@@ -33,6 +33,22 @@ components:
     entity_4: {source_id: entity_2}
   RumorTargetComponent:
     entity_4: {target_id: entity_6}
+  FactionComponent:
+    entity_2: {name: Moss Wardens, ideology: ""}
+  InstitutionComponent:
+    entity_3: {name: Cartographers, institution_type: guild}
+  LawRegionComponent:
+    entity_7: {region_id: moss-road, fines: {}}
+  FactionReputationComponent:
+    entity_1: {scores: {Moss Wardens: 5}}
+  InstitutionReputationComponent:
+    entity_1: {scores: {entity_3: 3}}
+  RegionalReputationComponent:
+    entity_1: {scores: {entity_7: 2}}
+  LegalReputationComponent:
+    entity_1: {scores: {moss-road: -4}}
+  WantedComponent:
+    entity_1: {amounts: {entity_2: 10}}
   WorldClockComponent:
     entity_7: {game_time_seconds: 0, tick_index: 0, time_scale: 1.0}
 relationships: {}

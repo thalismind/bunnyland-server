@@ -61,6 +61,63 @@ def _live_target(
     return target
 
 
+def _live_target_or_label(
+    entities: dict[str, Any],
+    components: dict[str, Any],
+    target_id: Any,
+    *,
+    owner_id: str,
+    component: str,
+    field: str,
+    target_component: str,
+    label_field: str,
+) -> str:
+    target = str(target_id or "")
+    typed_targets = _records(components, target_component)
+    if target in entities:
+        if target not in typed_targets:
+            raise WorldMigrationError(
+                f"schema-v1 entity {owner_id!r} component {component}.{field} "
+                f"refers to entity {target!r} without {target_component}"
+            )
+        return target
+    matches = [
+        entity_id
+        for entity_id, fields in typed_targets.items()
+        if isinstance(fields, dict) and str(fields.get(label_field, "")) == target
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise WorldMigrationError(
+            f"schema-v1 entity {owner_id!r} component {component}.{field} "
+            f"has ambiguous {target_component}.{label_field} label {target!r}"
+        )
+    return _live_target(
+        entities,
+        target,
+        owner_id=owner_id,
+        component=component,
+        field=field,
+    )
+
+
+def _score_map(fields: Any, *, owner_id: str, component: str, field: str) -> dict[str, int]:
+    if not isinstance(fields, dict):
+        raise WorldMigrationError(f"{component} fields for {owner_id!r} must be a mapping")
+    scores = fields.get(field, {})
+    if not isinstance(scores, dict):
+        raise WorldMigrationError(f"{component}.{field} for {owner_id!r} must be a mapping")
+    normalized: dict[str, int] = {}
+    for target, value in scores.items():
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise WorldMigrationError(
+                f"{component}.{field} for {owner_id!r} must contain integer values"
+            )
+        normalized[str(target)] = value
+    return normalized
+
+
 def _quest_index(components: dict[str, Any]) -> dict[str, str]:
     index: dict[str, str] = {}
     for type_name in ("QuestComponent", "GeneratedQuestComponent"):
@@ -325,6 +382,83 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
             field="target_id",
         )
         _add_edge(relationships, "RefersToSubject", rumor_id, target_id)
+
+    standing_maps = (
+        (
+            "FactionReputationComponent",
+            "HasStandingWithFaction",
+            "FactionComponent",
+            "name",
+        ),
+        (
+            "InstitutionReputationComponent",
+            "HasStandingWithInstitution",
+            "InstitutionComponent",
+            "name",
+        ),
+        (
+            "RegionalReputationComponent",
+            "HasStandingInRegion",
+            "LawRegionComponent",
+            "region_id",
+        ),
+        (
+            "LegalReputationComponent",
+            "HasLegalStandingInRegion",
+            "LawRegionComponent",
+            "region_id",
+        ),
+    )
+    for component_name, edge_name, target_component, label_field in standing_maps:
+        records = components.pop(component_name, {})
+        if not isinstance(records, dict):
+            raise WorldMigrationError(f"persisted type {component_name!r} must contain a mapping")
+        for owner_id, fields in sorted(records.items()):
+            for target, score in _score_map(
+                fields,
+                owner_id=owner_id,
+                component=component_name,
+                field="scores",
+            ).items():
+                target_id = _live_target_or_label(
+                    entities,
+                    components,
+                    target,
+                    owner_id=owner_id,
+                    component=component_name,
+                    field="scores",
+                    target_component=target_component,
+                    label_field=label_field,
+                )
+                _add_edge(relationships, edge_name, owner_id, target_id, {"score": score})
+
+    wanted = components.pop("WantedComponent", {})
+    if not isinstance(wanted, dict):
+        raise WorldMigrationError("persisted type 'WantedComponent' must contain a mapping")
+    for character_id, fields in sorted(wanted.items()):
+        for faction, amount in _score_map(
+            fields,
+            owner_id=character_id,
+            component="WantedComponent",
+            field="amounts",
+        ).items():
+            faction_id = _live_target_or_label(
+                entities,
+                components,
+                faction,
+                owner_id=character_id,
+                component="WantedComponent",
+                field="amounts",
+                target_component="FactionComponent",
+                label_field="name",
+            )
+            _add_edge(
+                relationships,
+                "WantedByFaction",
+                character_id,
+                faction_id,
+                {"amount": amount},
+            )
 
     generated = components.pop("GeneratedQuestComponent", {})
     for order, (entity_id, fields) in enumerate(sorted(generated.items()), start=1):

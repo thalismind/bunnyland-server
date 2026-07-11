@@ -1451,10 +1451,7 @@ async def test_builtin_generation_enrichers_enrich_from_generation_intent():
     )
     from bunnyland.simpacks.daggersim.mechanics import DungeonComponent
     from bunnyland.simpacks.dinosim.mechanics import DinosaurComponent, EnclosureComponent
-    from bunnyland.simpacks.dragonsim.mechanics import (
-        FactionReputationComponent,
-        PointOfInterestComponent,
-    )
+    from bunnyland.simpacks.dragonsim.mechanics import PointOfInterestComponent
     from bunnyland.simpacks.gardensim.mechanics import (
         CropQualityComponent,
         FarmQuestComponent,
@@ -1728,7 +1725,6 @@ async def test_builtin_generation_enrichers_enrich_from_generation_intent():
     assert raptor.has_component(DinosaurComponent)
     assert raptor.has_component(StaminaComponent)
     assert raptor.has_component(MutationThresholdComponent)
-    assert raptor.has_component(FactionReputationComponent)
 
 
 async def test_builtin_generation_enrichers_enrich_from_descriptive_mentions():
@@ -2217,15 +2213,16 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         EnchantedItemComponent,
         EtiquetteSkillComponent,
         FeedingNeedComponent,
+        HasLegalStandingInRegion,
+        HasStandingInRegion,
+        HasStandingWithInstitution,
         HostilityComponent,
         IngredientComponent,
         InstitutionComponent,
         InstitutionDuesComponent,
-        InstitutionReputationComponent,
         InstitutionServiceComponent,
         LanguageSkillComponent,
         LawRegionComponent,
-        LegalReputationComponent,
         LodgingComponent,
         OriginatesFromSource,
         PotionMakerComponent,
@@ -2234,7 +2231,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         RecallAnchorComponent,
         RechargeServiceComponent,
         RefersToSubject,
-        RegionalReputationComponent,
         RestRiskComponent,
         RumorComponent,
         RumorReliabilityComponent,
@@ -2256,9 +2252,9 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         DiscoveryComponent,
         EncounterZoneComponent,
         FactionComponent,
-        FactionReputationComponent,
         GreatSoulComponent,
         GuardComponent,
+        HasStandingWithFaction,
         JailComponent,
         LockDifficultyComponent,
         LoreBookComponent,
@@ -2279,7 +2275,7 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         SpellCooldownComponent,
         SurrenderComponent,
         VoiceInscriptionComponent,
-        WantedComponent,
+        WantedByFaction,
         WordOfPowerComponent,
     )
     from bunnyland.simpacks.dragonsim.quests import QuestTemplateComponent
@@ -2569,16 +2565,11 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
     assert dagger_board.get_relationships(OriginatesFromSource) == [
         (OriginatesFromSource(), dagger_city.id)
     ]
-    assert dagger_board.get_relationships(RefersToSubject) == [
-        (RefersToSubject(), dagger_city.id)
-    ]
+    assert dagger_board.get_relationships(RefersToSubject) == [(RefersToSubject(), dagger_city.id)]
 
     dagger_scholar = actor.world.get_entity(result.characters["dagger_scholar"])
     for component_type in (
         BountyComponent,
-        RegionalReputationComponent,
-        InstitutionReputationComponent,
-        LegalReputationComponent,
         ClassTemplateComponent,
         CustomClassComponent,
         LanguageSkillComponent,
@@ -2594,6 +2585,13 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         ConversationToneComponent,
     ):
         assert dagger_scholar.has_component(component_type)
+    assert dagger_scholar.get_relationships(HasStandingInRegion) == [
+        (HasStandingInRegion(score=1), dagger_city.id)
+    ]
+    assert dagger_scholar.get_relationships(HasLegalStandingInRegion) == [
+        (HasLegalStandingInRegion(), dagger_city.id)
+    ]
+    assert not dagger_scholar.get_relationships(HasStandingWithInstitution)
 
     dragon_ruin = actor.world.get_entity(result.rooms["dragon_ruin"])
     for component_type in (
@@ -2624,12 +2622,10 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
 
     dragon_mage = actor.world.get_entity(result.characters["dragon_mage"])
     for component_type in (
-        FactionReputationComponent,
         GuardComponent,
         JailComponent,
         GreatSoulComponent,
         SneakingComponent,
-        WantedComponent,
         MagicComponent,
         SpellCooldownComponent,
         PersuasionComponent,
@@ -2637,6 +2633,8 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         AncientBeastComponent,
     ):
         assert dragon_mage.has_component(component_type)
+    assert not dragon_mage.get_relationships(HasStandingWithFaction)
+    assert not dragon_mage.get_relationships(WantedByFaction)
 
 
 async def test_builtin_generation_enrichers_cover_cross_package_mention_branches():
@@ -2664,7 +2662,6 @@ async def test_builtin_generation_enrichers_cover_cross_package_mention_branches
     )
     from bunnyland.simpacks.dragonsim.mechanics import (
         FactionComponent,
-        FactionReputationComponent,
         PointOfInterestComponent,
         QuestComponent,
     )
@@ -2848,7 +2845,6 @@ async def test_builtin_generation_enrichers_cover_cross_package_mention_branches
     assert fighter.has_component(FertilityComponent)
     assert fighter.has_component(RadiationDoseComponent)
     assert fighter.has_component(MutationThresholdComponent)
-    assert fighter.has_component(FactionReputationComponent)
 
 
 async def test_builtin_generation_enrichers_cover_sim_pack_expansion_wants():
@@ -3567,10 +3563,17 @@ async def test_enrichment_object_only_component_branches():
 
 
 def test_relationship_generation_requires_targets_and_emits_configured_access():
-    from bunnyland.core import GenerationEdge
+    from bunnyland.core import GenerationEdge, GenerationTarget
     from bunnyland.simpacks.colonysim.generation import ColonyGenerationEnricher
     from bunnyland.simpacks.daggersim.generation import DaggerGenerationEnricher
-    from bunnyland.simpacks.daggersim.mechanics import HasAccessToService
+    from bunnyland.simpacks.daggersim.mechanics import (
+        HasAccessToService,
+        HasLegalStandingInRegion,
+        HasStandingInRegion,
+        HasStandingWithInstitution,
+    )
+    from bunnyland.simpacks.dragonsim.generation import DragonGenerationEnricher
+    from bunnyland.simpacks.dragonsim.mechanics import HasStandingWithFaction, WantedByFaction
 
     colony = ColonyGenerationEnricher().enrich(
         GenerationRequest(
@@ -3589,6 +3592,49 @@ def test_relationship_generation_requires_targets_and_emits_configured_access():
         )
     )
     assert access.edges == (GenerationEdge(HasAccessToService(), "entity_1"),)
+
+    standing = dagger.enrich(
+        GenerationRequest(
+            entity_kind="character",
+            capabilities=(
+                "bunnyland.daggersim.regional-reputation",
+                "bunnyland.daggersim.institution-reputation",
+                "bunnyland.daggersim.legal-reputation",
+            ),
+            context={"room_id": "room", "institution_id": "guild"},
+        )
+    )
+    assert standing.edges == (
+        GenerationEdge(HasStandingInRegion(score=1), GenerationTarget("room")),
+        GenerationEdge(HasStandingWithInstitution(score=1), GenerationTarget("guild")),
+        GenerationEdge(HasLegalStandingInRegion(), GenerationTarget("room")),
+    )
+    unscoped_standing = dagger.enrich(
+        GenerationRequest(
+            entity_kind="character",
+            capabilities=(
+                "bunnyland.daggersim.regional-reputation",
+                "bunnyland.daggersim.institution-reputation",
+                "bunnyland.daggersim.legal-reputation",
+            ),
+        )
+    )
+    assert unscoped_standing.edges == ()
+
+    dragon_standing = DragonGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="character",
+            capabilities=(
+                "bunnyland.dragonsim.faction-reputation",
+                "bunnyland.dragonsim.wanted",
+            ),
+            context={"faction_id": "faction"},
+        )
+    )
+    assert dragon_standing.edges == (
+        GenerationEdge(HasStandingWithFaction(), GenerationTarget("faction")),
+        GenerationEdge(WantedByFaction(amount=10), GenerationTarget("faction")),
+    )
 
     unscoped_rumor = dagger.enrich(
         GenerationRequest(

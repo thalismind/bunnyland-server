@@ -816,8 +816,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
 
     dagger = plugins[DAGGERSIM]
     assert {
-        "InstitutionReputationComponent",
-        "LegalReputationComponent",
         "PropertyDeedComponent",
         "InstitutionDuesComponent",
         "LetterOfCreditComponent",
@@ -896,9 +894,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "MiningSiteComponent",
         "MortgageComponent",
     } <= {component.__name__ for component in void.ecs.components}
-    assert {"WorksShift", "MemberOfAwayTeam"} <= {
-        edge.__name__ for edge in void.ecs.edges
-    }
+    assert {"WorksShift", "MemberOfAwayTeam"} <= {edge.__name__ for edge in void.ecs.edges}
     assert {
         "assign-crew-shift",
         "relieve-crew-shift",

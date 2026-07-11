@@ -92,6 +92,9 @@ from bunnyland.simpacks.daggersim.mechanics import (
     FinePaidEvent,
     GeneratedSiteInstantiatedEvent,
     HasAccessToService,
+    HasLegalStandingInRegion,
+    HasStandingInRegion,
+    HasStandingWithInstitution,
     HostilityComponent,
     IdentifyIngredientHandler,
     IngredientComponent,
@@ -102,7 +105,6 @@ from bunnyland.simpacks.daggersim.mechanics import (
     InstitutionJoinedEvent,
     InstitutionPromotedEvent,
     InstitutionReputationChangedEvent,
-    InstitutionReputationComponent,
     InstitutionServiceComponent,
     InstitutionServiceUsedEvent,
     InvestigateRumorHandler,
@@ -113,7 +115,6 @@ from bunnyland.simpacks.daggersim.mechanics import (
     LawRegionComponent,
     LeaveDungeonHandler,
     LegalReputationChangedEvent,
-    LegalReputationComponent,
     LetterOfCreditComponent,
     LetterOfCreditIssuedEvent,
     LoanComponent,
@@ -1393,6 +1394,7 @@ def _law_region(scenario):
     scenario.actor.world.get_entity(scenario.room_a).add_component(
         LawRegionComponent(region_id="moss-road", fines={"trespass": 15, "default": 10})
     )
+    return scenario.room_a
 
 
 def _class_template(scenario):
@@ -2927,6 +2929,22 @@ def test_pay_fine_succeeds_when_crime_has_no_bounty_component():
         Contains(mode=ContainmentMode.INVENTORY), crime.id
     )
 
+    unrelated_region = spawn_entity(
+        scenario.actor.world,
+        [LawRegionComponent(region_id="other-road", fines={})],
+    )
+    missing_region = PayFineHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "pay-fine", crime_id=str(crime.id)),
+    )
+    assert missing_region.reason == "crime law region does not exist"
+    assert account.get_component(BankAccountComponent).balance == 25
+    assert crime.get_component(CrimeRecordComponent).status == "open"
+    replace_component(
+        unrelated_region,
+        LawRegionComponent(region_id="moss-road", fines={}),
+    )
+
     result = PayFineHandler().execute(
         ctx,
         _handler_cmd(scenario, "pay-fine", crime_id=str(crime.id)),
@@ -3310,10 +3328,10 @@ async def test_join_institution_and_use_member_service_grants_output_item():
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.has_relationship(MemberOfInstitution, institution_id)
-    assert character.get_component(InstitutionReputationComponent).scores[str(institution_id)] == 2
-    assert character.get_relationships(HasAccessToService) == [
-        (HasAccessToService(), service_id)
+    assert character.get_relationships(HasStandingWithInstitution) == [
+        (HasStandingWithInstitution(score=2), institution_id)
     ]
+    assert character.get_relationships(HasAccessToService) == [(HasAccessToService(), service_id)]
     assert _grant_service_access(character, service_id) is False
     assert "Unlocked institution services: 1." in daggersim_fragments(
         scenario.actor.world, character
@@ -3509,7 +3527,7 @@ async def test_unpaid_loan_defaults_into_debt():
 async def test_crime_posts_bounty_and_pay_fine_resolves_record_from_bank_account():
     scenario = build_scenario()
     _install(scenario.actor)
-    _law_region(scenario)
+    region_id = _law_region(scenario)
     bank_id = _bank(scenario)
     opened: list[AccountOpenedEvent] = []
     crimes: list[CrimeCommittedEvent] = []
@@ -3538,7 +3556,9 @@ async def test_crime_posts_bounty_and_pay_fine_resolves_record_from_bank_account
     assert crime.get_component(BountyComponent).amount == 15
     assert bounties[0].amount == 15
     character = scenario.actor.world.get_entity(scenario.character)
-    assert character.get_component(LegalReputationComponent).scores["moss-road"] == -15
+    assert character.get_relationships(HasLegalStandingInRegion) == [
+        (HasLegalStandingInRegion(score=-15), region_id)
+    ]
 
     await scenario.actor.submit(_cmd(scenario, "pay-fine", crime_id=str(crime_id)))
     await scenario.actor.tick(HOUR)
@@ -3548,7 +3568,9 @@ async def test_crime_posts_bounty_and_pay_fine_resolves_record_from_bank_account
     assert crime.get_component(CrimeRecordComponent).status == "paid"
     assert not crime.has_component(BountyComponent)
     assert paid[0].crime_id == str(crime_id)
-    assert character.get_component(LegalReputationComponent).scores["moss-road"] == 0
+    assert character.get_relationships(HasLegalStandingInRegion) == [
+        (HasLegalStandingInRegion(score=0), region_id)
+    ]
     assert [event.score for event in legal] == [-15, 0]
 
 
@@ -3957,9 +3979,7 @@ def test_daggersim_component_prompt_fragments_use_target_and_self_context():
         "Safe storage: 2 item(s).",
     )
     assert (
-        SafeStorageComponent(owner_id=str(character.id)).prompt_fragments(
-            observer_institution_ctx
-        )
+        SafeStorageComponent(owner_id=str(character.id)).prompt_fragments(observer_institution_ctx)
         == ()
     )
     assert DebtCollectorComponent(
@@ -5073,14 +5093,6 @@ def test_daggersim_first_person_only_fragments_hide_from_observers():
             "Traveling by cart; arrival due at epoch 10.",
         ),
         (
-            InstitutionReputationComponent(scores={"guild_1": 3}),
-            "Institution reputation with guild_1: 3.",
-        ),
-        (
-            LegalReputationComponent(scores={"region_a": -2}),
-            "Legal reputation in region_a: -2.",
-        ),
-        (
             CustomClassComponent(class_name="Tunnel Sage"),
             "Custom class: Tunnel Sage.",
         ),
@@ -5319,18 +5331,12 @@ def test_daggersim_fragments_include_legal_reputation_and_named_institution():
             InstitutionComponent(name="Coin Wardens"),
         ],
     )
-    # InstitutionReputationComponent with a resolvable entity id -> uses its name (4091->4093).
-    replace_component(
-        character,
-        InstitutionReputationComponent(scores={str(institution.id): 6}),
-    )
-    replace_component(
-        character,
-        LegalReputationComponent(scores={"moss-road": -3}),
-    )
+    region_id = _law_region(scenario)
+    character.add_relationship(HasStandingWithInstitution(score=6), institution.id)
+    character.add_relationship(HasLegalStandingInRegion(score=-3), region_id)
     lines = daggersim_fragments(world, character)
-    assert any("Institution reputation with Coin Wardens: 6." == line for line in lines)
-    assert any("Legal reputation in moss-road: -3." == line for line in lines)
+    assert "Institution standing with Coin Wardens: 6." in lines
+    assert "Legal standing in moss-road: -3." in lines
 
 
 def test_daggersim_use_service_rejects_non_institution_container():
@@ -5702,16 +5708,40 @@ def test_daggersim_use_recall_from_roomless_character():
     assert container_of(world.get_entity(scenario.character)) == anchor.id
 
 
-def test_daggersim_fragments_keep_unresolvable_reputation_label():
+def test_daggersim_standing_edges_hide_from_observers():
     scenario = build_scenario()
     _install(scenario.actor)
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
+    institution = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Coin Wardens", kind="institution"),
+            InstitutionComponent(name="Coin Wardens"),
+        ],
+    )
+    edge = HasStandingWithInstitution(score=4)
+    first = ComponentPromptContext.for_entity(world, character, target=institution)
+    observer_entity = spawn_entity(world, [CharacterComponent()])
+    observer = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(viewer=observer_entity),
+        target=institution,
+    )
 
-    # InstitutionReputation keyed by a non-entity string keeps the raw label (4092->4094).
-    replace_component(character, InstitutionReputationComponent(scores={"not-an-entity": 4}))
-    lines = daggersim_fragments(world, character)
-    assert any("Institution reputation with not-an-entity: 4." == line for line in lines)
+    assert edge.prompt_fragments(first) == ("Institution standing with Coin Wardens: 4.",)
+    assert edge.prompt_fragments(observer) == ()
+
+    region = spawn_entity(world, [IdentityComponent(name="Moss Road", kind="region")])
+    region_first = ComponentPromptContext.for_entity(world, character, target=region)
+    regional = HasStandingInRegion(score=2)
+    assert regional.prompt_fragments(region_first) == ("Regional standing in Moss Road: 2.",)
+    assert regional.prompt_fragments(observer) == ()
+
+    legal = HasLegalStandingInRegion(score=-1)
+    assert legal.prompt_fragments(observer) == ()
+    assert legal.prompt_fragments(region_first) == ("Legal standing in Moss Road: -1.",)
 
 
 def test_daggersim_social_register_reactor_ignores_missing_speaker():

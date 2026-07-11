@@ -96,7 +96,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     SurrenderComponent,
     TracksQuest,
     VoiceInscriptionComponent,
-    WantedComponent,
+    WantedByFaction,
 )
 
 
@@ -816,10 +816,10 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
         "Ancient beast nearby: Alduin (soul absorbed).",
     )
     assert GreatSoulComponent(souls=0).prompt_fragments(self_ctx) == ()
-    assert WantedComponent(amounts={"hold": 40}).prompt_fragments(other_ctx) == ()
-    assert WantedComponent(amounts={"hold": 40}).prompt_fragments(self_ctx) == (
-        "Bounty of 40 with hold.",
-    )
+    assert WantedByFaction(amount=40).prompt_fragments(other_ctx) == ()
+    assert WantedByFaction(amount=40).prompt_fragments(
+        ComponentPromptContext.for_entity(world, character, target=faction)
+    ) == ("Bounty of 40 with Companions.",)
     assert LockDifficultyComponent(locked=False).prompt_fragments(self_ctx) == ()
     assert LockDifficultyComponent(difficulty=5).prompt_fragments(
         ComponentPromptContext.for_entity(world, entity("chest"))

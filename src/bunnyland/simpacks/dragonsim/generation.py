@@ -1,6 +1,6 @@
 """Declarative dragonsim generation contributions."""
 
-from ...core.generation import GenerationDelta, GenerationRequest
+from ...core.generation import GenerationDelta, GenerationEdge, GenerationRequest, GenerationTarget
 from ...worldgen.enrichment import (
     GenerationContext,
     generation_generated_id,
@@ -15,9 +15,9 @@ from .mechanics import (
     DiscoveryComponent,
     EncounterZoneComponent,
     FactionComponent,
-    FactionReputationComponent,
     GreatSoulComponent,
     GuardComponent,
+    HasStandingWithFaction,
     JailComponent,
     LockDifficultyComponent,
     LoreBookComponent,
@@ -38,7 +38,7 @@ from .mechanics import (
     SpellCooldownComponent,
     SurrenderComponent,
     VoiceInscriptionComponent,
-    WantedComponent,
+    WantedByFaction,
     WordOfPowerComponent,
 )
 from .quests import QuestTemplateComponent
@@ -88,6 +88,7 @@ class DragonGenerationEnricher:
     def enrich(self, request: GenerationRequest) -> GenerationDelta:
         ctx = GenerationContext.from_request(request)
         components = {}
+        edges = []
 
         def add(component):
             components[type(component)] = component
@@ -95,7 +96,11 @@ class DragonGenerationEnricher:
         if ctx.is_character:
             name = ctx.name
             if generation_wants(ctx, "bunnyland.dragonsim.faction-reputation"):
-                add(FactionReputationComponent(scores={}))
+                faction_id = request.context.get("faction_id")
+                if faction_id:
+                    edges.append(
+                        GenerationEdge(HasStandingWithFaction(), GenerationTarget(str(faction_id)))
+                    )
             if generation_wants(ctx, "bunnyland.dragonsim.guard") or generation_mentions(
                 ctx, "guard"
             ):
@@ -114,7 +119,13 @@ class DragonGenerationEnricher:
             ):
                 add(SneakingComponent(sneaking=True, since_epoch=ctx.world_epoch))
             if generation_wants(ctx, "bunnyland.dragonsim.wanted", "bunnyland.dragonsim.bounty"):
-                add(WantedComponent(amounts={generation_generated_id(ctx, "faction"): 10}))
+                faction_id = request.context.get("faction_id")
+                if faction_id:
+                    edges.append(
+                        GenerationEdge(
+                            WantedByFaction(amount=10), GenerationTarget(str(faction_id))
+                        )
+                    )
             if generation_wants(ctx, "bunnyland.dragonsim.magic"):
                 add(MagicComponent(last_updated_epoch=ctx.world_epoch))
             if generation_wants(ctx, "bunnyland.dragonsim.spell-cooldown"):
@@ -211,6 +222,7 @@ class DragonGenerationEnricher:
                 )
         return GenerationDelta(
             components=tuple(components.values()),
+            edges=tuple(edges),
             satisfies=tuple(
                 capability for capability in request.capabilities if capability in CAPABILITIES
             ),

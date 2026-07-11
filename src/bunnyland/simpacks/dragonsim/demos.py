@@ -45,7 +45,7 @@ async def dragonsim_example(actor, seed: str, options: GenOptions) -> Instantiat
     from bunnyland.simpacks.dragonsim.mechanics import (
         DiscoveryComponent,
         FactionComponent,
-        FactionReputationComponent,
+        HasStandingWithFaction,
         PointOfInterestComponent,
     )
 
@@ -84,7 +84,7 @@ async def dragonsim_example(actor, seed: str, options: GenOptions) -> Instantiat
             PointOfInterestComponent(location_type="barrow", region="Mistmoor"),
             DiscoveryComponent(),
         )
-        _add(
+        faction = _add(
             actor,
             village,
             [
@@ -100,10 +100,8 @@ async def dragonsim_example(actor, seed: str, options: GenOptions) -> Instantiat
             "Reach the inner sanctum",
             "an ancient relic",
         )
-        _augment(
-            actor,
-            world.characters["aldric"],
-            FactionReputationComponent(scores={"Moss Wardens": 5}),
+        actor.world.get_entity(world.characters["aldric"]).add_relationship(
+            HasStandingWithFaction(score=5), faction.id
         )
     return world
 

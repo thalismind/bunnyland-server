@@ -203,6 +203,11 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
         "PotionRecipeComponent": "ingredient_ids",
         "EggComponent": "parent_ids",
         "RumorComponent": "heard_by",
+        "FactionReputationComponent": "scores",
+        "InstitutionReputationComponent": "scores",
+        "RegionalReputationComponent": "scores",
+        "LegalReputationComponent": "scores",
+        "WantedComponent": "amounts",
     }
     edge_names = {
         "AllowedIn",
@@ -218,11 +223,18 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
         "RumorHeardBy",
         "MemberOfFaction",
         "MemberOfInstitution",
+        "HasStandingWithFaction",
+        "HasStandingWithInstitution",
+        "HasStandingInRegion",
+        "HasLegalStandingInRegion",
+        "WantedByFaction",
     }
     found_edges: set[str] = set()
+    found_classes: set[str] = set()
     for path in root.rglob("mechanics.py"):
         tree = ast.parse(path.read_text())
         for node in (item for item in ast.walk(tree) if isinstance(item, ast.ClassDef)):
+            found_classes.add(node.name)
             fields = {
                 child.target.id
                 for child in node.body
@@ -233,18 +245,30 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
             if any(isinstance(base, ast.Name) and base.id == "Edge" for base in node.bases):
                 found_edges.add(node.name)
     assert edge_names <= found_edges
-    assert not {
-        "MemberOf",
-        "CaravanHasMember",
-        "FestivalJoinedBy",
-        "AwayTeamHasMember",
-        "StoresItem",
-        "CanUseService",
-        "RecipeRequiresIngredient",
-        "EggHasParent",
-        "RumorHasSource",
-        "RumorAbout",
-    } & found_edges
+    removed_wrappers = {
+        "FactionReputationComponent",
+        "InstitutionReputationComponent",
+        "RegionalReputationComponent",
+        "LegalReputationComponent",
+        "WantedComponent",
+    }
+    assert not removed_wrappers & found_classes
+    assert (
+        not {
+            "MemberOf",
+            "CaravanHasMember",
+            "FestivalJoinedBy",
+            "AwayTeamHasMember",
+            "StoresItem",
+            "CanUseService",
+            "RecipeRequiresIngredient",
+            "EggHasParent",
+            "RumorHasSource",
+            "RumorAbout",
+        }
+        & found_edges
+    )
+
 
 def test_registry_rejects_duplicate_event_ownership_and_incompatible_expectations():
     with pytest.raises(PluginError, match="already owned"):

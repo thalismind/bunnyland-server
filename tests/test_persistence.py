@@ -427,26 +427,34 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix)
     assert source.read_text() == before
     assert migrated["bunnyland"]["schema_version"] == 2
     expected = {
-        "AllowedIn": ("entity_1", "entity_2"),
-        "MemberOfCaravan": ("entity_1", "entity_3"),
-        "StoredIn": ("entity_4", "entity_3"),
-        "HasAccessToService": ("entity_1", "entity_5"),
-        "MemberOfFestival": ("entity_1", "entity_3"),
-        "MemberOfAwayTeam": ("entity_1", "entity_3"),
-        "DependsOnIngredient": ("entity_5", "entity_4"),
-        "DescendsFromParent": ("entity_6", "entity_1"),
-        "RumorHeardBy": ("entity_4", "entity_1"),
-        "OriginatesFromSource": ("entity_4", "entity_2"),
-        "RefersToSubject": ("entity_4", "entity_6"),
+        "AllowedIn": ("entity_1", "entity_2", {}),
+        "MemberOfCaravan": ("entity_1", "entity_3", {}),
+        "StoredIn": ("entity_4", "entity_3", {}),
+        "HasAccessToService": ("entity_1", "entity_5", {}),
+        "MemberOfFestival": ("entity_1", "entity_3", {}),
+        "MemberOfAwayTeam": ("entity_1", "entity_3", {}),
+        "DependsOnIngredient": ("entity_5", "entity_4", {"order": 0}),
+        "DescendsFromParent": ("entity_6", "entity_1", {"order": 0}),
+        "RumorHeardBy": ("entity_4", "entity_1", {}),
+        "OriginatesFromSource": ("entity_4", "entity_2", {}),
+        "RefersToSubject": ("entity_4", "entity_6", {}),
+        "HasStandingWithFaction": ("entity_1", "entity_2", {"score": 5}),
+        "HasStandingWithInstitution": ("entity_1", "entity_3", {"score": 3}),
+        "HasStandingInRegion": ("entity_1", "entity_7", {"score": 2}),
+        "HasLegalStandingInRegion": ("entity_1", "entity_7", {"score": -4}),
+        "WantedByFaction": ("entity_1", "entity_2", {"amount": 10}),
     }
-    for edge_name, (source_id, target_id) in expected.items():
-        assert migrated["relationships"][edge_name][source_id][0]["target"] == target_id
+    for edge_name, (source_id, target_id, edge) in expected.items():
+        record = migrated["relationships"][edge_name][source_id][0]
+        assert record == {"target": target_id, "edge": edge}
 
     actor, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
     destination = tmp_path / f"relationships-v2.{suffix}"
     save_world(actor, destination, meta=meta)
-    saved = json.loads(destination.read_text()) if suffix == "json" else yaml.safe_load(
-        destination.read_text()
+    saved = (
+        json.loads(destination.read_text())
+        if suffix == "json"
+        else yaml.safe_load(destination.read_text())
     )
     metadata_key = "bunnyland" if suffix == "json" else "__bunnyland__"
     assert saved[metadata_key]["schema_version"] == 2
@@ -464,9 +472,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix)
         ("RumorComponent", "heard_by"),
     ],
 )
-def test_schema_v1_relationship_sequences_reject_malformed_and_missing_targets(
-    component, field
-):
+def test_schema_v1_relationship_sequences_reject_malformed_and_missing_targets(component, field):
     malformed = _schema_v1_generated_quest_snapshot()
     malformed["components"][component] = {"entity_1": {field: 7}}
     with pytest.raises(WorldMigrationError, match=rf"{field}.*must be a sequence"):
@@ -519,6 +525,77 @@ def test_schema_v1_rumor_without_source_drops_empty_wrapper():
 
     assert "RumorSourceComponent" not in migrated["components"]
     assert "OriginatesFromSource" not in migrated["relationships"]
+
+
+@pytest.mark.parametrize(
+    ("component", "field", "target_component"),
+    [
+        ("FactionReputationComponent", "scores", "FactionComponent"),
+        ("InstitutionReputationComponent", "scores", "InstitutionComponent"),
+        ("RegionalReputationComponent", "scores", "LawRegionComponent"),
+        ("LegalReputationComponent", "scores", "LawRegionComponent"),
+        ("WantedComponent", "amounts", "FactionComponent"),
+    ],
+)
+def test_schema_v1_standing_maps_reject_invalid_targets_and_non_integer_values(
+    component, field, target_component
+):
+    missing = _schema_v1_generated_quest_snapshot()
+    missing["components"][component] = {"entity_1": {field: {"missing": 1}}}
+    with pytest.raises(
+        WorldMigrationError,
+        match=rf"entity 'entity_1'.*{component}\.{field}.*'missing'",
+    ):
+        migrate_snapshot(missing)
+
+    malformed = _schema_v1_generated_quest_snapshot()
+    malformed["components"][component] = {"entity_1": {field: {"entity_2": "high"}}}
+    with pytest.raises(WorldMigrationError, match=rf"{component}\.{field}.*integer values"):
+        migrate_snapshot(malformed)
+
+    wrong_type = _schema_v1_generated_quest_snapshot()
+    wrong_type["components"][component] = {"entity_1": {field: {"entity_2": 1}}}
+    with pytest.raises(WorldMigrationError, match=rf"entity_2.*without {target_component}"):
+        migrate_snapshot(wrong_type)
+
+
+def test_schema_v1_standing_maps_reject_ambiguous_labels_and_malformed_records():
+    ambiguous = _schema_v1_generated_quest_snapshot()
+    ambiguous["components"]["FactionComponent"] = {
+        "entity_2": {"name": "Wardens"},
+        "entity_3": {"name": "Wardens"},
+    }
+    ambiguous["components"]["FactionReputationComponent"] = {"entity_1": {"scores": {"Wardens": 1}}}
+    with pytest.raises(WorldMigrationError, match="ambiguous FactionComponent.name"):
+        migrate_snapshot(ambiguous)
+
+    malformed_fields = _schema_v1_generated_quest_snapshot()
+    malformed_fields["components"]["FactionReputationComponent"] = {"entity_1": []}
+    with pytest.raises(WorldMigrationError, match="fields for 'entity_1'.*mapping"):
+        migrate_snapshot(malformed_fields)
+
+    malformed_scores = _schema_v1_generated_quest_snapshot()
+    malformed_scores["components"]["FactionReputationComponent"] = {"entity_1": {"scores": []}}
+    with pytest.raises(WorldMigrationError, match=r"FactionReputationComponent\.scores.*mapping"):
+        migrate_snapshot(malformed_scores)
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        "FactionReputationComponent",
+        "InstitutionReputationComponent",
+        "RegionalReputationComponent",
+        "LegalReputationComponent",
+        "WantedComponent",
+    ],
+)
+def test_schema_v1_standing_component_tables_must_be_mappings(component):
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"][component] = []
+
+    with pytest.raises(WorldMigrationError, match=rf"persisted type '{component}'.*mapping"):
+        migrate_snapshot(source)
 
 
 def test_schema_v1_migration_handles_collisions_and_unaccepted_generated_quests():

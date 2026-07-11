@@ -4,7 +4,6 @@ from ...core.generation import GenerationDelta, GenerationEdge, GenerationReques
 from ...worldgen.enrichment import (
     GenerationContext,
     generation_expansion_trigger,
-    generation_generated_id,
     generation_mentions,
     generation_wants,
 )
@@ -29,15 +28,16 @@ from .mechanics import (
     ExpansionHookComponent,
     FeedingNeedComponent,
     HasAccessToService,
+    HasLegalStandingInRegion,
+    HasStandingInRegion,
+    HasStandingWithInstitution,
     HostilityComponent,
     IngredientComponent,
     InstitutionComponent,
     InstitutionDuesComponent,
-    InstitutionReputationComponent,
     InstitutionServiceComponent,
     LanguageSkillComponent,
     LawRegionComponent,
-    LegalReputationComponent,
     LodgingComponent,
     OriginatesFromSource,
     PotionMakerComponent,
@@ -46,7 +46,6 @@ from .mechanics import (
     RecallAnchorComponent,
     RechargeServiceComponent,
     RefersToSubject,
-    RegionalReputationComponent,
     RestRiskComponent,
     RumorComponent,
     RumorReliabilityComponent,
@@ -199,15 +198,24 @@ class DaggerGenerationEnricher:
             if generation_wants(ctx, "bunnyland.daggersim.bounty"):
                 add(BountyComponent(amount=10, region_id=ctx.room_id))
             if generation_wants(ctx, "bunnyland.daggersim.regional-reputation"):
-                add(RegionalReputationComponent(scores={ctx.room_id: 1}))
-            if generation_wants(ctx, "bunnyland.daggersim.institution-reputation"):
-                add(
-                    InstitutionReputationComponent(
-                        scores={generation_generated_id(ctx, "institution"): 1}
+                if ctx.room_id:
+                    edges.append(
+                        GenerationEdge(HasStandingInRegion(score=1), GenerationTarget(ctx.room_id))
                     )
-                )
+            if generation_wants(ctx, "bunnyland.daggersim.institution-reputation"):
+                institution_id = request.context.get("institution_id")
+                if institution_id:
+                    edges.append(
+                        GenerationEdge(
+                            HasStandingWithInstitution(score=1),
+                            GenerationTarget(str(institution_id)),
+                        )
+                    )
             if generation_wants(ctx, "bunnyland.daggersim.legal-reputation"):
-                add(LegalReputationComponent(scores={ctx.room_id: 0}))
+                if ctx.room_id:
+                    edges.append(
+                        GenerationEdge(HasLegalStandingInRegion(), GenerationTarget(ctx.room_id))
+                    )
             if generation_wants(ctx, "bunnyland.daggersim.service-access"):
                 service_id = request.context.get("service_id")
                 if service_id:

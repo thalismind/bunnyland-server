@@ -197,8 +197,20 @@ class FactionComponent(Component):
 
 
 @dataclass(frozen=True)
-class FactionReputationComponent(Component):
-    scores: dict[str, int]
+class HasStandingWithFaction(Edge):
+    """character -> faction, carrying that faction's standing score."""
+
+    score: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person or ctx.target is None:
+            return ()
+        faction_name = (
+            ctx.target.get_component(FactionComponent).name
+            if ctx.target.has_component(FactionComponent)
+            else _name(ctx.target)
+        )
+        return (f"Faction standing with {faction_name}: {self.score}.",)
 
 
 @dataclass(frozen=True)
@@ -314,18 +326,20 @@ class SneakingComponent(Component):
 
 
 @dataclass(frozen=True)
-class WantedComponent(Component):
-    """Outstanding bounties keyed by faction id (catalogue 6.5)."""
+class WantedByFaction(Edge):
+    """character -> faction, carrying the outstanding bounty amount."""
 
-    amounts: dict[str, int]
+    amount: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person:
+        if not ctx.is_first_person or ctx.target is None:
             return ()
-        return tuple(
-            f"Bounty of {amount} with {faction_name}."
-            for faction_name, amount in sorted(self.amounts.items())
+        faction_name = (
+            ctx.target.get_component(FactionComponent).name
+            if ctx.target.has_component(FactionComponent)
+            else _name(ctx.target)
         )
+        return (f"Bounty of {self.amount} with {faction_name}.",)
 
 
 @dataclass(frozen=True)
@@ -1407,6 +1421,17 @@ def _is_sneaking(character: Entity) -> bool:
     )
 
 
+def _faction_bounty(character: Entity, faction_id: EntityId) -> WantedByFaction | None:
+    return next(
+        (
+            edge
+            for edge, target_id in character.get_relationships(WantedByFaction)
+            if target_id == faction_id
+        ),
+        None,
+    )
+
+
 def _awake_witnesses(world: World, room_id: EntityId, thief_id: EntityId) -> list[EntityId]:
     """Awake, conscious characters sharing the room who could see a crime."""
     witnesses: list[EntityId] = []
@@ -1516,15 +1541,11 @@ class StealHandler:
         if not faction_witnesses:
             return []
 
-        amounts = (
-            dict(thief.get_component(WantedComponent).amounts)
-            if thief.has_component(WantedComponent)
-            else {}
-        )
         events: list[DomainEvent] = []
         for faction_id, witness_ids in faction_witnesses.items():
-            key = str(faction_id)
-            amounts[key] = amounts.get(key, 0) + DEFAULT_BOUNTY
+            current = _faction_bounty(thief, faction_id)
+            amount = (current.amount if current is not None else 0) + DEFAULT_BOUNTY
+            thief.add_relationship(WantedByFaction(amount=amount), faction_id)
             faction = ctx.world.get_entity(faction_id)
             faction_name = (
                 faction.get_component(FactionComponent).name
@@ -1539,17 +1560,13 @@ class StealHandler:
                         room_id=str(room_id),
                         target_ids=tuple(witness_ids),
                         criminal_id=str(thief_id),
-                        faction_id=key,
+                        faction_id=str(faction_id),
                         faction_name=faction_name,
-                        bounty=amounts[key],
+                        bounty=amount,
                         witness_ids=tuple(witness_ids),
                     )
                 )
             )
-        if thief.has_component(WantedComponent):
-            replace_component(thief, WantedComponent(amounts=amounts))
-        else:
-            thief.add_component(WantedComponent(amounts=amounts))
         return events
 
 
@@ -1562,24 +1579,22 @@ class PayBountyHandler:
         if character_id is None or faction_id is None:
             return rejected("invalid character or faction id")
         character = ctx.entity(character_id)
-        if not character.has_component(WantedComponent):
+        bounty = _faction_bounty(character, faction_id)
+        if not character.get_relationships(WantedByFaction):
             return rejected("you have no bounties")
-        amounts = dict(character.get_component(WantedComponent).amounts)
-        key = str(faction_id)
-        if key not in amounts:
+        if bounty is None:
             return rejected("you have no bounty with that faction")
-        paid = amounts.pop(key)
-        replace_component(character, WantedComponent(amounts=amounts))
+        character.remove_relationship(WantedByFaction, faction_id)
         return ok(
             BountyPaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(key,),
+                    target_ids=(str(faction_id),),
                     character_id=str(character_id),
-                    faction_id=key,
-                    amount=paid,
+                    faction_id=str(faction_id),
+                    amount=bounty.amount,
                 )
             )
         )
@@ -1653,15 +1668,14 @@ class BribeGuardHandler:
         if not guard.has_component(GuardComponent):
             return rejected("target is not a guard")
         component = guard.get_component(GuardComponent)
-        if character.has_component(WantedComponent):
-            amounts = dict(character.get_component(WantedComponent).amounts)
-            if component.faction_id in amounts:
-                amounts[component.faction_id] = max(
-                    0, amounts[component.faction_id] - component.bribe_amount
-                )
-                if amounts[component.faction_id] == 0:
-                    amounts.pop(component.faction_id)
-                replace_component(character, WantedComponent(amounts=amounts))
+        faction_id = parse_entity_id(component.faction_id)
+        if faction_id is not None:
+            bounty = _faction_bounty(character, faction_id)
+            if bounty is not None:
+                amount = max(0, bounty.amount - component.bribe_amount)
+                character.remove_relationship(WantedByFaction, faction_id)
+                if amount:
+                    character.add_relationship(WantedByFaction(amount=amount), faction_id)
         return ok(
             GuardBribedEvent(
                 **ctx.event_base(
@@ -1691,10 +1705,9 @@ class ServeJailTimeHandler:
         if ctx.epoch < sentence.release_epoch:
             return rejected("sentence is not complete")
         character.remove_component(JailComponent)
-        if character.has_component(WantedComponent):
-            amounts = dict(character.get_component(WantedComponent).amounts)
-            amounts.pop(sentence.faction_id, None)
-            replace_component(character, WantedComponent(amounts=amounts))
+        faction_id = parse_entity_id(sentence.faction_id)
+        if faction_id is not None:
+            character.remove_relationship(WantedByFaction, faction_id)
         return ok(
             JailSentenceServedEvent(
                 **ctx.event_base(
@@ -1804,13 +1817,9 @@ class ReportCrimeHandler:
         if bounty <= 0:
             return rejected("bounty must be positive")
         criminal = ctx.entity(criminal_id)
-        wanted = (
-            dict(criminal.get_component(WantedComponent).amounts)
-            if criminal.has_component(WantedComponent)
-            else {}
-        )
-        wanted[str(faction_id)] = wanted.get(str(faction_id), 0) + bounty
-        replace_component(criminal, WantedComponent(amounts=wanted))
+        current = _faction_bounty(criminal, faction_id)
+        amount = (current.amount if current is not None else 0) + bounty
+        criminal.add_relationship(WantedByFaction(amount=amount), faction_id)
         return ok(
             CrimeReportedEvent(
                 **ctx.event_base(
@@ -2393,6 +2402,12 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
             world, character, perspective=ctx.perspective, target=faction
         )
         lines.extend(edge.prompt_fragments(edge_ctx))
+    for edge, faction_id in character.get_relationships(HasStandingWithFaction):
+        faction = world.get_entity(faction_id)
+        edge_ctx = ComponentPromptContext.for_entity(
+            world, character, perspective=ctx.perspective, target=faction
+        )
+        lines.extend(edge.prompt_fragments(edge_ctx))
 
     for quest in world.query().with_all([QuestComponent]).execute_entities():
         quest_ctx = ComponentPromptContext.for_entity(
@@ -2438,15 +2453,12 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
 
     if _is_sneaking(character):
         lines.append("You are sneaking.")
-    if character.has_component(WantedComponent):
-        for faction_key, amount in character.get_component(WantedComponent).amounts.items():
-            faction_name = faction_key
-            parsed = parse_entity_id(faction_key)
-            if parsed is not None and world.has_entity(parsed):
-                faction = world.get_entity(parsed)
-                if faction.has_component(FactionComponent):
-                    faction_name = faction.get_component(FactionComponent).name
-            lines.append(f"Bounty of {amount} with {faction_name}.")
+    for edge, faction_id in character.get_relationships(WantedByFaction):
+        faction = world.get_entity(faction_id)
+        edge_ctx = ComponentPromptContext.for_entity(
+            world, character, perspective=ctx.perspective, target=faction
+        )
+        lines.extend(edge.prompt_fragments(edge_ctx))
 
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
@@ -2488,7 +2500,7 @@ __all__ = [
     "ArtifactUsedEvent",
     "BrewPotionHandler",
     "BribeGuardHandler",
-    "WantedComponent",
+    "WantedByFaction",
     "BountyPaidEvent",
     "CastDragonSpellHandler",
     "ChangeFactionRankHandler",
@@ -2506,7 +2518,7 @@ __all__ = [
     "FactionJoinedEvent",
     "FactionLeftEvent",
     "FactionRankChangedEvent",
-    "FactionReputationComponent",
+    "HasStandingWithFaction",
     "GuardBribedEvent",
     "GuardComponent",
     "GreatSoulAbsorbedEvent",
