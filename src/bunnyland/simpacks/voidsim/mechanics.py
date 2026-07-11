@@ -432,12 +432,16 @@ class DataSalvageComponent(Component):
 @dataclass(frozen=True)
 class AwayTeamComponent(Component):
     mission: str = "survey"
-    member_ids: tuple[str, ...] = ()
     deployed: bool = False
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         state = "deployed" if self.deployed else "standing by"
         return (f"Away team {_name(ctx.entity)}: {self.mission}, {state}.",)
+
+
+@dataclass(frozen=True)
+class MemberOfAwayTeam(Edge):
+    pass
 
 
 @dataclass(frozen=True)
@@ -3373,6 +3377,7 @@ __all__ = [
     "AssignCrewShiftHandler",
     "AstrogationComponent",
     "AwayTeamComponent",
+    "MemberOfAwayTeam",
     "AwayTeamDeployedEvent",
     "BlueprintComponent",
     "BoardingRepelledEvent",

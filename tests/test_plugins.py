@@ -818,7 +818,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     assert {
         "InstitutionReputationComponent",
         "LegalReputationComponent",
-        "ServiceAccessComponent",
         "PropertyDeedComponent",
         "InstitutionDuesComponent",
         "LetterOfCreditComponent",
@@ -830,7 +829,9 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "AfflictionStigmaComponent",
         "CureRequestComponent",
     } <= {component.__name__ for component in dagger.ecs.components}
-    assert "OwnsProperty" in {edge.__name__ for edge in dagger.ecs.edges}
+    assert {"OwnsProperty", "StoredIn", "HasAccessToService"} <= {
+        edge.__name__ for edge in dagger.ecs.edges
+    }
     assert {
         "buy-property",
         "promote-institution",
@@ -895,7 +896,9 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "MiningSiteComponent",
         "MortgageComponent",
     } <= {component.__name__ for component in void.ecs.components}
-    assert "WorksShift" in {edge.__name__ for edge in void.ecs.edges}
+    assert {"WorksShift", "MemberOfAwayTeam"} <= {
+        edge.__name__ for edge in void.ecs.edges
+    }
     assert {
         "assign-crew-shift",
         "relieve-crew-shift",

@@ -57,6 +57,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     CreatureTrackedEvent,
     CreatureTrampledEvent,
     CreatureTranquilizedEvent,
+    DescendsFromParent,
     DinosaurComponent,
     DinosimPolicyComponent,
     DodgeCreatureHandler,
@@ -294,7 +295,8 @@ def _definition() -> Plugin:
                 RanchLaborComponent,
                 GuardAnimalComponent,
                 CreatureNeedComponent,
-            )
+            ),
+            edges=(DescendsFromParent,),
         ),
         commands=CommandContribution(
             action_definitions=ACTION_DEFINITIONS,

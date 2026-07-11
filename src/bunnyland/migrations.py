@@ -49,6 +49,18 @@ def _synthetic_id(entities: dict[str, Any], prefab: str, ordinal: int) -> str:
     return f"{prefab}_{sequence}"
 
 
+def _live_target(
+    entities: dict[str, Any], target_id: Any, *, owner_id: str, component: str, field: str
+) -> str:
+    target = str(target_id or "")
+    if target not in entities:
+        raise WorldMigrationError(
+            f"schema-v1 entity {owner_id!r} component {component}.{field} "
+            f"refers to missing entity {target!r}"
+        )
+    return target
+
+
 def _quest_index(components: dict[str, Any]) -> dict[str, str]:
     index: dict[str, str] = {}
     for type_name in ("QuestComponent", "GeneratedQuestComponent"):
@@ -101,6 +113,218 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
     quest_index = _quest_index(components)
     states = _records(components, "QuestStateComponent")
     quests = _records(components, "QuestComponent")
+
+    recipes = _records(components, "PotionRecipeComponent")
+    for recipe_id, fields in sorted(recipes.items()):
+        fields = dict(fields)
+        ingredient_ids = fields.pop("ingredient_ids", ()) or ()
+        if not isinstance(ingredient_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"PotionRecipeComponent.ingredient_ids for {recipe_id!r} must be a sequence"
+            )
+        recipes[recipe_id] = fields
+        for order, ingredient_id in enumerate(ingredient_ids):
+            target_id = _live_target(
+                entities,
+                ingredient_id,
+                owner_id=recipe_id,
+                component="PotionRecipeComponent",
+                field="ingredient_ids",
+            )
+            _add_edge(
+                relationships,
+                "DependsOnIngredient",
+                recipe_id,
+                target_id,
+                {"order": order},
+            )
+
+    eggs = _records(components, "EggComponent")
+    for egg_id, fields in sorted(eggs.items()):
+        fields = dict(fields)
+        parent_ids = fields.pop("parent_ids", ()) or ()
+        if not isinstance(parent_ids, (list, tuple)):
+            raise WorldMigrationError(f"EggComponent.parent_ids for {egg_id!r} must be a sequence")
+        eggs[egg_id] = fields
+        for order, parent_id in enumerate(parent_ids):
+            target_id = _live_target(
+                entities,
+                parent_id,
+                owner_id=egg_id,
+                component="EggComponent",
+                field="parent_ids",
+            )
+            _add_edge(
+                relationships,
+                "DescendsFromParent",
+                egg_id,
+                target_id,
+                {"order": order},
+            )
+
+    allowed_areas = components.pop("AllowedAreaComponent", {})
+    if not isinstance(allowed_areas, dict):
+        raise WorldMigrationError("persisted type 'AllowedAreaComponent' must be a mapping")
+    for character_id, fields in sorted(allowed_areas.items()):
+        fields = dict(fields)
+        room_ids = fields.pop("room_ids", ()) or ()
+        if not isinstance(room_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"AllowedAreaComponent.room_ids for {character_id!r} must be a sequence"
+            )
+        for room_id in room_ids:
+            target_id = _live_target(
+                entities,
+                room_id,
+                owner_id=character_id,
+                component="AllowedAreaComponent",
+                field="room_ids",
+            )
+            _add_edge(relationships, "AllowedIn", character_id, target_id)
+
+    caravans = _records(components, "CaravanComponent")
+    for caravan_id, fields in sorted(caravans.items()):
+        fields = dict(fields)
+        member_ids = fields.pop("member_ids", ()) or ()
+        if not isinstance(member_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"CaravanComponent.member_ids for {caravan_id!r} must be a sequence"
+            )
+        caravans[caravan_id] = fields
+        for member_id in member_ids:
+            target_id = _live_target(
+                entities,
+                member_id,
+                owner_id=caravan_id,
+                component="CaravanComponent",
+                field="member_ids",
+            )
+            _add_edge(relationships, "MemberOfCaravan", target_id, caravan_id)
+
+    safe_storages = _records(components, "SafeStorageComponent")
+    for storage_id, fields in sorted(safe_storages.items()):
+        fields = dict(fields)
+        item_ids = fields.pop("item_ids", ()) or ()
+        if not isinstance(item_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"SafeStorageComponent.item_ids for {storage_id!r} must be a sequence"
+            )
+        safe_storages[storage_id] = fields
+        for item_id in item_ids:
+            target_id = _live_target(
+                entities,
+                item_id,
+                owner_id=storage_id,
+                component="SafeStorageComponent",
+                field="item_ids",
+            )
+            _add_edge(relationships, "StoredIn", target_id, storage_id)
+
+    service_access = components.pop("ServiceAccessComponent", {})
+    if not isinstance(service_access, dict):
+        raise WorldMigrationError("persisted type 'ServiceAccessComponent' must be a mapping")
+    for character_id, fields in sorted(service_access.items()):
+        fields = dict(fields)
+        service_ids = fields.pop("service_ids", ()) or ()
+        if not isinstance(service_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"ServiceAccessComponent.service_ids for {character_id!r} must be a sequence"
+            )
+        for service_id in service_ids:
+            target_id = _live_target(
+                entities,
+                service_id,
+                owner_id=character_id,
+                component="ServiceAccessComponent",
+                field="service_ids",
+            )
+            _add_edge(relationships, "HasAccessToService", character_id, target_id)
+
+    festivals = _records(components, "FestivalComponent")
+    for festival_id, fields in sorted(festivals.items()):
+        fields = dict(fields)
+        participant_ids = fields.pop("joined_character_ids", ()) or ()
+        if not isinstance(participant_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"FestivalComponent.joined_character_ids for {festival_id!r} must be a sequence"
+            )
+        festivals[festival_id] = fields
+        for character_id in participant_ids:
+            target_id = _live_target(
+                entities,
+                character_id,
+                owner_id=festival_id,
+                component="FestivalComponent",
+                field="joined_character_ids",
+            )
+            _add_edge(relationships, "MemberOfFestival", target_id, festival_id)
+
+    away_teams = _records(components, "AwayTeamComponent")
+    for team_id, fields in sorted(away_teams.items()):
+        fields = dict(fields)
+        member_ids = fields.pop("member_ids", ()) or ()
+        if not isinstance(member_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"AwayTeamComponent.member_ids for {team_id!r} must be a sequence"
+            )
+        away_teams[team_id] = fields
+        for member_id in member_ids:
+            target_id = _live_target(
+                entities,
+                member_id,
+                owner_id=team_id,
+                component="AwayTeamComponent",
+                field="member_ids",
+            )
+            _add_edge(relationships, "MemberOfAwayTeam", target_id, team_id)
+
+    rumors = _records(components, "RumorComponent")
+    for rumor_id, fields in sorted(rumors.items()):
+        fields = dict(fields)
+        listener_ids = fields.pop("heard_by", ()) or ()
+        if not isinstance(listener_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"RumorComponent.heard_by for {rumor_id!r} must be a sequence"
+            )
+        rumors[rumor_id] = fields
+        for listener_id in listener_ids:
+            target_id = _live_target(
+                entities,
+                listener_id,
+                owner_id=rumor_id,
+                component="RumorComponent",
+                field="heard_by",
+            )
+            _add_edge(relationships, "RumorHeardBy", rumor_id, target_id)
+
+    rumor_sources = components.pop("RumorSourceComponent", {})
+    if not isinstance(rumor_sources, dict):
+        raise WorldMigrationError("persisted type 'RumorSourceComponent' must be a mapping")
+    for rumor_id, fields in sorted(rumor_sources.items()):
+        source_id = dict(fields).get("source_id")
+        if source_id is None:
+            continue
+        target_id = _live_target(
+            entities,
+            source_id,
+            owner_id=rumor_id,
+            component="RumorSourceComponent",
+            field="source_id",
+        )
+        _add_edge(relationships, "OriginatesFromSource", rumor_id, target_id)
+
+    rumor_targets = components.pop("RumorTargetComponent", {})
+    if not isinstance(rumor_targets, dict):
+        raise WorldMigrationError("persisted type 'RumorTargetComponent' must be a mapping")
+    for rumor_id, fields in sorted(rumor_targets.items()):
+        target_id = _live_target(
+            entities,
+            dict(fields).get("target_id"),
+            owner_id=rumor_id,
+            component="RumorTargetComponent",
+            field="target_id",
+        )
+        _add_edge(relationships, "RefersToSubject", rumor_id, target_id)
 
     generated = components.pop("GeneratedQuestComponent", {})
     for order, (entity_id, fields) in enumerate(sorted(generated.items()), start=1):

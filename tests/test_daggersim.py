@@ -91,6 +91,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     FeedOnHandler,
     FinePaidEvent,
     GeneratedSiteInstantiatedEvent,
+    HasAccessToService,
     HostilityComponent,
     IdentifyIngredientHandler,
     IngredientComponent,
@@ -146,6 +147,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     RecallUsedEvent,
     RechargeEnchantedItemHandler,
     RechargeServiceComponent,
+    RefersToSubject,
     RentLodgingHandler,
     RepayLoanHandler,
     RequestCureHandler,
@@ -156,9 +158,9 @@ from bunnyland.simpacks.daggersim.mechanics import (
     RetrieveSafeItemHandler,
     RumorBecameExpansionEvent,
     RumorComponent,
+    RumorHeardBy,
     RumorHeardEvent,
     RumorReliabilityComponent,
-    RumorTargetComponent,
     RumorVerifiedEvent,
     SafeStorageComponent,
     SafeStorageUpdatedEvent,
@@ -168,13 +170,13 @@ from bunnyland.simpacks.daggersim.mechanics import (
     SendDebtCollectorHandler,
     SentenceCrimeHandler,
     ServiceAccessChangedEvent,
-    ServiceAccessComponent,
     SetRecallHandler,
     SocialRegisterComponent,
     SocialRegisterReactor,
     SpellCastEvent,
     SpellCreatedEvent,
     SpellTemplateComponent,
+    StoredIn,
     StoreSafeItemHandler,
     StreetwiseSkillComponent,
     SupernaturalAfflictionComponent,
@@ -200,6 +202,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     WithdrawHandler,
     _apply_spell_effect,
     _current_law_region,
+    _grant_service_access,
     _institution_membership,
     _name,
     _payload_entity_id,
@@ -626,7 +629,7 @@ def test_daggersim_parity_handlers_mutate_state_directly():
     assert extend_quest.get_component(QuestStateComponent).due_at_epoch == 150
     assert lie_quest.get_component(QuestStateComponent).status == "lied"
     assert account.get_component(BankAccountComponent).balance == 70
-    assert storage.get_component(SafeStorageComponent).item_ids == ()
+    assert carried_item.get_relationships(StoredIn) == []
     assert crime.get_component(CrimeRecordComponent).status == "sentenced:fine"
     assert lodging.get_component(LodgingComponent).occupied_by == str(scenario.character)
     assert scenario.actor.world.get_entity(scenario.room_a).has_component(CampingComponent)
@@ -928,6 +931,21 @@ def test_daggersim_parity_handlers_reject_wrong_kind_and_state_directly():
     for entity in (bank, storage, other_storage, loose_item):
         room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), carried_item.id)
+    second_carried_item = spawn_entity(
+        world,
+        [IdentityComponent(name="seal", kind="item"), PortableComponent(can_pick_up=True)],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), second_carried_item.id)
+    stored = StoreSafeItemHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "store-safe-item",
+            storage_id=str(storage.id),
+            item_id=str(second_carried_item.id),
+        ),
+    )
+    assert stored.ok is True
 
     debt = spawn_entity(
         world,
@@ -1270,9 +1288,9 @@ def _rumor(scenario, site_id, *, reliability=1.0):
             IdentityComponent(name="carrot vault rumor", kind="rumor"),
             RumorComponent(text="The old carrot vault beneath Rain Garden still exists."),
             RumorReliabilityComponent(score=reliability),
-            RumorTargetComponent(target_id=str(site_id)),
         ],
     )
+    rumor.add_relationship(RefersToSubject(), site_id)
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), rumor.id
     )
@@ -1518,8 +1536,9 @@ async def test_heard_rumor_can_be_verified_into_expansion_request():
     await scenario.actor.submit(_cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id)))
     await scenario.actor.tick(HOUR)
 
-    rumor = scenario.actor.world.get_entity(rumor_id).get_component(RumorComponent)
-    assert str(scenario.character) in rumor.heard_by
+    rumor_entity = scenario.actor.world.get_entity(rumor_id)
+    rumor = rumor_entity.get_component(RumorComponent)
+    assert rumor_entity.has_relationship(RumorHeardBy, scenario.character)
     assert rumor.state == "verified"
     assert heard[0].text.startswith("The old carrot vault")
     assert verified[0].rumor_id == str(rumor_id)
@@ -1569,13 +1588,10 @@ def test_investigate_rumor_rejects_invalid_targets_and_states():
         scenario.actor.world,
         [
             IdentityComponent(name="resolved rumor", kind="rumor"),
-            RumorComponent(
-                text="This one is settled.",
-                heard_by=(str(scenario.character),),
-                state="verified",
-            ),
+            RumorComponent(text="This one is settled.", state="verified"),
         ],
     )
+    resolved_rumor.add_relationship(RumorHeardBy(), scenario.character)
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), resolved_rumor.id
     )
@@ -1675,9 +1691,10 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
         scenario.actor.world,
         [
             IdentityComponent(name="heard rumor", kind="rumor"),
-            RumorComponent(text="Already heard.", heard_by=(str(scenario.character),)),
+            RumorComponent(text="Already heard."),
         ],
     )
+    heard_rumor.add_relationship(RumorHeardBy(), scenario.character)
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), heard_rumor.id
     )
@@ -2297,35 +2314,26 @@ def test_investigate_rumor_ignores_invalid_or_non_site_targets():
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), prop.id
     )
-    invalid_target_rumor = spawn_entity(
-        scenario.actor.world,
-        [
-            IdentityComponent(name="invalid target rumor", kind="rumor"),
-            RumorComponent(
-                text="The map points nowhere.",
-                heard_by=(str(scenario.character),),
-            ),
-            RumorReliabilityComponent(score=1.0),
-            RumorTargetComponent(target_id="not-an-entity"),
-        ],
-    )
     non_site_rumor = spawn_entity(
         scenario.actor.world,
         [
             IdentityComponent(name="marker rumor", kind="rumor"),
-            RumorComponent(
-                text="The marker is important.",
-                heard_by=(str(scenario.character),),
-            ),
+            RumorComponent(text="The marker is important."),
             RumorReliabilityComponent(score=1.0),
-            RumorTargetComponent(target_id=str(prop.id)),
         ],
     )
+    non_site_rumor.add_relationship(RumorHeardBy(), scenario.character)
+    non_site_rumor.add_relationship(RefersToSubject(), prop.id)
     room = scenario.actor.world.get_entity(scenario.room_a)
-    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), invalid_target_rumor.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), non_site_rumor.id)
+    no_target_rumor = spawn_entity(
+        scenario.actor.world,
+        [RumorComponent(text="There is no particular subject."), RumorReliabilityComponent()],
+    )
+    no_target_rumor.add_relationship(RumorHeardBy(), scenario.character)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), no_target_rumor.id)
 
-    for rumor_id in (invalid_target_rumor.id, non_site_rumor.id):
+    for rumor_id in (non_site_rumor.id, no_target_rumor.id):
         result = InvestigateRumorHandler().execute(
             ctx,
             _handler_cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id)),
@@ -3303,7 +3311,13 @@ async def test_join_institution_and_use_member_service_grants_output_item():
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.has_relationship(MemberOfInstitution, institution_id)
     assert character.get_component(InstitutionReputationComponent).scores[str(institution_id)] == 2
-    assert character.get_component(ServiceAccessComponent).service_ids == (str(service_id),)
+    assert character.get_relationships(HasAccessToService) == [
+        (HasAccessToService(), service_id)
+    ]
+    assert _grant_service_access(character, service_id) is False
+    assert "Unlocked institution services: 1." in daggersim_fragments(
+        scenario.actor.world, character
+    )
     assert joined[0].institution_name == "Burrow Cartographers"
     assert [event.score for event in reputation] == [1, 2]
     assert access[0].service_id == str(service_id)
@@ -3825,11 +3839,7 @@ def test_daggersim_fragments_show_heard_rumors():
     site_id = _site(scenario)
     rumor_id = _rumor(scenario, site_id)
     rumor_entity = scenario.actor.world.get_entity(rumor_id)
-    rumor = rumor_entity.get_component(RumorComponent)
-    replace_component(
-        rumor_entity,
-        RumorComponent(text=rumor.text, heard_by=(str(scenario.character),)),
-    )
+    rumor_entity.add_relationship(RumorHeardBy(), scenario.character)
 
     fragments = daggersim_fragments(
         scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
@@ -3860,8 +3870,9 @@ def test_daggersim_component_prompt_fragments_use_target_and_self_context():
     character = world.get_entity(scenario.character)
     rumor = spawn_entity(
         world,
-        [RumorComponent(text="The old carrot vault is open.", heard_by=(str(character.id),))],
+        [RumorComponent(text="The old carrot vault is open.")],
     )
+    rumor.add_relationship(RumorHeardBy(), character.id)
     institution = spawn_entity(
         world,
         [
@@ -3938,11 +3949,15 @@ def test_daggersim_component_prompt_fragments_use_target_and_self_context():
         ).prompt_fragments(observer_institution_ctx)
         == ()
     )
-    assert SafeStorageComponent(owner_id=str(character.id), item_ids=("a", "b")).prompt_fragments(
-        institution_ctx
-    ) == ("Safe storage: 2 item(s).",)
+    stored_a = spawn_entity(world, [])
+    stored_b = spawn_entity(world, [])
+    stored_a.add_relationship(StoredIn(), institution.id)
+    stored_b.add_relationship(StoredIn(), institution.id)
+    assert SafeStorageComponent(owner_id=str(character.id)).prompt_fragments(institution_ctx) == (
+        "Safe storage: 2 item(s).",
+    )
     assert (
-        SafeStorageComponent(owner_id=str(character.id), item_ids=("a", "b")).prompt_fragments(
+        SafeStorageComponent(owner_id=str(character.id)).prompt_fragments(
             observer_institution_ctx
         )
         == ()
@@ -5066,10 +5081,6 @@ def test_daggersim_first_person_only_fragments_hide_from_observers():
             "Legal reputation in region_a: -2.",
         ),
         (
-            ServiceAccessComponent(service_ids=("svc_1", "svc_2")),
-            "Unlocked institution services: 2.",
-        ),
-        (
             CustomClassComponent(class_name="Tunnel Sage"),
             "Custom class: Tunnel Sage.",
         ),
@@ -5635,9 +5646,8 @@ def test_daggersim_selected_rumor_skips_already_heard():
     # (3609->3604) regardless of the reachable-set iteration order — this pins the
     # branch that otherwise only flaked when a heard rumor happened to precede a fresh
     # one in set order (see PYTHONHASHSEED-sensitive coverage).
-    heard = spawn_entity(
-        world, [RumorComponent(text="old news", heard_by=(str(scenario.character),))]
-    )
+    heard = spawn_entity(world, [RumorComponent(text="old news")])
+    heard.add_relationship(RumorHeardBy(), scenario.character)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), heard.id)
     assert _selected_rumor_id(ctx, scenario.character, None) is None
 
@@ -5660,11 +5670,11 @@ def test_daggersim_selected_rumor_is_order_independent(heard_flags):
     world = scenario.actor.world
     ctx = HandlerContext(world, scenario.actor.epoch)
     room = world.get_entity(scenario.room_a)
-    character_key = str(scenario.character)
     unheard_ids = set()
     for index, already_heard in enumerate(heard_flags):
-        heard_by = (character_key,) if already_heard else ()
-        rumor = spawn_entity(world, [RumorComponent(text=f"rumor-{index}", heard_by=heard_by)])
+        rumor = spawn_entity(world, [RumorComponent(text=f"rumor-{index}")])
+        if already_heard:
+            rumor.add_relationship(RumorHeardBy(), scenario.character)
         room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), rumor.id)
         if not already_heard:
             unheard_ids.add(rumor.id)

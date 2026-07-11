@@ -52,7 +52,7 @@ from bunnyland.foundation.needs.mechanics import FunNeedComponent
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 from bunnyland.simpacks.colonysim import mechanics as colonysim
 from bunnyland.simpacks.colonysim.mechanics import (
-    AllowedAreaComponent,
+    AllowedIn,
     AllowItemHandler,
     AssignedTo,
     AssignJobHandler,
@@ -85,6 +85,7 @@ from bunnyland.simpacks.colonysim.mechanics import (
     MedicalBedComponent,
     MedicalRecoveryConsequence,
     MedicineComponent,
+    MemberOfCaravan,
     MentalStateComponent,
     MentalStateConsequence,
     MergeStackHandler,
@@ -1217,13 +1218,16 @@ async def test_work_priorities_allowed_areas_room_quality_and_wealth_fragments()
         _cmd(scenario, "set-allowed-area", room_ids=(str(scenario.room_a), str(scenario.room_b)))
     )
     await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(
+        _cmd(scenario, "set-allowed-area", room_ids=(str(scenario.room_b),))
+    )
+    await scenario.actor.tick(HOUR)
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.get_component(WorkPriorityComponent).priorities == {"doctor": 1}
-    assert character.get_component(AllowedAreaComponent).room_ids == (
-        str(scenario.room_a),
-        str(scenario.room_b),
-    )
+    assert {room_id for _edge, room_id in character.get_relationships(AllowedIn)} == {
+        scenario.room_b,
+    }
     assert room.get_component(RoomQualityComponent).impressiveness == 7.0
     marker = next(scenario.actor.world.query().with_all([ColonySimComponent]).execute_entities())
     assert marker.get_component(ColonyWealthComponent).wealth >= 110.0
@@ -1912,7 +1916,7 @@ def test_colonysim_fragments_show_health_room_and_work_context():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(WorkPriorityComponent(priorities={"doctor": 1}))
-    character.add_component(AllowedAreaComponent(room_ids=(str(scenario.room_a),)))
+    character.add_relationship(AllowedIn(), scenario.room_a)
     character.add_component(BedRestComponent(started_at_epoch=0, bed_id="entity_999"))
     character.add_component(InfectionComponent(severity=0.35, immunity=0.45))
     character.add_component(MentalStateComponent(state="mental_break", reason="low fun"))
@@ -1985,10 +1989,9 @@ def test_colonysim_fragments_show_health_room_and_work_context():
         assert line in fragments
 
     character.remove_component(WorkPriorityComponent)
-    character.remove_component(AllowedAreaComponent)
+    character.remove_relationship(AllowedIn, scenario.room_a)
     character.remove_component(MentalStateComponent)
     character.add_component(WorkPriorityComponent())
-    character.add_component(AllowedAreaComponent())
     character.add_component(MentalStateComponent())
     sparse_fragments = colonysim_fragments(scenario.actor.world, character)
     assert "Nearby job: haul priority 1 (available)." not in sparse_fragments
@@ -2178,6 +2181,7 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
         scenario.actor.world.get_entity(caravan_id).get_component(CaravanComponent).destination
         == "hill market"
     )
+    assert character.get_relationships(MemberOfCaravan) == [(MemberOfCaravan(), caravan_id)]
     assert surgeries[0].part == "left paw"
     body_part_id = character.get_relationships(HasBodyPart)[0][1]
     assert (
@@ -2509,6 +2513,13 @@ def test_colonysim_catalogue_handlers_reject_bad_state_directly():
             None,
         ),
         (
+            FormCaravanHandler(),
+            "form-caravan",
+            {"destination": "town", "member_ids": ("entity_999",)},
+            "caravan member does not exist",
+            None,
+        ),
+        (
             PerformSurgeryHandler(),
             "perform-surgery",
             {"patient_id": "not-an-id", "surgery_id": str(surgery.id)},
@@ -2576,7 +2587,7 @@ def test_colonysim_fragments_cover_catalogue_state_variants():
     room = scenario.actor.world.get_entity(scenario.room_a)
     replace_component(character, WorkPriorityComponent(priorities={"doctor": 1}))
     replace_component(character, PawnProfileComponent(expectations="moderate"))
-    replace_component(character, AllowedAreaComponent(room_ids=(str(scenario.room_a),)))
+    character.add_relationship(AllowedIn(), scenario.room_a)
     replace_component(
         character,
         PrisonerComponent(recruitment_progress=2, recruitment_difficulty=5),

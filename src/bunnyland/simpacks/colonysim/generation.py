@@ -1,6 +1,6 @@
 """Declarative colonysim generation contributions."""
 
-from ...core.generation import GenerationDelta, GenerationRequest
+from ...core.generation import GenerationDelta, GenerationEdge, GenerationRequest, GenerationTarget
 from ...worldgen.enrichment import (
     GenerationContext,
     generation_mentions,
@@ -9,7 +9,7 @@ from ...worldgen.enrichment import (
     generation_wants,
 )
 from .mechanics import (
-    AllowedAreaComponent,
+    AllowedIn,
     BedRestComponent,
     BodyPartHealthComponent,
     CaravanComponent,
@@ -88,6 +88,7 @@ class ColonyGenerationEnricher:
     def enrich(self, request: GenerationRequest) -> GenerationDelta:
         ctx = GenerationContext.from_request(request)
         components = {}
+        edges = []
 
         def add(component):
             components[type(component)] = component
@@ -151,7 +152,8 @@ class ColonyGenerationEnricher:
             if generation_wants(ctx, "bunnyland.colonysim.allowed-area") or generation_mentions(
                 ctx, "allowed area"
             ):
-                add(AllowedAreaComponent(room_ids=()))
+                if ctx.room_id:
+                    edges.append(GenerationEdge(AllowedIn(), GenerationTarget(ctx.room_id)))
             if generation_wants(ctx, "bunnyland.colonysim.bed-rest") or generation_mentions(
                 ctx, "bed rest"
             ):
@@ -261,6 +263,7 @@ class ColonyGenerationEnricher:
                 add(ProstheticComponent(part=resource_type))
         return GenerationDelta(
             components=tuple(components.values()),
+            edges=tuple(edges),
             satisfies=tuple(
                 capability for capability in request.capabilities if capability in CAPABILITIES
             ),

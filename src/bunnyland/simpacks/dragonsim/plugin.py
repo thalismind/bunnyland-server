@@ -20,6 +20,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     CrimeReportedEvent,
     CrimeWitnessedEvent,
     DeclineQuestHandler,
+    DependsOnIngredient,
     DiscoverLocationHandler,
     DiscoveryComponent,
     DragonSpellCastEvent,
@@ -55,7 +56,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     MapMarkerAddedEvent,
     MapMarkerComponent,
     MarkMapHandler,
-    MemberOf,
+    MemberOfFaction,
     PayBountyHandler,
     PerkComponent,
     PerkUnlockedEvent,
@@ -202,7 +203,7 @@ def _definition() -> Plugin:
                 ArtifactComponent,
             ),
             edges=(
-                MemberOf,
+                MemberOfFaction,
                 HasPerk,
                 KnowsWord,
                 KnowsSpell,
@@ -212,6 +213,7 @@ def _definition() -> Plugin:
                 TracksQuest,
                 RequiresQuest,
                 QuestRewardGrants,
+                DependsOnIngredient,
             ),
         ),
         commands=CommandContribution(

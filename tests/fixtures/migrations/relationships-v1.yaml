@@ -1,0 +1,39 @@
+metadata: {version: "1.0", epoch: 0}
+bunnyland: {schema_version: 1, plugins: []}
+prefabs:
+  entity: {components: {}}
+entities:
+  entity_1: {prefab: entity, created_epoch: 0}
+  entity_2: {prefab: entity, created_epoch: 0}
+  entity_3: {prefab: entity, created_epoch: 0}
+  entity_4: {prefab: entity, created_epoch: 0}
+  entity_5: {prefab: entity, created_epoch: 0}
+  entity_6: {prefab: entity, created_epoch: 0}
+  entity_7: {prefab: entity, created_epoch: 0}
+components:
+  AllowedAreaComponent:
+    entity_1: {room_ids: [entity_2]}
+  CaravanComponent:
+    entity_3: {destination: market, member_ids: [entity_1], cargo: {}, departed_at_epoch: 0, returned: false}
+  SafeStorageComponent:
+    entity_3: {owner_id: entity_1, item_ids: [entity_4]}
+  ServiceAccessComponent:
+    entity_1: {service_ids: [entity_5]}
+  FestivalComponent:
+    entity_3: {name: Fair, season: spring, day: 1, joined_character_ids: [entity_1]}
+  AwayTeamComponent:
+    entity_3: {mission: survey, member_ids: [entity_1], deployed: false}
+  PotionRecipeComponent:
+    entity_5: {name: Tonic, potion_name: Tonic, ingredient_ids: [entity_4]}
+  EggComponent:
+    entity_6: {species_name: raptor, laid_at_epoch: 0, parent_ids: [entity_1]}
+  RumorComponent:
+    entity_4: {text: A hidden road, heard_by: [entity_1], state: unverified}
+  RumorSourceComponent:
+    entity_4: {source_id: entity_2}
+  RumorTargetComponent:
+    entity_4: {target_id: entity_6}
+  WorldClockComponent:
+    entity_7: {game_time_seconds: 0, tick_index: 0, time_scale: 1.0}
+relationships: {}
+relics: []

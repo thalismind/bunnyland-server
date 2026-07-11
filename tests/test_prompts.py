@@ -84,7 +84,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     LoreBookComponent,
     MagicComponent,
     MapMarkerComponent,
-    MemberOf,
+    MemberOfFaction,
     PointOfInterestComponent,
     PotionRecipeComponent,
     QuestAcceptedBy,
@@ -800,12 +800,12 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert JailComponent(faction_id="hold", release_epoch=10).prompt_fragments(self_ctx) == (
         "Serving jail time for hold until 10.",
     )
-    assert MemberOf(rank="thane").prompt_fragments(self_ctx) == ()
-    assert MemberOf(rank="thane").prompt_fragments(
+    assert MemberOfFaction(rank="thane").prompt_fragments(self_ctx) == ()
+    assert MemberOfFaction(rank="thane").prompt_fragments(
         ComponentPromptContext.for_entity(world, character, target=faction)
     ) == ("You are a thane of Companions.",)
     assert (
-        MemberOf(rank="thane").prompt_fragments(
+        MemberOfFaction(rank="thane").prompt_fragments(
             ComponentPromptContext.for_entity(
                 world, character, perspective=other_ctx.perspective, target=faction
             )

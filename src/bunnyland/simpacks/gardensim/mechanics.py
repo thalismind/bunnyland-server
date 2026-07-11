@@ -11,7 +11,7 @@ from dataclasses import field, replace
 from functools import partial
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
-from relics import Component, Entity, World
+from relics import Component, Edge, Entity, World
 
 from bunnyland.foundation.consumables.components import (
     ConsumableComponent,
@@ -332,11 +332,15 @@ class FestivalComponent(Component):
     name: str
     season: str
     day: int = 1
-    joined_character_ids: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         del ctx
         return (f"Nearby festival: {self.name} ({self.season}).",)
+
+
+@pydantic_dataclass(frozen=True)
+class MemberOfFestival(Edge):
+    pass
 
 
 @pydantic_dataclass(frozen=True)
@@ -2292,8 +2296,9 @@ class JoinFestivalHandler:
         season = _current_season(ctx.world)
         if season is not None and component.season != season:
             return rejected("festival is not active this season")
-        joined = tuple(sorted({*component.joined_character_ids, str(character_id)}))
-        replace_component(festival, replace(component, joined_character_ids=joined))
+        character = ctx.entity(character_id)
+        if not character.has_relationship(MemberOfFestival, festival_id):
+            character.add_relationship(MemberOfFestival(), festival_id)
         return ok(
             FestivalJoinedEvent(
                 **ctx.event_base(
@@ -2703,6 +2708,7 @@ __all__ = [
     "FertilizerComponent",
     "FertilizeHandler",
     "FestivalComponent",
+    "MemberOfFestival",
     "FestivalJoinedEvent",
     "FishCaughtEvent",
     "FishHandler",

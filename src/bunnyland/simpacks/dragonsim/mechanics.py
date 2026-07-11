@@ -234,7 +234,7 @@ class PerkComponent(Component):
 
 
 @dataclass(frozen=True)
-class MemberOf(Edge):
+class MemberOfFaction(Edge):
     rank: str = "member"
     since_epoch: int = 0
 
@@ -437,12 +437,16 @@ class PotionRecipeComponent(Component):
     school: str = "alchemy"
     skill_name: str = "alchemy"
     min_skill_level: int = 0
-    ingredient_ids: tuple[str, ...] = ()
     effect: str = ""
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         del ctx
         return (f"Potion recipe nearby: {self.name}.",)
+
+
+@dataclass(frozen=True)
+class DependsOnIngredient(Edge):
+    order: int = 0
 
 
 @dataclass(frozen=True)
@@ -1175,10 +1179,10 @@ class JoinFactionHandler:
         faction = ctx.entity(faction_id)
         if not faction.has_component(FactionComponent):
             return rejected("target is not a faction")
-        if character.has_relationship(MemberOf, faction_id):
+        if character.has_relationship(MemberOfFaction, faction_id):
             return rejected("already a faction member")
 
-        character.add_relationship(MemberOf(rank=rank, since_epoch=ctx.epoch), faction_id)
+        character.add_relationship(MemberOfFaction(rank=rank, since_epoch=ctx.epoch), faction_id)
         faction_name = faction.get_component(FactionComponent).name
         return ok(
             FactionJoinedEvent(
@@ -1209,10 +1213,10 @@ class LeaveFactionHandler:
         faction = ctx.entity(faction_id)
         if not faction.has_component(FactionComponent):
             return rejected("target is not a faction")
-        if not character.has_relationship(MemberOf, faction_id):
+        if not character.has_relationship(MemberOfFaction, faction_id):
             return rejected("not a faction member")
 
-        character.remove_relationship(MemberOf, faction_id)
+        character.remove_relationship(MemberOfFaction, faction_id)
         faction_name = faction.get_component(FactionComponent).name
         return ok(
             FactionLeftEvent(
@@ -1505,7 +1509,9 @@ class StealHandler:
             return []
         faction_witnesses: dict[EntityId, list[str]] = {}
         for witness_id in _awake_witnesses(ctx.world, room_id, thief_id):
-            for _edge, faction_id in ctx.world.get_entity(witness_id).get_relationships(MemberOf):
+            for _edge, faction_id in ctx.world.get_entity(witness_id).get_relationships(
+                MemberOfFaction
+            ):
                 faction_witnesses.setdefault(faction_id, []).append(str(witness_id))
         if not faction_witnesses:
             return []
@@ -1594,14 +1600,14 @@ class ChangeFactionRankHandler:
         if not faction.has_component(FactionComponent):
             return rejected("target is not a faction")
         character = ctx.entity(character_id)
-        memberships = character.get_relationships(MemberOf)
+        memberships = character.get_relationships(MemberOfFaction)
         current = next((edge for edge, target in memberships if target == faction_id), None)
         if current is None:
             return rejected("not a faction member")
 
-        character.remove_relationship(MemberOf, faction_id)
+        character.remove_relationship(MemberOfFaction, faction_id)
         character.add_relationship(
-            MemberOf(rank=new_rank, since_epoch=current.since_epoch), faction_id
+            MemberOfFaction(rank=new_rank, since_epoch=current.since_epoch), faction_id
         )
         faction_name = faction.get_component(FactionComponent).name
         return ok(
@@ -2045,18 +2051,15 @@ class BrewPotionHandler:
             and _skill_level(character, recipe.skill_name) < recipe.min_skill_level
         ):
             return rejected("skill level too low for this recipe")
-        for raw_id in recipe.ingredient_ids:
-            ingredient_id = parse_entity_id(raw_id)
-            if (
-                ingredient_id is None
-                or not ctx.world.has_entity(ingredient_id)
-                or container_of(ctx.world.get_entity(ingredient_id)) != character_id
-            ):
+        ingredients = sorted(
+            recipe_entity.get_relationships(DependsOnIngredient),
+            key=lambda relationship: relationship[0].order,
+        )
+        for _edge, ingredient_id in ingredients:
+            if container_of(ctx.world.get_entity(ingredient_id)) != character_id:
                 return rejected("required ingredient is not carried")
 
-        for raw_id in recipe.ingredient_ids:
-            # Every ingredient id parsed during the validation loop above, so it is non-None here.
-            ingredient_id = parse_entity_id(raw_id)
+        for _edge, ingredient_id in ingredients:
             character.remove_relationship(Contains, ingredient_id)
         potion = spawn_entity(
             ctx.world,
@@ -2383,8 +2386,8 @@ class StudyVoiceInscriptionHandler:
 def dragonsim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     ctx = ComponentPromptContext.for_entity(world, character)
-    for edge, faction_id in character.get_relationships(MemberOf):
-        # Relics cascades inbound edge removal, so MemberOf never points at a missing faction.
+    for edge, faction_id in character.get_relationships(MemberOfFaction):
+        # Relics cascades inbound removal, so MemberOfFaction never points at a missing faction.
         faction = world.get_entity(faction_id)
         edge_ctx = ComponentPromptContext.for_entity(
             world, character, perspective=ctx.perspective, target=faction
@@ -2527,7 +2530,7 @@ __all__ = [
     "MapMarkerAddedEvent",
     "MapMarkerComponent",
     "MarkMapHandler",
-    "MemberOf",
+    "MemberOfFaction",
     "PayBountyHandler",
     "PerkComponent",
     "PerkUnlockedEvent",
@@ -2539,6 +2542,7 @@ __all__ = [
     "PotionBrewedEvent",
     "PotionComponent",
     "PotionRecipeComponent",
+    "DependsOnIngredient",
     "QuestAcceptedEvent",
     "QuestBranchChosenEvent",
     "QuestAcceptedBy",

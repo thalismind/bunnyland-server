@@ -11,7 +11,7 @@ from dataclasses import replace
 from random import Random
 
 from pydantic.dataclasses import dataclass
-from relics import Component, Entity, EntityId, World
+from relics import Component, Edge, Entity, EntityId, World
 
 from bunnyland.simpacks.colonysim.mechanics import ResourceStackComponent
 from bunnyland.simpacks.lifesim.mechanics import AgeComponent, LifeStageComponent
@@ -141,7 +141,6 @@ class EggComponent(Component):
     species_name: str
     laid_at_epoch: int
     fertilized: bool = False
-    parent_ids: tuple[str, ...] = ()
     source: str = "natural"
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
@@ -152,6 +151,11 @@ class EggComponent(Component):
             if incubation.temperature is not None:
                 state = f"{state}, {incubation.temperature:g} C"
         return (f"Nearby egg: {_entity_name(ctx.entity)} ({self.species_name}, {state}).",)
+
+
+@dataclass(frozen=True)
+class DescendsFromParent(Edge):
+    order: int = 0
 
 
 @dataclass(frozen=True)
@@ -1416,7 +1420,7 @@ def _spawn_egg(
     parent_ids: tuple[str, ...] = (),
     source: str = "natural",
 ) -> Entity:
-    return spawn_entity(
+    egg = spawn_entity(
         world,
         [
             IdentityComponent(name=f"{species_name} egg", kind="egg", tags=("dinosim",)),
@@ -1424,12 +1428,16 @@ def _spawn_egg(
                 species_name=species_name,
                 laid_at_epoch=epoch,
                 fertilized=fertilized,
-                parent_ids=parent_ids,
                 source=source,
             ),
             PortableComponent(can_pick_up=True),
         ],
     )
+    for order, raw_parent_id in enumerate(parent_ids):
+        parent_id = parse_entity_id(raw_parent_id)
+        if parent_id is not None and world.has_entity(parent_id):
+            egg.add_relationship(DescendsFromParent(order=order), parent_id)
+    return egg
 
 
 def _spawn_creature_product(
@@ -1805,8 +1813,14 @@ class FertilizeEggHandler:
         ):
             return rejected("parent is not fertile")
 
-        parent_ids = tuple(dict.fromkeys((*egg.parent_ids, str(parent_id))))
-        replace_component(egg_entity, replace(egg, fertilized=True, parent_ids=parent_ids))
+        if not egg_entity.has_relationship(DescendsFromParent, parent_id):
+            egg_entity.add_relationship(
+                DescendsFromParent(
+                    order=len(egg_entity.get_relationships(DescendsFromParent))
+                ),
+                parent_id,
+            )
+        replace_component(egg_entity, replace(egg, fertilized=True))
         return ok(
             EggFertilizedEvent(
                 **ctx.event_base(
@@ -3668,7 +3682,11 @@ class CollectEggHandler:
             return rejected("egg is not reachable")
         if not egg_entity.has_component(EggComponent):
             return rejected("target is not an egg")
-        egg = egg_entity.get_component(EggComponent)
+        parents = sorted(
+            egg_entity.get_relationships(DescendsFromParent),
+            key=lambda relationship: relationship[0].order,
+        )
+        source_creature_id = str(parents[0][1]) if parents else ""
         character = ctx.entity(character_id)
         _remove_from_container(ctx.world, egg_id)
         character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), egg_id)
@@ -3677,7 +3695,7 @@ class CollectEggHandler:
             CreatureProductComponent(
                 product_type="egg",
                 quantity=1.0,
-                source_creature_id=egg.parent_ids[0] if egg.parent_ids else "",
+                source_creature_id=source_creature_id,
                 collected_at_epoch=ctx.epoch,
             ),
         )
@@ -3688,7 +3706,7 @@ class CollectEggHandler:
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
                     target_ids=(str(egg_id),),
-                    creature_id=egg.parent_ids[0] if egg.parent_ids else "",
+                    creature_id=source_creature_id,
                     product_id=str(egg_id),
                     product_type="egg",
                     quantity=1.0,
@@ -4058,6 +4076,7 @@ __all__ = [
     "DodgeCreatureHandler",
     "DriveOffPredatorHandler",
     "EggComponent",
+    "DescendsFromParent",
     "EggFertilizedEvent",
     "EggHatchedEvent",
     "EggIncubatedEvent",

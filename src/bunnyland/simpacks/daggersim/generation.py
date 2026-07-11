@@ -1,6 +1,6 @@
 """Declarative daggersim generation contributions."""
 
-from ...core.generation import GenerationDelta, GenerationRequest
+from ...core.generation import GenerationDelta, GenerationEdge, GenerationRequest, GenerationTarget
 from ...worldgen.enrichment import (
     GenerationContext,
     generation_expansion_trigger,
@@ -28,6 +28,7 @@ from .mechanics import (
     EtiquetteSkillComponent,
     ExpansionHookComponent,
     FeedingNeedComponent,
+    HasAccessToService,
     HostilityComponent,
     IngredientComponent,
     InstitutionComponent,
@@ -38,19 +39,18 @@ from .mechanics import (
     LawRegionComponent,
     LegalReputationComponent,
     LodgingComponent,
+    OriginatesFromSource,
     PotionMakerComponent,
     ProceduralSiteComponent,
     PropertyDeedComponent,
     RecallAnchorComponent,
     RechargeServiceComponent,
+    RefersToSubject,
     RegionalReputationComponent,
     RestRiskComponent,
     RumorComponent,
     RumorReliabilityComponent,
-    RumorSourceComponent,
-    RumorTargetComponent,
     SecretDoorComponent,
-    ServiceAccessComponent,
     SocialRegisterComponent,
     SpellTemplateComponent,
     StreetwiseSkillComponent,
@@ -124,6 +124,7 @@ class DaggerGenerationEnricher:
     def enrich(self, request: GenerationRequest) -> GenerationDelta:
         ctx = GenerationContext.from_request(request)
         components = {}
+        edges = []
 
         def add(component):
             components[type(component)] = component
@@ -208,7 +209,9 @@ class DaggerGenerationEnricher:
             if generation_wants(ctx, "bunnyland.daggersim.legal-reputation"):
                 add(LegalReputationComponent(scores={ctx.room_id: 0}))
             if generation_wants(ctx, "bunnyland.daggersim.service-access"):
-                add(ServiceAccessComponent(service_ids=(generation_generated_id(ctx, "service"),)))
+                service_id = request.context.get("service_id")
+                if service_id:
+                    edges.append(GenerationEdge(HasAccessToService(), service_id))
             if generation_wants(ctx, "bunnyland.daggersim.class-template"):
                 add(ClassTemplateComponent(class_name=name, primary_skills=tuple(ctx.tags)))
             if generation_wants(ctx, "bunnyland.daggersim.custom-class"):
@@ -254,11 +257,15 @@ class DaggerGenerationEnricher:
             ):
                 add(RumorComponent(text=ctx.intent or name))
             if generation_wants(ctx, "bunnyland.daggersim.rumor-source"):
-                add(RumorSourceComponent(source_id=ctx.room_id))
+                if ctx.room_id:
+                    edges.append(
+                        GenerationEdge(OriginatesFromSource(), GenerationTarget(ctx.room_id))
+                    )
             if generation_wants(ctx, "bunnyland.daggersim.rumor-reliability"):
                 add(RumorReliabilityComponent(score=0.75))
             if generation_wants(ctx, "bunnyland.daggersim.rumor-target"):
-                add(RumorTargetComponent(target_id=ctx.room_id or ctx.entity_id))
+                if ctx.room_id:
+                    edges.append(GenerationEdge(RefersToSubject(), GenerationTarget(ctx.room_id)))
             if generation_wants(ctx, "bunnyland.daggersim.bank") or generation_mentions(
                 ctx, "bank"
             ):
@@ -293,6 +300,7 @@ class DaggerGenerationEnricher:
                 add(AutomapComponent(marked_rooms=(ctx.room_id,) if ctx.room_id else ()))
         return GenerationDelta(
             components=tuple(components.values()),
+            edges=tuple(edges),
             satisfies=tuple(
                 capability for capability in request.capabilities if capability in CAPABILITIES
             ),

@@ -1,7 +1,7 @@
 """Canonical Colony Sim plugin entrypoint."""
 
 from bunnyland.simpacks.colonysim.mechanics import (
-    AllowedAreaComponent,
+    AllowedIn,
     AllowItemHandler,
     AssignedTo,
     AssignJobHandler,
@@ -33,6 +33,7 @@ from bunnyland.simpacks.colonysim.mechanics import (
     JobComponent,
     MedicalBedComponent,
     MedicineComponent,
+    MemberOfCaravan,
     MentalStateComponent,
     MergeStackHandler,
     Owns,
@@ -124,7 +125,6 @@ def _definition() -> Plugin:
                 WorkPriorityComponent,
                 WorkCapabilityComponent,
                 PawnProfileComponent,
-                AllowedAreaComponent,
                 RoomRoleComponent,
                 RoomStatComponent,
                 RoomQualityComponent,
@@ -145,7 +145,7 @@ def _definition() -> Plugin:
                 ProstheticComponent,
                 MentalStateComponent,
             ),
-            edges=(ReservedBy, AssignedTo, Owns, HasBodyPart),
+            edges=(ReservedBy, AssignedTo, Owns, HasBodyPart, AllowedIn, MemberOfCaravan),
             systems=(ResourceRegenSystem,),
         ),
         commands=CommandContribution(

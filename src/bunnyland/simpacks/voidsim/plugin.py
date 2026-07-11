@@ -93,6 +93,7 @@ from bunnyland.simpacks.voidsim.mechanics import (
     LifeSupportComponent,
     LifeSupportFailedEvent,
     LoadCargoHandler,
+    MemberOfAwayTeam,
     MineAsteroidHandler,
     MiningCompletedEvent,
     MiningSiteComponent,
@@ -260,7 +261,7 @@ def _definition() -> Plugin:
                 InsurancePolicyComponent,
                 MortgageComponent,
             ),
-            edges=(DockedTo, JumpRoute, WorksShift),
+            edges=(DockedTo, JumpRoute, WorksShift, MemberOfAwayTeam),
         ),
         commands=CommandContribution(
             action_definitions=ACTION_DEFINITIONS,

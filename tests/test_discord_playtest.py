@@ -811,9 +811,9 @@ def _add_daggersim_rumor_world(scenario):
         [
             dagger.RumorComponent(text="The old carrot vault beneath Rain Garden still exists."),
             dagger.RumorReliabilityComponent(score=1.0),
-            dagger.RumorTargetComponent(target_id=str(site_id)),
         ],
     )
+    scenario.actor.world.get_entity(rumor_id).add_relationship(dagger.RefersToSubject(), site_id)
     origin = scenario.actor.world.get_entity(scenario.room_a)
     destination = scenario.actor.world.get_entity(scenario.room_b)
     origin.add_component(dagger.TravelHubComponent(name="Mosslit Burrow", region_id="moss-road"))
@@ -1841,7 +1841,7 @@ async def test_discord_playtest_dragonsim_core_loop(scenario):
     assert objective.get_component(dragon.QuestObjectiveComponent).completed is True
     assert reward.get_component(dragon.QuestRewardComponent).claimed is True
     assert container_of(scenario.actor.world.get_entity(reward_item_id)) == scenario.character
-    assert not character.has_relationship(dragon.MemberOf, faction_id)
+    assert not character.has_relationship(dragon.MemberOfFaction, faction_id)
     assert completed_quests
 
 

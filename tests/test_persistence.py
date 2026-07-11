@@ -6,6 +6,7 @@ import json
 import sys
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
@@ -339,6 +340,185 @@ def test_schema_v1_cure_quest_hook_name_migrates_to_affliction_request():
     source["components"]["CureRequestComponent"] = {}
     with pytest.raises(WorldMigrationError, match="both CureQuestHookComponent"):
         migrate_snapshot(source)
+
+
+def test_schema_v1_potion_recipe_ingredients_migrate_to_ordered_edges():
+    source = _schema_v1_generated_quest_snapshot()
+    source["entities"]["entity_4"] = {"prefab": "entity", "created_epoch": 0}
+    source["components"]["PotionRecipeComponent"] = {
+        "entity_2": {
+            "name": "moon tonic",
+            "potion_name": "Moon Tonic",
+            "ingredient_ids": ["entity_4"],
+        }
+    }
+
+    migrated = migrate_snapshot(source)
+
+    assert source["components"]["PotionRecipeComponent"]["entity_2"]["ingredient_ids"] == [
+        "entity_4"
+    ]
+    assert "ingredient_ids" not in migrated["components"]["PotionRecipeComponent"]["entity_2"]
+    assert migrated["relationships"]["DependsOnIngredient"]["entity_2"] == [
+        {"target": "entity_4", "edge": {"order": 0}}
+    ]
+
+    missing = _schema_v1_generated_quest_snapshot()
+    missing["components"]["PotionRecipeComponent"] = {
+        "entity_2": {"name": "bad", "potion_name": "Bad", "ingredient_ids": ["missing"]}
+    }
+    with pytest.raises(
+        WorldMigrationError,
+        match=r"entity 'entity_2'.*PotionRecipeComponent\.ingredient_ids.*'missing'",
+    ):
+        migrate_snapshot(missing)
+
+    malformed = _schema_v1_generated_quest_snapshot()
+    malformed["components"]["PotionRecipeComponent"] = {
+        "entity_2": {"name": "bad", "potion_name": "Bad", "ingredient_ids": 7}
+    }
+    with pytest.raises(WorldMigrationError, match="ingredient_ids.*must be a sequence"):
+        migrate_snapshot(malformed)
+
+
+def test_schema_v1_egg_parents_migrate_to_ordered_edges():
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"]["EggComponent"] = {
+        "entity_1": {
+            "species_name": "raptor",
+            "laid_at_epoch": 3,
+            "parent_ids": ["entity_2"],
+        }
+    }
+
+    migrated = migrate_snapshot(source)
+
+    assert source["components"]["EggComponent"]["entity_1"]["parent_ids"] == ["entity_2"]
+    assert "parent_ids" not in migrated["components"]["EggComponent"]["entity_1"]
+    assert migrated["relationships"]["DescendsFromParent"]["entity_1"] == [
+        {"target": "entity_2", "edge": {"order": 0}}
+    ]
+
+    missing = _schema_v1_generated_quest_snapshot()
+    missing["components"]["EggComponent"] = {
+        "entity_1": {"species_name": "raptor", "laid_at_epoch": 3, "parent_ids": ["missing"]}
+    }
+    with pytest.raises(WorldMigrationError, match=r"EggComponent\.parent_ids.*'missing'"):
+        migrate_snapshot(missing)
+
+    malformed = _schema_v1_generated_quest_snapshot()
+    malformed["components"]["EggComponent"] = {
+        "entity_1": {"species_name": "raptor", "laid_at_epoch": 3, "parent_ids": 7}
+    }
+    with pytest.raises(WorldMigrationError, match="parent_ids.*must be a sequence"):
+        migrate_snapshot(malformed)
+
+
+@pytest.mark.parametrize("suffix", ["json", "yaml"])
+def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix):
+    import yaml
+
+    source = Path(__file__).parent / "fixtures" / "migrations" / f"relationships-v1.{suffix}"
+    before = source.read_text()
+    raw = json.loads(before) if suffix == "json" else yaml.safe_load(before)
+
+    migrated = migrate_snapshot(raw)
+
+    assert source.read_text() == before
+    assert migrated["bunnyland"]["schema_version"] == 2
+    expected = {
+        "AllowedIn": ("entity_1", "entity_2"),
+        "MemberOfCaravan": ("entity_1", "entity_3"),
+        "StoredIn": ("entity_4", "entity_3"),
+        "HasAccessToService": ("entity_1", "entity_5"),
+        "MemberOfFestival": ("entity_1", "entity_3"),
+        "MemberOfAwayTeam": ("entity_1", "entity_3"),
+        "DependsOnIngredient": ("entity_5", "entity_4"),
+        "DescendsFromParent": ("entity_6", "entity_1"),
+        "RumorHeardBy": ("entity_4", "entity_1"),
+        "OriginatesFromSource": ("entity_4", "entity_2"),
+        "RefersToSubject": ("entity_4", "entity_6"),
+    }
+    for edge_name, (source_id, target_id) in expected.items():
+        assert migrated["relationships"][edge_name][source_id][0]["target"] == target_id
+
+    actor, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
+    destination = tmp_path / f"relationships-v2.{suffix}"
+    save_world(actor, destination, meta=meta)
+    saved = json.loads(destination.read_text()) if suffix == "json" else yaml.safe_load(
+        destination.read_text()
+    )
+    metadata_key = "bunnyland" if suffix == "json" else "__bunnyland__"
+    assert saved[metadata_key]["schema_version"] == 2
+
+
+@pytest.mark.parametrize(
+    ("component", "field"),
+    [
+        ("AllowedAreaComponent", "room_ids"),
+        ("CaravanComponent", "member_ids"),
+        ("SafeStorageComponent", "item_ids"),
+        ("ServiceAccessComponent", "service_ids"),
+        ("FestivalComponent", "joined_character_ids"),
+        ("AwayTeamComponent", "member_ids"),
+        ("RumorComponent", "heard_by"),
+    ],
+)
+def test_schema_v1_relationship_sequences_reject_malformed_and_missing_targets(
+    component, field
+):
+    malformed = _schema_v1_generated_quest_snapshot()
+    malformed["components"][component] = {"entity_1": {field: 7}}
+    with pytest.raises(WorldMigrationError, match=rf"{field}.*must be a sequence"):
+        migrate_snapshot(malformed)
+
+    missing = _schema_v1_generated_quest_snapshot()
+    missing["components"][component] = {"entity_1": {field: ["missing"]}}
+    with pytest.raises(
+        WorldMigrationError,
+        match=rf"entity 'entity_1'.*{component}\.{field}.*'missing'",
+    ):
+        migrate_snapshot(missing)
+
+
+@pytest.mark.parametrize("component", ["AllowedAreaComponent", "ServiceAccessComponent"])
+def test_schema_v1_empty_relationship_wrappers_must_be_mappings(component):
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"][component] = []
+    with pytest.raises(WorldMigrationError, match=rf"type '{component}'.*mapping"):
+        migrate_snapshot(source)
+
+
+@pytest.mark.parametrize(
+    ("component", "field"),
+    [("RumorSourceComponent", "source_id"), ("RumorTargetComponent", "target_id")],
+)
+def test_schema_v1_rumor_relationship_wrappers_reject_missing_targets(component, field):
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"][component] = {"entity_1": {field: "missing"}}
+    with pytest.raises(
+        WorldMigrationError,
+        match=rf"entity 'entity_1'.*{component}\.{field}.*'missing'",
+    ):
+        migrate_snapshot(source)
+
+
+@pytest.mark.parametrize("component", ["RumorSourceComponent", "RumorTargetComponent"])
+def test_schema_v1_rumor_relationship_wrappers_must_be_mappings(component):
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"][component] = []
+    with pytest.raises(WorldMigrationError, match=rf"type '{component}'.*mapping"):
+        migrate_snapshot(source)
+
+
+def test_schema_v1_rumor_without_source_drops_empty_wrapper():
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"]["RumorSourceComponent"] = {"entity_1": {"source_id": None}}
+
+    migrated = migrate_snapshot(source)
+
+    assert "RumorSourceComponent" not in migrated["components"]
+    assert "OriginatesFromSource" not in migrated["relationships"]
 
 
 def test_schema_v1_migration_handles_collisions_and_unaccepted_generated_quests():

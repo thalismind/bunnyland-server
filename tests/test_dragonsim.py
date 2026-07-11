@@ -44,6 +44,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     CrimeReportedEvent,
     CrimeWitnessedEvent,
     DeclineQuestHandler,
+    DependsOnIngredient,
     DiscoverLocationHandler,
     DiscoveryComponent,
     DragonSpellCastEvent,
@@ -78,7 +79,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     MapMarkerAddedEvent,
     MapMarkerComponent,
     MarkMapHandler,
-    MemberOf,
+    MemberOfFaction,
     PayBountyHandler,
     PerkComponent,
     PerkUnlockedEvent,
@@ -555,6 +556,10 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
             ),
         ],
     )
+    missing_ingredient = spawn_entity(
+        world,
+        [IdentityComponent(name="missing herb", kind="item"), PortableComponent()],
+    )
     missing_ingredient_recipe = spawn_entity(
         world,
         [
@@ -563,10 +568,10 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
                 name="missing recipe",
                 potion_name="Missing Tonic",
                 skill_name="",
-                ingredient_ids=("entity_999",),
             ),
         ],
     )
+    missing_ingredient_recipe.add_relationship(DependsOnIngredient(), missing_ingredient.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), recipe.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), missing_ingredient_recipe.id)
     empty_artifact = spawn_entity(
@@ -1480,7 +1485,7 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
         assert result.reason == reason
 
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_relationship(MemberOf(rank="member", since_epoch=0), faction.id)
+    character.add_relationship(MemberOfFaction(rank="member", since_epoch=0), faction.id)
     result = JoinFactionHandler().execute(
         ctx,
         _handler_cmd(scenario, "join-faction", faction_id=str(faction.id)),
@@ -1517,13 +1522,13 @@ async def test_join_and_leave_faction_updates_membership_edge():
     await scenario.actor.tick(HOUR)
 
     character = scenario.actor.world.get_entity(scenario.character)
-    assert character.has_relationship(MemberOf, faction)
+    assert character.has_relationship(MemberOfFaction, faction)
     assert joined[0].rank == "scout"
 
     await scenario.actor.submit(_cmd(scenario, "leave-faction", faction_id=str(faction)))
     await scenario.actor.tick(HOUR)
 
-    assert not character.has_relationship(MemberOf, faction)
+    assert not character.has_relationship(MemberOfFaction, faction)
     assert left[0].faction_name == "Moss Wardens"
 
 
@@ -1535,8 +1540,8 @@ def test_dragonsim_fragments_show_quests_factions_and_nearby_locations():
     quest, _objective = _quest(scenario)
     book = _skill_book(scenario)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_relationship(MemberOf(rank="scout", since_epoch=0), faction)
-    character.add_relationship(MemberOf(rank="ally", since_epoch=0), nameless_group.id)
+    character.add_relationship(MemberOfFaction(rank="scout", since_epoch=0), faction)
+    character.add_relationship(MemberOfFaction(rank="ally", since_epoch=0), nameless_group.id)
     quest_entity = scenario.actor.world.get_entity(quest)
     replace_component(quest_entity, QuestStateComponent(status="active"))
     quest_entity.add_relationship(QuestAcceptedBy(), scenario.character)
@@ -1971,7 +1976,7 @@ async def test_change_rank_bribe_guard_serve_jail_and_pick_lock():
     _install(scenario.actor)
     faction = _faction(scenario)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_relationship(MemberOf(rank="scout", since_epoch=3), faction)
+    character.add_relationship(MemberOfFaction(rank="scout", since_epoch=3), faction)
     character.add_component(WantedComponent(amounts={str(faction): 15}))
     guard = spawn_entity(
         scenario.actor.world,
@@ -2062,11 +2067,11 @@ async def test_learn_cast_brew_and_use_fixed_adventure_magic():
                 potion_name="Blue Tonic",
                 skill_name="alchemy",
                 min_skill_level=1,
-                ingredient_ids=(str(herb.id),),
                 effect="restore",
             ),
         ],
     )
+    recipe.add_relationship(DependsOnIngredient(), herb.id)
     artifact = spawn_entity(
         scenario.actor.world,
         [
@@ -2121,7 +2126,7 @@ def _victim_with_item(scenario, *, faction_id=None, room=None, name="Mara"):
     )
     world.get_entity(room).add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), victim.id)
     if faction_id is not None:
-        victim.add_relationship(MemberOf(rank="member"), faction_id)
+        victim.add_relationship(MemberOfFaction(rank="member"), faction_id)
     item = spawn_entity(
         world,
         [IdentityComponent(name="ruby ring", kind="item"), PortableComponent(can_pick_up=True)],

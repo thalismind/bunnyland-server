@@ -92,6 +92,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     CreatureTrackedEvent,
     CreatureTrampledEvent,
     CreatureTranquilizedEvent,
+    DescendsFromParent,
     DinoIncidentEnrichment,
     DinosaurComponent,
     DodgeCreatureHandler,
@@ -225,6 +226,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     _reachable_creature,
     _region_for_room,
     _region_rooms,
+    _spawn_egg,
     _species_name,
     dinosim_fragments,
     generate_kaiju_spawn_specs,
@@ -1575,10 +1577,10 @@ async def test_creature_products_feed_store_ranch_work_and_guard_assignment_loop
             EggComponent(
                 species_name="velociraptor",
                 laid_at_epoch=0,
-                parent_ids=(str(raptor.id),),
             ),
         ],
     )
+    egg.add_relationship(DescendsFromParent(), raptor.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raptor.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), egg.id)
 
@@ -4360,3 +4362,16 @@ def test_drive_off_predator_rejects_creature_without_a_room():
 
     assert not result.ok
     assert result.reason == "creature is not in a room"
+
+
+def test_spawn_egg_ignores_missing_parent_reference():
+    scenario = build_scenario()
+
+    egg = _spawn_egg(
+        scenario.actor.world,
+        "raptor",
+        0,
+        parent_ids=("entity_999",),
+    )
+
+    assert egg.get_relationships(DescendsFromParent) == []

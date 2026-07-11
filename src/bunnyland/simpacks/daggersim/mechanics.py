@@ -77,22 +77,16 @@ class ExpansionHookComponent(Component):
 @dataclass(frozen=True)
 class RumorComponent(Component):
     text: str
-    heard_by: tuple[str, ...] = ()
     state: str = "unverified"
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if (
             ctx.target is None
-            or str(ctx.target.id) not in self.heard_by
+            or not ctx.entity.has_relationship(RumorHeardBy, ctx.target.id)
             or not ctx.can_view_private_state
         ):
             return ()
         return (f"Rumor: {self.text} ({self.state}).",)
-
-
-@dataclass(frozen=True)
-class RumorSourceComponent(Component):
-    source_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,8 +95,18 @@ class RumorReliabilityComponent(Component):
 
 
 @dataclass(frozen=True)
-class RumorTargetComponent(Component):
-    target_id: str
+class OriginatesFromSource(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class RefersToSubject(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class RumorHeardBy(Edge):
+    pass
 
 
 @dataclass(frozen=True)
@@ -260,7 +264,6 @@ class LetterOfCreditComponent(Component):
 @dataclass(frozen=True)
 class SafeStorageComponent(Component):
     owner_id: str
-    item_ids: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if (
@@ -269,7 +272,15 @@ class SafeStorageComponent(Component):
             or not ctx.can_view_private_state
         ):
             return ()
-        return (f"Safe storage: {len(self.item_ids)} item(s).",)
+        stored_count = (
+            sum(
+                entity.has_relationship(StoredIn, ctx.entity.id)
+                for entity in ctx._world.query().execute_entities()
+            )
+            if ctx._world is not None
+            else 0
+        )
+        return (f"Safe storage: {stored_count} item(s).",)
 
 
 @dataclass(frozen=True)
@@ -344,16 +355,6 @@ class LegalReputationComponent(Component):
 
 
 @dataclass(frozen=True)
-class ServiceAccessComponent(Component):
-    service_ids: tuple[str, ...] = ()
-
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person or not self.service_ids:
-            return ()
-        return (f"Unlocked institution services: {len(self.service_ids)}.",)
-
-
-@dataclass(frozen=True)
 class PropertyDeedComponent(Component):
     property_id: str = ""
     region_id: str = ""
@@ -373,6 +374,16 @@ class OwnsProperty(Edge):
         if ctx.target is None:
             return ()
         return (f"Property owned: {_name(ctx.target)}.",)
+
+
+@dataclass(frozen=True)
+class StoredIn(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class HasAccessToService(Edge):
+    pass
 
 
 @dataclass(frozen=True)
@@ -1106,14 +1117,13 @@ def _adjust_legal_reputation(character: Entity, region_id: str, delta: int) -> i
 
 
 def _grant_service_access(character: Entity, service_id: EntityId) -> bool:
-    current = (
-        character.get_component(ServiceAccessComponent)
-        if character.has_component(ServiceAccessComponent)
-        else ServiceAccessComponent()
-    )
-    service_ids = tuple(dict.fromkeys((*current.service_ids, str(service_id))))
-    replace_component(character, replace(current, service_ids=service_ids))
-    return len(service_ids) != len(current.service_ids)
+    if any(
+        target_id == service_id
+        for _edge, target_id in character.get_relationships(HasAccessToService)
+    ):
+        return False
+    character.add_relationship(HasAccessToService(), service_id)
+    return True
 
 
 def _deed_reputation_score(character: Entity, tag: str) -> float:
@@ -1217,11 +1227,10 @@ class AskRumorHandler:
             return rejected("target is not a rumor")
 
         rumor = rumor_entity.get_component(RumorComponent)
-        if str(character_id) in rumor.heard_by:
+        if rumor_entity.has_relationship(RumorHeardBy, character_id):
             return rejected("rumor already heard")
 
-        heard_by = tuple((*rumor.heard_by, str(character_id)))
-        replace_component(rumor_entity, replace(rumor, heard_by=heard_by))
+        rumor_entity.add_relationship(RumorHeardBy(), character_id)
         return ok(
             RumorHeardEvent(
                 **ctx.event_base(
@@ -1255,7 +1264,7 @@ class InvestigateRumorHandler:
             return rejected("target is not a rumor")
 
         rumor = rumor_entity.get_component(RumorComponent)
-        if str(character_id) not in rumor.heard_by:
+        if not rumor_entity.has_relationship(RumorHeardBy, character_id):
             return rejected("rumor has not been heard")
         if rumor.state != "unverified":
             return rejected("rumor is already resolved")
@@ -1283,9 +1292,10 @@ class InvestigateRumorHandler:
                 )
             )
         )
-        if verified and rumor_entity.has_component(RumorTargetComponent):
-            target_id = parse_entity_id(rumor_entity.get_component(RumorTargetComponent).target_id)
-            if target_id is not None and ctx.world.has_entity(target_id):
+        if verified:
+            targets = rumor_entity.get_relationships(RefersToSubject)
+            if targets:
+                target_id = targets[0][1]
                 target = ctx.entity(target_id)
                 if target.has_component(ProceduralSiteComponent):
                     site = target.get_component(ProceduralSiteComponent)
@@ -1975,11 +1985,11 @@ class StoreSafeItemHandler:
         )
         if safe.owner_id != str(character_id):
             return rejected("safe storage belongs to someone else")
+        if not storage.has_component(SafeStorageComponent):
+            storage.add_component(safe)
         character.remove_relationship(Contains, item_id)
         storage.add_relationship(Contains(mode=ContainmentMode.CONTAINER), item_id)
-        replace_component(
-            storage, replace(safe, item_ids=tuple(sorted((*safe.item_ids, str(item_id)))))
-        )
+        ctx.entity(item_id).add_relationship(StoredIn(), storage_id)
         return ok(
             SafeStorageUpdatedEvent(
                 **ctx.event_base(
@@ -2012,14 +2022,14 @@ class RetrieveSafeItemHandler:
         safe = storage.get_component(SafeStorageComponent)
         if safe.owner_id != str(character_id):
             return rejected("safe storage belongs to someone else")
-        if str(item_id) not in safe.item_ids:
+        if not any(
+            target_id == storage_id
+            for _edge, target_id in ctx.entity(item_id).get_relationships(StoredIn)
+        ):
             return rejected("item is not in safe storage")
         storage.remove_relationship(Contains, item_id)
+        ctx.entity(item_id).remove_relationship(StoredIn, storage_id)
         ctx.entity(character_id).add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
-        replace_component(
-            storage,
-            replace(safe, item_ids=tuple(item for item in safe.item_ids if item != str(item_id))),
-        )
         return ok(
             SafeStorageUpdatedEvent(
                 **ctx.event_base(
@@ -3234,8 +3244,7 @@ def _selected_rumor_id(
         entity = ctx.entity(entity_id)
         if not entity.has_component(RumorComponent):
             continue
-        rumor = entity.get_component(RumorComponent)
-        if str(character_id) not in rumor.heard_by:
+        if not entity.has_relationship(RumorHeardBy, character_id):
             return entity_id
     return None
 
@@ -3706,7 +3715,6 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         AfflictionStigmaComponent,
         CureRequestComponent,
         FeedingNeedComponent,
-        ServiceAccessComponent,
         WereformComponent,
         TravelPlanComponent,
     ):
@@ -3723,6 +3731,9 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             lines.append(f"Institution reputation with {label}: {score}.")
     if character.has_component(LegalReputationComponent):
         lines.extend(character.get_component(LegalReputationComponent).prompt_fragments(ctx))
+    service_count = len(character.get_relationships(HasAccessToService))
+    if service_count:
+        lines.append(f"Unlocked institution services: {service_count}.")
     for edge, institution_id in character.get_relationships(MemberOfInstitution):
         if world.has_entity(institution_id):
             institution = world.get_entity(institution_id)
@@ -3937,13 +3948,15 @@ __all__ = [
     "RumorDisprovenEvent",
     "RumorHeardEvent",
     "RumorReliabilityComponent",
-    "RumorSourceComponent",
-    "RumorTargetComponent",
+    "OriginatesFromSource",
+    "RefersToSubject",
+    "RumorHeardBy",
     "RumorVerifiedEvent",
     "SpellCastEvent",
     "SpellCreatedEvent",
     "SpellTemplateComponent",
     "SafeStorageComponent",
+    "StoredIn",
     "SafeStorageUpdatedEvent",
     "SendDebtCollectorHandler",
     "SentenceCrimeHandler",
@@ -3982,7 +3995,7 @@ __all__ = [
     "DungeonRoomDiscoveredEvent",
     "SecretDoorFoundEvent",
     "ServiceAccessChangedEvent",
-    "ServiceAccessComponent",
+    "HasAccessToService",
     "RecallAnchorSetEvent",
     "RecallUsedEvent",
     "DungeonObjectiveFoundEvent",

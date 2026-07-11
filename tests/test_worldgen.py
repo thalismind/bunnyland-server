@@ -1877,7 +1877,7 @@ async def test_builtin_generation_enrichers_enrich_from_descriptive_mentions():
 
 async def test_builtin_generation_enrichers_cover_core_sim_pack_wants():
     from bunnyland.simpacks.colonysim.mechanics import (
-        AllowedAreaComponent,
+        AllowedIn,
         BedRestComponent,
         CaravanComponent,
         ColonyWealthComponent,
@@ -2095,12 +2095,12 @@ async def test_builtin_generation_enrichers_cover_core_sim_pack_wants():
         CollectionComponent,
         WorkPriorityComponent,
         WorkCapabilityComponent,
-        AllowedAreaComponent,
         BedRestComponent,
         InfectionComponent,
         MentalStateComponent,
     ):
         assert resident.has_component(component_type)
+    assert resident.get_relationships(AllowedIn) == [(AllowedIn(), life_home.id)]
     assert resident.get_component(ReproductiveComponent).species_group == "bunny"
 
     life_shop = actor.world.get_entity(result.objects["life_shop"])
@@ -2227,19 +2227,18 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         LawRegionComponent,
         LegalReputationComponent,
         LodgingComponent,
+        OriginatesFromSource,
         PotionMakerComponent,
         ProceduralSiteComponent,
         PropertyDeedComponent,
         RecallAnchorComponent,
         RechargeServiceComponent,
+        RefersToSubject,
         RegionalReputationComponent,
         RestRiskComponent,
         RumorComponent,
         RumorReliabilityComponent,
-        RumorSourceComponent,
-        RumorTargetComponent,
         SecretDoorComponent,
-        ServiceAccessComponent,
         SocialRegisterComponent,
         SpellTemplateComponent,
         StreetwiseSkillComponent,
@@ -2548,9 +2547,7 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
     dagger_board = actor.world.get_entity(result.objects["dagger_board"])
     for component_type in (
         RumorComponent,
-        RumorSourceComponent,
         RumorReliabilityComponent,
-        RumorTargetComponent,
         QuestTemplateComponent,
         QuestComponent,
         QuestStateComponent,
@@ -2569,6 +2566,12 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         AutomapComponent,
     ):
         assert dagger_board.has_component(component_type)
+    assert dagger_board.get_relationships(OriginatesFromSource) == [
+        (OriginatesFromSource(), dagger_city.id)
+    ]
+    assert dagger_board.get_relationships(RefersToSubject) == [
+        (RefersToSubject(), dagger_city.id)
+    ]
 
     dagger_scholar = actor.world.get_entity(result.characters["dagger_scholar"])
     for component_type in (
@@ -2576,7 +2579,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         RegionalReputationComponent,
         InstitutionReputationComponent,
         LegalReputationComponent,
-        ServiceAccessComponent,
         ClassTemplateComponent,
         CustomClassComponent,
         LanguageSkillComponent,
@@ -3562,3 +3564,39 @@ async def test_enrichment_object_only_component_branches():
     assert actor.world.get_entity(result.characters["mutant"]).has_component(
         MutationResistanceComponent
     )
+
+
+def test_relationship_generation_requires_targets_and_emits_configured_access():
+    from bunnyland.core import GenerationEdge
+    from bunnyland.simpacks.colonysim.generation import ColonyGenerationEnricher
+    from bunnyland.simpacks.daggersim.generation import DaggerGenerationEnricher
+    from bunnyland.simpacks.daggersim.mechanics import HasAccessToService
+
+    colony = ColonyGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="character",
+            capabilities=("bunnyland.colonysim.allowed-area",),
+        )
+    )
+    assert colony.edges == ()
+
+    dagger = DaggerGenerationEnricher()
+    access = dagger.enrich(
+        GenerationRequest(
+            entity_kind="character",
+            capabilities=("bunnyland.daggersim.service-access",),
+            context={"service_id": "entity_1"},
+        )
+    )
+    assert access.edges == (GenerationEdge(HasAccessToService(), "entity_1"),)
+
+    unscoped_rumor = dagger.enrich(
+        GenerationRequest(
+            entity_kind="object",
+            capabilities=(
+                "bunnyland.daggersim.rumor-source",
+                "bunnyland.daggersim.rumor-target",
+            ),
+        )
+    )
+    assert unscoped_rumor.edges == ()

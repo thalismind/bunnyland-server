@@ -207,16 +207,6 @@ class PawnProfileComponent(Component):
 
 
 @dataclass(frozen=True)
-class AllowedAreaComponent(Component):
-    room_ids: tuple[str, ...] = ()
-
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person or not self.room_ids:
-            return ()
-        return ("Allowed work area rooms: " + ", ".join(sorted(self.room_ids)) + ".",)
-
-
-@dataclass(frozen=True)
 class RoomRoleComponent(Component):
     role: str = "room"
 
@@ -325,7 +315,6 @@ class TradeOfferComponent(Component):
 @dataclass(frozen=True)
 class CaravanComponent(Component):
     destination: str
-    member_ids: tuple[str, ...] = ()
     cargo: dict[str, int] = field(default_factory=dict)
     departed_at_epoch: int = 0
     returned: bool = False
@@ -444,6 +433,16 @@ class Owns(Edge):
 
 @dataclass(frozen=True)
 class HasBodyPart(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class AllowedIn(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class MemberOfCaravan(Edge):
     pass
 
 
@@ -1119,7 +1118,12 @@ class SetAllowedAreaHandler:
             if not ctx.entity(room_id).has_component(RoomComponent):
                 return rejected("target is not a room")
         character = ctx.entity(character_id)
-        replace_component(character, AllowedAreaComponent(room_ids=room_ids))
+        for _edge, room_id in character.get_relationships(AllowedIn):
+            character.remove_relationship(AllowedIn, room_id)
+        for room_id_str in room_ids:
+            room_id = parse_entity_id(room_id_str)
+            assert room_id is not None
+            character.add_relationship(AllowedIn(), room_id)
         return ok(
             AllowedAreaSetEvent(
                 **ctx.event_base(
@@ -2074,18 +2078,25 @@ class FormCaravanHandler:
         member_ids = tuple(
             sorted({str(character_id), *_parse_types(command.payload.get("member_ids"))})
         )
+        parsed_member_ids: list[EntityId] = []
+        for member_id in member_ids:
+            parsed = parse_entity_id(member_id)
+            if parsed is None or not ctx.world.has_entity(parsed):
+                return rejected("caravan member does not exist")
+            parsed_member_ids.append(parsed)
         caravan = spawn_entity(
             ctx.world,
             [
                 IdentityComponent(name=f"caravan to {destination}", kind="caravan"),
                 CaravanComponent(
                     destination=destination,
-                    member_ids=member_ids,
                     cargo=cargo,
                     departed_at_epoch=ctx.epoch,
                 ),
             ],
         )
+        for member_id in parsed_member_ids:
+            ctx.entity(member_id).add_relationship(MemberOfCaravan(), caravan.id)
         return ok(
             CaravanFormedEvent(
                 **ctx.event_base(
@@ -2240,7 +2251,6 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
     for component_type in (
         WorkPriorityComponent,
         PawnProfileComponent,
-        AllowedAreaComponent,
         PrisonerComponent,
         BedRestComponent,
         InfectionComponent,
@@ -2248,6 +2258,9 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
     ):
         if character.has_component(component_type):
             lines.extend(character.get_component(component_type).prompt_fragments(ctx))
+    allowed_rooms = [str(room_id) for _edge, room_id in character.get_relationships(AllowedIn)]
+    if allowed_rooms:
+        lines.append("Allowed work area rooms: " + ", ".join(sorted(allowed_rooms)) + ".")
     for entity in world.query().with_all([RecipeComponent]).execute_entities():
         recipe_ctx = ComponentPromptContext.for_entity(
             world, entity, perspective=ctx.perspective, target=character
@@ -2310,7 +2323,7 @@ def colonysim_fragments(world: World, character: Entity) -> list[str]:
 
 __all__ = [
     "AllowItemHandler",
-    "AllowedAreaComponent",
+    "AllowedIn",
     "AllowedAreaSetEvent",
     "AssignedTo",
     "AssignJobHandler",
@@ -2318,6 +2331,7 @@ __all__ = [
     "BedRestComponent",
     "BodyPartHealthComponent",
     "CaravanComponent",
+    "MemberOfCaravan",
     "CaravanFormedEvent",
     "CharacterRescuedEvent",
     "ClaimOwnershipHandler",

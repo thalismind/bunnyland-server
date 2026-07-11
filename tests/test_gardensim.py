@@ -91,6 +91,7 @@ from bunnyland.simpacks.gardensim.mechanics import (
     MachineRepairedEvent,
     MailClaimedEvent,
     MailComponent,
+    MemberOfFestival,
     MineHandler,
     MineLevelComponent,
     MiningNodeComponent,
@@ -830,6 +831,11 @@ async def test_fishing_mining_foraging_gifts_festivals_and_bundles():
     await scenario.actor.tick(0.0)
     await scenario.actor.submit(_cmd(scenario, "join-festival", festival_id=str(festival.id)))
     await scenario.actor.tick(0.0)
+    repeated_join = JoinFestivalHandler().execute(
+        HandlerContext(scenario.actor.world, scenario.actor.epoch),
+        _handler_cmd(scenario, "join-festival", festival_id=str(festival.id)),
+    )
+    assert repeated_join.ok is True
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(
         _cmd(
@@ -846,7 +852,11 @@ async def test_fishing_mining_foraging_gifts_festivals_and_bundles():
     assert not scenario.actor.world.has_entity(node.id)
     assert not scenario.actor.world.has_entity(forage.id)
     assert friend.get_component(FriendshipComponent).points == 10.0
-    assert str(scenario.character) in festival.get_component(FestivalComponent).joined_character_ids
+    assert scenario.actor.world.get_entity(scenario.character).get_relationships(
+        MemberOfFestival
+    ) == [
+        (MemberOfFestival(), festival.id)
+    ]
     assert bundle.get_component(BundleComponent).completed is True
 
 

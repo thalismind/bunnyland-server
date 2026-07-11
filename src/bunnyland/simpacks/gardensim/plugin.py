@@ -80,6 +80,7 @@ from bunnyland.simpacks.gardensim.mechanics import (
     MachineRepairedEvent,
     MailClaimedEvent,
     MailComponent,
+    MemberOfFestival,
     MineHandler,
     MineLevelComponent,
     MiningNodeComponent,
@@ -198,7 +199,8 @@ def _definition() -> Plugin:
                 MuseumCollectionComponent,
                 RewardComponent,
                 DailyFarmResetComponent,
-            )
+            ),
+            edges=(MemberOfFestival,),
         ),
         commands=CommandContribution(
             action_definitions=ACTION_DEFINITIONS,

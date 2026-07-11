@@ -191,6 +191,61 @@ def test_removed_compatibility_surfaces_cannot_return():
         ), path
 
 
+def test_live_memberships_and_aggregate_relationships_remain_edges():
+    root = Path(__file__).parents[1] / "src" / "bunnyland" / "simpacks"
+    forbidden_fields = {
+        "AllowedAreaComponent": "room_ids",
+        "CaravanComponent": "member_ids",
+        "SafeStorageComponent": "item_ids",
+        "ServiceAccessComponent": "service_ids",
+        "FestivalComponent": "joined_character_ids",
+        "AwayTeamComponent": "member_ids",
+        "PotionRecipeComponent": "ingredient_ids",
+        "EggComponent": "parent_ids",
+        "RumorComponent": "heard_by",
+    }
+    edge_names = {
+        "AllowedIn",
+        "MemberOfCaravan",
+        "StoredIn",
+        "HasAccessToService",
+        "MemberOfFestival",
+        "MemberOfAwayTeam",
+        "DependsOnIngredient",
+        "DescendsFromParent",
+        "OriginatesFromSource",
+        "RefersToSubject",
+        "RumorHeardBy",
+        "MemberOfFaction",
+        "MemberOfInstitution",
+    }
+    found_edges: set[str] = set()
+    for path in root.rglob("mechanics.py"):
+        tree = ast.parse(path.read_text())
+        for node in (item for item in ast.walk(tree) if isinstance(item, ast.ClassDef)):
+            fields = {
+                child.target.id
+                for child in node.body
+                if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name)
+            }
+            if node.name in forbidden_fields:
+                assert forbidden_fields[node.name] not in fields, path
+            if any(isinstance(base, ast.Name) and base.id == "Edge" for base in node.bases):
+                found_edges.add(node.name)
+    assert edge_names <= found_edges
+    assert not {
+        "MemberOf",
+        "CaravanHasMember",
+        "FestivalJoinedBy",
+        "AwayTeamHasMember",
+        "StoresItem",
+        "CanUseService",
+        "RecipeRequiresIngredient",
+        "EggHasParent",
+        "RumorHasSource",
+        "RumorAbout",
+    } & found_edges
+
 def test_registry_rejects_duplicate_event_ownership_and_incompatible_expectations():
     with pytest.raises(PluginError, match="already owned"):
         PluginRegistry(
