@@ -138,8 +138,6 @@ from .quests import (
     AcceptGeneratedQuestHandler,
     AskForWorkHandler,
     CompleteGeneratedQuestHandler,
-    CureQuestHookComponent,
-    CureQuestRequestedEvent,
     ExtendGeneratedQuestHandler,
     LieAboutQuestHandler,
     QuestAbandonedEvent,
@@ -151,7 +149,7 @@ from .quests import (
     QuestRefusedEvent,
     QuestTemplateComponent,
     RefuseGeneratedQuestHandler,
-    RequestCureQuestHandler,
+    generated_quest_fragments,
 )
 from .resolution import RESOLUTION_RULES
 
@@ -180,7 +178,6 @@ def _definition() -> Plugin:
                 QuestObjectiveComponent,
                 QuestRewardComponent,
                 QuestTemplateComponent,
-                CureQuestHookComponent,
                 FactionComponent,
                 FactionReputationComponent,
                 GuardComponent,
@@ -235,7 +232,6 @@ def _definition() -> Plugin:
                 AbandonGeneratedQuestHandler,
                 ExtendGeneratedQuestHandler,
                 LieAboutQuestHandler,
-                RequestCureQuestHandler,
                 JoinFactionHandler,
                 LeaveFactionHandler,
                 ChangeFactionRankHandler,
@@ -279,7 +275,6 @@ def _definition() -> Plugin:
                 QuestAbandonedEvent,
                 QuestExtendedEvent,
                 QuestLieToldEvent,
-                CureQuestRequestedEvent,
                 FactionJoinedEvent,
                 FactionLeftEvent,
                 FactionRankChangedEvent,
@@ -311,7 +306,7 @@ def _definition() -> Plugin:
         ),
         runtime=RuntimeContribution(service_factories=(_install_quest_deadlines,)),
         content=ContentContribution(
-            prompt_fragments=(dragonsim_fragments,),
+            prompt_fragments=(dragonsim_fragments, generated_quest_fragments),
             generation_capabilities=CAPABILITIES,
             generation_enrichers=(GENERATION_ENRICHER, GENERATED_QUEST_ENRICHER),
             incident_resolution_rules=RESOLUTION_RULES,

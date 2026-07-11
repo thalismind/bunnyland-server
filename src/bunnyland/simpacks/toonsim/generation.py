@@ -37,7 +37,6 @@ from .mechanics import (
 )
 
 CAPABILITIES = ()
-ALIASES = {}
 
 
 def _component(components, component_type):

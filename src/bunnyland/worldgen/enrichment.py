@@ -70,14 +70,7 @@ class GenerationContext:
             ),
             None,
         )
-        wants = tuple(
-            dict.fromkeys(
-                (
-                    *request.capabilities,
-                    *(value.rsplit(".", 1)[-1] for value in request.capabilities if "." in value),
-                )
-            )
-        )
+        wants = tuple(dict.fromkeys(request.capabilities))
         entity_id = request.request_id
         room_key = str(request.context.get("room_key", request.source_key))
         room_id = str(request.context.get("room_id", room_key))
@@ -157,9 +150,9 @@ def generation_crop_type(context: GenerationContext) -> str:
 
 
 def generation_expansion_trigger(context: GenerationContext) -> str:
-    if generation_wants(context, "rumor"):
+    if generation_wants(context, "bunnyland.daggersim.rumor"):
         return "rumor"
-    if generation_wants(context, "quest"):
+    if generation_wants(context, "bunnyland.dragonsim.quest"):
         return "quest"
     return "worldgen"
 

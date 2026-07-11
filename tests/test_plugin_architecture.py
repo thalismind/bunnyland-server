@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -113,16 +114,12 @@ def test_registry_namespaces_same_named_event_classes_and_uses_exact_identity():
 
 
 def test_dragonsim_is_the_single_owner_of_quest_contracts():
-    from bunnyland.simpacks.daggersim.mechanics import (
-        QuestCompletedEvent as DaggerQuestCompletedEvent,
-    )
-    from bunnyland.simpacks.daggersim.mechanics import QuestGeneratedEvent, QuestTemplateComponent
     from bunnyland.simpacks.dragonsim.events import QuestCompletedEvent
-    from bunnyland.simpacks.dragonsim.quests import QuestProvenanceComponent
+    from bunnyland.simpacks.dragonsim.mechanics import QuestProvenanceComponent
+    from bunnyland.simpacks.dragonsim.quests import QuestGeneratedEvent, QuestTemplateComponent
 
     registry = PluginRegistry(bunnyland_plugins())
 
-    assert DaggerQuestCompletedEvent is QuestCompletedEvent
     assert registry.event_key(QuestCompletedEvent) == "bunnyland.dragonsim:QuestCompletedEvent"
     assert registry.event_key(QuestGeneratedEvent) == "bunnyland.dragonsim:QuestGeneratedEvent"
     assert registry.components["QuestProvenanceComponent"] == (
@@ -133,6 +130,65 @@ def test_dragonsim_is_the_single_owner_of_quest_contracts():
         "bunnyland.dragonsim",
         QuestTemplateComponent,
     )
+
+
+def test_removed_compatibility_surfaces_cannot_return():
+    root = Path(__file__).parents[1] / "src" / "bunnyland"
+    dagger_source = root / "simpacks" / "daggersim" / "mechanics.py"
+    dagger_tree = ast.parse(dagger_source.read_text())
+    generated_quest_names = {
+        "QuestTemplateComponent",
+        "QuestGeneratedEvent",
+        "QuestFailedEvent",
+        "QuestRefusedEvent",
+        "QuestAbandonedEvent",
+        "QuestExtendedEvent",
+        "QuestLieToldEvent",
+        "AskForWorkHandler",
+        "AcceptGeneratedQuestHandler",
+        "CompleteGeneratedQuestHandler",
+        "RefuseGeneratedQuestHandler",
+        "AbandonGeneratedQuestHandler",
+        "ExtendGeneratedQuestHandler",
+        "LieAboutQuestHandler",
+        "QuestDeadlineConsequence",
+    }
+    assert (
+        not {
+            node.name
+            for node in ast.walk(dagger_tree)
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+        }
+        & generated_quest_names
+    )
+
+    for path in root.rglob("generation.py"):
+        tree = ast.parse(path.read_text())
+        assert not any(
+            isinstance(node, (ast.Assign, ast.AnnAssign))
+            and any(
+                isinstance(target, ast.Name) and target.id == "ALIASES"
+                for target in (node.targets if isinstance(node, ast.Assign) else (node.target,))
+            )
+            for node in ast.walk(tree)
+        ), path
+
+    assert not (root / "tui" / "verbs.py").exists()
+    tui_source = (root / "tui" / "app.py").read_text()
+    assert "ACTION_VERBS" not in tui_source
+    assert "_legacy_action_view" not in tui_source
+
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        assert not any(
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Name)
+            and node.targets[0].id.endswith(("Component", "Event", "Handler"))
+            and node.value.id.endswith(("Component", "Event", "Handler"))
+            for node in ast.walk(tree)
+        ), path
 
 
 def test_registry_rejects_duplicate_event_ownership_and_incompatible_expectations():

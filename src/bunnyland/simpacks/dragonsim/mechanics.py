@@ -2396,7 +2396,6 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
             world, quest, perspective=ctx.perspective, target=character
         )
         lines.extend(quest.get_component(QuestComponent).prompt_fragments(quest_ctx))
-
         state = quest.get_component(QuestStateComponent)
         lines.extend(state.prompt_fragments(quest_ctx))
 

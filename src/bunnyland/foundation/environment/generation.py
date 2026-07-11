@@ -14,13 +14,6 @@ CAPABILITIES = (
     "bunnyland.environment.fuel",
 )
 
-ALIASES = {
-    "burning": "bunnyland.environment.burning",
-    "fire": "bunnyland.environment.fire",
-    "flammable": "bunnyland.environment.flammable",
-    "fuel": "bunnyland.environment.fuel",
-}
-
 
 class EnvironmentGenerationEnricher:
     capabilities: tuple[str, ...] = ()
@@ -33,11 +26,13 @@ class EnvironmentGenerationEnricher:
             components[type(component)] = component
 
         if not ctx.is_character:
-            if generation_wants(ctx, "flammable", "fuel") or generation_mentions(
+            if generation_wants(
+                ctx, "bunnyland.environment.flammable", "bunnyland.environment.fuel"
+            ) or generation_mentions(
                 ctx, "wood", "paper", "cloth", "grass", "forest", "brush", "fuel"
             ):
                 add(FlammableComponent(fuel=8.0))
-            if generation_wants(ctx, "fire", "burning"):
+            if generation_wants(ctx, "bunnyland.environment.fire", "bunnyland.environment.burning"):
                 add(FireComponent(last_updated_epoch=ctx.world_epoch))
         return GenerationDelta(
             components=tuple(components.values()),

@@ -98,50 +98,6 @@ CAPABILITIES = (
     "bunnyland.gardensim.weed",
 )
 
-ALIASES = {
-    "animal-breeding": "bunnyland.gardensim.animal-breeding",
-    "animal-home": "bunnyland.gardensim.animal-home",
-    "animal-product": "bunnyland.gardensim.animal-product",
-    "bundle": "bunnyland.gardensim.bundle",
-    "collection": "bunnyland.gardensim.collection",
-    "crop": "bunnyland.gardensim.crop",
-    "crop-growth": "bunnyland.gardensim.crop-growth",
-    "crop-inspection": "bunnyland.gardensim.crop-inspection",
-    "crop-quality": "bunnyland.gardensim.crop-quality",
-    "daily-farm-reset": "bunnyland.gardensim.daily-farm-reset",
-    "farm-animal": "bunnyland.gardensim.farm-animal",
-    "farm-quest": "bunnyland.gardensim.farm-quest",
-    "fertilizer": "bunnyland.gardensim.fertilizer",
-    "festival": "bunnyland.gardensim.festival",
-    "fishing-spot": "bunnyland.gardensim.fishing-spot",
-    "forage": "bunnyland.gardensim.forage",
-    "friendship": "bunnyland.gardensim.friendship",
-    "garden-soil": "bunnyland.gardensim.garden-soil",
-    "geode": "bunnyland.gardensim.geode",
-    "gift-preference": "bunnyland.gardensim.gift-preference",
-    "greenhouse": "bunnyland.gardensim.greenhouse",
-    "harvestable": "bunnyland.gardensim.harvestable",
-    "ladder": "bunnyland.gardensim.ladder",
-    "machine": "bunnyland.gardensim.machine",
-    "machine-breakdown": "bunnyland.gardensim.machine-breakdown",
-    "mail": "bunnyland.gardensim.mail",
-    "mine-level": "bunnyland.gardensim.mine-level",
-    "mining-node": "bunnyland.gardensim.mining-node",
-    "museum-collection": "bunnyland.gardensim.museum-collection",
-    "pest": "bunnyland.gardensim.pest",
-    "processing-recipe": "bunnyland.gardensim.processing-recipe",
-    "regrowable": "bunnyland.gardensim.regrowable",
-    "reward": "bunnyland.gardensim.reward",
-    "seed": "bunnyland.gardensim.seed",
-    "shipping-bin": "bunnyland.gardensim.shipping-bin",
-    "soil": "bunnyland.gardensim.soil",
-    "tilled": "bunnyland.gardensim.tilled",
-    "tree": "bunnyland.gardensim.tree",
-    "tree-tap": "bunnyland.gardensim.tree-tap",
-    "watered": "bunnyland.gardensim.watered",
-    "weed": "bunnyland.gardensim.weed",
-}
-
 
 class GardenGenerationEnricher:
     capabilities: tuple[str, ...] = ()
@@ -154,62 +110,82 @@ class GardenGenerationEnricher:
             components[type(component)] = component
 
         if ctx.is_room:
-            if generation_wants(ctx, "soil", "garden-soil") or generation_mentions(
-                ctx, "garden", "farm", "field"
-            ):
+            if generation_wants(
+                ctx, "bunnyland.gardensim.soil", "bunnyland.gardensim.garden-soil"
+            ) or generation_mentions(ctx, "garden", "farm", "field"):
                 add(SoilComponent(quality=1.2))
-            if generation_wants(ctx, "greenhouse") or generation_mentions(ctx, "greenhouse"):
+            if generation_wants(ctx, "bunnyland.gardensim.greenhouse") or generation_mentions(
+                ctx, "greenhouse"
+            ):
                 add(GreenhouseComponent())
-            if generation_wants(ctx, "mine-level") or generation_mentions(ctx, "mine", "cavern"):
+            if generation_wants(ctx, "bunnyland.gardensim.mine-level") or generation_mentions(
+                ctx, "mine", "cavern"
+            ):
                 add(MineLevelComponent(level=1))
-            if generation_wants(ctx, "daily-farm-reset"):
+            if generation_wants(ctx, "bunnyland.gardensim.daily-farm-reset"):
                 add(DailyFarmResetComponent(last_reset_epoch=ctx.world_epoch))
         elif ctx.is_character:
             resource_type = generation_resource_type(ctx)
-            if generation_wants(ctx, "gift-preference") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.gift-preference") or generation_mentions(
                 ctx, "likes", "loves gifts"
             ):
                 add(GiftPreferenceComponent(likes=(resource_type,)))
-            if generation_wants(ctx, "friendship") or generation_mentions(ctx, "friend"):
+            if generation_wants(ctx, "bunnyland.gardensim.friendship") or generation_mentions(
+                ctx, "friend"
+            ):
                 add(FriendshipComponent())
-            if generation_wants(ctx, "collection") or generation_mentions(ctx, "collection"):
+            if generation_wants(ctx, "bunnyland.gardensim.collection") or generation_mentions(
+                ctx, "collection"
+            ):
                 add(CollectionComponent(entries=(resource_type,)))
         else:
             name = ctx.name
             crop_type = generation_crop_type(ctx)
             resource_type = generation_resource_type(ctx)
-            if generation_wants(ctx, "seed") or generation_mentions(ctx, "seed", "seeds"):
+            if generation_wants(ctx, "bunnyland.gardensim.seed") or generation_mentions(
+                ctx, "seed", "seeds"
+            ):
                 add(SeedComponent(crop_type=crop_type, growth_days=2.0, yield_item=crop_type))
-            if generation_wants(ctx, "tilled") or generation_mentions(ctx, "tilled soil"):
+            if generation_wants(ctx, "bunnyland.gardensim.tilled") or generation_mentions(
+                ctx, "tilled soil"
+            ):
                 add(TilledComponent(tilled_at_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "watered") or generation_mentions(ctx, "watered"):
+            if generation_wants(ctx, "bunnyland.gardensim.watered") or generation_mentions(
+                ctx, "watered"
+            ):
                 add(
                     WateredComponent(
                         watered_at_epoch=ctx.world_epoch,
                         expires_at_epoch=ctx.world_epoch + 24 * 60 * 60,
                     )
                 )
-            if generation_wants(ctx, "crop") or generation_mentions(ctx, "planted crop"):
+            if generation_wants(ctx, "bunnyland.gardensim.crop") or generation_mentions(
+                ctx, "planted crop"
+            ):
                 add(CropComponent(crop_type=crop_type, planted_at_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "crop-growth"):
+            if generation_wants(ctx, "bunnyland.gardensim.crop-growth"):
                 add(
                     CropGrowthComponent(
                         progress_days=0.0, required_days=2.0, last_updated_epoch=ctx.world_epoch
                     )
                 )
-            if generation_wants(ctx, "harvestable") or generation_mentions(ctx, "harvestable"):
+            if generation_wants(ctx, "bunnyland.gardensim.harvestable") or generation_mentions(
+                ctx, "harvestable"
+            ):
                 add(HarvestableComponent(yield_item=resource_type, ready=True))
-            if generation_wants(ctx, "fertilizer") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.fertilizer") or generation_mentions(
                 ctx, "fertilizer", "compost"
             ):
                 add(FertilizerComponent(kind="compost", growth_multiplier=1.2))
-            if generation_wants(ctx, "tree") or generation_mentions(ctx, "sapling", "tree"):
+            if generation_wants(ctx, "bunnyland.gardensim.tree") or generation_mentions(
+                ctx, "sapling", "tree"
+            ):
                 add(
                     TreeComponent(
                         tree_type=resource_type, planted_at_epoch=ctx.world_epoch, maturity_days=7.0
                     )
                 )
-            if generation_wants(ctx, "tree-tap") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.tree-tap") or generation_mentions(
                 ctx, "tree tap", "tapped tree"
             ):
                 add(
@@ -217,29 +193,35 @@ class GardenGenerationEnricher:
                         tapped_at_epoch=ctx.world_epoch, last_collected_epoch=ctx.world_epoch
                     )
                 )
-            if generation_wants(ctx, "crop-quality") or generation_mentions(ctx, "crop", "sprout"):
+            if generation_wants(ctx, "bunnyland.gardensim.crop-quality") or generation_mentions(
+                ctx, "crop", "sprout"
+            ):
                 add(CropQualityComponent(quality=1.1))
-            if generation_wants(ctx, "regrowable") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.regrowable") or generation_mentions(
                 ctx, "regrow", "perennial"
             ):
                 add(RegrowableComponent(regrow_days=2.0))
-            if generation_wants(ctx, "pest") or generation_mentions(ctx, "pest", "bugs"):
+            if generation_wants(ctx, "bunnyland.gardensim.pest") or generation_mentions(
+                ctx, "pest", "bugs"
+            ):
                 add(PestComponent(severity=0.5))
-            if generation_wants(ctx, "weed") or generation_mentions(ctx, "weed", "weeds"):
+            if generation_wants(ctx, "bunnyland.gardensim.weed") or generation_mentions(
+                ctx, "weed", "weeds"
+            ):
                 add(WeedComponent(density=0.5))
-            if generation_wants(ctx, "crop-inspection"):
+            if generation_wants(ctx, "bunnyland.gardensim.crop-inspection"):
                 add(CropInspectionComponent(inspected_at_epoch=ctx.world_epoch, notes=ctx.intent))
-            if generation_wants(ctx, "machine") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.machine") or generation_mentions(
                 ctx, "machine", "preserves", "keg"
             ):
                 add(MachineComponent(machine_type=resource_type))
-            if generation_wants(ctx, "machine-breakdown") or generation_mentions(
-                ctx, "broken machine"
-            ):
+            if generation_wants(
+                ctx, "bunnyland.gardensim.machine-breakdown"
+            ) or generation_mentions(ctx, "broken machine"):
                 add(MachineBreakdownComponent(reason=ctx.intent or "worldgen"))
-            if generation_wants(ctx, "processing-recipe") or generation_mentions(
-                ctx, "processing recipe"
-            ):
+            if generation_wants(
+                ctx, "bunnyland.gardensim.processing-recipe"
+            ) or generation_mentions(ctx, "processing recipe"):
                 add(
                     ProcessingRecipeComponent(
                         recipe_id=resource_type,
@@ -249,18 +231,20 @@ class GardenGenerationEnricher:
                         duration_seconds=60,
                     )
                 )
-            if generation_wants(ctx, "animal-home") or generation_mentions(ctx, "coop", "barn"):
+            if generation_wants(ctx, "bunnyland.gardensim.animal-home") or generation_mentions(
+                ctx, "coop", "barn"
+            ):
                 add(AnimalHomeComponent())
-            if generation_wants(ctx, "farm-animal") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.farm-animal") or generation_mentions(
                 ctx, "farm animal", "cow", "chicken"
             ):
                 species = generation_animal_species(ctx)
                 add(FarmAnimalComponent(species=species))
-            if generation_wants(ctx, "animal-product"):
+            if generation_wants(ctx, "bunnyland.gardensim.animal-product"):
                 add(AnimalProductComponent(product_type=resource_type))
-            if generation_wants(ctx, "animal-breeding"):
+            if generation_wants(ctx, "bunnyland.gardensim.animal-breeding"):
                 add(AnimalBreedingComponent(offspring_species=generation_animal_species(ctx)))
-            if generation_wants(ctx, "fishing-spot") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.fishing-spot") or generation_mentions(
                 ctx, "fishing spot", "pond"
             ):
                 add(
@@ -268,33 +252,51 @@ class GardenGenerationEnricher:
                         fish_type=generation_fish_type(ctx), season=generation_season(ctx)
                     )
                 )
-            if generation_wants(ctx, "mining-node") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.mining-node") or generation_mentions(
                 ctx, "mining node", "ore node"
             ):
                 add(MiningNodeComponent(resource_type=resource_type))
-            if generation_wants(ctx, "shipping-bin") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.shipping-bin") or generation_mentions(
                 ctx, "shipping bin", "shipping crate"
             ):
                 add(ShippingBinComponent())
-            if generation_wants(ctx, "geode") or generation_mentions(ctx, "geode"):
+            if generation_wants(ctx, "bunnyland.gardensim.geode") or generation_mentions(
+                ctx, "geode"
+            ):
                 add(GeodeComponent(resource_type=resource_type))
-            if generation_wants(ctx, "ladder") or generation_mentions(ctx, "ladder"):
+            if generation_wants(ctx, "bunnyland.gardensim.ladder") or generation_mentions(
+                ctx, "ladder"
+            ):
                 add(LadderComponent(target_room_id=ctx.entity_id))
-            if generation_wants(ctx, "forage") or generation_mentions(ctx, "forage"):
+            if generation_wants(ctx, "bunnyland.gardensim.forage") or generation_mentions(
+                ctx, "forage"
+            ):
                 add(ForageComponent(resource_type=resource_type, seasons=(generation_season(ctx),)))
-            if generation_wants(ctx, "festival") or generation_mentions(ctx, "festival"):
+            if generation_wants(ctx, "bunnyland.gardensim.festival") or generation_mentions(
+                ctx, "festival"
+            ):
                 add(FestivalComponent(name=name, season=generation_season(ctx)))
-            if generation_wants(ctx, "bundle") or generation_mentions(ctx, "bundle"):
+            if generation_wants(ctx, "bunnyland.gardensim.bundle") or generation_mentions(
+                ctx, "bundle"
+            ):
                 add(BundleComponent(bundle_id=ctx.object_key, requirements={resource_type: 1}))
-            if generation_wants(ctx, "collection") or generation_mentions(ctx, "collection"):
+            if generation_wants(ctx, "bunnyland.gardensim.collection") or generation_mentions(
+                ctx, "collection"
+            ):
                 add(CollectionComponent(entries=(resource_type,)))
-            if generation_wants(ctx, "museum-collection") or generation_mentions(ctx, "museum"):
+            if generation_wants(
+                ctx, "bunnyland.gardensim.museum-collection"
+            ) or generation_mentions(ctx, "museum"):
                 add(MuseumCollectionComponent())
-            if generation_wants(ctx, "reward") or generation_mentions(ctx, "reward"):
+            if generation_wants(ctx, "bunnyland.gardensim.reward") or generation_mentions(
+                ctx, "reward"
+            ):
                 add(RewardComponent(resource_type=resource_type))
-            if generation_wants(ctx, "mail") or generation_mentions(ctx, "mail", "letter"):
+            if generation_wants(ctx, "bunnyland.gardensim.mail") or generation_mentions(
+                ctx, "mail", "letter"
+            ):
                 add(MailComponent(subject=name))
-            if generation_wants(ctx, "farm-quest") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.gardensim.farm-quest") or generation_mentions(
                 ctx, "quest", "order board"
             ):
                 add(FarmQuestComponent(quest_id=resource_type, requested={resource_type: 1}))

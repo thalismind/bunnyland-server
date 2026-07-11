@@ -47,26 +47,6 @@ CAPABILITIES = (
     "bunnyland.lifesim.whim",
 )
 
-ALIASES = {
-    "aspiration": "bunnyland.lifesim.aspiration",
-    "bill": "bunnyland.lifesim.bill",
-    "business-owner": "bunnyland.lifesim.business-owner",
-    "career": "bunnyland.lifesim.career",
-    "character-profile": "bunnyland.lifesim.character-profile",
-    "customer": "bunnyland.lifesim.customer",
-    "home": "bunnyland.lifesim.home",
-    "home-object": "bunnyland.lifesim.home-object",
-    "household": "bunnyland.lifesim.household",
-    "job-schedule": "bunnyland.lifesim.job-schedule",
-    "profile": "bunnyland.lifesim.profile",
-    "reproductive": "bunnyland.lifesim.reproductive",
-    "reputation": "bunnyland.lifesim.reputation",
-    "room-claim": "bunnyland.lifesim.room-claim",
-    "routine": "bunnyland.lifesim.routine",
-    "skill-set": "bunnyland.lifesim.skill-set",
-    "whim": "bunnyland.lifesim.whim",
-}
-
 
 class LifeGenerationEnricher:
     capabilities: tuple[str, ...] = ()
@@ -79,14 +59,14 @@ class LifeGenerationEnricher:
             components[type(component)] = component
 
         if ctx.is_room:
-            if generation_wants(ctx, "home"):
+            if generation_wants(ctx, "bunnyland.lifesim.home"):
                 add(
                     HomeComponent(
                         owner_id=generation_generated_id(ctx, "owner"),
                         household_id=generation_generated_id(ctx, "household"),
                     )
                 )
-            if generation_wants(ctx, "room-claim"):
+            if generation_wants(ctx, "bunnyland.lifesim.room-claim"):
                 add(
                     RoomClaimComponent(
                         claimed_by_id=generation_generated_id(ctx, "claimant"),
@@ -94,9 +74,9 @@ class LifeGenerationEnricher:
                     )
                 )
         elif ctx.is_character:
-            if generation_wants(ctx, "profile", "character-profile") or generation_mentions(
-                ctx, "routine", "interest", "hobby", "backstory"
-            ):
+            if generation_wants(
+                ctx, "bunnyland.lifesim.profile", "bunnyland.lifesim.character-profile"
+            ) or generation_mentions(ctx, "routine", "interest", "hobby", "backstory"):
                 add(
                     CharacterProfileComponent(
                         traits=tuple(ctx.generation.tags),
@@ -106,7 +86,7 @@ class LifeGenerationEnricher:
                         else "",
                     )
                 )
-            if generation_wants(ctx, "aspiration") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.lifesim.aspiration") or generation_mentions(
                 ctx, "aspiration", "life goal"
             ):
                 add(
@@ -115,15 +95,19 @@ class LifeGenerationEnricher:
                         milestones=tuple(ctx.generation.tags),
                     )
                 )
-            if generation_wants(ctx, "career") or generation_mentions(ctx, "career", "job"):
+            if generation_wants(ctx, "bunnyland.lifesim.career") or generation_mentions(
+                ctx, "career", "job"
+            ):
                 add(CareerComponent(title=ctx.intent or "Generated Career"))
-            if generation_wants(ctx, "job-schedule") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.lifesim.job-schedule") or generation_mentions(
                 ctx, "shift", "schedule"
             ):
                 add(JobScheduleComponent(next_shift_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "customer") or generation_mentions(ctx, "customer", "shopper"):
+            if generation_wants(ctx, "bunnyland.lifesim.customer") or generation_mentions(
+                ctx, "customer", "shopper"
+            ):
                 add(CustomerComponent())
-            if generation_wants(ctx, "household") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.lifesim.household") or generation_mentions(
                 ctx, "household", "family"
             ):
                 add(
@@ -132,32 +116,42 @@ class LifeGenerationEnricher:
                         name=ctx.intent or ctx.name,
                     )
                 )
-            if generation_wants(ctx, "routine") or generation_mentions(ctx, "daily routine"):
+            if generation_wants(ctx, "bunnyland.lifesim.routine") or generation_mentions(
+                ctx, "daily routine"
+            ):
                 add(
                     RoutineComponent(
                         activity=ctx.intent or "generated routine", next_due_epoch=ctx.world_epoch
                     )
                 )
-            if generation_wants(ctx, "reputation") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.lifesim.reputation") or generation_mentions(
                 ctx, "known for", "famous"
             ):
                 add(ReputationComponent(known_for=tuple(ctx.generation.tags)))
-            if generation_wants(ctx, "skill-set") or generation_mentions(ctx, "skill", "skilled"):
+            if generation_wants(ctx, "bunnyland.lifesim.skill-set") or generation_mentions(
+                ctx, "skill", "skilled"
+            ):
                 resource_type = generation_resource_type(ctx)
                 add(SkillSetComponent(levels={resource_type: 1}, xp={resource_type: 0.0}))
-            if generation_wants(ctx, "reproductive") or generation_mentions(ctx, "fertile"):
+            if generation_wants(ctx, "bunnyland.lifesim.reproductive") or generation_mentions(
+                ctx, "fertile"
+            ):
                 add(ReproductiveComponent(species_group=ctx.species))
         else:
             name = ctx.name
-            if generation_wants(ctx, "whim") or generation_mentions(ctx, "whim", "wish"):
+            if generation_wants(ctx, "bunnyland.lifesim.whim") or generation_mentions(
+                ctx, "whim", "wish"
+            ):
                 add(WhimComponent(want=name))
-            if generation_wants(ctx, "home-object") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.lifesim.home-object") or generation_mentions(
                 ctx, "chair", "bed", "stove", "sofa", "decor", "home"
             ):
                 add(HomeObjectComponent(affordance="comfort", decor_score=1.0))
-            if generation_wants(ctx, "bill") or generation_mentions(ctx, "bill", "rent", "tax"):
+            if generation_wants(ctx, "bunnyland.lifesim.bill") or generation_mentions(
+                ctx, "bill", "rent", "tax"
+            ):
                 add(BillComponent(amount=10, reason=ctx.intent or name))
-            if generation_wants(ctx, "business-owner") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.lifesim.business-owner") or generation_mentions(
                 ctx, "business", "shop", "stall"
             ):
                 add(BusinessOwnerComponent(name=name))

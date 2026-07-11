@@ -66,6 +66,8 @@ class PluginRegistry:
         from ..core import components, controllers, edges, events
         from ..core.events import DomainEvent
 
+        self._capabilities["bunnyland.core.key"] = ("bunnyland.core", None)
+
         for module in (components, controllers):
             for _name, value in getmembers(module, isclass):
                 if (

@@ -91,6 +91,13 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "schema-v1 snapshot contains both StealthComponent and SneakingComponent"
             )
         components["SneakingComponent"] = components.pop("StealthComponent")
+    legacy_cure_request = components.pop("CureQuestHookComponent", None)
+    if legacy_cure_request is not None:
+        if "CureRequestComponent" in components:
+            raise WorldMigrationError(
+                "schema-v1 snapshot contains both CureQuestHookComponent and CureRequestComponent"
+            )
+        components["CureRequestComponent"] = legacy_cure_request
     quest_index = _quest_index(components)
     states = _records(components, "QuestStateComponent")
     quests = _records(components, "QuestComponent")

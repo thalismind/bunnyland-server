@@ -734,7 +734,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "QuestTemplateComponent",
         "QuestStateComponent",
         "QuestProvenanceComponent",
-        "CureQuestHookComponent",
     } <= {component.__name__ for component in dragon.ecs.components}
     assert {
         "HasPerk",
@@ -780,7 +779,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "abandon-generated-quest",
         "extend-generated-quest",
         "lie-about-quest",
-        "request-cure-quest",
     } <= {handler.command_type for handler in dragon.commands.action_handlers}
     assert {
         "MapMarkerAddedEvent",
@@ -813,7 +811,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "QuestAbandonedEvent",
         "QuestExtendedEvent",
         "QuestLieToldEvent",
-        "CureQuestRequestedEvent",
     } <= {event.__name__ for event in dragon.commands.typed_events}
     assert LIFESIM in dragon.dependencies.requires
 
@@ -831,6 +828,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "PotionMakerComponent",
         "IngredientComponent",
         "AfflictionStigmaComponent",
+        "CureRequestComponent",
     } <= {component.__name__ for component in dagger.ecs.components}
     assert "OwnsProperty" in {edge.__name__ for edge in dagger.ecs.edges}
     assert {
@@ -851,6 +849,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "identify",
         "progress-affliction-incubation",
         "mark-affliction-stigma",
+        "request-cure-quest",
     } <= {handler.command_type for handler in dagger.commands.action_handlers}
     assert {
         "InstitutionReputationChangedEvent",
@@ -868,6 +867,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "IngredientIdentifiedEvent",
         "AfflictionIncubationProgressedEvent",
         "AfflictionStigmaMarkedEvent",
+        "CureRequestedEvent",
     } <= {event.__name__ for event in dagger.commands.typed_events}
 
     void = plugins[VOIDSIM]

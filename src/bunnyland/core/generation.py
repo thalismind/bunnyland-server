@@ -88,7 +88,7 @@ class CoreGenerationEnricher:
         from .components import KeyComponent
 
         text = " ".join((request.entity_kind, request.description, *request.tags)).casefold()
-        wants_key = "key" in {value.casefold() for value in request.capabilities}
+        wants_key = "bunnyland.core.key" in {value.casefold() for value in request.capabilities}
         has_key = any(
             isinstance(component, KeyComponent)
             for component in request.context.get("base_components", ())

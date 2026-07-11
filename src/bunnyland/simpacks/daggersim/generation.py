@@ -17,6 +17,7 @@ from .mechanics import (
     ClassTemplateComponent,
     ConversationToneComponent,
     CreatureLanguageComponent,
+    CureRequestComponent,
     CustomClassComponent,
     CustomSpellComponent,
     DialogueApproachComponent,
@@ -67,14 +68,14 @@ CAPABILITIES = (
     "bunnyland.daggersim.affliction-stigma",
     "bunnyland.daggersim.automap",
     "bunnyland.daggersim.bank",
+    "bunnyland.daggersim.bounty",
     "bunnyland.daggersim.camping",
     "bunnyland.daggersim.class-template",
     "bunnyland.daggersim.conversation-tone",
     "bunnyland.daggersim.creature-language",
-    "bunnyland.daggersim.cure-quest-hook",
+    "bunnyland.daggersim.cure-request",
     "bunnyland.daggersim.custom-class",
     "bunnyland.daggersim.custom-spell",
-    "bunnyland.daggersim.dagger-quest-reward",
     "bunnyland.daggersim.dialogue-approach",
     "bunnyland.daggersim.dungeon",
     "bunnyland.daggersim.dungeon-objective",
@@ -82,7 +83,6 @@ CAPABILITIES = (
     "bunnyland.daggersim.etiquette-skill",
     "bunnyland.daggersim.expansion-hook",
     "bunnyland.daggersim.feeding-need",
-    "bunnyland.daggersim.generated-quest",
     "bunnyland.daggersim.hostility",
     "bunnyland.daggersim.ingredient",
     "bunnyland.daggersim.institution",
@@ -96,8 +96,6 @@ CAPABILITIES = (
     "bunnyland.daggersim.potion-maker",
     "bunnyland.daggersim.procedural-site",
     "bunnyland.daggersim.property-deed",
-    "bunnyland.daggersim.quest-deadline",
-    "bunnyland.daggersim.quest-template",
     "bunnyland.daggersim.recall-anchor",
     "bunnyland.daggersim.recharge-service",
     "bunnyland.daggersim.regional-reputation",
@@ -119,62 +117,6 @@ CAPABILITIES = (
     "bunnyland.daggersim.unrealized-location",
 )
 
-ALIASES = {
-    "affliction-stigma": "bunnyland.daggersim.affliction-stigma",
-    "automap": "bunnyland.daggersim.automap",
-    "bank": "bunnyland.daggersim.bank",
-    "camping": "bunnyland.daggersim.camping",
-    "class-template": "bunnyland.daggersim.class-template",
-    "conversation-tone": "bunnyland.daggersim.conversation-tone",
-    "creature-language": "bunnyland.daggersim.creature-language",
-    "cure-quest-hook": "bunnyland.daggersim.cure-quest-hook",
-    "custom-class": "bunnyland.daggersim.custom-class",
-    "custom-spell": "bunnyland.daggersim.custom-spell",
-    "dagger-quest-reward": "bunnyland.daggersim.dagger-quest-reward",
-    "dialogue-approach": "bunnyland.daggersim.dialogue-approach",
-    "dungeon": "bunnyland.daggersim.dungeon",
-    "dungeon-objective": "bunnyland.daggersim.dungeon-objective",
-    "enchanted-item": "bunnyland.daggersim.enchanted-item",
-    "etiquette-skill": "bunnyland.daggersim.etiquette-skill",
-    "expansion-hook": "bunnyland.daggersim.expansion-hook",
-    "feeding-need": "bunnyland.daggersim.feeding-need",
-    "generated-quest": "bunnyland.daggersim.generated-quest",
-    "hostility": "bunnyland.daggersim.hostility",
-    "ingredient": "bunnyland.daggersim.ingredient",
-    "institution": "bunnyland.daggersim.institution",
-    "institution-dues": "bunnyland.daggersim.institution-dues",
-    "institution-reputation": "bunnyland.daggersim.institution-reputation",
-    "institution-service": "bunnyland.daggersim.institution-service",
-    "language-skill": "bunnyland.daggersim.language-skill",
-    "law-region": "bunnyland.daggersim.law-region",
-    "legal-reputation": "bunnyland.daggersim.legal-reputation",
-    "lodging": "bunnyland.daggersim.lodging",
-    "potion-maker": "bunnyland.daggersim.potion-maker",
-    "procedural-site": "bunnyland.daggersim.procedural-site",
-    "property-deed": "bunnyland.daggersim.property-deed",
-    "quest-deadline": "bunnyland.daggersim.quest-deadline",
-    "quest-template": "bunnyland.daggersim.quest-template",
-    "recall-anchor": "bunnyland.daggersim.recall-anchor",
-    "recharge-service": "bunnyland.daggersim.recharge-service",
-    "regional-reputation": "bunnyland.daggersim.regional-reputation",
-    "rest-risk": "bunnyland.daggersim.rest-risk",
-    "rumor": "bunnyland.daggersim.rumor",
-    "rumor-reliability": "bunnyland.daggersim.rumor-reliability",
-    "rumor-source": "bunnyland.daggersim.rumor-source",
-    "rumor-target": "bunnyland.daggersim.rumor-target",
-    "secret-door": "bunnyland.daggersim.secret-door",
-    "service-access": "bunnyland.daggersim.service-access",
-    "social-register": "bunnyland.daggersim.social-register",
-    "spell-template": "bunnyland.daggersim.spell-template",
-    "streetwise-skill": "bunnyland.daggersim.streetwise-skill",
-    "supernatural-affliction": "bunnyland.daggersim.supernatural-affliction",
-    "travel-hub": "bunnyland.daggersim.travel-hub",
-    "travel-interruption": "bunnyland.daggersim.travel-interruption",
-    "travel-mode": "bunnyland.daggersim.travel-mode",
-    "travel-supply": "bunnyland.daggersim.travel-supply",
-    "unrealized-location": "bunnyland.daggersim.unrealized-location",
-}
-
 
 class DaggerGenerationEnricher:
     capabilities: tuple[str, ...] = ()
@@ -188,22 +130,22 @@ class DaggerGenerationEnricher:
 
         if ctx.is_room:
             name = ctx.name
-            if generation_wants(ctx, "procedural-site"):
+            if generation_wants(ctx, "bunnyland.daggersim.procedural-site"):
                 add(ProceduralSiteComponent(site_type=ctx.biome, seed=ctx.seed))
-            if generation_wants(ctx, "unrealized-location") or generation_mentions(
-                ctx, "unrealized location"
-            ):
+            if generation_wants(
+                ctx, "bunnyland.daggersim.unrealized-location"
+            ) or generation_mentions(ctx, "unrealized location"):
                 add(
                     UnrealizedLocationComponent(summary=ctx.intent or name, region_id=ctx.entity_id)
                 )
-            if generation_wants(ctx, "expansion-hook"):
+            if generation_wants(ctx, "bunnyland.daggersim.expansion-hook"):
                 add(
                     ExpansionHookComponent(
                         trigger=generation_expansion_trigger(ctx),
                         generator_plugin_id=_DEFAULT_EXPANSION_GENERATOR,
                     )
                 )
-            if generation_wants(ctx, "dungeon") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.daggersim.dungeon") or generation_mentions(
                 ctx, "dungeon", "crypt", "vault"
             ):
                 add(
@@ -215,125 +157,139 @@ class DaggerGenerationEnricher:
                     )
                 )
                 add(DungeonRoomComponent(dungeon_id=ctx.room_key, discovered=True))
-            if generation_wants(ctx, "travel-hub") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.daggersim.travel-hub") or generation_mentions(
                 ctx, "crossroads", "station"
             ):
                 add(TravelHubComponent(name=name))
-            if generation_wants(ctx, "travel-mode"):
+            if generation_wants(ctx, "bunnyland.daggersim.travel-mode"):
                 add(TravelModeComponent(mode=ctx.biome or "foot"))
-            if generation_wants(ctx, "institution") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.daggersim.institution") or generation_mentions(
                 ctx, "guild", "temple", "bank"
             ):
                 add(InstitutionComponent(name=name))
-            if generation_wants(ctx, "institution-service"):
+            if generation_wants(ctx, "bunnyland.daggersim.institution-service"):
                 add(InstitutionServiceComponent(service_name=name))
-            if generation_wants(ctx, "institution-dues"):
+            if generation_wants(ctx, "bunnyland.daggersim.institution-dues"):
                 add(InstitutionDuesComponent(amount_due=10))
-            if generation_wants(ctx, "bank") or generation_mentions(ctx, "bank"):
+            if generation_wants(ctx, "bunnyland.daggersim.bank") or generation_mentions(
+                ctx, "bank"
+            ):
                 add(BankComponent(name=name, region_id=ctx.entity_id))
-            if generation_wants(ctx, "law-region"):
+            if generation_wants(ctx, "bunnyland.daggersim.law-region"):
                 add(LawRegionComponent(region_id=ctx.entity_id, fines={"trespass": 5}))
-            if generation_wants(ctx, "property-deed"):
+            if generation_wants(ctx, "bunnyland.daggersim.property-deed"):
                 add(PropertyDeedComponent(property_id=ctx.entity_id, region_id=ctx.entity_id))
-            if generation_wants(ctx, "lodging") or generation_mentions(ctx, "inn", "lodging"):
+            if generation_wants(ctx, "bunnyland.daggersim.lodging") or generation_mentions(
+                ctx, "inn", "lodging"
+            ):
                 add(LodgingComponent(price=5))
-            if generation_wants(ctx, "camping") or generation_mentions(ctx, "camp"):
+            if generation_wants(ctx, "bunnyland.daggersim.camping") or generation_mentions(
+                ctx, "camp"
+            ):
                 add(CampingComponent(risk="low", started_at_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "travel-supply"):
+            if generation_wants(ctx, "bunnyland.daggersim.travel-supply"):
                 add(TravelSupplyComponent(quantity=3))
-            if generation_wants(ctx, "travel-interruption"):
+            if generation_wants(ctx, "bunnyland.daggersim.travel-interruption"):
                 add(TravelInterruptionComponent(reason=ctx.intent or "worldgen"))
-            if generation_wants(ctx, "rest-risk"):
+            if generation_wants(ctx, "bunnyland.daggersim.rest-risk"):
                 add(RestRiskComponent(band="uneasy", note=ctx.intent or name))
         elif ctx.is_character:
             name = ctx.name
-            if generation_wants(ctx, "bounty"):
+            if generation_wants(ctx, "bunnyland.daggersim.bounty"):
                 add(BountyComponent(amount=10, region_id=ctx.room_id))
-            if generation_wants(ctx, "regional-reputation"):
+            if generation_wants(ctx, "bunnyland.daggersim.regional-reputation"):
                 add(RegionalReputationComponent(scores={ctx.room_id: 1}))
-            if generation_wants(ctx, "institution-reputation"):
+            if generation_wants(ctx, "bunnyland.daggersim.institution-reputation"):
                 add(
                     InstitutionReputationComponent(
                         scores={generation_generated_id(ctx, "institution"): 1}
                     )
                 )
-            if generation_wants(ctx, "legal-reputation"):
+            if generation_wants(ctx, "bunnyland.daggersim.legal-reputation"):
                 add(LegalReputationComponent(scores={ctx.room_id: 0}))
-            if generation_wants(ctx, "service-access"):
+            if generation_wants(ctx, "bunnyland.daggersim.service-access"):
                 add(ServiceAccessComponent(service_ids=(generation_generated_id(ctx, "service"),)))
-            if generation_wants(ctx, "class-template"):
+            if generation_wants(ctx, "bunnyland.daggersim.class-template"):
                 add(ClassTemplateComponent(class_name=name, primary_skills=tuple(ctx.tags)))
-            if generation_wants(ctx, "custom-class"):
+            if generation_wants(ctx, "bunnyland.daggersim.custom-class"):
                 add(CustomClassComponent(class_name=name, primary_skills=tuple(ctx.tags)))
-            if generation_wants(ctx, "language-skill"):
+            if generation_wants(ctx, "bunnyland.daggersim.language-skill"):
                 add(LanguageSkillComponent(languages={ctx.species: 1}))
-            if generation_wants(ctx, "supernatural-affliction"):
+            if generation_wants(ctx, "bunnyland.daggersim.supernatural-affliction"):
                 add(
                     SupernaturalAfflictionComponent(
                         affliction_type=ctx.intent or "worldgen",
                         contracted_at_epoch=ctx.world_epoch,
                     )
                 )
-            if generation_wants(ctx, "affliction-stigma"):
+            if generation_wants(ctx, "bunnyland.daggersim.affliction-stigma"):
                 add(AfflictionStigmaComponent(region_id=ctx.room_id))
-            if generation_wants(ctx, "feeding-need"):
+            if generation_wants(ctx, "bunnyland.daggersim.cure-request"):
+                add(CureRequestComponent(affliction_type=ctx.intent or "worldgen"))
+            if generation_wants(ctx, "bunnyland.daggersim.feeding-need"):
                 add(FeedingNeedComponent(current=1.0, last_updated_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "recall-anchor"):
+            if generation_wants(ctx, "bunnyland.daggersim.recall-anchor"):
                 add(RecallAnchorComponent(room_id=ctx.room_id))
-            if generation_wants(ctx, "dialogue-approach"):
+            if generation_wants(ctx, "bunnyland.daggersim.dialogue-approach"):
                 add(DialogueApproachComponent(last_approach="worldgen"))
-            if generation_wants(ctx, "etiquette-skill"):
+            if generation_wants(ctx, "bunnyland.daggersim.etiquette-skill"):
                 add(EtiquetteSkillComponent(level=1))
-            if generation_wants(ctx, "streetwise-skill"):
+            if generation_wants(ctx, "bunnyland.daggersim.streetwise-skill"):
                 add(StreetwiseSkillComponent(level=1))
-            if generation_wants(ctx, "social-register"):
+            if generation_wants(ctx, "bunnyland.daggersim.social-register"):
                 add(SocialRegisterComponent(register=ctx.species))
-            if generation_wants(ctx, "conversation-tone"):
+            if generation_wants(ctx, "bunnyland.daggersim.conversation-tone"):
                 add(ConversationToneComponent(tone="curious", last_reaction=ctx.intent or name))
         else:
             name = ctx.name
-            if generation_wants(ctx, "expansion-hook"):
+            if generation_wants(ctx, "bunnyland.daggersim.expansion-hook"):
                 add(
                     ExpansionHookComponent(
                         trigger=generation_expansion_trigger(ctx),
                         generator_plugin_id=_DEFAULT_EXPANSION_GENERATOR,
                     )
                 )
-            if generation_wants(ctx, "rumor") or generation_mentions(ctx, "rumor"):
+            if generation_wants(ctx, "bunnyland.daggersim.rumor") or generation_mentions(
+                ctx, "rumor"
+            ):
                 add(RumorComponent(text=ctx.intent or name))
-            if generation_wants(ctx, "rumor-source"):
+            if generation_wants(ctx, "bunnyland.daggersim.rumor-source"):
                 add(RumorSourceComponent(source_id=ctx.room_id))
-            if generation_wants(ctx, "rumor-reliability"):
+            if generation_wants(ctx, "bunnyland.daggersim.rumor-reliability"):
                 add(RumorReliabilityComponent(score=0.75))
-            if generation_wants(ctx, "rumor-target"):
+            if generation_wants(ctx, "bunnyland.daggersim.rumor-target"):
                 add(RumorTargetComponent(target_id=ctx.room_id or ctx.entity_id))
-            if generation_wants(ctx, "bank") or generation_mentions(ctx, "bank"):
+            if generation_wants(ctx, "bunnyland.daggersim.bank") or generation_mentions(
+                ctx, "bank"
+            ):
                 add(BankComponent(name=name, region_id=ctx.room_id or ""))
-            if generation_wants(ctx, "spell-template"):
+            if generation_wants(ctx, "bunnyland.daggersim.spell-template"):
                 add(SpellTemplateComponent(spell_name=name, effect_type="worldgen", magnitude=1.0))
-            if generation_wants(ctx, "custom-spell"):
+            if generation_wants(ctx, "bunnyland.daggersim.custom-spell"):
                 add(CustomSpellComponent(spell_name=name, effect_type="worldgen", magnitude=1.0))
-            if generation_wants(ctx, "enchanted-item"):
+            if generation_wants(ctx, "bunnyland.daggersim.enchanted-item"):
                 add(EnchantedItemComponent(spell_name=name, effect_type="worldgen", magnitude=1.0))
-            if generation_wants(ctx, "potion-maker"):
+            if generation_wants(ctx, "bunnyland.daggersim.potion-maker"):
                 add(PotionMakerComponent(recipe_name=name, output_item_name=f"{name} potion"))
-            if generation_wants(ctx, "recharge-service"):
+            if generation_wants(ctx, "bunnyland.daggersim.recharge-service"):
                 add(RechargeServiceComponent(charge_amount=1))
-            if generation_wants(ctx, "ingredient"):
+            if generation_wants(ctx, "bunnyland.daggersim.ingredient"):
                 add(IngredientComponent(ingredient_name=name, effect=ctx.intent or "worldgen"))
-            if generation_wants(ctx, "creature-language"):
+            if generation_wants(ctx, "bunnyland.daggersim.creature-language"):
                 add(CreatureLanguageComponent(language=ctx.entity_kind))
-            if generation_wants(ctx, "hostility"):
+            if generation_wants(ctx, "bunnyland.daggersim.hostility"):
                 add(HostilityComponent(hostile=True))
-            if generation_wants(ctx, "dungeon-objective"):
+            if generation_wants(ctx, "bunnyland.daggersim.dungeon-objective"):
                 add(
                     DungeonObjectiveComponent(
                         objective_kind=ctx.entity_kind, description=ctx.intent or name
                     )
                 )
-            if generation_wants(ctx, "secret-door") or generation_mentions(ctx, "secret door"):
+            if generation_wants(ctx, "bunnyland.daggersim.secret-door") or generation_mentions(
+                ctx, "secret door"
+            ):
                 add(SecretDoorComponent(target_room_id=ctx.room_id or ctx.entity_id, hint=name))
-            if generation_wants(ctx, "automap"):
+            if generation_wants(ctx, "bunnyland.daggersim.automap"):
                 add(AutomapComponent(marked_rooms=(ctx.room_id,) if ctx.room_id else ()))
         return GenerationDelta(
             components=tuple(components.values()),

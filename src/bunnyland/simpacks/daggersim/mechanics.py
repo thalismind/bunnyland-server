@@ -13,18 +13,6 @@ from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
 from bunnyland.foundation.history.mechanics import DeedReputationComponent
-from bunnyland.simpacks.dragonsim.mechanics import (
-    QuestAcceptedBy,
-    QuestAcceptedEvent,
-    QuestCompletedEvent,
-    QuestComponent,
-    QuestHasObjective,
-    QuestHasReward,
-    QuestObjectiveComponent,
-    QuestProvenanceComponent,
-    QuestRewardComponent,
-    QuestStateComponent,
-)
 
 from ...core.commands import SubmittedCommand
 from ...core.components import HealthComponent, IdentityComponent, PortableComponent
@@ -207,18 +195,6 @@ class MemberOfInstitution(Edge):
             return ()
         institution = ctx.target.get_component(InstitutionComponent)
         return (f"Institution membership: {institution.name} ({self.rank}).",)
-
-
-@dataclass(frozen=True)
-class QuestTemplateComponent(Component):
-    title: str
-    objective: str
-    reward_item_name: str
-    duration_seconds: int = 24 * 60 * 60
-
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        del ctx
-        return (f"Work available: {self.title}.",)
 
 
 @dataclass(frozen=True)
@@ -602,7 +578,7 @@ class AfflictionStigmaComponent(Component):
 
 
 @dataclass(frozen=True)
-class CureQuestHookComponent(Component):
+class CureRequestComponent(Component):
     affliction_type: str
     quest_id: str | None = None
 
@@ -849,37 +825,6 @@ class InstitutionDuesPaidEvent(DomainEvent):
     amount: int
 
 
-class QuestGeneratedEvent(DomainEvent):
-    quest_id: str
-    title: str
-    due_at_epoch: int
-
-
-class QuestFailedEvent(DomainEvent):
-    quest_id: str
-    title: str
-
-
-class QuestRefusedEvent(DomainEvent):
-    quest_id: str
-    title: str
-
-
-class QuestAbandonedEvent(DomainEvent):
-    quest_id: str
-    title: str
-
-
-class QuestExtendedEvent(DomainEvent):
-    quest_id: str
-    due_at_epoch: int
-
-
-class QuestLieToldEvent(DomainEvent):
-    quest_id: str
-    lie: str
-
-
 class AccountOpenedEvent(DomainEvent):
     bank_id: str
     account_id: str
@@ -1068,7 +1013,7 @@ class AfflictionStigmaMarkedEvent(DomainEvent):
     severity: int
 
 
-class CureQuestRequestedEvent(DomainEvent):
+class CureRequestedEvent(DomainEvent):
     affliction_type: str
     quest_id: str | None = None
 
@@ -1709,343 +1654,6 @@ class PayInstitutionDuesHandler:
                 )
             )
         )
-
-
-class AskForWorkHandler:
-    command_type = "ask-for-work"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        template_id = parse_entity_id(command.payload.get("template_id"))
-        if character_id is None or template_id is None:
-            return rejected("invalid character or template id")
-        if not ctx.world.has_entity(template_id):
-            return rejected("quest template does not exist")
-
-        character = ctx.entity(character_id)
-        if template_id not in reachable_ids(ctx.world, character):
-            return rejected("quest template is not reachable")
-        template_entity = ctx.entity(template_id)
-        if not template_entity.has_component(QuestTemplateComponent):
-            return rejected("target is not a quest template")
-
-        from ...core.ecs import spawn_entity
-
-        template = template_entity.get_component(QuestTemplateComponent)
-        due_at = ctx.epoch + template.duration_seconds
-        quest = spawn_entity(
-            ctx.world,
-            [
-                IdentityComponent(name=template.title, kind="quest"),
-                QuestComponent(
-                    quest_id=f"generated:{template_id}",
-                    title=template.title,
-                    description=template.objective,
-                ),
-                QuestStateComponent(due_at_epoch=due_at),
-                QuestProvenanceComponent(
-                    generator="bunnyland.dragonsim",
-                    source_id=str(template_id),
-                    generated_at_epoch=ctx.epoch,
-                ),
-            ],
-        )
-        objective = spawn_entity(
-            ctx.world,
-            [QuestObjectiveComponent(description=template.objective)],
-        )
-        reward = spawn_entity(
-            ctx.world,
-            [QuestRewardComponent(description=template.reward_item_name)],
-        )
-        quest.add_relationship(QuestHasObjective(), objective.id)
-        quest.add_relationship(QuestHasReward(), reward.id)
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), quest.id)
-        return ok(
-            QuestGeneratedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest.id),),
-                    quest_id=str(quest.id),
-                    title=template.title,
-                    due_at_epoch=due_at,
-                )
-            )
-        )
-
-
-class AcceptGeneratedQuestHandler:
-    command_type = "accept-generated-quest"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        quest_id = parse_entity_id(command.payload.get("quest_id"))
-        if character_id is None or quest_id is None:
-            return rejected("invalid character or quest id")
-        if not ctx.world.has_entity(quest_id):
-            return rejected("quest does not exist")
-
-        character = ctx.entity(character_id)
-        if quest_id not in reachable_ids(ctx.world, character):
-            return rejected("quest is not reachable")
-        quest = ctx.entity(quest_id)
-        if not quest.has_component(QuestProvenanceComponent):
-            return rejected("target is not a generated quest")
-        component = quest.get_component(QuestComponent)
-        state = quest.get_component(QuestStateComponent)
-        if state.status != "offered":
-            return rejected("quest is not offered")
-
-        quest.add_relationship(QuestAcceptedBy(accepted_at_epoch=ctx.epoch), character_id)
-        replace_component(
-            quest,
-            replace(state, status="active", accepted_at_epoch=ctx.epoch),
-        )
-        return ok(
-            QuestAcceptedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest_id),),
-                    quest_id=str(quest_id),
-                    title=component.title,
-                )
-            )
-        )
-
-
-class CompleteGeneratedQuestHandler:
-    command_type = "complete-generated-quest"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        quest_id = parse_entity_id(command.payload.get("quest_id"))
-        if character_id is None or quest_id is None:
-            return rejected("invalid character or quest id")
-        if not ctx.world.has_entity(quest_id):
-            return rejected("quest does not exist")
-
-        character = ctx.entity(character_id)
-        if quest_id not in reachable_ids(ctx.world, character):
-            return rejected("quest is not reachable")
-        quest = ctx.entity(quest_id)
-        if not quest.has_component(QuestProvenanceComponent):
-            return rejected("target is not a generated quest")
-        component = quest.get_component(QuestComponent)
-        state = quest.get_component(QuestStateComponent)
-        if state.status != "active":
-            return rejected("quest is not active")
-        if not quest.has_relationship(QuestAcceptedBy, character_id):
-            return rejected("quest is not accepted by character")
-        if state.due_at_epoch is not None and ctx.epoch > state.due_at_epoch:
-            return rejected("quest deadline has passed")
-        rewards = [
-            ctx.world.get_entity(reward_id)
-            for _edge, reward_id in quest.get_relationships(QuestHasReward)
-            if ctx.world.has_entity(reward_id)
-        ]
-        if not rewards:
-            return rejected("quest has no reward")
-
-        reward_entity = rewards[0]
-        reward = reward_entity.get_component(QuestRewardComponent)
-        item = _spawn_inventory_item(ctx.world, character, reward.description, kind="quest-reward")
-        replace_component(
-            quest,
-            replace(state, status="completed", completed_at_epoch=ctx.epoch),
-        )
-        replace_component(
-            reward_entity,
-            replace(
-                reward,
-                claimed=True,
-                claimed_by=str(character_id),
-                claimed_at_epoch=ctx.epoch,
-            ),
-        )
-        return ok(
-            QuestCompletedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest_id), str(item.id)),
-                    quest_id=str(quest_id),
-                    title=component.title,
-                    reward_item_id=str(item.id),
-                )
-            )
-        )
-
-
-class RefuseGeneratedQuestHandler:
-    command_type = "refuse-generated-quest"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        quest_id = parse_entity_id(command.payload.get("quest_id"))
-        if character_id is None or quest_id is None:
-            return rejected("invalid character or quest id")
-        if not ctx.world.has_entity(quest_id):
-            return rejected("quest does not exist")
-        quest = ctx.entity(quest_id)
-        if not quest.has_component(QuestProvenanceComponent):
-            return rejected("target is not a generated quest")
-        component = quest.get_component(QuestComponent)
-        state = quest.get_component(QuestStateComponent)
-        if state.status != "offered":
-            return rejected("quest is not offered")
-        replace_component(quest, replace(state, status="refused"))
-        return ok(
-            QuestRefusedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest_id),),
-                    quest_id=str(quest_id),
-                    title=component.title,
-                )
-            )
-        )
-
-
-class AbandonGeneratedQuestHandler:
-    command_type = "abandon-generated-quest"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        quest_id = parse_entity_id(command.payload.get("quest_id"))
-        if character_id is None or quest_id is None:
-            return rejected("invalid character or quest id")
-        if not ctx.world.has_entity(quest_id):
-            return rejected("quest does not exist")
-        quest = ctx.entity(quest_id)
-        if not quest.has_component(QuestProvenanceComponent):
-            return rejected("target is not a generated quest")
-        component = quest.get_component(QuestComponent)
-        state = quest.get_component(QuestStateComponent)
-        if state.status != "active" or not quest.has_relationship(QuestAcceptedBy, character_id):
-            return rejected("quest is not active for character")
-        replace_component(quest, replace(state, status="abandoned"))
-        return ok(
-            QuestAbandonedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest_id),),
-                    quest_id=str(quest_id),
-                    title=component.title,
-                )
-            )
-        )
-
-
-class ExtendGeneratedQuestHandler:
-    command_type = "extend-generated-quest"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        quest_id = parse_entity_id(command.payload.get("quest_id"))
-        seconds = int(command.payload.get("seconds", 24 * 60 * 60))
-        if character_id is None or quest_id is None:
-            return rejected("invalid character or quest id")
-        if seconds <= 0:
-            return rejected("extension must be positive")
-        if not ctx.world.has_entity(quest_id):
-            return rejected("quest does not exist")
-        quest = ctx.entity(quest_id)
-        if not quest.has_component(QuestProvenanceComponent):
-            return rejected("target is not a generated quest")
-        state = quest.get_component(QuestStateComponent)
-        if state.due_at_epoch is None:
-            return rejected("quest has no deadline")
-        updated = replace(state, due_at_epoch=state.due_at_epoch + seconds)
-        replace_component(quest, updated)
-        return ok(
-            QuestExtendedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest_id),),
-                    quest_id=str(quest_id),
-                    due_at_epoch=updated.due_at_epoch,
-                )
-            )
-        )
-
-
-class LieAboutQuestHandler:
-    command_type = "lie-about-quest"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        quest_id = parse_entity_id(command.payload.get("quest_id"))
-        lie = str(command.payload.get("lie", "")).strip()
-        if character_id is None or quest_id is None or not lie:
-            return rejected("invalid character, quest, or lie")
-        if not ctx.world.has_entity(quest_id):
-            return rejected("quest does not exist")
-        quest = ctx.entity(quest_id)
-        if not quest.has_component(QuestProvenanceComponent):
-            return rejected("target is not a generated quest")
-        replace_component(
-            quest,
-            replace(quest.get_component(QuestStateComponent), status="lied"),
-        )
-        return ok(
-            QuestLieToldEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.ROOM,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest_id),),
-                    quest_id=str(quest_id),
-                    lie=lie,
-                )
-            )
-        )
-
-
-class QuestDeadlineConsequence:
-    def process(self, world: World, epoch: int) -> list[DomainEvent]:
-        events: list[DomainEvent] = []
-        query = world.query().with_all(
-            [QuestComponent, QuestStateComponent, QuestProvenanceComponent]
-        )
-        for quest in query.execute_entities():
-            component = quest.get_component(QuestComponent)
-            state = quest.get_component(QuestStateComponent)
-            if (
-                state.status != "active"
-                or state.due_at_epoch is None
-                or epoch <= state.due_at_epoch
-            ):
-                continue
-            accepted = quest.get_relationships(QuestAcceptedBy)
-            actor_id = str(accepted[0][1]) if accepted else None
-            replace_component(
-                quest,
-                replace(state, status="failed", failed_at_epoch=epoch),
-            )
-            events.append(
-                QuestFailedEvent(
-                    **_travel_event_base(
-                        epoch,
-                        visibility=EventVisibility.PRIVATE,
-                        actor_id=actor_id,
-                        target_ids=(str(quest.id),),
-                        quest_id=str(quest.id),
-                        title=component.title,
-                    )
-                )
-            )
-        return events
 
 
 class OpenBankAccountHandler:
@@ -3359,7 +2967,7 @@ class MarkAfflictionStigmaHandler:
         )
 
 
-class RequestCureQuestHandler:
+class RequestCureHandler:
     command_type = "request-cure-quest"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
@@ -3373,13 +2981,13 @@ class RequestCureQuestHandler:
         affliction = character.get_component(SupernaturalAfflictionComponent)
         replace_component(
             character,
-            CureQuestHookComponent(
+            CureRequestComponent(
                 affliction_type=affliction.affliction_type,
                 quest_id=quest_id,
             ),
         )
         return ok(
-            CureQuestRequestedEvent(
+            CureRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
@@ -4049,8 +3657,6 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             InstitutionComponent,
             InstitutionDuesComponent,
             InstitutionServiceComponent,
-            QuestComponent,
-            QuestTemplateComponent,
             BankComponent,
             LoanComponent,
             LetterOfCreditComponent,
@@ -4098,7 +3704,7 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         CustomClassComponent,
         SupernaturalAfflictionComponent,
         AfflictionStigmaComponent,
-        CureQuestHookComponent,
+        CureRequestComponent,
         FeedingNeedComponent,
         ServiceAccessComponent,
         WereformComponent,
@@ -4221,31 +3827,27 @@ def install_daggersim(actor) -> None:
 
 __all__ = [
     "AskRumorHandler",
-    "AcceptGeneratedQuestHandler",
     "AccountOpenedEvent",
     "AfflictionContractedEvent",
     "AfflictionCuredEvent",
     "AfflictionIncubationProgressedEvent",
     "AfflictionStigmaComponent",
     "AfflictionStigmaMarkedEvent",
-    "AskForWorkHandler",
     "BankAccountComponent",
     "BankComponent",
     "BountyComponent",
     "BountyPostedEvent",
-    "AbandonGeneratedQuestHandler",
     "AttemptPacifyHandler",
     "BuyTravelSuppliesHandler",
     "BuyPropertyHandler",
     "CampHandler",
     "CampMadeEvent",
     "CampingComponent",
-    "CompleteGeneratedQuestHandler",
     "CommitCrimeHandler",
     "ContractAfflictionHandler",
     "CourtSentenceIssuedEvent",
-    "CureQuestHookComponent",
-    "CureQuestRequestedEvent",
+    "CureRequestComponent",
+    "CureRequestedEvent",
     "CureAfflictionHandler",
     "CastSpellHandler",
     "ClassTemplateComponent",
@@ -4269,7 +3871,6 @@ __all__ = [
     "ExpandSiteHandler",
     "ExpansionHookComponent",
     "ExpansionRequestedEvent",
-    "ExtendGeneratedQuestHandler",
     "FinePaidEvent",
     "FeedingNeedChangedEvent",
     "EndTransformationHandler",
@@ -4300,7 +3901,6 @@ __all__ = [
     "LanguageSkillComponent",
     "LetterOfCreditComponent",
     "LetterOfCreditIssuedEvent",
-    "LieAboutQuestHandler",
     "LodgingComponent",
     "LodgingRentedEvent",
     "LoanComponent",
@@ -4328,19 +3928,8 @@ __all__ = [
     "RegionalReputationComponent",
     "RechargeEnchantedItemHandler",
     "RechargeServiceComponent",
-    "RefuseGeneratedQuestHandler",
-    "QuestAbandonedEvent",
-    "QuestAcceptedEvent",
-    "QuestCompletedEvent",
-    "QuestDeadlineConsequence",
-    "QuestFailedEvent",
-    "QuestGeneratedEvent",
-    "QuestExtendedEvent",
-    "QuestLieToldEvent",
-    "QuestRefusedEvent",
-    "QuestTemplateComponent",
     "RepayLoanHandler",
-    "RequestCureQuestHandler",
+    "RequestCureHandler",
     "ResolveTravelInterruptionHandler",
     "RetrieveSafeItemHandler",
     "RumorBecameExpansionEvent",

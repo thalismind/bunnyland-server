@@ -52,6 +52,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="rent_lodging",
     ),
     define_action("camp", ("risk",), tool_name="camp"),
+    define_action("request-cure-quest", ("quest_id",), tool_name="request_cure_quest"),
     define_action("buy-travel-supplies", ("quantity",), tool_name="buy_travel_supplies"),
     define_action(
         "resolve-travel-interruption",

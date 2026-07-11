@@ -66,36 +66,6 @@ CAPABILITIES = (
     "bunnyland.barbariansim.weapon",
 )
 
-ALIASES = {
-    "armor": "bunnyland.barbariansim.armor",
-    "base-claim": "bunnyland.barbariansim.base-claim",
-    "blessing": "bunnyland.barbariansim.blessing",
-    "boss": "bunnyland.barbariansim.boss",
-    "building": "bunnyland.barbariansim.building",
-    "climbing-gate": "bunnyland.barbariansim.climbing-gate",
-    "climbing-skill": "bunnyland.barbariansim.climbing-skill",
-    "combatant": "bunnyland.barbariansim.combatant",
-    "corruption": "bunnyland.barbariansim.corruption",
-    "curse": "bunnyland.barbariansim.curse",
-    "danger-zone": "bunnyland.barbariansim.danger-zone",
-    "durability": "bunnyland.barbariansim.durability",
-    "durable-fortification": "bunnyland.barbariansim.durable-fortification",
-    "key": "bunnyland.barbariansim.key",
-    "poison": "bunnyland.barbariansim.poison",
-    "purge-wave": "bunnyland.barbariansim.purge-wave",
-    "ritual": "bunnyland.barbariansim.ritual",
-    "shelter": "bunnyland.barbariansim.shelter",
-    "shrine": "bunnyland.barbariansim.shrine",
-    "siege-readiness": "bunnyland.barbariansim.siege-readiness",
-    "stamina": "bunnyland.barbariansim.stamina",
-    "survival-gap": "bunnyland.barbariansim.survival-gap",
-    "temperature-exposure": "bunnyland.barbariansim.temperature-exposure",
-    "temperature-resistance": "bunnyland.barbariansim.temperature-resistance",
-    "trap": "bunnyland.barbariansim.trap",
-    "treasure": "bunnyland.barbariansim.treasure",
-    "weapon": "bunnyland.barbariansim.weapon",
-}
-
 
 class BarbarianGenerationEnricher:
     capabilities: tuple[str, ...] = ()
@@ -109,9 +79,11 @@ class BarbarianGenerationEnricher:
 
         if ctx.is_room:
             name = ctx.name
-            if generation_wants(ctx, "shelter") or generation_mentions(ctx, "shelter", "camp"):
+            if generation_wants(ctx, "bunnyland.barbariansim.shelter") or generation_mentions(
+                ctx, "shelter", "camp"
+            ):
                 add(ShelterComponent(temperature_buffer=10.0))
-            if generation_wants(ctx, "base-claim"):
+            if generation_wants(ctx, "bunnyland.barbariansim.base-claim"):
                 add(
                     BaseClaimComponent(
                         claimed_by=generation_generated_id(ctx, "claimant"),
@@ -119,69 +91,97 @@ class BarbarianGenerationEnricher:
                         claimed_at_epoch=ctx.world_epoch,
                     )
                 )
-            if generation_wants(ctx, "survival-gap") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.barbariansim.survival-gap") or generation_mentions(
                 ctx, "shortage", "survival gap"
             ):
                 add(SurvivalGapComponent(required_resource=generation_resource_type(ctx)))
-            if generation_wants(ctx, "building") or generation_mentions(ctx, "building", "hall"):
+            if generation_wants(ctx, "bunnyland.barbariansim.building") or generation_mentions(
+                ctx, "building", "hall"
+            ):
                 add(BuildingComponent(integrity=20.0, maximum_integrity=20.0))
-            if generation_wants(ctx, "siege-readiness") or generation_mentions(ctx, "siege"):
+            if generation_wants(
+                ctx, "bunnyland.barbariansim.siege-readiness"
+            ) or generation_mentions(ctx, "siege"):
                 add(SiegeReadinessComponent(score=1.0))
-            if generation_wants(ctx, "purge-wave") or generation_mentions(ctx, "purge wave"):
+            if generation_wants(ctx, "bunnyland.barbariansim.purge-wave") or generation_mentions(
+                ctx, "purge wave"
+            ):
                 add(PurgeWaveComponent(wave=1, started_at_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "danger-zone") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.barbariansim.danger-zone") or generation_mentions(
                 ctx, "danger zone", "ruin"
             ):
                 add(DangerZoneComponent(zone_type=ctx.biome))
-            if generation_wants(ctx, "boss") or generation_mentions(ctx, "boss", "warlord"):
+            if generation_wants(ctx, "bunnyland.barbariansim.boss") or generation_mentions(
+                ctx, "boss", "warlord"
+            ):
                 add(BossComponent(name=name))
         elif ctx.is_character:
             name = ctx.name
-            if generation_wants(ctx, "temperature-resistance"):
+            if generation_wants(ctx, "bunnyland.barbariansim.temperature-resistance"):
                 add(TemperatureResistanceComponent(heat=5.0, cold=5.0))
-            if generation_wants(ctx, "temperature-exposure"):
+            if generation_wants(ctx, "bunnyland.barbariansim.temperature-exposure"):
                 add(TemperatureExposureComponent(last_updated_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "poison") or generation_mentions(ctx, "poisoned"):
-                add(PoisonComponent(severity=1.0))
-            if generation_wants(ctx, "corruption") or generation_mentions(ctx, "corrupted"):
-                add(CorruptionComponent(amount=1.0))
-            if generation_wants(ctx, "stamina", "combatant") or generation_mentions(
-                ctx, "warrior", "fighter"
+            if generation_wants(ctx, "bunnyland.barbariansim.poison") or generation_mentions(
+                ctx, "poisoned"
             ):
+                add(PoisonComponent(severity=1.0))
+            if generation_wants(ctx, "bunnyland.barbariansim.corruption") or generation_mentions(
+                ctx, "corrupted"
+            ):
+                add(CorruptionComponent(amount=1.0))
+            if generation_wants(
+                ctx, "bunnyland.barbariansim.stamina", "bunnyland.barbariansim.combatant"
+            ) or generation_mentions(ctx, "warrior", "fighter"):
                 add(StaminaComponent())
-            if generation_wants(ctx, "blessing"):
+            if generation_wants(ctx, "bunnyland.barbariansim.blessing"):
                 add(BlessingComponent(name=name, source_id=ctx.entity_id))
-            if generation_wants(ctx, "curse"):
+            if generation_wants(ctx, "bunnyland.barbariansim.curse"):
                 add(CurseComponent(name=name, source_id=ctx.entity_id))
-            if generation_wants(ctx, "climbing-skill") or generation_mentions(ctx, "climber"):
+            if generation_wants(
+                ctx, "bunnyland.barbariansim.climbing-skill"
+            ) or generation_mentions(ctx, "climber"):
                 add(ClimbingSkillComponent(level=1))
         else:
             name = ctx.name
-            if generation_wants(ctx, "weapon") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.barbariansim.weapon") or generation_mentions(
                 ctx, "sword", "axe", "spear", "club"
             ):
                 add(WeaponComponent(damage=8.0, lethal_capable=True))
-            if generation_wants(ctx, "armor") or generation_mentions(ctx, "armor", "shield"):
-                add(ArmorComponent(rating=2.0))
-            if generation_wants(ctx, "durability") or generation_mentions(ctx, "durable"):
-                add(DurabilityComponent(current=10.0, maximum=10.0))
-            if generation_wants(ctx, "durable-fortification") or generation_mentions(
-                ctx, "barricade", "wall"
+            if generation_wants(ctx, "bunnyland.barbariansim.armor") or generation_mentions(
+                ctx, "armor", "shield"
             ):
+                add(ArmorComponent(rating=2.0))
+            if generation_wants(ctx, "bunnyland.barbariansim.durability") or generation_mentions(
+                ctx, "durable"
+            ):
+                add(DurabilityComponent(current=10.0, maximum=10.0))
+            if generation_wants(
+                ctx, "bunnyland.barbariansim.durable-fortification"
+            ) or generation_mentions(ctx, "barricade", "wall"):
                 add(FortificationComponent(rating=2.0, durability=20.0))
-            if generation_wants(ctx, "trap") or generation_mentions(ctx, "trap"):
+            if generation_wants(ctx, "bunnyland.barbariansim.trap") or generation_mentions(
+                ctx, "trap"
+            ):
                 add(TrapComponent(damage=6.0))
-            if generation_wants(ctx, "shrine") or generation_mentions(ctx, "shrine", "altar"):
+            if generation_wants(ctx, "bunnyland.barbariansim.shrine") or generation_mentions(
+                ctx, "shrine", "altar"
+            ):
                 add(ShrineComponent(deity=name))
-            if generation_wants(ctx, "ritual") or generation_mentions(ctx, "ritual"):
+            if generation_wants(ctx, "bunnyland.barbariansim.ritual") or generation_mentions(
+                ctx, "ritual"
+            ):
                 add(RitualComponent(ritual_type=ctx.intent or name))
-            if generation_wants(ctx, "blessing"):
+            if generation_wants(ctx, "bunnyland.barbariansim.blessing"):
                 add(BlessingComponent(name=name, source_id=ctx.entity_id))
-            if generation_wants(ctx, "curse"):
+            if generation_wants(ctx, "bunnyland.barbariansim.curse"):
                 add(CurseComponent(name=name, source_id=ctx.entity_id))
-            if generation_wants(ctx, "treasure") or generation_mentions(ctx, "treasure", "cache"):
+            if generation_wants(ctx, "bunnyland.barbariansim.treasure") or generation_mentions(
+                ctx, "treasure", "cache"
+            ):
                 add(TreasureComponent(treasure_type=ctx.entity_kind, key_name=name))
-            if generation_wants(ctx, "climbing-gate") or generation_mentions(ctx, "cliff", "climb"):
+            if generation_wants(ctx, "bunnyland.barbariansim.climbing-gate") or generation_mentions(
+                ctx, "cliff", "climb"
+            ):
                 add(ClimbingGateComponent(required_level=1))
         return GenerationDelta(
             components=tuple(components.values()),

@@ -27,15 +27,12 @@ from bunnyland.core.handlers import HandlerContext, SayHandler, TellHandler
 from bunnyland.foundation.history.mechanics import DeedReputationComponent
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 from bunnyland.simpacks.daggersim.mechanics import (
-    AbandonGeneratedQuestHandler,
-    AcceptGeneratedQuestHandler,
     AccountOpenedEvent,
     AfflictionContractedEvent,
     AfflictionCuredEvent,
     AfflictionIncubationProgressedEvent,
     AfflictionStigmaComponent,
     AfflictionStigmaMarkedEvent,
-    AskForWorkHandler,
     AskRumorHandler,
     AttemptPacifyHandler,
     AutomapComponent,
@@ -50,7 +47,6 @@ from bunnyland.simpacks.daggersim.mechanics import (
     CastSpellHandler,
     ClassTemplateComponent,
     CommitCrimeHandler,
-    CompleteGeneratedQuestHandler,
     ContractAfflictionHandler,
     ConversationToneComponent,
     CourtSentenceIssuedEvent,
@@ -61,8 +57,8 @@ from bunnyland.simpacks.daggersim.mechanics import (
     CrimeCommittedEvent,
     CrimeRecordComponent,
     CureAfflictionHandler,
-    CureQuestHookComponent,
-    CureQuestRequestedEvent,
+    CureRequestComponent,
+    CureRequestedEvent,
     CustomClassComponent,
     CustomClassCreatedEvent,
     CustomSpellComponent,
@@ -89,7 +85,6 @@ from bunnyland.simpacks.daggersim.mechanics import (
     ExpandSiteHandler,
     ExpansionHookComponent,
     ExpansionRequestedEvent,
-    ExtendGeneratedQuestHandler,
     FeedingNeedChangedEvent,
     FeedingNeedComponent,
     FeedingNeedConsequence,
@@ -120,7 +115,6 @@ from bunnyland.simpacks.daggersim.mechanics import (
     LegalReputationComponent,
     LetterOfCreditComponent,
     LetterOfCreditIssuedEvent,
-    LieAboutQuestHandler,
     LoanComponent,
     LoanDefaultedEvent,
     LoanDueConsequence,
@@ -147,25 +141,14 @@ from bunnyland.simpacks.daggersim.mechanics import (
     PromoteInstitutionHandler,
     PropertyDeedComponent,
     PropertyPurchasedEvent,
-    QuestAbandonedEvent,
-    QuestAcceptedEvent,
-    QuestCompletedEvent,
-    QuestDeadlineConsequence,
-    QuestExtendedEvent,
-    QuestFailedEvent,
-    QuestGeneratedEvent,
-    QuestLieToldEvent,
-    QuestRefusedEvent,
-    QuestTemplateComponent,
     RecallAnchorComponent,
     RecallAnchorSetEvent,
     RecallUsedEvent,
     RechargeEnchantedItemHandler,
     RechargeServiceComponent,
-    RefuseGeneratedQuestHandler,
     RentLodgingHandler,
     RepayLoanHandler,
-    RequestCureQuestHandler,
+    RequestCureHandler,
     RequestDungeonHandler,
     ResolveTravelInterruptionHandler,
     RestHandler,
@@ -230,11 +213,32 @@ from bunnyland.simpacks.daggersim.mechanics import (
 )
 from bunnyland.simpacks.dragonsim.mechanics import (
     QuestAcceptedBy,
+    QuestAcceptedEvent,
+    QuestCompletedEvent,
     QuestComponent,
     QuestHasReward,
     QuestProvenanceComponent,
     QuestRewardComponent,
     QuestStateComponent,
+    dragonsim_fragments,
+)
+from bunnyland.simpacks.dragonsim.quests import (
+    AbandonGeneratedQuestHandler,
+    AcceptGeneratedQuestHandler,
+    AskForWorkHandler,
+    CompleteGeneratedQuestHandler,
+    ExtendGeneratedQuestHandler,
+    LieAboutQuestHandler,
+    QuestAbandonedEvent,
+    QuestDeadlineConsequence,
+    QuestExtendedEvent,
+    QuestFailedEvent,
+    QuestGeneratedEvent,
+    QuestLieToldEvent,
+    QuestRefusedEvent,
+    QuestTemplateComponent,
+    RefuseGeneratedQuestHandler,
+    generated_quest_fragments,
 )
 
 HOUR = 60 * 60
@@ -602,10 +606,10 @@ def test_daggersim_parity_handlers_mutate_state_directly():
             AfflictionStigmaMarkedEvent,
         ),
         (
-            RequestCureQuestHandler(),
+            RequestCureHandler(),
             "request-cure-quest",
             {"quest_id": "moon cure"},
-            CureQuestRequestedEvent,
+            CureRequestedEvent,
         ),
     ]
 
@@ -631,8 +635,12 @@ def test_daggersim_parity_handlers_mutate_state_directly():
     assert str(scenario.character) in ingredient.get_component(IngredientComponent).identified_by
     assert character.get_component(SupernaturalAfflictionComponent).stage == "active"
     assert character.get_component(AfflictionStigmaComponent).severity == 2
-    assert character.get_component(CureQuestHookComponent).quest_id == "moon cure"
-    fragments = daggersim_fragments(scenario.actor.world, character)
+    assert character.get_component(CureRequestComponent).quest_id == "moon cure"
+    fragments = [
+        *daggersim_fragments(scenario.actor.world, character),
+        *dragonsim_fragments(scenario.actor.world, character),
+        *generated_quest_fragments(scenario.actor.world, character),
+    ]
     assert "Institution nearby: Mages Guild (guild)." in fragments
     assert "Institution dues: 25 (paid)." in fragments
     assert "Generated quest: rat cellar job (refused)." in fragments
@@ -798,7 +806,7 @@ def test_daggersim_parity_handlers_reject_invalid_targets_directly():
             {"severity": 1},
             "invalid character id",
         ),
-        (RequestCureQuestHandler(), "request-cure-quest", {}, "invalid character id"),
+        (RequestCureHandler(), "request-cure-quest", {}, "invalid character id"),
     ]
     for handler, command_type, payload, reason in character_only_cases:
         result = handler.execute(
@@ -818,7 +826,7 @@ def test_daggersim_parity_handlers_reject_invalid_targets_directly():
     )
     assert bad_stigma.ok is False
     assert bad_stigma.reason == "stigma severity must be positive"
-    no_cure = RequestCureQuestHandler().execute(ctx, _handler_cmd(scenario, "request-cure-quest"))
+    no_cure = RequestCureHandler().execute(ctx, _handler_cmd(scenario, "request-cure-quest"))
     assert no_cure.ok is False
     assert no_cure.reason == "character has no supernatural affliction"
 
@@ -4088,7 +4096,11 @@ def test_daggersim_fragments_show_nearby_services_magic_law_and_character_state(
         )
     scenario.actor.world.get_entity(scenario.room_a).add_component(RestRiskComponent(band="uneasy"))
 
-    fragments = daggersim_fragments(scenario.actor.world, character)
+    fragments = [
+        *daggersim_fragments(scenario.actor.world, character),
+        *dragonsim_fragments(scenario.actor.world, character),
+        *generated_quest_fragments(scenario.actor.world, character),
+    ]
 
     assert "Bank nearby: Moss Bank." in fragments
     assert "Loan: 10 due at epoch 500 (active)." in fragments
@@ -5070,7 +5082,7 @@ def test_daggersim_first_person_only_fragments_hide_from_observers():
             "Affliction stigma: moss-road severity 4.",
         ),
         (
-            CureQuestHookComponent(affliction_type="vampire"),
+            CureRequestComponent(affliction_type="vampire"),
             "Cure quest hook: vampire.",
         ),
         (

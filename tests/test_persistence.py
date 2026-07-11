@@ -303,9 +303,7 @@ def test_schema_migration_validates_version_and_v2_sections():
 
 def test_schema_v1_dragon_stealth_name_migrates_without_mutating_source():
     source = _schema_v1_generated_quest_snapshot()
-    source["components"]["StealthComponent"] = {
-        "entity_2": {"sneaking": True, "since_epoch": 7}
-    }
+    source["components"]["StealthComponent"] = {"entity_2": {"sneaking": True, "since_epoch": 7}}
 
     migrated = migrate_snapshot(source)
 
@@ -316,14 +314,31 @@ def test_schema_v1_dragon_stealth_name_migrates_without_mutating_source():
     }
 
     ambiguous = _schema_v1_generated_quest_snapshot()
-    ambiguous["components"]["StealthComponent"] = {
-        "entity_2": {"sneaking": True, "since_epoch": 7}
-    }
+    ambiguous["components"]["StealthComponent"] = {"entity_2": {"sneaking": True, "since_epoch": 7}}
     ambiguous["components"]["SneakingComponent"] = {
         "entity_3": {"sneaking": False, "since_epoch": 0}
     }
     with pytest.raises(WorldMigrationError, match="both StealthComponent and SneakingComponent"):
         migrate_snapshot(ambiguous)
+
+
+def test_schema_v1_cure_quest_hook_name_migrates_to_affliction_request():
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"]["CureQuestHookComponent"] = {
+        "entity_2": {"affliction_type": "moon-form", "quest_id": None}
+    }
+
+    migrated = migrate_snapshot(source)
+
+    assert "CureQuestHookComponent" in source["components"]
+    assert "CureQuestHookComponent" not in migrated["components"]
+    assert migrated["components"]["CureRequestComponent"] == {
+        "entity_2": {"affliction_type": "moon-form", "quest_id": None}
+    }
+
+    source["components"]["CureRequestComponent"] = {}
+    with pytest.raises(WorldMigrationError, match="both CureQuestHookComponent"):
+        migrate_snapshot(source)
 
 
 def test_schema_v1_migration_handles_collisions_and_unaccepted_generated_quests():

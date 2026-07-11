@@ -120,6 +120,7 @@ from bunnyland.simpacks.dinosim import mechanics as dino
 from bunnyland.simpacks.dinosim.incidents import KAIJU_ATTACK
 from bunnyland.simpacks.dinosim.resolution import RESOLUTION_RULES as DINO_RESOLUTION_RULES
 from bunnyland.simpacks.dragonsim import mechanics as dragon
+from bunnyland.simpacks.dragonsim import quests as dragon_quests
 from bunnyland.simpacks.gardensim.mechanics import (
     CropComponent,
     CropGrowthConsequence,
@@ -752,9 +753,9 @@ def _install_daggersim_playtest(actor) -> None:
         dagger.PlanTravelHandler(),
         dagger.JoinInstitutionHandler(),
         dagger.UseInstitutionServiceHandler(),
-        dagger.AskForWorkHandler(),
-        dagger.AcceptGeneratedQuestHandler(),
-        dagger.CompleteGeneratedQuestHandler(),
+        dragon_quests.AskForWorkHandler(),
+        dragon_quests.AcceptGeneratedQuestHandler(),
+        dragon_quests.CompleteGeneratedQuestHandler(),
         dagger.OpenBankAccountHandler(),
         dagger.DepositHandler(),
         dagger.WithdrawHandler(),
@@ -782,7 +783,7 @@ def _install_daggersim_playtest(actor) -> None:
     ):
         actor.register_handler(handler)
     actor.register_consequence(dagger.TravelCompletionConsequence())
-    actor.register_consequence(dagger.QuestDeadlineConsequence())
+    actor.register_consequence(dragon_quests.QuestDeadlineConsequence())
     actor.register_consequence(dagger.LoanDueConsequence())
     actor.register_consequence(dagger.FeedingNeedConsequence())
 
@@ -850,7 +851,7 @@ def _add_daggersim_economy_world(scenario):
         "ratcatcher errand",
         "quest-template",
         [
-            dagger.QuestTemplateComponent(
+            dragon_quests.QuestTemplateComponent(
                 title="Clear the North Tunnel",
                 objective="Drive the rats away from the old milestone.",
                 reward_item_name="guild writ",
@@ -1962,8 +1963,8 @@ async def test_discord_playtest_daggersim_economy_loop(scenario):
     repaid: list = []
     withdrawn: list = []
     paid: list = []
-    scenario.actor.bus.subscribe(dagger.QuestGeneratedEvent, generated.append)
-    scenario.actor.bus.subscribe(dagger.QuestCompletedEvent, completed.append)
+    scenario.actor.bus.subscribe(dragon_quests.QuestGeneratedEvent, generated.append)
+    scenario.actor.bus.subscribe(dragon.QuestCompletedEvent, completed.append)
     scenario.actor.bus.subscribe(dagger.WithdrawalMadeEvent, withdrawn.append)
     scenario.actor.bus.subscribe(dagger.LoanRepaidEvent, repaid.append)
     scenario.actor.bus.subscribe(dagger.FinePaidEvent, paid.append)

@@ -26,26 +26,15 @@ CAPABILITIES = (
     "bunnyland.neonsim.camera",
     "bunnyland.neonsim.checkpoint",
     "bunnyland.neonsim.clinic",
+    "bunnyland.neonsim.contract",
     "bunnyland.neonsim.cyberpunk-site",
     "bunnyland.neonsim.data-broker",
     "bunnyland.neonsim.fixer",
     "bunnyland.neonsim.netrunner",
     "bunnyland.neonsim.safehouse",
     "bunnyland.neonsim.security-zone",
+    "bunnyland.neonsim.terminal",
 )
-
-ALIASES = {
-    "black-market": "bunnyland.neonsim.black-market",
-    "camera": "bunnyland.neonsim.camera",
-    "checkpoint": "bunnyland.neonsim.checkpoint",
-    "clinic": "bunnyland.neonsim.clinic",
-    "cyberpunk-site": "bunnyland.neonsim.cyberpunk-site",
-    "data-broker": "bunnyland.neonsim.data-broker",
-    "fixer": "bunnyland.neonsim.fixer",
-    "netrunner": "bunnyland.neonsim.netrunner",
-    "safehouse": "bunnyland.neonsim.safehouse",
-    "security-zone": "bunnyland.neonsim.security-zone",
-}
 
 
 class NeonGenerationEnricher:
@@ -59,52 +48,58 @@ class NeonGenerationEnricher:
             components[type(component)] = component
 
         if ctx.is_character:
-            if generation_wants(ctx, "fixer") or generation_mentions(ctx, "fixer"):
+            if generation_wants(ctx, "bunnyland.neonsim.fixer") or generation_mentions(
+                ctx, "fixer"
+            ):
                 add(FixerComponent(name=ctx.name))
-            if generation_wants(ctx, "netrunner") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.netrunner") or generation_mentions(
                 ctx, "netrunner", "runner", "hacker"
             ):
                 add(AccessLevelComponent(clearance=2))
                 add(AugmentationSlotsComponent())
         else:
-            if generation_wants(ctx, "cyberpunk-site") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.cyberpunk-site") or generation_mentions(
                 ctx, "district", "arcology", "corp", "nightclub", "plaza", "market", "alley"
             ):
                 add(CyberpunkSiteComponent(site_type=ctx.name))
-            if generation_wants(ctx, "security-zone") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.security-zone") or generation_mentions(
                 ctx, "restricted", "secure", "vault"
             ):
                 add(SecurityZoneComponent(clearance_required=2))
                 add(RestrictedAreaComponent())
-            if generation_wants(ctx, "checkpoint") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.checkpoint") or generation_mentions(
                 ctx, "checkpoint", "turnstile"
             ):
                 add(CheckpointComponent(clearance_required=2, bribe_cost=20))
-            if generation_wants(ctx, "safehouse") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.safehouse") or generation_mentions(
                 ctx, "safehouse", "hideout", "flop"
             ):
                 add(SafehouseComponent())
-            if generation_wants(ctx, "camera") or generation_mentions(ctx, "camera", "cctv"):
+            if generation_wants(ctx, "bunnyland.neonsim.camera") or generation_mentions(
+                ctx, "camera", "cctv"
+            ):
                 add(DeviceComponent(device_type="camera"))
                 add(CameraComponent())
                 add(SurveillanceCoverageComponent())
-            if generation_wants(ctx, "terminal") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.terminal") or generation_mentions(
                 ctx, "terminal", "server", "console"
             ):
                 add(DeviceComponent(device_type="terminal"))
                 add(HackableComponent(security=2))
-            if generation_wants(ctx, "black-market") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.black-market") or generation_mentions(
                 ctx, "vendor", "black market", "dealer"
             ):
                 add(BlackMarketComponent())
-            if generation_wants(ctx, "data-broker") or generation_mentions(ctx, "fence", "broker"):
+            if generation_wants(ctx, "bunnyland.neonsim.data-broker") or generation_mentions(
+                ctx, "fence", "broker"
+            ):
                 add(DataBrokerComponent())
-            if generation_wants(ctx, "clinic") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.clinic") or generation_mentions(
                 ctx, "clinic", "ripperdoc", "surgeon"
             ):
                 licensed = not generation_mentions(ctx, "ripperdoc", "street", "back-alley")
                 add(ClinicComponent(licensed=licensed))
-            if generation_wants(ctx, "contract") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.neonsim.contract") or generation_mentions(
                 ctx, "contract", "job posting", "gig"
             ):
                 add(RunnerContractComponent())

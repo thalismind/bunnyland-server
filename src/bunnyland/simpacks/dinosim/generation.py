@@ -70,36 +70,6 @@ CAPABILITIES = (
     "bunnyland.dinosim.weak-point",
 )
 
-ALIASES = {
-    "ancient-sample": "bunnyland.dinosim.ancient-sample",
-    "apex-predator": "bunnyland.dinosim.apex-predator",
-    "armor-plate": "bunnyland.dinosim.armor-plate",
-    "bait": "bunnyland.dinosim.bait",
-    "bone": "bunnyland.dinosim.bone",
-    "charge": "bunnyland.dinosim.charge",
-    "creature-attack": "bunnyland.dinosim.creature-attack",
-    "creature-need": "bunnyland.dinosim.creature-need",
-    "creature-product": "bunnyland.dinosim.creature-product",
-    "dinosaur": "bunnyland.dinosim.dinosaur",
-    "egg": "bunnyland.dinosim.egg",
-    "enclosure": "bunnyland.dinosim.enclosure",
-    "fossil": "bunnyland.dinosim.fossil",
-    "fossil-survey": "bunnyland.dinosim.fossil-survey",
-    "herd": "bunnyland.dinosim.herd",
-    "hide": "bunnyland.dinosim.hide",
-    "kaiju": "bunnyland.dinosim.kaiju",
-    "nest": "bunnyland.dinosim.nest",
-    "roar": "bunnyland.dinosim.roar",
-    "scent": "bunnyland.dinosim.scent",
-    "territory": "bunnyland.dinosim.territory",
-    "toxin": "bunnyland.dinosim.toxin",
-    "track": "bunnyland.dinosim.track",
-    "trample": "bunnyland.dinosim.trample",
-    "tranquilizer": "bunnyland.dinosim.tranquilizer",
-    "water-creature": "bunnyland.dinosim.water-creature",
-    "weak-point": "bunnyland.dinosim.weak-point",
-}
-
 
 class DinoGenerationEnricher:
     capabilities: tuple[str, ...] = ()
@@ -113,69 +83,79 @@ class DinoGenerationEnricher:
 
         if ctx.is_room:
             species = generation_resource_type(ctx)
-            if generation_wants(ctx, "enclosure") or generation_mentions(ctx, "enclosure", "pen"):
+            if generation_wants(ctx, "bunnyland.dinosim.enclosure") or generation_mentions(
+                ctx, "enclosure", "pen"
+            ):
                 add(EnclosureComponent(name=ctx.name))
                 add(EscapeRiskComponent(last_updated_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "track") or generation_mentions(ctx, "tracks", "footprints"):
+            if generation_wants(ctx, "bunnyland.dinosim.track") or generation_mentions(
+                ctx, "tracks", "footprints"
+            ):
                 add(TrackComponent(room_id=ctx.entity_id, last_tracked_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "territory") or generation_mentions(ctx, "territory"):
+            if generation_wants(ctx, "bunnyland.dinosim.territory") or generation_mentions(
+                ctx, "territory"
+            ):
                 add(TerritoryComponent(species_name=species, marked_at_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "herd") or generation_mentions(ctx, "herd"):
+            if generation_wants(ctx, "bunnyland.dinosim.herd") or generation_mentions(ctx, "herd"):
                 add(HerdComponent(species_name=species, last_tracked_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "nest") or generation_mentions(ctx, "nest"):
+            if generation_wants(ctx, "bunnyland.dinosim.nest") or generation_mentions(ctx, "nest"):
                 add(NestComponent(species_name=species))
-            if generation_wants(ctx, "scent"):
+            if generation_wants(ctx, "bunnyland.dinosim.scent"):
                 add(ScentComponent(species_name=species))
         elif ctx.is_character:
-            if generation_wants(ctx, "dinosaur") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.dinosim.dinosaur") or generation_mentions(
                 ctx, "dinosaur", "raptor", "rex"
             ):
                 add(DinosaurComponent(species_name=ctx.species))
                 add(SpeciesComponent(common_name=ctx.species))
                 add(FertilityComponent())
-            if generation_wants(ctx, "water-creature") or generation_mentions(
+            if generation_wants(ctx, "bunnyland.dinosim.water-creature") or generation_mentions(
                 ctx, "aquatic", "water creature"
             ):
                 add(WaterCreatureComponent(species_name=ctx.species))
-            if generation_wants(ctx, "creature-need"):
+            if generation_wants(ctx, "bunnyland.dinosim.creature-need"):
                 add(CreatureNeedComponent(last_updated_epoch=ctx.world_epoch))
-            if generation_wants(ctx, "kaiju") or generation_mentions(ctx, "kaiju"):
+            if generation_wants(ctx, "bunnyland.dinosim.kaiju") or generation_mentions(
+                ctx, "kaiju"
+            ):
                 add(KaijuComponent())
-            if generation_wants(ctx, "creature-attack"):
+            if generation_wants(ctx, "bunnyland.dinosim.creature-attack"):
                 add(CreatureAttackComponent())
-            if generation_wants(ctx, "roar") or generation_mentions(ctx, "roar"):
+            if generation_wants(ctx, "bunnyland.dinosim.roar") or generation_mentions(ctx, "roar"):
                 add(RoarComponent())
-            if generation_wants(ctx, "charge"):
+            if generation_wants(ctx, "bunnyland.dinosim.charge"):
                 add(ChargeComponent())
-            if generation_wants(ctx, "trample"):
+            if generation_wants(ctx, "bunnyland.dinosim.trample"):
                 add(TrampleComponent())
-            if generation_wants(ctx, "armor-plate"):
+            if generation_wants(ctx, "bunnyland.dinosim.armor-plate"):
                 add(ArmorPlateComponent())
-            if generation_wants(ctx, "weak-point"):
+            if generation_wants(ctx, "bunnyland.dinosim.weak-point"):
                 add(WeakPointComponent())
-            if generation_wants(ctx, "apex-predator"):
+            if generation_wants(ctx, "bunnyland.dinosim.apex-predator"):
                 add(ApexPredatorComponent())
         else:
             species = generation_resource_type(ctx)
-            if generation_wants(ctx, "fossil") or generation_mentions(ctx, "fossil", "amber"):
+            if generation_wants(ctx, "bunnyland.dinosim.fossil") or generation_mentions(
+                ctx, "fossil", "amber"
+            ):
                 add(FossilFragmentComponent(sample_quality=0.8))
-            if generation_wants(ctx, "fossil-survey"):
+            if generation_wants(ctx, "bunnyland.dinosim.fossil-survey"):
                 add(FossilSurveyComponent())
-            if generation_wants(ctx, "ancient-sample"):
+            if generation_wants(ctx, "bunnyland.dinosim.ancient-sample"):
                 add(AncientSampleComponent(species_name=species))
-            if generation_wants(ctx, "bait"):
+            if generation_wants(ctx, "bunnyland.dinosim.bait"):
                 add(BaitComponent(target_species=species))
-            if generation_wants(ctx, "tranquilizer"):
+            if generation_wants(ctx, "bunnyland.dinosim.tranquilizer"):
                 add(TranquilizerComponent())
-            if generation_wants(ctx, "creature-product"):
+            if generation_wants(ctx, "bunnyland.dinosim.creature-product"):
                 add(CreatureProductComponent(product_type=species))
-            if generation_wants(ctx, "hide"):
+            if generation_wants(ctx, "bunnyland.dinosim.hide"):
                 add(HideComponent())
-            if generation_wants(ctx, "bone"):
+            if generation_wants(ctx, "bunnyland.dinosim.bone"):
                 add(BoneComponent())
-            if generation_wants(ctx, "toxin"):
+            if generation_wants(ctx, "bunnyland.dinosim.toxin"):
                 add(ToxinComponent())
-            if generation_wants(ctx, "egg") or generation_mentions(ctx, "egg"):
+            if generation_wants(ctx, "bunnyland.dinosim.egg") or generation_mentions(ctx, "egg"):
                 add(EggComponent(species_name=species, laid_at_epoch=ctx.world_epoch))
         return GenerationDelta(
             components=tuple(components.values()),

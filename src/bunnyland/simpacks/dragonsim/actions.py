@@ -176,7 +176,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("quest_id", "lie"),
         tool_name="lie_about_quest",
     ),
-    define_action("request-cure-quest", ("quest_id",), tool_name="request_cure_quest"),
 )
 
 __all__ = ["ACTION_DEFINITIONS"]
