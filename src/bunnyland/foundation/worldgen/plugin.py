@@ -13,15 +13,7 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from ...worldgen.examples import (
-    CLUE_SNACK_DEMO,
-    DIVE_SCHEME_DEMO,
-    DUNGEON_DEMOS,
-    GOTHIC_COUNT_DEMO,
-    MIDNIGHT_BURGER_DEMO,
-    SCENE_DEMOS,
-    STAR_OPERA_DEMO,
-)
+from ...worldgen.examples import APPLE_CROSSING_DEMO, BELL_GREEN_DEMO, CLOVER_CITY_DEMO
 from ...worldgen.generators import (
     WorldGenerator,
     empty_generator,
@@ -77,13 +69,9 @@ def _definition() -> Plugin:
                     group="scene demo",
                     uses_seed=False,
                 ),
-                CLUE_SNACK_DEMO,
-                DIVE_SCHEME_DEMO,
-                STAR_OPERA_DEMO,
-                GOTHIC_COUNT_DEMO,
-                MIDNIGHT_BURGER_DEMO,
-                *DUNGEON_DEMOS,
-                *SCENE_DEMOS,
+                APPLE_CROSSING_DEMO,
+                BELL_GREEN_DEMO,
+                CLOVER_CITY_DEMO,
                 WorldGenerator(
                     "oneshot",
                     oneshot_generator,

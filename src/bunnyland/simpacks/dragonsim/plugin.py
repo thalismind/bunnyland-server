@@ -130,8 +130,8 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from ...worldgen.examples import DRAGONSIM_DEMO
 from .actions import ACTION_DEFINITIONS
+from .demos import CLUE_SNACK_DEMO, DRAGONSIM_DEMO
 from .generation import ALIASES, CAPABILITIES, GENERATED_QUEST_ENRICHER, GENERATION_ENRICHER
 from .quests import (
     AbandonGeneratedQuestHandler,
@@ -316,7 +316,7 @@ def _definition() -> Plugin:
             generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER, GENERATED_QUEST_ENRICHER),
             incident_resolution_rules=RESOLUTION_RULES,
-            world_generators=(DRAGONSIM_DEMO,),
+            world_generators=(DRAGONSIM_DEMO, CLUE_SNACK_DEMO),
         ),
     )
 

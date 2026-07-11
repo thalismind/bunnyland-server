@@ -191,8 +191,14 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from ...worldgen.examples import DAGGERSIM_DEMO
 from .actions import ACTION_DEFINITIONS
+from .demos import (
+    DAGGERSIM_DEMO,
+    DIVE_SCHEME_DEMO,
+    DUNGEON_DEMOS,
+    GOTHIC_COUNT_DEMO,
+    STORM_LIGHTHOUSE_DEMO,
+)
 from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
 from .resolution import RESOLUTION_RULES
 
@@ -392,7 +398,13 @@ def _definition() -> Plugin:
             generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
             incident_resolution_rules=RESOLUTION_RULES,
-            world_generators=(DAGGERSIM_DEMO,),
+            world_generators=(
+                DAGGERSIM_DEMO,
+                DIVE_SCHEME_DEMO,
+                GOTHIC_COUNT_DEMO,
+                *DUNGEON_DEMOS,
+                STORM_LIGHTHOUSE_DEMO,
+            ),
         ),
     )
 

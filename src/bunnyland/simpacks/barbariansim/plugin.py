@@ -112,8 +112,8 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from ...worldgen.examples import BARBARIANSIM_DEMO
 from .actions import ACTION_DEFINITIONS
+from .demos import BARBARIANSIM_DEMO
 from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
 from .incidents import BARBARIAN_RAID
 

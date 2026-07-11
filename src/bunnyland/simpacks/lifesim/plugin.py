@@ -162,8 +162,13 @@ from ...plugins.model import (
     RuntimeContribution,
 )
 from ...worldgen.apartment import APARTMENT_DEMO
-from ...worldgen.examples import LIFESIM_DEMO
 from .actions import ACTION_DEFINITIONS
+from .demos import (
+    LIFESIM_DEMO,
+    MIDNIGHT_BURGER_DEMO,
+    MIDNIGHT_LAUNDROMAT_DEMO,
+    VACANCY_MOTEL_DEMO,
+)
 from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
 
 
@@ -334,7 +339,13 @@ def _definition() -> Plugin:
             generation_capabilities=CAPABILITIES,
             generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
-            world_generators=(LIFESIM_DEMO, APARTMENT_DEMO),
+            world_generators=(
+                LIFESIM_DEMO,
+                MIDNIGHT_BURGER_DEMO,
+                VACANCY_MOTEL_DEMO,
+                MIDNIGHT_LAUNDROMAT_DEMO,
+                APARTMENT_DEMO,
+            ),
         ),
     )
 

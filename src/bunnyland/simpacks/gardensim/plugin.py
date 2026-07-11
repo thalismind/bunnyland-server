@@ -137,11 +137,13 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from ...worldgen.examples import (
+from .actions import ACTION_DEFINITIONS
+from .demos import (
+    COUNTY_FAIR_DEMO,
+    FROZEN_GREENHOUSE_DEMO,
     GARDENSIM_DEMO,
     MAPLE_FARM_DEMO,
 )
-from .actions import ACTION_DEFINITIONS
 from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
 
 
@@ -286,7 +288,12 @@ def _definition() -> Plugin:
             generation_capabilities=CAPABILITIES,
             generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
-            world_generators=(GARDENSIM_DEMO, MAPLE_FARM_DEMO),
+            world_generators=(
+                GARDENSIM_DEMO,
+                MAPLE_FARM_DEMO,
+                FROZEN_GREENHOUSE_DEMO,
+                COUNTY_FAIR_DEMO,
+            ),
         ),
     )
 

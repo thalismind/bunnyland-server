@@ -3,7 +3,9 @@ its hallmark mechanics (plus the life-sim needs every character inherits)."""
 
 from __future__ import annotations
 
+import inspect
 import re
+import sys
 
 import pytest
 
@@ -29,7 +31,9 @@ from bunnyland.foundation.environment.mechanics import (
 )
 from bunnyland.foundation.needs.mechanics import HungerComponent
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
+from bunnyland.simpacks.barbariansim.demos import BARBARIANSIM_DEMO
 from bunnyland.simpacks.barbariansim.mechanics import WeaponComponent
+from bunnyland.simpacks.colonysim.demos import COLONYSIM_DEMO
 from bunnyland.simpacks.colonysim.mechanics import (
     ColonyIncidentComponent,
     JobBillComponent,
@@ -43,6 +47,13 @@ from bunnyland.simpacks.colonysim.mechanics import (
     TradeOfferComponent,
     WorkstationComponent,
 )
+from bunnyland.simpacks.daggersim.demos import (
+    DAGGERSIM_DEMO,
+    DIVE_SCHEME_DEMO,
+    DUNGEON_DEMOS,
+    GOTHIC_COUNT_DEMO,
+    STORM_LIGHTHOUSE_DEMO,
+)
 from bunnyland.simpacks.daggersim.mechanics import (
     AutomapComponent,
     BankComponent,
@@ -54,6 +65,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     SecretDoorComponent,
     SupernaturalAfflictionComponent,
 )
+from bunnyland.simpacks.dinosim.demos import DINOSIM_DEMO
 from bunnyland.simpacks.dinosim.mechanics import (
     CreatureProductComponent,
     DinosaurComponent,
@@ -62,7 +74,14 @@ from bunnyland.simpacks.dinosim.mechanics import (
     FossilFragmentComponent,
     ReptileProcreationComponent,
 )
+from bunnyland.simpacks.dragonsim.demos import CLUE_SNACK_DEMO, DRAGONSIM_DEMO
 from bunnyland.simpacks.dragonsim.mechanics import PointOfInterestComponent, QuestComponent
+from bunnyland.simpacks.gardensim.demos import (
+    COUNTY_FAIR_DEMO,
+    FROZEN_GREENHOUSE_DEMO,
+    GARDENSIM_DEMO,
+    MAPLE_FARM_DEMO,
+)
 from bunnyland.simpacks.gardensim.mechanics import (
     CropComponent,
     CropGrowthComponent,
@@ -82,14 +101,23 @@ from bunnyland.simpacks.gardensim.mechanics import (
     TreeTapComponent,
     WeedComponent,
 )
+from bunnyland.simpacks.lifesim.demos import (
+    LIFESIM_DEMO,
+    MIDNIGHT_BURGER_DEMO,
+    MIDNIGHT_LAUNDROMAT_DEMO,
+    VACANCY_MOTEL_DEMO,
+)
 from bunnyland.simpacks.lifesim.mechanics import (
     CareerComponent,
     CharacterProfileComponent,
     HomeObjectComponent,
     WhimComponent,
 )
+from bunnyland.simpacks.neonsim.demos import NEONSIM_DEMO, STUCK_SUBWAY_DEMO
 from bunnyland.simpacks.neonsim.mechanics import CyberpunkSiteComponent
+from bunnyland.simpacks.nukesim.demos import NUKESIM_DEMO
 from bunnyland.simpacks.nukesim.mechanics import RadiationSourceComponent
+from bunnyland.simpacks.voidsim.demos import STAR_OPERA_DEMO, VOIDSIM_DEMO
 from bunnyland.simpacks.voidsim.mechanics import (
     HabitatModuleComponent,
     LifeSupportComponent,
@@ -97,29 +125,7 @@ from bunnyland.simpacks.voidsim.mechanics import (
     ShipComponent,
     ShipSystemComponent,
 )
-from bunnyland.worldgen.examples import (
-    BARBARIANSIM_DEMO,
-    COLONYSIM_DEMO,
-    COUNTY_FAIR_DEMO,
-    DAGGERSIM_DEMO,
-    DINOSIM_DEMO,
-    DRAGONSIM_DEMO,
-    DUNGEON_DEMOS,
-    FROZEN_GREENHOUSE_DEMO,
-    GARDENSIM_DEMO,
-    LIFESIM_DEMO,
-    MAPLE_FARM_DEMO,
-    MIDNIGHT_BURGER_DEMO,
-    MIDNIGHT_LAUNDROMAT_DEMO,
-    NEONSIM_DEMO,
-    NUKESIM_DEMO,
-    POP_CULTURE_DEMOS,
-    SCENE_DEMOS,
-    STORM_LIGHTHOUSE_DEMO,
-    STUCK_SUBWAY_DEMO,
-    VACANCY_MOTEL_DEMO,
-    VOIDSIM_DEMO,
-)
+from bunnyland.worldgen.examples import APPLE_CROSSING_DEMO, BELL_GREEN_DEMO, CLOVER_CITY_DEMO
 from bunnyland.worldgen.generators import GenOptions, collect_generators
 
 PACKAGE_DEMOS = [
@@ -134,6 +140,24 @@ PACKAGE_DEMOS = [
     NEONSIM_DEMO,
     DINOSIM_DEMO,
 ]
+POP_CULTURE_DEMOS = (
+    CLUE_SNACK_DEMO,
+    DIVE_SCHEME_DEMO,
+    STAR_OPERA_DEMO,
+    GOTHIC_COUNT_DEMO,
+    MIDNIGHT_BURGER_DEMO,
+)
+SCENE_DEMOS = (
+    APPLE_CROSSING_DEMO,
+    BELL_GREEN_DEMO,
+    CLOVER_CITY_DEMO,
+    STORM_LIGHTHOUSE_DEMO,
+    VACANCY_MOTEL_DEMO,
+    FROZEN_GREENHOUSE_DEMO,
+    STUCK_SUBWAY_DEMO,
+    MIDNIGHT_LAUNDROMAT_DEMO,
+    COUNTY_FAIR_DEMO,
+)
 ALL_DEMOS = [
     *PACKAGE_DEMOS,
     MAPLE_FARM_DEMO,
@@ -609,9 +633,14 @@ async def test_demo_builds_without_a_world_clock(demo, monkeypatch):
     false branch -- and the world must still build with rooms and characters.
     """
     from bunnyland.core.components import WorldClockComponent
-    from bunnyland.worldgen import examples
 
-    real_instantiate = examples.instantiate
+    builder = next(
+        cell.cell_contents
+        for cell in demo.generate.__closure__ or ()
+        if inspect.iscoroutinefunction(cell.cell_contents)
+    )
+    demo_module = sys.modules[builder.__module__]
+    real_instantiate = demo_module.instantiate
 
     async def instantiate_then_drop_clock(actor, *args, **kwargs):
         world = await real_instantiate(actor, *args, **kwargs)
@@ -622,7 +651,7 @@ async def test_demo_builds_without_a_world_clock(demo, monkeypatch):
                 actor.world.remove(clock.id)
         return world
 
-    monkeypatch.setattr(examples, "instantiate", instantiate_then_drop_clock)
+    monkeypatch.setattr(demo_module, "instantiate", instantiate_then_drop_clock)
 
     actor = WorldActor()
     world = await demo.generate(actor, demo.name, GenOptions())

@@ -209,13 +209,16 @@ def test_worldgen_plugin_contributes_named_generators():
     assert "halloween" not in without
     assert "holiday" not in without
     assert "tower-debate" not in without
-    assert "clue-snack-demo" not in without
-    assert "dive-scheme-demo" not in without
-    assert "star-opera-demo" not in without
-    assert "gothic-count-demo" not in without
+    assert "apple-crossing" not in without
+    assert "bell-green" not in without
+    assert "clover-city" not in without
     assert "oneshot" not in without
     assert "recursive" not in without
-    # each sim plugin also contributes its own example world, tied to that plugin
+    # Each sim plugin contributes all of its own demo worlds, independently of Worldgen.
+    assert "clue-snack-demo" in without
+    assert "dive-scheme-demo" in without
+    assert "star-opera-demo" in without
+    assert "gothic-count-demo" in without
     assert "voidsim-demo" in registry
     assert "nukesim-demo" in registry
     assert "dinosim-demo" in registry

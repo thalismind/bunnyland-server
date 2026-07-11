@@ -97,8 +97,8 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from ...worldgen.examples import COLONYSIM_DEMO
 from .actions import ACTION_DEFINITIONS
+from .demos import COLONYSIM_DEMO
 from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
 from .resolution import RESOLUTION_RULES
 

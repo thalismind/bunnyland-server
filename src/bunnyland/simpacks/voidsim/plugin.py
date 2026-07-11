@@ -186,8 +186,8 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from ...worldgen.examples import VOIDSIM_DEMO
 from .actions import ACTION_DEFINITIONS
+from .demos import STAR_OPERA_DEMO, VOIDSIM_DEMO
 from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
 
 
@@ -376,7 +376,7 @@ def _definition() -> Plugin:
             generation_capabilities=CAPABILITIES,
             generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
-            world_generators=(VOIDSIM_DEMO,),
+            world_generators=(VOIDSIM_DEMO, STAR_OPERA_DEMO),
         ),
     )
 

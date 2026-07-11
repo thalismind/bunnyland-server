@@ -208,8 +208,8 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from ...worldgen.examples import DINOSIM_DEMO
 from .actions import ACTION_DEFINITIONS
+from .demos import DINOSIM_DEMO
 from .generation import ALIASES, CAPABILITIES, GENERATION_ENRICHER
 from .incidents import KAIJU_ATTACK
 from .resolution import RESOLUTION_RULES
