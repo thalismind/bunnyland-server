@@ -19,7 +19,7 @@ dist/
 build/
 
 # generated media
-media/
+/media/
 
 # secrets
 .env
